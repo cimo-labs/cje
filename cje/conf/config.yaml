@@ -1,0 +1,23 @@
+defaults:
+  - estimator: auto
+
+# Analysis inputs
+dataset: data.jsonl            # Path to JSONL dataset
+judge_field: judge_score
+oracle_field: oracle_label
+fresh_draws_dir: null          # Required for DR estimators
+
+# Estimator selection and options
+estimator_name: ${estimator.name}
+estimator_config: ${estimator.config}
+
+# Output / logging
+verbose: false
+output: null                   # Optional: path to write results JSON
+
+hydra:
+  job:
+    chdir: false               # Do not change working directory
+  run:
+    dir: .                     # Keep outputs local unless overridden
+  output_subdir: null

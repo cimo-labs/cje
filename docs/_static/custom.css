@@ -1,0 +1,164 @@
+/* Custom CSS for CJE-Core documentation */
+
+/* Improve code block styling */
+.highlight {
+    border-radius: 4px;
+    margin: 1em 0;
+}
+
+/* Better table styling */
+.wy-table-responsive table td,
+.wy-table-responsive table th {
+    white-space: normal;
+}
+
+/* API documentation improvements */
+.py.class,
+.py.function,
+.py.method {
+    border-left: 3px solid #2980b9;
+    padding-left: 0.5em;
+    margin: 1em 0;
+}
+
+/* Source code links */
+.viewcode-link {
+    float: right;
+    font-size: 0.8em;
+}
+
+/* Version badges */
+.version-badge {
+    background: #2980b9;
+    color: white;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.8em;
+}
+
+/* Example boxes */
+.example-box {
+    border: 1px solid #d4edda;
+    background-color: #f8f9fa;
+    padding: 1em;
+    border-radius: 4px;
+    margin: 1em 0;
+}
+
+.example-box .admonition-title {
+    background-color: #28a745;
+    color: white;
+    margin: -1em -1em 0.5em -1em;
+    padding: 0.5em 1em;
+    border-radius: 4px 4px 0 0;
+}
+
+/* Fix for long parameter lists */
+.field-list td {
+    vertical-align: top;
+    padding-bottom: 0.5em;
+}
+
+/* Improve navigation */
+.wy-nav-content {
+    max-width: 1200px;
+}
+
+/* Better mobile responsiveness */
+@media screen and (max-width: 768px) {
+    .wy-nav-content {
+        margin-left: 0;
+    }
+}
+
+/* Track card improvements - override RTD theme */
+.track-container {
+    display: flex !important;
+    gap: 20px !important;
+    margin: 30px 0 !important;
+    flex-wrap: wrap !important;
+    justify-content: space-between !important;
+}
+
+.track-card {
+    flex: 1 1 300px !important;
+    max-width: 350px !important;
+    min-width: 280px !important;
+    border: 2px solid #e1e4e8 !important;
+    border-radius: 12px !important;
+    padding: 24px !important;
+    background: #ffffff !important;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
+    transition: all 0.3s ease !important;
+    margin-bottom: 20px !important;
+}
+
+.track-card:hover {
+    border-color: #0969da !important;
+    box-shadow: 0 4px 12px rgba(9, 105, 218, 0.15) !important;
+    transform: translateY(-4px) !important;
+}
+
+.track-title {
+    font-size: 1.4em !important;
+    font-weight: 600 !important;
+    color: #0969da !important;
+    margin-bottom: 12px !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+}
+
+.track-button {
+    display: inline-block !important;
+    background: #0969da !important;
+    color: #ffffff !important;
+    padding: 10px 20px !important;
+    border-radius: 6px !important;
+    text-decoration: none !important;
+    font-weight: 600 !important;
+    margin-top: 16px !important;
+    transition: all 0.2s ease !important;
+    border: none !important;
+    cursor: pointer !important;
+}
+
+.track-button:hover,
+.track-button:visited,
+.track-button:active,
+.track-button:focus {
+    background: #0860ca !important;
+    color: #ffffff !important;
+    text-decoration: none !important;
+    transform: translateY(-1px) !important;
+    box-shadow: 0 2px 8px rgba(9, 105, 218, 0.3) !important;
+}
+
+/* Fix RTD theme link color override */
+.rst-content .track-button,
+.rst-content .track-button:visited,
+.rst-content a.track-button,
+.rst-content a.track-button:visited {
+    color: #ffffff !important;
+}
+
+/* Improve Quick Decision Helper section */
+.quick-decision-helper {
+    margin-top: 40px !important;
+    padding: 24px !important;
+    background: #f8f9fa !important;
+    border-radius: 12px !important;
+    border: 1px solid #e1e4e8 !important;
+}
+
+/* Responsive improvements */
+@media screen and (max-width: 768px) {
+    .track-container {
+        flex-direction: column !important;
+    }
+    
+    .track-card {
+        max-width: 100% !important;
+        min-width: 100% !important;
+    }
+} 

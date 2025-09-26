@@ -1,0 +1,5 @@
+name: stacked-dr
+config:
+  estimators: [dr-cpo, tmle, mrdr]
+  parallel: true
+

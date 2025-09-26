@@ -1,0 +1,13 @@
+# Documentation requirements for ReadTheDocs
+# Core Sphinx and theme
+sphinx>=7.0,<8.0
+sphinx-rtd-theme>=2.0
+
+# Sphinx extensions
+sphinx-autodoc-typehints>=1.25
+sphinx-copybutton>=0.5
+myst-parser>=2.0,<3.0
+linkify-it-py>=2.0  # Required for MyST parser linkify extension
+
+# Additional dependencies needed for building docs
+packaging 

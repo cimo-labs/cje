@@ -1,0 +1,16 @@
+default_install_hook_types: [pre-commit, pre-push]
+default_language_version:
+  python: python3.10
+repos:
+  - repo: https://github.com/psf/black
+    rev: 25.1.0
+    hooks: 
+      - id: black
+        language_version: python3.10
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+      - id: mypy
+        additional_dependencies: [types-PyYAML]
+        language_version: python3.10
+        args: [--ignore-missing-imports, --no-strict-optional, --no-warn-unused-ignores]

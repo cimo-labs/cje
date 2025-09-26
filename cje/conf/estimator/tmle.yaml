@@ -1,0 +1,5 @@
+name: tmle
+config:
+  n_folds: 5
+  link: logit
+

@@ -1,0 +1,5 @@
+name: mrdr
+config:
+  n_folds: 5
+  omega_mode: snips
+
