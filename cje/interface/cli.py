@@ -43,15 +43,13 @@ def create_parser() -> argparse.ArgumentParser:
 
     from .factory import get_estimator_names
 
-    choices = list(get_estimator_names()) + ["auto"]
     analyze_parser.add_argument(
         "--estimator",
-        choices=choices,
+        choices=list(get_estimator_names()),
         default="stacked-dr",
         help=(
             "Estimation method. Default: stacked-dr (robust ensemble). "
-            "Use calibrated-ips for speed over robustness. "
-            "Use 'auto' to let CJE decide based on your data."
+            "Use calibrated-ips for speed over robustness or if you don't have fresh draws."
         ),
     )
 
