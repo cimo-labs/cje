@@ -12,7 +12,7 @@ The stacking approach:
 """
 
 from dataclasses import dataclass
-from typing import Tuple, Dict, Any, Optional, List
+from typing import Tuple, Dict, Any, Optional, List, cast
 import numpy as np
 from sklearn.isotonic import IsotonicRegression
 from sklearn.model_selection import KFold
@@ -272,7 +272,7 @@ class SIMCalibrator:
 
                 # Renormalize to ensure exact sum to 1
                 pi_full = pi_full / pi_full.sum()
-                return pi_full
+                return cast(np.ndarray, pi_full)
 
             # Remove most negative from active set
             min_idx = np.argmin(pi_active)

@@ -19,7 +19,7 @@ reduction by exploiting the judge score structure.
 """
 
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, cast
 import numpy as np
 from sklearn.isotonic import IsotonicRegression
 from sklearn.preprocessing import SplineTransformer
@@ -378,7 +378,7 @@ class IsotonicInfluenceControl:
 
         iso = IsotonicRegression(increasing=increasing, out_of_bounds="clip")
         iso.fit(train_scores, train_influence)
-        return iso.predict(test_scores)
+        return cast(np.ndarray, iso.predict(test_scores))
 
     def _fit_isotonic_cross_fitted(
         self,

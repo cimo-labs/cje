@@ -688,9 +688,9 @@ class DREstimator(BaseCJEEstimator):
 
             if hasattr(self, "_fresh_draw_stats") and policy in self._fresh_draw_stats:
                 stats = self._fresh_draw_stats[policy]
-                fresh_var = stats[
-                    "variances"
-                ]  # per-prompt sample var if M_i>=2, else 0
+                fresh_var = np.asarray(
+                    stats["variances"]
+                )  # per-prompt sample var if M_i>=2, else 0
                 M = np.asarray(stats["draws_per_prompt"])  # Ensure numpy array
 
                 # Check if we can compute exact MC variance (all M >= 2)
@@ -718,12 +718,18 @@ class DREstimator(BaseCJEEstimator):
                     has_multi = np.any(M >= 2)
                     if has_multi:
                         # Combine exact for M>=2 and bound for M=1
+                        mask_multi = M >= 2
+                        M_array = np.asarray(
+                            M
+                        )  # Ensure it's a numpy array for indexing
                         exact_part = float(
-                            np.sum(fresh_var[M >= 2] / np.maximum(M[M >= 2], 1))
+                            np.sum(
+                                fresh_var[mask_multi]
+                                / np.maximum(M_array[mask_multi], 1)
+                            )
                         ) / (n**2)
-                        bound_part = float(np.sum(np.ones(np.sum(M < 2)) * s2_cap)) / (
-                            n**2
-                        )
+                        n_singles = int(np.sum(M < 2))
+                        bound_part = float(np.sum(np.ones(n_singles) * s2_cap)) / (n**2)
                         mc_var = exact_part + bound_part
                         fallback_method = "upper_bound(mixed)"
                     else:

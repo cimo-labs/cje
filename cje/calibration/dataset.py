@@ -294,14 +294,16 @@ def calibrate_from_raw_data(
     oracle_labels = []
     oracle_mask = []
 
-    for record in data:
+    for idx, record in enumerate(data):
         # Extract judge score
         judge_score = record.get(judge_field)
         if judge_score is None:
-            raise ValueError(f"Judge field '{judge_field}' not found in record")
+            raise ValueError(f"Judge field '{judge_field}' not found in record {idx}")
 
         if isinstance(judge_score, dict):
             judge_score = judge_score.get("mean", judge_score.get("value"))
+        if judge_score is None:
+            raise ValueError(f"Judge score is None for record {idx}")
         judge_scores.append(float(judge_score))
 
         # Check for oracle label

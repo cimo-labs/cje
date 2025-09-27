@@ -40,7 +40,6 @@ def create_test_dataset(oracle_coverage: float = 1.0, n_samples: int = 100) -> D
             prompt="test prompt",
             response="test response",
             reward=reward,  # Add reward field
-            base_policy="base",
             base_policy_logprob=-2.0,
             target_policy_logprobs={"target": -1.5},
             metadata={

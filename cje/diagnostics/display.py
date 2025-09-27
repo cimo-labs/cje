@@ -82,10 +82,10 @@ def create_weight_summary_table(
                 # Try both 'status' and 'consistency_flag' for compatibility
                 status_val = diag.get("status", diag.get("consistency_flag", "UNKNOWN"))
                 # Handle Status enum if present
-                if hasattr(status_val, "value"):
+                if status_val is not None and hasattr(status_val, "value"):
                     status = status_val.value.upper()
                 else:
-                    status = str(status_val)
+                    status = str(status_val) if status_val is not None else "UNKNOWN"
             else:
                 ess = 0.0
                 max_w = 1.0
