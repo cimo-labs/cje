@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/img/CJE_logo.svg" alt="CJE Logo" width="400">
+  <img src="CJE_logo.svg" alt="CJE Logo" width="400">
 </div>
 
 # CJE - Causal Judge Evaluation
@@ -111,6 +111,12 @@ See the documentation for estimator details.
 🔧 **For Engineers**
 - [Engineering Guide](README_ENGINEERING.md) - Interface specs and patterns
 - [Arena Experiment](cje/experiments/arena_10k_simplified/) - Production pipeline example
+- **Module READMEs** - Each subdirectory in `cje/` contains a developer-oriented README:
+  - `cje/estimators/README.md` - Estimator implementations and hierarchy
+  - `cje/diagnostics/README.md` - Diagnostic system architecture
+  - `cje/data/README.md` - Data models and validation
+  - `cje/calibration/README.md` - Calibration methods
+  - `cje/interface/README.md` - High-level API details
 
 📊 **Additional Resources**
 - API Reference - Coming soon

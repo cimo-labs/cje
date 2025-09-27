@@ -1,16 +1,8 @@
 # CJE Makefile
 
-.PHONY: docs docs-serve docs-clean test lint format help
+.PHONY: test lint format help
 
-# Documentation commands
-docs:  ## Build documentation
-	cd docs && poetry run sphinx-build -b html . _build/html
-
-docs-clean:  ## Clean and rebuild documentation
-	cd docs && rm -rf _build && poetry run sphinx-build -b html . _build/html
-
-docs-serve:  ## Serve documentation locally
-	cd docs/_build/html && python -m http.server 8000
+# Documentation now hosted on cimo-labs.com
 
 # Development commands
 test:  ## Run tests

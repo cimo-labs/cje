@@ -197,4 +197,12 @@ A: Use `calibrated-ips` - it's robust without fresh samples. DR methods need the
 **Ready for more?**
 - Understanding diagnostics - See diagnostics.summary()
 - Generating fresh samples - Use teacher_forcing module
+- [Engineering Guide](README_ENGINEERING.md) - Interface specs and patterns
 - Research paper - Coming soon
+
+**For Developers:**
+Each module in `cje/` has a developer-oriented README with implementation details:
+- `cje/estimators/README.md` - Estimator implementations
+- `cje/diagnostics/README.md` - Diagnostic architecture
+- `cje/data/README.md` - Data models and validation
+- `cje/calibration/README.md` - Calibration methods

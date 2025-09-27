@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Minimal setup.py for ReadTheDocs compatibility."""
+"""Minimal setup.py for package installation."""
 
 from setuptools import setup, find_packages
 
@@ -28,11 +28,7 @@ setup(
         "typing-extensions>=4.0",
     ],
     extras_require={
-        "docs": [
-            "sphinx>=7.0",
-            "sphinx-rtd-theme>=2.0",
-            "myst-parser>=2.0",
-        ],
+        # Documentation now hosted on cimo-labs.com
     },
     classifiers=[
         "Development Status :: 4 - Beta",
