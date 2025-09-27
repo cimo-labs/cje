@@ -16,7 +16,12 @@ jobs:
         python-version: '3.10'
     - run: pip install poetry
     - run: poetry install
-    - run: poetry run pytest
+    - run: poetry run pytest --cov=cje --cov-report=term --cov-report=xml
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.xml
+        fail_ci_if_error: false
 
   lint:
     runs-on: ubuntu-latest
