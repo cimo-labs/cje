@@ -2,100 +2,138 @@
   <img src="docs/img/CJE_logo.svg" alt="CJE Logo" width="400">
 </div>
 
-# Causal Judge Evaluation (CJE)
+# CJE - Causal Judge Evaluation
 
-[![Docs](https://readthedocs.org/projects/causal-judge-evaluation/badge/?version=latest)](https://causal-judge-evaluation.readthedocs.io/en/latest/)
+[![Docs](https://img.shields.io/badge/docs-cimo--labs.com-blue)](https://cimo-labs.com/cje)
 [![Python](https://img.shields.io/badge/python-3.9%E2%80%933.12-blue)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Shape‑constrained, unbiased off‑policy metrics for LLM systems and beyond. Turn routine judge scores into reliable counterfactual policy estimates with variance control.
+**Off-policy evaluation for LLMs that actually works.** Get unbiased estimates of how your new model will perform before deployment.
 
-Quickstart
-----------
+## Why CJE?
 
-Install from source and run your first estimate.
+🎯 **Problem**: LLM-as-judge scores are biased - they tell you about your current model, not your next one
+✅ **Solution**: CJE uses causal inference to debias these scores for reliable policy evaluation
 
+## Installation
+
+```bash
+pip install cje-eval
+```
+
+For development:
 ```bash
 git clone https://github.com/fondutech/causal-judge-evaluation.git
 cd causal-judge-evaluation
-pip install -e .
+poetry install  # or pip install -e .
 ```
 
-Python API:
+## Quick Start
 
 ```python
 from cje import analyze_dataset
 
-# Defaults to stacked-dr (most robust, requires fresh draws)
-results = analyze_dataset("logs.jsonl", fresh_draws_dir="responses/")
-print(f"Estimate: {results.estimates[0]:.3f} ± {1.96*results.standard_errors[0]:.3f}")
-
-# Or use calibrated-ips if no fresh draws available
-# results = analyze_dataset("logs.jsonl", estimator="calibrated-ips")
+# Get unbiased estimate with confidence intervals
+result = analyze_dataset("your_data.jsonl", estimator="calibrated-ips")
+print(f"Policy value: {result.estimates[0]:.3f} ± {result.standard_errors[0]:.3f}")
 ```
 
-CLI:
+For production use with fresh samples (most accurate):
+```python
+# With fresh draws from target policy (best accuracy)
+result = analyze_dataset("logs.jsonl", estimator="stacked-dr",
+                        fresh_draws_dir="responses/")
+```
 
+CLI usage:
 ```bash
-# Defaults to stacked-dr (most robust, requires fresh draws)
-python -m cje analyze logs.jsonl --fresh-draws-dir responses/ -o results.json
+# Quick evaluation
+python -m cje analyze data.jsonl --estimator calibrated-ips -o results.json
 
-# Or use calibrated-ips if no fresh draws available
-# python -m cje analyze logs.jsonl --estimator calibrated-ips -o results.json
+# Production evaluation with fresh samples
+python -m cje analyze data.jsonl --estimator stacked-dr --fresh-draws-dir responses/
 ```
 
-At a Glance
------------
+## How It Works
+
+CJE transforms biased judge scores into unbiased policy estimates:
 
 ```
-┌──────────────┐      ┌────────────────────────────────┐      ┌─────────────────────────────┐      ┌──────────────────────┐
-│  Logs (JSONL)│  ─→  │ Calibrate f: S → R             │  ─→  │ Estimate (IPS or DR)        │  ─→  │   Diagnostics & CIs  │
-│ X, A, S,     │      │ (oracle slice, cross‑fit)      │      │ W = exp(lp_t − lp_b)        │      │ ESS, tails, compare  │
-│ log pπ₀, pπ′ │      │                                │      │SIMCal → W_c (stable weights)│      │ policies, gates      │
-└──────────────┘      └────────────────────────────────┘      └─────────────────────────────┘      └──────────────────────┘
+Your Data → Judge Calibration → Importance Weighting → Unbiased Estimate + CI
+(logs.jsonl)  (maps judge→truth)   (reweights samples)    (with diagnostics)
 ```
 
-Where: X=prompt, A=response, S=judge score, lp=log probability.
+## When to Use CJE
 
-Choosing an Estimator
----------------------
+✅ **Perfect for:**
+- A/B testing LLMs before deployment
+- Evaluating multiple model variants
+- Reusing existing data for new evaluations
+- High-stakes decisions needing confidence intervals
 
-**Default: `stacked-dr`** - Robust ensemble of DR estimators (DR-CPO + TMLE + MRDR). Most reliable choice. **Requires fresh draws.**
+❌ **Not for:**
+- Online learning (CJE is offline)
+- Real-time scoring (CJE is batch)
+- Small samples (<1000 examples)
 
-- **No fresh draws available** → `calibrated-ips` (still very good, faster)
-- **Need maximum speed** → `calibrated-ips` (faster but less stable than DR)
-- **Debugging or research** → Individual estimators (`dr-cpo`, `tmle`, `mrdr`, `raw-ips`)
+## Data Requirements
 
-Data Format (minimal)
----------------------
+CJE expects JSONL with these fields:
 
 ```json
 {
-  "prompt": "...",
-  "response": "...",
-  "base_policy_logprob": -35.7,
-  "target_policy_logprobs": {"A": -33.1, "B": -34.2},
-  "metadata": {"judge_score": 0.85, "oracle_label": 0.90}
+  "prompt": "What is 2+2?",
+  "response": "4",
+  "base_policy_logprob": -2.3,               // Log P(response|prompt) for current model
+  "target_policy_logprobs": {"gpt4": -1.8},  // Same for model(s) to evaluate
+  "metadata": {
+    "judge_score": 0.9,                      // Your LLM judge's score
+    "oracle_label": 1.0                      // Ground truth (5-10% labeled is enough)
+  }
 }
 ```
 
-Documentation
--------------
+## Choosing an Estimator
 
-- Quickstart and tutorials: https://causal-judge-evaluation.readthedocs.io/en/latest/
-- How it works (pipeline schematic): https://causal-judge-evaluation.readthedocs.io/en/latest/explanation/how_it_works.html
-- Examples: `examples/`
-- Arena experiment: `cje/experiments/arena_10k_simplified/`
+- **`calibrated-ips`** (default for quick start): Fast, reliable, no fresh samples needed
+- **`stacked-dr`** (recommended for production): Most accurate, requires fresh samples from target
+- **Individual estimators** (`dr-cpo`, `tmle`, `mrdr`): For research and debugging
 
-Development
------------
+See the documentation for estimator details.
 
-- Install: `make install` (Poetry managed), or `pip install -e .`
-- Tests: `make test` (end‑to‑end focus), coverage available
-- Lint/format: `make lint`, `make format`
-- Docs: `make docs` and `make docs-serve`
+## Documentation
 
-License
--------
+📚 **Getting Started**
+- [5-Minute Quickstart](QUICKSTART.md) - First analysis step-by-step
+- [Examples](examples/) - Working code samples
+- Full documentation coming soon on cimo-labs.com
 
-MIT License – see [LICENSE](LICENSE).
+🔧 **For Engineers**
+- [Engineering Guide](README_ENGINEERING.md) - Interface specs and patterns
+- [Arena Experiment](cje/experiments/arena_10k_simplified/) - Production pipeline example
+
+📊 **Additional Resources**
+- API Reference - Coming soon
+- Mathematical Foundations - Coming soon
+- Troubleshooting Guide - Coming soon
+
+## Development
+
+```bash
+make install  # Install with Poetry
+make test     # Run tests
+make format   # Auto-format code
+make lint     # Check code quality
+```
+
+## Support
+
+- 🐛 [Issues](https://github.com/fondutech/causal-judge-evaluation/issues)
+- 💬 [Discussions](https://github.com/fondutech/causal-judge-evaluation/discussions)
+
+## License
+
+MIT - See [LICENSE](LICENSE) for details.
+
+---
+**Ready to start?** → [5-Minute Quickstart](QUICKSTART.md)

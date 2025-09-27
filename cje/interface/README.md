@@ -228,4 +228,4 @@ python -m cje.interface.hydra_entry \
 3. **Check diagnostics** especially `weight_ess` for reliability
 4. **Fresh draws required** for all DR methods (stacked-dr, dr-cpo, mrdr, tmle)
 
-For more details, see the [full documentation](https://causal-judge-evaluation.readthedocs.io).
+For more details, see the full documentation (coming soon on cimo-labs.com).
