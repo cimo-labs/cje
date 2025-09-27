@@ -565,7 +565,7 @@ class CalibratedIPS(BaseCJEEstimator):
             n_samples_used[policy] = n
 
             # SAFETY CHECK: Refuse to provide unreliable estimates
-            # Following CLAUDE.md: "Fail Fast and Clearly"
+            # Fail fast and clearly
 
             # Check effective sample size
             ess = np.sum(weights) ** 2 / np.sum(weights**2) / n

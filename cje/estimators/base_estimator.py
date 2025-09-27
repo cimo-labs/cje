@@ -78,7 +78,7 @@ class BaseCJEEstimator(ABC):
 
         # All estimators now create diagnostics directly in estimate()
         # The DiagnosticSuite system has been removed for simplicity
-        # per CLAUDE.md principles (YAGNI, Do One Thing Well)
+        # Following principles: YAGNI, Do One Thing Well
 
         # Verify diagnostics were created
         if self.run_diagnostics and result is not None:

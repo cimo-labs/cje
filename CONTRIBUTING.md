@@ -2,11 +2,16 @@
 
 Thanks for contributing! We keep things simple.
 
-## 🎯 Core Principle
+## 🎯 Core Principles
 
-**Do One Thing Well** - Read [CLAUDE.md](CLAUDE.md) for our philosophy.
+**Do One Thing Well** - Each component should have a single, clear purpose.
 
-**TL;DR**: Simple > Clever. Explicit > Magic. YAGNI.
+**Philosophy**:
+- Simple > Clever
+- Explicit > Magic
+- YAGNI (You Aren't Gonna Need It)
+- Fail fast with clear errors
+- No duplicate utilities - search before implementing
 
 ## 🛠️ Setup
 
