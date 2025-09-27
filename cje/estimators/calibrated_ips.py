@@ -701,7 +701,9 @@ class CalibratedIPS(BaseCJEEstimator):
 
             # Ensure R_oof has correct shape after calibration attempts
             if len(R_oof) != len(rewards):
-                logger.debug(f"R_oof has wrong shape ({len(R_oof)} vs {len(rewards)}), using uncalibrated rewards")
+                logger.debug(
+                    f"R_oof has wrong shape ({len(R_oof)} vs {len(rewards)}), using uncalibrated rewards"
+                )
                 R_oof = rewards.copy()
 
             # Check if we should use honest IFs with outer CV
