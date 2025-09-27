@@ -62,7 +62,7 @@ When we calibrate judge scores using only a subset of oracle labels (e.g., 10% c
 **Oracle Slice Augmentation**: An optional point-estimate **bias correction** term `(L/π_L)m̂(S)(Y-f̂(S))` used **only** in TR-CPO under MAR with fitted π_L(S), or optionally as an MCAR engineering fallback (off by default).
 
 ### 5. Isotonic Influence Control (IIC)
-A variance reduction technique that residualizes influence functions against judge scores. By fitting E[φ|S] using spline or isotonic regression and computing residuals φ̃ = φ - Ê[φ|S], IIC reduces variance without changing the estimand. This is "free" variance reduction that's enabled by default in estimators that support it (CalibratedIPS, OrthogonalizedIPS, DR-CPO, and all DR variants).
+A variance reduction technique that residualizes influence functions against judge scores. By fitting E[φ|S] using spline or isotonic regression and computing residuals φ̃ = φ - Ê[φ|S], IIC reduces variance without changing the estimand. This is "free" variance reduction that can be enabled in estimators that support it (CalibratedIPS, OrthogonalizedIPS, DR-CPO, and all DR variants). It is disabled by default to preserve standard methodology.
 
 ## Module Descriptions
 
@@ -163,7 +163,7 @@ Advanced variance reduction through influence function residualization:
 - **Guaranteed improvement**: Var(φ̃) ≤ Var(φ) by construction
 - **Typical reductions**: 5-20% SE reduction depending on R²(φ|S)
 - **Free lunch**: No additional data or assumptions required
-- **Enabled by default**: All estimators use IIC unless explicitly disabled
+- **Disabled by default**: IIC must be explicitly enabled with use_iic=True
 
 **Why it works**: Influence functions often correlate with judge scores because both relate to outcome quality. By removing the predictable component E[φ|S], we eliminate systematic variation while preserving the estimand.
 
@@ -334,9 +334,9 @@ print(f"R²(φ|S): {diagnostics['r_squared']:.3f}")
 print(f"Variance reduction: {diagnostics['var_reduction']:.1%}")
 print(f"Regression type: {diagnostics['regression_type']}")
 
-# IIC is automatically applied in estimators when use_iic=True (default)
+# IIC can be enabled in estimators that support it (disabled by default)
 from cje import CalibratedIPS
-estimator = CalibratedIPS(sampler, use_iic=True)  # Default
+estimator = CalibratedIPS(sampler, use_iic=True)  # Enable IIC for variance reduction
 ```
 
 ### Oracle Uncertainty (Default: OUA Jackknife)

@@ -58,7 +58,7 @@ class TMLEEstimator(DREstimator):
         use_calibrated_weights: bool = True,
         weight_mode: str = "hajek",
         reward_calibrator: Optional[Any] = None,
-        use_iic: bool = True,  # Enable IIC for variance reduction
+        use_iic: bool = False,  # IIC disabled by default
         **kwargs: Any,
     ):
         # Initialize DR base with standard isotonic outcome model

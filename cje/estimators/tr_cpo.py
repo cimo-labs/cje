@@ -72,9 +72,9 @@ class TRCPOEstimator(DREstimator):
         random_seed: int = 42,
         min_pi: float = 1e-3,
         max_pi: float = 1 - 1e-3,
-        use_iic: bool = True,
+        use_iic: bool = False,
         run_diagnostics: bool = True,
-        oua_jackknife: bool = False,
+        oua_jackknife: bool = True,
         use_efficient_tr: bool = True,  # Default to variance-reduced version
         anchor_on_simcal: bool = False,  # Optional SIMCal anchoring with retarget to raw w
         add_orthogonalizer: bool = False,  # Reserved: optional orthogonalizer term (off by default)
@@ -116,7 +116,7 @@ class TRCPOEstimator(DREstimator):
                     weight_mode=self.weight_mode,
                     reward_calibrator=reward_calibrator,
                     run_diagnostics=False,
-                    oua_jackknife=False,
+                    oua_jackknife=True,
                     use_outer_cv=True,
                     n_outer_folds=n_folds,
                     outer_cv_seed=random_seed,

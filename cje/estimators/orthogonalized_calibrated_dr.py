@@ -86,7 +86,7 @@ class OrthogonalizedCalibratedDRCPO(DREstimator):
         reward_calibrator: Optional[Any] = None,
         random_seed: int = 42,
         run_diagnostics: bool = True,
-        use_iic: bool = True,
+        use_iic: bool = False,
         use_orthogonalization: bool = True,
         **kwargs: Any,
     ):
