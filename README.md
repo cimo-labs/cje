@@ -1,5 +1,5 @@
 <div align="left">
-  <img src="CJE_logo_v3.jpg" alt="CJE Logo" width="250">
+  <img src="CJE_logo.jpg" alt="CJE Logo" width="250">
 </div>
 
 # CJE - Causal Judge Evaluation
