@@ -687,17 +687,22 @@ class CalibratedIPS(BaseCJEEstimator):
 
                         if np.all(ds_idx >= 0):
                             tmp = self.reward_calibrator.predict_oof_by_index(ds_idx)
-                            if tmp is not None:
+                            if tmp is not None and len(tmp) > 0:
                                 R_oof = np.asarray(tmp, dtype=float)
                     elif hasattr(self.reward_calibrator, "predict_oof"):
                         S_vec = np.asarray(
                             [d.get("judge_score", np.nan) for d in data], dtype=float
                         )
                         tmp = self.reward_calibrator.predict_oof(S_vec, fold_ids)
-                        if tmp is not None:
+                        if tmp is not None and len(tmp) > 0:
                             R_oof = np.asarray(tmp, dtype=float)
                 except Exception as e:
                     logger.debug(f"OOF reward prediction failed for IF path: {e}")
+
+            # Ensure R_oof has correct shape after calibration attempts
+            if len(R_oof) != len(rewards):
+                logger.debug(f"R_oof has wrong shape ({len(R_oof)} vs {len(rewards)}), using uncalibrated rewards")
+                R_oof = rewards.copy()
 
             # Check if we should use honest IFs with outer CV
             calib_info = self._calibration_info.get(policy, {})
