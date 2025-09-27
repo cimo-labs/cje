@@ -6,7 +6,7 @@
 
 [![Docs](https://img.shields.io/badge/docs-cimo--labs.com-blue)](https://cimo-labs.com/cje)
 [![Python](https://img.shields.io/badge/python-3.9%E2%80%933.12-blue)](https://www.python.org/downloads/)
-[![codecov](https://codecov.io/gh/fondutech/causal-judge-evaluation/branch/main/graph/badge.svg)](https://codecov.io/gh/fondutech/causal-judge-evaluation)
+[![codecov](https://codecov.io/gh/cimo-labs/cje/branch/main/graph/badge.svg)](https://codecov.io/gh/cimo-labs/cje)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 **Off-policy evaluation for LLMs that actually works.** Get unbiased estimates of how your new model will perform before deployment.
