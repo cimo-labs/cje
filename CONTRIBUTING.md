@@ -23,9 +23,20 @@ poetry run pytest  # Verify everything works
 ## 📝 Code Standards
 
 1. **Type everything** - Use type hints
-2. **No magic values** - Return None or raise exceptions  
+2. **No magic values** - Return None or raise exceptions
 3. **Single responsibility** - Each function does ONE thing
 4. **Test your code** - All PRs need tests
+
+## 🧪 Testing Philosophy
+
+CJE prioritizes **statistical correctness** over code coverage metrics:
+
+- **Monte Carlo validation** - Tests should verify statistical properties (unbiasedness, coverage)
+- **Real data testing** - Test with actual arena data when possible
+- **Mathematical verification** - Validate key properties (monotonicity, mean preservation)
+- **Integration over unit tests** - Complete pipelines matter more than isolated functions
+
+We don't optimize for coverage percentages. A test that validates statistical properties is worth more than 100 tests of getters/setters.
 
 ## ✅ Pull Request Checklist
 
