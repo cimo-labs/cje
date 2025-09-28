@@ -104,9 +104,17 @@ labeled_sample_ids = random.sample(all_ids, k=int(0.1 * len(all_ids)))
 ```
 
 ### "ValueError: DR estimators require fresh draws"
-Generate new samples from target policy:
-```bash
-python -m cje.teacher_forcing generate --model gpt4 --n-samples 1000
+Generate new samples from target policy using CJE's Fireworks integration:
+```python
+from cje.teacher_forcing import compute_teacher_forced_logprob
+
+# Generate log probabilities for your target model
+for sample in your_data:
+    logprob = compute_teacher_forced_logprob(
+        prompt=sample["prompt"],
+        response=sample["response"],
+        model="accounts/fireworks/models/llama-v3p2-3b-instruct"
+    )
 ```
 
 ## Next Steps - Choose Your Path

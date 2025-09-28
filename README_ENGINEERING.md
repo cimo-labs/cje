@@ -58,6 +58,27 @@ class EstimationResult:
 - Missing log probs → sample skipped with warning
 - At least 10% samples need oracle labels for calibration
 
+### Computing Log Probabilities
+
+CJE includes Fireworks API integration for teacher-forced log probability computation:
+
+```python
+from cje.teacher_forcing import compute_teacher_forced_logprob
+
+# For any model available on Fireworks
+logprob = compute_teacher_forced_logprob(
+    prompt="What is the capital of France?",
+    response="The capital of France is Paris.",
+    model="accounts/fireworks/models/llama-v3p2-3b-instruct"
+)
+```
+
+The teacher forcing module handles:
+- Automatic chat template detection and application
+- Proper tokenization and log probability extraction
+- Fallback mechanisms for robustness
+- Support for all major model families (Llama, Qwen, Mistral, etc.)
+
 ## Output Usage
 
 ### Basic Usage

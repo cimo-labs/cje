@@ -94,6 +94,23 @@ CJE expects JSONL with these fields:
 }
 ```
 
+### Generating Log Probabilities
+
+CJE includes built-in **Fireworks API integration** for computing teacher-forced log probabilities:
+
+```python
+from cje.teacher_forcing import compute_teacher_forced_logprob
+
+# Compute log P(response|prompt) for any model on Fireworks
+logprob = compute_teacher_forced_logprob(
+    prompt="What is 2+2?",
+    response="4",
+    model="accounts/fireworks/models/llama-v3p2-3b-instruct"
+)
+```
+
+This handles chat templates, tokenization, and API calls automatically. See `cje/teacher_forcing/` for details.
+
 ## Choosing an Estimator
 
 - **`calibrated-ips`** (default for quick start): Fast, reliable, no fresh samples needed
