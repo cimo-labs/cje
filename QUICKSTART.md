@@ -110,11 +110,13 @@ from cje.teacher_forcing import compute_teacher_forced_logprob
 
 # Generate log probabilities for your target model
 for sample in your_data:
-    logprob = compute_teacher_forced_logprob(
+    result = compute_teacher_forced_logprob(
         prompt=sample["prompt"],
         response=sample["response"],
         model="accounts/fireworks/models/llama-v3p2-3b-instruct"
     )
+    if result.status == "success":
+        sample["target_logprob"] = result.value
 ```
 
 ## Next Steps - Choose Your Path

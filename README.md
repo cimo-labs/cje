@@ -102,11 +102,13 @@ CJE includes built-in **Fireworks API integration** for computing teacher-forced
 from cje.teacher_forcing import compute_teacher_forced_logprob
 
 # Compute log P(response|prompt) for any model on Fireworks
-logprob = compute_teacher_forced_logprob(
+result = compute_teacher_forced_logprob(
     prompt="What is 2+2?",
     response="4",
     model="accounts/fireworks/models/llama-v3p2-3b-instruct"
 )
+if result.status == "success":
+    logprob = result.value  # e.g., -2.3
 ```
 
 This handles chat templates, tokenization, and API calls automatically. See `cje/teacher_forcing/` for details.

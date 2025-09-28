@@ -66,11 +66,13 @@ CJE includes Fireworks API integration for teacher-forced log probability comput
 from cje.teacher_forcing import compute_teacher_forced_logprob
 
 # For any model available on Fireworks
-logprob = compute_teacher_forced_logprob(
+result = compute_teacher_forced_logprob(
     prompt="What is the capital of France?",
     response="The capital of France is Paris.",
     model="accounts/fireworks/models/llama-v3p2-3b-instruct"
 )
+if result.status == "success":
+    logprob = result.value  # The log probability
 ```
 
 The teacher forcing module handles:
