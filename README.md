@@ -9,12 +9,14 @@
 [![Tests](https://img.shields.io/badge/tests-passing-green)](https://github.com/cimo-labs/cje/actions)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**Off-policy evaluation for LLMs that actually works.** Get unbiased estimates of how your new model will perform before deployment.
+**What if your AI evals looked like A/B tests with reliable confidence intervals and causal guarantees?**
+
+CJE makes it possible. Get unbiased estimates of how your new model will perform before deployment, with the statistical rigor you'd expect from production experimentation.
 
 ## Why CJE?
 
-🎯 **Problem**: LLM-as-judge scores are biased - they tell you about your current model, not your next one
-✅ **Solution**: CJE uses causal inference to debias these scores for reliable policy evaluation
+🎯 **Problem**: Your LLM-judge scores are noisy, biased, and untrustworthy
+✅ **Solution**: CJE uses causal inference to debias them, giving you reliable estimates with confidence intervals without compromising on judge flexibility
 
 ## Installation
 
