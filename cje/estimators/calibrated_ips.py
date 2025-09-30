@@ -952,17 +952,6 @@ class CalibratedIPS(BaseCJEEstimator):
             method="calibrated_ips" if self.calibrate_weights else "raw_ips",
             influence_functions=influence_functions,
             diagnostics=None,  # Will be set below
-            robust_standard_errors=(
-                np.array(standard_errors) if self.use_outer_cv else None
-            ),
-            robust_confidence_intervals=(
-                [
-                    self._robust_ci.get(p, (np.nan, np.nan))
-                    for p in self.sampler.target_policies
-                ]
-                if self.use_outer_cv and hasattr(self, "_robust_ci")
-                else None
-            ),
             metadata={
                 "target_policies": list(self.sampler.target_policies),
                 "iic_diagnostics": (

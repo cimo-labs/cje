@@ -175,13 +175,13 @@ if result.diagnostics.weight_ess < 0.1:
     print("Warning: Low ESS, consider using DR methods")
 
 # Report results
+cis = result.ci()
 for i, policy in enumerate(result.metadata["target_policies"]):
     estimate = result.estimates[i]
-    se = result.robust_standard_errors[i]
-    ci_low, ci_high = result.robust_confidence_intervals[i]
+    ci_low, ci_high = cis[i]
 
     print(f"\n{policy}:")
-    print(f"  Estimate: {estimate:.3f} ± {se:.3f}")
+    print(f"  Estimate: {estimate:.3f}")
     print(f"  95% CI: [{ci_low:.3f}, {ci_high:.3f}]")
     print(f"  ESS: {result.diagnostics.ess_per_policy[policy]:.1%}")
 ```

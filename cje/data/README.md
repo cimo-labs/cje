@@ -170,7 +170,7 @@ Non-core fields go into metadata automatically, allowing:
 ### 5. **Oracle Coverage Detection**
 PrecomputedSampler.oracle_coverage property enables:
 - Automatic OUA jackknife activation when coverage < 100%
-- Honest confidence intervals via robust_standard_errors
+- Oracle uncertainty included in standard_errors at partial coverage
 - Graceful handling of partial oracle labels
 - Backward compatibility
 

@@ -422,8 +422,6 @@ class TMLEEstimator(DREstimator):
             influence_functions=self._influence_functions,
             diagnostics=diagnostics,  # Add the DRDiagnostics object
             metadata=metadata,
-            robust_standard_errors=None,
-            robust_confidence_intervals=None,
         )
 
         # Apply OUA jackknife using base class method

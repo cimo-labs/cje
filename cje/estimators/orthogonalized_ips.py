@@ -433,8 +433,6 @@ class OrthogonalizedCalibratedIPS(CalibratedIPS):
             method="oc-ips",
             influence_functions=influence_functions,
             diagnostics=None,  # Will be set below
-            robust_standard_errors=None,
-            robust_confidence_intervals=None,
             metadata={
                 "target_policies": list(self.sampler.target_policies),
                 "calibrate": self.calibrate_weights,

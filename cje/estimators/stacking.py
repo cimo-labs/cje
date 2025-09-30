@@ -190,8 +190,6 @@ class StackedDREstimator(BaseCJEEstimator):
             influence_functions=stacked_ifs,
             metadata=metadata,
             diagnostics=None,
-            robust_standard_errors=None,
-            robust_confidence_intervals=None,
         )
 
         # Add any diagnostics from components
@@ -206,9 +204,7 @@ class StackedDREstimator(BaseCJEEstimator):
         """Augment stacked SEs with oracle jackknife (OUA) via linear combination.
 
         For fixed stacking weights w, the stacked jackknife path is ψ_stack^(−f) = Σ w_k ψ_k^(−f).
-        We compute var_oracle_stack = (K-1)/K * Var_f(ψ_stack^(−f)) and set
-        robust_standard_errors = sqrt(standard_errors^2 + var_oracle_stack).
-        If no component provides jackknife or K<2, we leave robust_standard_errors as None.
+        We compute var_oracle_stack = (K-1)/K * Var_f(ψ_stack^(−f)) and add it to standard_errors in-place.
         """
         # Skip OUA when we have 100% oracle coverage (no oracle uncertainty)
         try:
@@ -217,11 +213,12 @@ class StackedDREstimator(BaseCJEEstimator):
                 and self.sampler.oracle_coverage == 1.0
             ):
                 # At 100% coverage, we use raw oracle labels, so no oracle uncertainty
-                result.robust_standard_errors = result.standard_errors
                 if result.metadata is None:
                     result.metadata = {}
-                result.metadata.setdefault("oua", {})
-                result.metadata["oua"]["skipped"] = "100% oracle coverage"
+                result.metadata.setdefault("se_components", {})
+                result.metadata["se_components"][
+                    "oracle_uncertainty_skipped"
+                ] = "100% oracle coverage"
                 return
         except Exception:
             pass  # Continue with normal OUA calculation if we can't check coverage
@@ -286,22 +283,33 @@ class StackedDREstimator(BaseCJEEstimator):
                             np.mean((stacked_jack - mu) ** 2)
                         )
 
-            # Combine with base SE if we have a valid var_oracle
-            if np.isfinite(base_se) and var_oracle >= 0.0:
-                robust_ses.append(float(np.sqrt(base_se**2 + var_oracle)))
-            else:
-                robust_ses.append(base_se)
+            # Update standard_errors in-place with oracle variance
+            if (
+                idx < len(result.standard_errors)
+                and np.isfinite(base_se)
+                and var_oracle >= 0.0
+            ):
+                result.standard_errors[idx] = float(np.sqrt(base_se**2 + var_oracle))
 
             var_oracle_per_policy[policy] = var_oracle
             jackknife_counts[policy] = int(K)
             contributors_map[policy] = contributors
 
-        # If we computed anything meaningful, attach to result
+        # If we computed anything meaningful, record it in metadata
         if any(k >= 2 for k in jackknife_counts.values()):
-            result.robust_standard_errors = np.asarray(robust_ses, dtype=float)
             # Merge into metadata
             if result.metadata is None:
                 result.metadata = {}
+            result.metadata.setdefault("se_components", {})
+            result.metadata["se_components"].update(
+                {
+                    "includes_oracle_uncertainty": True,
+                    "oracle_variance_per_policy": var_oracle_per_policy,
+                    "oracle_jackknife_counts": jackknife_counts,
+                    "oracle_contributors": contributors_map,
+                }
+            )
+            # Keep backward compat key
             result.metadata.setdefault("oua", {})
             result.metadata["oua"].update(
                 {

@@ -779,9 +779,7 @@ class TRCPOEstimator(DREstimator):
             method=method_name,
             influence_functions=if_map,
             diagnostics=diagnostics,
-            robust_standard_errors=None,
             # robust_standard_errors_per_policy removed in latest version
-            robust_confidence_intervals=None,
             metadata={
                 "target_policies": list(self.sampler.target_policies),
                 "tr_diagnostics": self._tr_diagnostics,

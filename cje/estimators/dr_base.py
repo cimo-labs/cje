@@ -1038,7 +1038,11 @@ class DREstimator(BaseCJEEstimator):
             pass
 
         # Mark that oracle variance is already included in standard_errors
-        metadata["se_components"] = {"includes_oua": True}
+        # (prevents base class from adding it again)
+        metadata["se_components"] = {
+            "includes_oracle_uncertainty": True,
+            "includes_mc_variance": True,
+        }
 
         # Add sample indices for IF alignment in stacking
         if hasattr(self, "_if_sample_indices"):
@@ -1052,8 +1056,6 @@ class DREstimator(BaseCJEEstimator):
             influence_functions=self._influence_functions,
             diagnostics=dr_diagnostics,
             metadata=metadata,
-            robust_standard_errors=None,
-            robust_confidence_intervals=None,
         )
 
         # Apply OUA jackknife using base class method

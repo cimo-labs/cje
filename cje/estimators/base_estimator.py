@@ -237,12 +237,11 @@ class BaseCJEEstimator(ABC):
     def _apply_oua_jackknife(self, result: EstimationResult) -> None:
         """Apply Oracle Uncertainty Augmentation via jackknife resampling.
 
-        This method computes robust standard errors that account for finite-sample
-        uncertainty in the learned reward calibrator f̂(S). It recomputes estimates
-        using each leave-one-fold calibrator and combines the variance.
+        This method adds oracle uncertainty to standard_errors in-place, accounting
+        for finite-sample uncertainty in the learned reward calibrator f̂(S).
 
         Args:
-            result: EstimationResult to augment with robust standard errors
+            result: EstimationResult with standard_errors to augment
         """
         if not (self.oua_jackknife and self.reward_calibrator is not None):
             return
@@ -253,10 +252,11 @@ class BaseCJEEstimator(ABC):
                 hasattr(self.sampler, "oracle_coverage")
                 and self.sampler.oracle_coverage == 1.0
             ):
-                result.robust_standard_errors = result.standard_errors
                 if isinstance(result.metadata, dict):
-                    result.metadata.setdefault("oua", {})
-                    result.metadata["oua"]["skipped"] = "100% oracle coverage"
+                    result.metadata.setdefault("se_components", {})
+                    result.metadata["se_components"][
+                        "oracle_uncertainty_skipped"
+                    ] = "100% oracle coverage"
                 return
         except Exception:
             pass  # Continue with normal OUA if we can't check coverage
@@ -264,38 +264,43 @@ class BaseCJEEstimator(ABC):
         # Check if oracle variance is already included (e.g., by DR estimators)
         if isinstance(result.metadata, dict) and result.metadata.get(
             "se_components", {}
-        ).get("includes_oua"):
-            # Oracle variance already included in standard_errors; just copy them
-            result.robust_standard_errors = result.standard_errors
+        ).get("includes_oracle_uncertainty"):
+            # Oracle variance already included in standard_errors by DR
             return
 
         try:
-            oua_ses: List[float] = []
             var_oracle_map: Dict[str, float] = {}
             jk_counts: Dict[str, int] = {}
-            base_se = result.standard_errors
 
             for i, policy in enumerate(self.sampler.target_policies):
                 var_orc = 0.0
                 K = 0
                 jack = self.get_oracle_jackknife(policy)
-                if jack is not None and len(jack) >= 2 and i < len(base_se):
+                if (
+                    jack is not None
+                    and len(jack) >= 2
+                    and i < len(result.standard_errors)
+                ):
                     K = len(jack)
                     psi_bar = float(np.mean(jack))
                     var_orc = (K - 1) / K * float(np.mean((jack - psi_bar) ** 2))
+
                 var_oracle_map[policy] = var_orc
                 jk_counts[policy] = K
-                se_main = float(base_se[i]) if i < len(base_se) else float("nan")
-                oua_ses.append(float(np.sqrt(se_main**2 + var_orc)))
 
-            result.robust_standard_errors = np.array(oua_ses)
-            # Attach OUA metadata
+                # Update standard_errors in place (add oracle variance)
+                if i < len(result.standard_errors):
+                    se_base = float(result.standard_errors[i])
+                    result.standard_errors[i] = float(np.sqrt(se_base**2 + var_orc))
+
+            # Record that oracle uncertainty has been added
             if isinstance(result.metadata, dict):
-                result.metadata.setdefault("oua", {})
-                result.metadata["oua"].update(
+                result.metadata.setdefault("se_components", {})
+                result.metadata["se_components"].update(
                     {
-                        "var_oracle_per_policy": var_oracle_map,
-                        "jackknife_counts": jk_counts,
+                        "includes_oracle_uncertainty": True,
+                        "oracle_variance_per_policy": var_oracle_map,
+                        "oracle_jackknife_counts": jk_counts,
                     }
                 )
         except Exception as e:

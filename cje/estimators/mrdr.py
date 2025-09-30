@@ -583,8 +583,6 @@ class MRDREstimator(DREstimator):
             influence_functions=self._influence_functions,
             diagnostics=diagnostics,
             metadata=metadata,
-            robust_standard_errors=None,
-            robust_confidence_intervals=None,
         )
 
         # Apply OUA jackknife using base class method (inherits from DREstimator)

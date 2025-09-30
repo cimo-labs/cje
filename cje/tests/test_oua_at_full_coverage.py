@@ -2,7 +2,7 @@
 """
 Test that OUA is correctly skipped at 100% oracle coverage.
 
-This test ensures that robust_standard_errors equals standard_errors
+This test ensures that oracle uncertainty is not added to standard_errors
 when oracle_coverage = 1.0, preventing the bug discovered in the
 ablation experiments.
 """
@@ -85,19 +85,16 @@ def test_ips_skips_oua_at_full_coverage() -> None:
     # Fit and estimate
     result = estimator.fit_and_estimate()
 
-    # Check that robust SE equals standard SE
+    # Check that standard errors were computed
     assert result.standard_errors is not None
-    assert result.robust_standard_errors is not None
-    np.testing.assert_array_equal(
-        result.standard_errors,
-        result.robust_standard_errors,
-        err_msg="At 100% oracle coverage, robust SE should equal standard SE",
-    )
 
-    # Check metadata
+    # Check metadata indicates OUA was skipped
     assert result.metadata is not None
-    assert "oua" in result.metadata
-    assert result.metadata["oua"].get("skipped") == "100% oracle coverage"
+    assert "se_components" in result.metadata
+    assert (
+        result.metadata["se_components"].get("oracle_uncertainty_skipped")
+        == "100% oracle coverage"
+    )
 
 
 def test_ips_applies_oua_at_partial_coverage() -> None:
@@ -126,58 +123,55 @@ def test_ips_applies_oua_at_partial_coverage() -> None:
     # Fit and estimate
     result = estimator.fit_and_estimate()
 
-    # Check that robust SE is larger than standard SE
+    # Check that standard errors include oracle uncertainty
     assert result.standard_errors is not None
-    assert result.robust_standard_errors is not None
-    assert np.all(
-        result.robust_standard_errors >= result.standard_errors
-    ), "Robust SE should be >= standard SE when OUA is applied"
+    assert result.metadata is not None
+    assert "se_components" in result.metadata
+    assert result.metadata["se_components"].get("includes_oracle_uncertainty") is True
 
-    # For meaningful OUA, they should actually be different
-    if not np.allclose(result.robust_standard_errors, result.standard_errors):
-        assert np.any(
-            result.robust_standard_errors > result.standard_errors
-        ), "At partial coverage with OUA, robust SE should be larger than standard SE"
+    # Check that oracle variance was actually added
+    oracle_variance = result.metadata["se_components"].get(
+        "oracle_variance_per_policy", {}
+    )
+    assert (
+        len(oracle_variance) > 0
+    ), "Oracle variance should be computed at partial coverage"
 
 
 def test_stacked_dr_skips_oua_at_full_coverage() -> None:
-    """Test that StackedDREstimator skips OUA at 100% oracle coverage."""
-    # This test verifies that at 100% oracle coverage, OUA is properly skipped.
-    # However, DR estimation itself doesn't work well at 100% oracle coverage
-    # since all samples get filtered out. So we just test the IPS part.
+    """Test that estimators skip OUA at 100% oracle coverage."""
+    # At 100% oracle coverage, there's no uncertainty in the calibrator,
+    # so OUA should be skipped.
 
-    # Create dataset with partial coverage instead to make DR work
-    dataset = create_test_dataset(oracle_coverage=0.5)
+    # Create dataset with 100% coverage
+    dataset = create_test_dataset(oracle_coverage=1.0)
 
-    # Mock calibrator to pretend we have 100% coverage
+    # Mock calibrator
     mock_calibrator = MagicMock()
     mock_calibrator.has_oracle_indices = False  # This indicates 100% coverage
 
-    # Mock the oracle coverage check to return 1.0
-    with patch.object(mock_calibrator, "oracle_coverage", 1.0):
-        # Create sampler (target_policies already in dataset)
-        sampler = PrecomputedSampler(dataset)
+    # Create sampler (target_policies already in dataset)
+    sampler = PrecomputedSampler(dataset)
 
-        # Test with CalibratedIPS instead which handles 100% coverage properly
-        estimator = CalibratedIPS(
-            sampler,
-            calibrate_weights=False,
-            oua_jackknife=True,
-        )
-        estimator.reward_calibrator = mock_calibrator
+    # Test with CalibratedIPS which handles 100% coverage properly
+    estimator = CalibratedIPS(
+        sampler,
+        calibrate_weights=False,
+        oua_jackknife=True,
+    )
+    estimator.reward_calibrator = mock_calibrator
 
-        # Fit and estimate
-        result = estimator.fit_and_estimate()
+    # Fit and estimate
+    result = estimator.fit_and_estimate()
 
-        # Check that robust SE equals standard SE
-        assert result.standard_errors is not None
-        assert result.robust_standard_errors is not None
-        np.testing.assert_array_almost_equal(
-            result.standard_errors,
-            result.robust_standard_errors,
-            decimal=10,
-            err_msg="At 100% oracle coverage, robust SE should equal standard SE",
-        )
+    # Check that OUA was skipped
+    assert result.standard_errors is not None
+    assert result.metadata is not None
+    assert "se_components" in result.metadata
+    assert (
+        result.metadata["se_components"].get("oracle_uncertainty_skipped")
+        == "100% oracle coverage"
+    )
 
 
 def test_multiple_estimators_at_full_coverage() -> None:
@@ -204,17 +198,14 @@ def test_multiple_estimators_at_full_coverage() -> None:
         # Fit and estimate
         result = estimator.fit_and_estimate()
 
-        # Check that robust SE equals standard SE
-        if (
-            result.standard_errors is not None
-            and result.robust_standard_errors is not None
-        ):
-            np.testing.assert_array_almost_equal(
-                result.standard_errors,
-                result.robust_standard_errors,
-                decimal=10,
-                err_msg=f"{estimator.__class__.__name__} should skip OUA at 100% coverage",
-            )
+        # Check that OUA was skipped
+        assert result.standard_errors is not None
+        assert result.metadata is not None
+        assert "se_components" in result.metadata
+        assert (
+            result.metadata["se_components"].get("oracle_uncertainty_skipped")
+            == "100% oracle coverage"
+        ), f"{estimator.__class__.__name__} should skip OUA at 100% coverage"
 
 
 if __name__ == "__main__":

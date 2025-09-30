@@ -521,8 +521,6 @@ class OrthogonalizedCalibratedDRCPO(DREstimator):
             method="oc_dr_cpo",
             influence_functions=ifs,
             diagnostics=None,  # The caller (suite) or parent infra can attach suites; we add metadata below
-            robust_standard_errors=None,
-            robust_confidence_intervals=None,
             metadata={
                 "target_policies": list(self.sampler.target_policies),
                 "orthogonalization_diagnostics": self._orthogonalization_diagnostics,

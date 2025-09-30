@@ -166,14 +166,6 @@ class EstimationResult(BaseModel):
         None, description="Diagnostic information (IPSDiagnostics or DRDiagnostics)"
     )
 
-    # Robust inference (Phase 3)
-    robust_standard_errors: Optional[np.ndarray] = Field(
-        None, description="Robust standard errors (bootstrap/cluster)"
-    )
-    robust_confidence_intervals: Optional[List[Tuple[float, float]]] = Field(
-        None, description="Robust confidence intervals"
-    )
-
     # Configuration and context
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
@@ -183,13 +175,36 @@ class EstimationResult(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
     def confidence_interval(self, alpha: float = 0.05) -> Tuple[np.ndarray, np.ndarray]:
-        """Compute confidence intervals."""
+        """Compute confidence intervals (returns lower and upper arrays).
+
+        Args:
+            alpha: Significance level (default 0.05 for 95% CI)
+
+        Returns:
+            Tuple of (lower_bounds, upper_bounds) as numpy arrays
+        """
         from scipy import stats
 
         z = stats.norm.ppf(1 - alpha / 2)
         lower = self.estimates - z * self.standard_errors
         upper = self.estimates + z * self.standard_errors
         return lower, upper
+
+    def ci(self, alpha: float = 0.05) -> List[Tuple[float, float]]:
+        """Convenience method for confidence intervals as list of tuples.
+
+        Args:
+            alpha: Significance level (default 0.05 for 95% CI)
+
+        Returns:
+            List of (lower, upper) tuples, one per policy
+
+        Example:
+            >>> result.ci()
+            [(0.701, 0.745), (0.680, 0.720)]
+        """
+        lower, upper = self.confidence_interval(alpha)
+        return [(float(l), float(u)) for l, u in zip(lower, upper)]
 
     def best_policy(self) -> int:
         """Get index of best policy by point estimate."""

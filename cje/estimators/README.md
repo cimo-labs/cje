@@ -92,7 +92,8 @@ result = estimator.fit_and_estimate()
 
 # 5. Access results
 estimates = result.estimates           # Point estimates
-std_errors = result.standard_errors    # Standard errors
+std_errors = result.standard_errors    # Complete standard errors (IF + MC + oracle)
+cis = result.ci()                      # Confidence intervals as (lower, upper) tuples
 diagnostics = result.diagnostics       # Health metrics
 influence = result.influence_functions # For inference
 ```
@@ -151,31 +152,38 @@ estimator.add_fresh_draws('policy', FreshDrawDataset(samples=[...]))
 
 ## Standard Errors and Uncertainty Quantification
 
-### Three Types of Standard Errors
+### Complete Standard Errors
 
-1. **`standard_errors`**: Base uncertainty from sampling (includes MC variance for DR estimators)
-2. **`robust_standard_errors`**: Adds oracle uncertainty from finite calibration sample
-3. **Method-specific robust SEs**: Some estimators add additional robustness adjustments
+`standard_errors` always includes all sources of uncertainty:
+- **Influence function (IF) variance**: Base sampling uncertainty
+- **Monte Carlo (MC) variance**: For DR estimators with finite fresh draws
+- **Oracle variance**: When calibration uses partial oracle labels (oracle_coverage < 100%)
 
 ### IPS Standard Errors
 ```python
-# Base SE from influence functions
-standard_errors = np.std(influence_functions, ddof=1) / np.sqrt(n)
+# Complete SE includes IF variance + oracle uncertainty
+standard_errors = np.sqrt(if_variance/n + oracle_variance)
 
-# Robust SE adds oracle uncertainty (only when oracle_coverage < 100%)
-robust_standard_errors = np.sqrt(standard_errors² + oracle_variance)
+# Oracle variance is automatically skipped at 100% oracle coverage
 ```
 
 ### DR Standard Errors (with Monte Carlo Variance)
 ```python
-# Base IF variance + MC variance from finite fresh draws
-standard_errors = np.sqrt(if_variance/n + mc_variance)
+# Complete SE includes all three components
+standard_errors = np.sqrt(if_variance/n + mc_variance + oracle_variance)
 
-# Robust SE adds oracle uncertainty on top
-robust_standard_errors = np.sqrt(standard_errors² + oracle_variance)
+# Check metadata for what's included
+result.metadata["se_components"]["includes_mc_variance"]  # True for DR
+result.metadata["se_components"]["includes_oracle_uncertainty"]  # True if OUA applied
 ```
 
-**Important**: For DR estimators, `standard_errors` already includes MC variance. Check `mc_variance_included: True` in metadata.
+### Convenience Method
+```python
+# Get confidence intervals as list of (lower, upper) tuples
+cis = result.ci(alpha=0.05)  # 95% CIs by default
+for i, (lower, upper) in enumerate(cis):
+    print(f"Policy {i}: [{lower:.3f}, {upper:.3f}]")
+```
 
 ### Automatic MC Variance Handling
 When only one fresh draw per prompt (M=1), DR estimators automatically use a conservative upper bound:
@@ -204,12 +212,15 @@ All estimators support OUA via delete-one-fold jackknife to account for calibrat
 # Enabled by default
 estimator = CalibratedIPS(sampler, oua_jackknife=True)
 
-# Access OUA-adjusted standard errors
+# Oracle uncertainty is automatically included in standard_errors
 result = estimator.fit_and_estimate()
-robust_ses = result.robust_standard_errors  # Includes oracle uncertainty
 
-# At 100% oracle coverage: robust_ses == standard_errors (no OUA applied)
-# At <100% coverage: robust_ses >= standard_errors (OUA adds uncertainty)
+# Check if oracle uncertainty was added
+if "se_components" in result.metadata:
+    if result.metadata["se_components"].get("oracle_uncertainty_skipped"):
+        print("OUA skipped - 100% oracle coverage")
+    elif result.metadata["se_components"].get("includes_oracle_uncertainty"):
+        print("Oracle uncertainty included in standard_errors")
 ```
 
 ### Honest Inference with Outer CV
