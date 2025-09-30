@@ -121,3 +121,15 @@ def test_cli_analyze_auto_with_fresh_draws_quiet() -> None:
 
     code = run_analysis(args)
     assert code == 0
+
+
+def test_stacked_dr_without_fresh_draws_raises_helpful_error() -> None:
+    """Stacked-DR requires fresh draws - ensure clear error message."""
+    dataset_path, _ = _arena_paths()
+
+    with pytest.raises(ValueError, match="DR estimators require fresh draws"):
+        analyze_dataset(
+            dataset_path=str(dataset_path),
+            estimator="stacked-dr",
+            fresh_draws_dir=None,  # Missing!
+        )
