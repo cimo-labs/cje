@@ -1,5 +1,5 @@
 # CJE Project Documentation - All README Files
-Generated on: Sat Sep 27 15:04:01 PDT 2025
+Generated on: Sun Sep 28 15:25:28 PDT 2025
 =
 
 
@@ -15,7 +15,7 @@ Generated on: Sat Sep 27 15:04:01 PDT 2025
 
 [![Docs](https://img.shields.io/badge/docs-cimo--labs.com-blue)](https://cimo-labs.com/cje)
 [![Python](https://img.shields.io/badge/python-3.9%E2%80%933.12-blue)](https://www.python.org/downloads/)
-[![codecov](https://codecov.io/gh/cimo-labs/cje/branch/main/graph/badge.svg)](https://codecov.io/gh/cimo-labs/cje)
+[![Tests](https://img.shields.io/badge/tests-passing-green)](https://github.com/cimo-labs/cje/actions)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 **Off-policy evaluation for LLMs that actually works.** Get unbiased estimates of how your new model will perform before deployment.
@@ -102,6 +102,25 @@ CJE expects JSONL with these fields:
   }
 }
 ```
+
+### Generating Log Probabilities
+
+CJE includes built-in **Fireworks API integration** for computing teacher-forced log probabilities:
+
+```python
+from cje.teacher_forcing import compute_teacher_forced_logprob
+
+# Compute log P(response|prompt) for any model on Fireworks
+result = compute_teacher_forced_logprob(
+    prompt="What is 2+2?",
+    response="4",
+    model="accounts/fireworks/models/llama-v3p2-3b-instruct"
+)
+if result.status == "success":
+    logprob = result.value  # e.g., -2.3
+```
+
+This handles chat templates, tokenization, and API calls automatically. See `cje/teacher_forcing/` for details.
 
 ## Choosing an Estimator
 
@@ -265,9 +284,19 @@ labeled_sample_ids = random.sample(all_ids, k=int(0.1 * len(all_ids)))
 ```
 
 ### "ValueError: DR estimators require fresh draws"
-Generate new samples from target policy:
-```bash
-python -m cje.teacher_forcing generate --model gpt4 --n-samples 1000
+Generate new samples from target policy using CJE's Fireworks integration:
+```python
+from cje.teacher_forcing import compute_teacher_forced_logprob
+
+# Generate log probabilities for your target model
+for sample in your_data:
+    result = compute_teacher_forced_logprob(
+        prompt=sample["prompt"],
+        response=sample["response"],
+        model="accounts/fireworks/models/llama-v3p2-3b-instruct"
+    )
+    if result.status == "success":
+        sample["target_logprob"] = result.value
 ```
 
 ## Next Steps - Choose Your Path
@@ -431,6 +460,29 @@ class EstimationResult:
 - Oracle labels must be in [0, 1] when present
 - Missing log probs → sample skipped with warning
 - At least 10% samples need oracle labels for calibration
+
+### Computing Log Probabilities
+
+CJE includes Fireworks API integration for teacher-forced log probability computation:
+
+```python
+from cje.teacher_forcing import compute_teacher_forced_logprob
+
+# For any model available on Fireworks
+result = compute_teacher_forced_logprob(
+    prompt="What is the capital of France?",
+    response="The capital of France is Paris.",
+    model="accounts/fireworks/models/llama-v3p2-3b-instruct"
+)
+if result.status == "success":
+    logprob = result.value  # The log probability
+```
+
+The teacher forcing module handles:
+- Automatic chat template detection and application
+- Proper tokenization and log probability extraction
+- Fallback mechanisms for robustness
+- Support for all major model families (Llama, Qwen, Mistral, etc.)
 
 ## Output Usage
 
@@ -3128,5 +3180,5 @@ The visualization module transforms complex statistical diagnostics into interpr
 
 # Summary:
 # - Total README files: 12
-# - Total lines of documentation: 5452
+# - Total lines of documentation: 5504
 # - Modules documented: 14

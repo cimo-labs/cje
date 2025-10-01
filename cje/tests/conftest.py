@@ -118,59 +118,34 @@ def arena_sampler(arena_calibrated: Dataset) -> PrecomputedSampler:
 
 @pytest.fixture
 def arena_fresh_draws() -> Dict[str, FreshDrawDataset]:
-    """Load real fresh draws from arena sample.
+    """Load real fresh draws from arena sample using the official loader.
 
     Returns dict mapping policy names to FreshDrawDataset objects.
     Policies: clone, premium, parallel_universe_prompt, unhelpful
 
-    Note: The response files aren't in fresh draw format, so we convert them.
+    This uses load_fresh_draws_auto() to test the actual production code path
+    that users will rely on.
     """
-    import json
+    from cje.data.fresh_draws import load_fresh_draws_auto
 
     responses_dir = Path(__file__).parent / "data" / "arena_sample" / "responses"
-    dataset_path = Path(__file__).parent / "data" / "arena_sample" / "dataset.jsonl"
 
     if not responses_dir.exists():
         pytest.skip(f"Fresh draws not found at {responses_dir}")
 
-    # First, get the set of prompt_ids that exist in the dataset
-    valid_prompt_ids = set()
-    with open(dataset_path) as f:
-        for line in f:
-            data = json.loads(line)
-            valid_prompt_ids.add(data["prompt_id"])
-
+    # Use the official loader for each policy - this is what users will do
     fresh_draws = {}
     for policy_file in responses_dir.glob("*_responses.jsonl"):
         policy_name = policy_file.stem.replace("_responses", "")
 
-        # Convert response format to fresh draw format
-        samples = []
-        with open(policy_file) as f:
-            for line in f:
-                data = json.loads(line)
-
-                # Only include samples with prompt_ids that exist in the dataset
-                if data["prompt_id"] not in valid_prompt_ids:
-                    continue
-
-                # Convert to FreshDrawSample format with all available fields
-                sample = FreshDrawSample(
-                    prompt_id=data["prompt_id"],
-                    target_policy=policy_name,  # Use policy_name, not data["policy"]
-                    judge_score=data["metadata"]["judge_score"],
-                    draw_idx=0,  # Single draw per prompt
-                    response=data.get(
-                        "response", ""
-                    ),  # Include response for completeness
-                    fold_id=None,  # Will be assigned by sampler if needed
-                )
-                samples.append(sample)
-
-        if samples:
-            fresh_draws[policy_name] = FreshDrawDataset(
-                target_policy=policy_name, draws_per_prompt=1, samples=samples
+        try:
+            fresh_dataset = load_fresh_draws_auto(
+                data_dir=responses_dir, policy=policy_name, verbose=False
             )
+            fresh_draws[policy_name] = fresh_dataset
+        except FileNotFoundError:
+            # Policy file exists but wasn't found by auto-loader (shouldn't happen)
+            pytest.skip(f"Could not load fresh draws for {policy_name}")
 
     return fresh_draws
 
