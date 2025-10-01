@@ -8,8 +8,8 @@ The simplest possible CJE workflow - load data and get estimates.
 from pathlib import Path
 from cje import analyze_dataset
 
-# Use the arena sample data included with CJE
-DATA_PATH = Path(__file__).parent.parent / "cje/tests/data/arena_sample/dataset.jsonl"
+# Use the arena sample data included with CJE examples
+DATA_PATH = Path(__file__).parent / "arena_sample" / "dataset.jsonl"
 
 # Run analysis
 results = analyze_dataset(str(DATA_PATH), estimator="calibrated-ips")

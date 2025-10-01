@@ -22,7 +22,13 @@ class TestFreshDrawLoading:
 
     def test_load_fresh_draws_auto_from_arena_sample(self) -> None:
         """Test that load_fresh_draws_auto works with real arena files."""
-        responses_dir = Path(__file__).parent / "data" / "arena_sample" / "responses"
+        # Point to examples directory (shared with tutorials)
+        responses_dir = (
+            Path(__file__).parent.parent.parent
+            / "examples"
+            / "arena_sample"
+            / "responses"
+        )
 
         if not responses_dir.exists():
             pytest.skip("Arena sample data not available")

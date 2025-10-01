@@ -19,10 +19,11 @@ pytestmark = [pytest.mark.integration, pytest.mark.uses_arena_sample]
 
 
 def _arena_paths() -> tuple[Path, Path]:
-    """Return (dataset_path, responses_dir) under the repo test data tree."""
+    """Return (dataset_path, responses_dir) from examples directory."""
     here = Path(__file__).parent
-    dataset_path = here / "data" / "arena_sample" / "dataset.jsonl"
-    responses_dir = here / "data" / "arena_sample" / "responses"
+    # Point to examples directory (shared with tutorials)
+    dataset_path = here.parent.parent / "examples" / "arena_sample" / "dataset.jsonl"
+    responses_dir = here.parent.parent / "examples" / "arena_sample" / "responses"
     if not dataset_path.exists():
         pytest.skip(f"Arena sample not found: {dataset_path}")
     return dataset_path, responses_dir

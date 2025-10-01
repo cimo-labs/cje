@@ -9,7 +9,7 @@ Key metric: Effective Sample Size (ESS) - higher is better.
 from pathlib import Path
 from cje import analyze_dataset
 
-DATA_PATH = Path(__file__).parent.parent / "cje/tests/data/arena_sample/dataset.jsonl"
+DATA_PATH = Path(__file__).parent / "arena_sample" / "dataset.jsonl"
 
 results = analyze_dataset(str(DATA_PATH), estimator="calibrated-ips")
 

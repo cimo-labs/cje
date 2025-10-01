@@ -36,8 +36,16 @@ def arena_dataset() -> Dataset:
     This is real data from Arena with judge scores and oracle labels.
     Use this for integration tests and realistic scenarios.
     Session-scoped for performance.
+
+    Data location: examples/arena_sample/dataset.jsonl
     """
-    data_path = Path(__file__).parent / "data" / "arena_sample" / "dataset.jsonl"
+    # Point to examples directory (shared with tutorials)
+    data_path = (
+        Path(__file__).parent.parent.parent
+        / "examples"
+        / "arena_sample"
+        / "dataset.jsonl"
+    )
     if not data_path.exists():
         pytest.skip(f"Arena sample not found at {data_path}")
     return load_dataset_from_jsonl(str(data_path))
@@ -48,8 +56,16 @@ def arena_sample() -> Dataset:
     """Load real arena sample dataset (100 samples).
 
     Function-scoped version for tests that modify the dataset.
+
+    Data location: examples/arena_sample/dataset.jsonl
     """
-    data_path = Path(__file__).parent / "data" / "arena_sample" / "dataset.jsonl"
+    # Point to examples directory (shared with tutorials)
+    data_path = (
+        Path(__file__).parent.parent.parent
+        / "examples"
+        / "arena_sample"
+        / "dataset.jsonl"
+    )
     if not data_path.exists():
         pytest.skip(f"Arena sample not found at {data_path}")
     return load_dataset_from_jsonl(str(data_path))
@@ -125,10 +141,15 @@ def arena_fresh_draws() -> Dict[str, FreshDrawDataset]:
 
     This uses load_fresh_draws_auto() to test the actual production code path
     that users will rely on.
+
+    Data location: examples/arena_sample/responses/
     """
     from cje.data.fresh_draws import load_fresh_draws_auto
 
-    responses_dir = Path(__file__).parent / "data" / "arena_sample" / "responses"
+    # Point to examples directory (shared with tutorials)
+    responses_dir = (
+        Path(__file__).parent.parent.parent / "examples" / "arena_sample" / "responses"
+    )
 
     if not responses_dir.exists():
         pytest.skip(f"Fresh draws not found at {responses_dir}")
