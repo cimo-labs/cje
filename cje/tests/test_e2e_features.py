@@ -96,9 +96,10 @@ class TestCrossFitting:
                 sampler, reward_calibrator=cal_result.calibrator, n_folds=5
             )
 
-            # Add fresh draws for each policy
+            # Add fresh draws for each policy (only those in sampler)
             for policy, fresh_data in arena_fresh_draws.items():
-                estimator.add_fresh_draws(policy, fresh_data)
+                if policy in sampler.target_policies:
+                    estimator.add_fresh_draws(policy, fresh_data)
 
             results = estimator.fit_and_estimate()
             estimates_list.append(results.estimates)
@@ -194,7 +195,8 @@ class TestIntegrationScenarios:
         results = estimator.fit_and_estimate()
 
         # Validate everything worked
-        assert len(results.estimates) == 4
+        n_policies = len(sampler.target_policies)
+        assert len(results.estimates) == n_policies
         assert all(0 <= e <= 1 for e in results.estimates)
         assert all(se > 0 for se in results.standard_errors)
 

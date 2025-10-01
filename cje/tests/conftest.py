@@ -31,7 +31,7 @@ from cje import load_dataset_from_jsonl
 
 @pytest.fixture(scope="session")
 def arena_dataset() -> Dataset:
-    """Load real arena sample dataset once per session (100 samples).
+    """Load real arena sample dataset once per session (1000 samples).
 
     This is real data from Arena with judge scores and oracle labels.
     Use this for integration tests and realistic scenarios.
@@ -53,7 +53,7 @@ def arena_dataset() -> Dataset:
 
 @pytest.fixture
 def arena_sample() -> Dataset:
-    """Load real arena sample dataset (100 samples).
+    """Load real arena sample dataset (1000 samples).
 
     Function-scoped version for tests that modify the dataset.
 
@@ -137,7 +137,7 @@ def arena_fresh_draws() -> Dict[str, FreshDrawDataset]:
     """Load real fresh draws from arena sample using the official loader.
 
     Returns dict mapping policy names to FreshDrawDataset objects.
-    Policies: clone, premium, parallel_universe_prompt, unhelpful
+    Policies: clone, parallel_universe_prompt
 
     This uses load_fresh_draws_auto() to test the actual production code path
     that users will rely on.

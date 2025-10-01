@@ -373,7 +373,7 @@ class DRDiagnostics(IPSDiagnostics):
             f"Weight ESS: {self.weight_ess:.1%}",
         ]
 
-        if self.is_calibrated:
+        if self.is_calibrated and self.calibration_r2 is not None:
             lines.append(f"Calibration R²: {self.calibration_r2:.3f}")
 
         # DR-specific info

@@ -10,8 +10,13 @@ from cje import analyze_dataset
 import numpy as np
 
 DATA_PATH = Path(__file__).parent / "arena_sample" / "dataset.jsonl"
+FRESH_DRAWS_DIR = Path(__file__).parent / "arena_sample" / "responses"
 
-results = analyze_dataset(str(DATA_PATH), estimator="calibrated-ips")
+# Auto mode selects stacked-dr when fresh draws are provided
+results = analyze_dataset(
+    str(DATA_PATH),
+    fresh_draws_dir=str(FRESH_DRAWS_DIR),
+)
 
 policies = results.metadata["target_policies"]
 estimates = results.estimates
@@ -25,12 +30,25 @@ print(
 )
 print()
 
-# Compare all policies to baseline (first policy)
+# Compare all policies to baseline using proper inference
 baseline_idx = 0
 print(f"Comparison to baseline ({policies[baseline_idx]}):")
+print(f"  {'Policy':<30} {'Diff':>8} {'SE':>7} {'p-value':>8} {'Sig':>4}")
+print(f"  {'-'*30} {'-'*8} {'-'*7} {'-'*8} {'-'*4}")
+
 for i, policy in enumerate(policies):
     if i == baseline_idx:
         continue
-    diff = estimates[i] - estimates[baseline_idx]
-    # Note: This is a simplified comparison - proper inference would account for correlation
-    print(f"  {policy:<30} {diff:+.3f}")
+
+    # Use built-in compare_policies() with influence functions
+    # compare_policies(i, baseline) computes: policy_i - baseline
+    # Positive difference means policy i is better than baseline
+    comparison = results.compare_policies(i, baseline_idx)
+
+    sig_marker = "*" if comparison["significant"] else ""
+    print(
+        f"  {policy:<30} {comparison['difference']:+8.3f} "
+        f"{comparison['se_difference']:7.3f} "
+        f"{comparison['p_value']:8.4f} "
+        f"{sig_marker:>4}"
+    )

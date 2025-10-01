@@ -113,6 +113,7 @@ class DREstimator(BaseCJEEstimator):
             "calibrate_weights": use_calibrated_weights,
             "weight_mode": weight_mode,
             "run_diagnostics": run_diagnostics,
+            "suppress_overlap_warnings": True,  # DR handles poor overlap, suppress IPS warnings
             "n_outer_folds": n_folds,  # Align with DR outcome folds
             "outer_cv_seed": random_seed,  # Align fold seeds for one-way clustering
         }
@@ -217,6 +218,13 @@ class DREstimator(BaseCJEEstimator):
         2. responses/ subdirectory
         3. fresh_draws/ subdirectory
         """
+        # Skip if fresh draws already loaded for all policies
+        if all(policy in self._fresh_draws for policy in self.sampler.target_policies):
+            logger.debug(
+                "Fresh draws already loaded for all policies, skipping auto-load"
+            )
+            return
+
         logger.info("Attempting to auto-load fresh draws...")
 
         # Try to infer data directory from sampler's dataset path if available
@@ -294,6 +302,10 @@ class DREstimator(BaseCJEEstimator):
         """Fit weight calibration (if applicable) and outcome model."""
         # First fit the IPS weights
         self.ips_estimator.fit()
+
+        # Call estimate() to populate IPS diagnostics (needed for weight ESS, etc.)
+        # This is cheap after fit() and ensures DR diagnostics include weight metrics
+        self._ips_result = self.ips_estimator.estimate()
 
         # Then fit the outcome model on logged data
         self._fit_outcome_model()

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 def analyze_dataset(
     dataset_path: str,
-    estimator: str = "stacked-dr",
+    estimator: str = "auto",
     judge_field: str = "judge_score",
     oracle_field: str = "oracle_label",
     estimator_config: Optional[Dict[str, Any]] = None,
@@ -38,7 +38,7 @@ def analyze_dataset(
 
     Args:
         dataset_path: Path to JSONL dataset file
-        estimator: Estimator type (default "stacked-dr"; also "calibrated-ips", "raw-ips", "dr-cpo", "mrdr", "tmle")
+        estimator: Estimator type (default "auto"; also "calibrated-ips", "stacked-dr", "raw-ips", "dr-cpo", "mrdr", "tmle")
         judge_field: Metadata field containing judge scores
         oracle_field: Metadata field containing oracle labels
         estimator_config: Optional configuration dict for the estimator

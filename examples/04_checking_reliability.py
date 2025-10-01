@@ -11,7 +11,8 @@ from cje import analyze_dataset
 
 DATA_PATH = Path(__file__).parent / "arena_sample" / "dataset.jsonl"
 
-results = analyze_dataset(str(DATA_PATH), estimator="calibrated-ips")
+# Auto mode selects calibrated-ips when no fresh draws provided
+results = analyze_dataset(str(DATA_PATH))
 
 # Check overall diagnostics
 diag = results.diagnostics

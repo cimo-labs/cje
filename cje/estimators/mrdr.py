@@ -278,6 +278,10 @@ class MRDREstimator(DREstimator):
         """
         # First fit IPS weights using base class
         self.ips_estimator.fit()
+
+        # Call estimate() to populate IPS diagnostics (needed for weight ESS, etc.)
+        self._ips_result = self.ips_estimator.estimate()
+
         self._fitted = True
 
         if not self.use_policy_specific_models:

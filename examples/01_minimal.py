@@ -11,8 +11,8 @@ from cje import analyze_dataset
 # Use the arena sample data included with CJE examples
 DATA_PATH = Path(__file__).parent / "arena_sample" / "dataset.jsonl"
 
-# Run analysis
-results = analyze_dataset(str(DATA_PATH), estimator="calibrated-ips")
+# Run analysis (auto-selects calibrated-ips when no fresh draws provided)
+results = analyze_dataset(str(DATA_PATH))
 
 # Print results with 95% confidence intervals
 print("Policy Estimates:")

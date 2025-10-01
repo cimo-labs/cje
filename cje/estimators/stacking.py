@@ -1,11 +1,4 @@
-"""Clean implementation of stacked DR estimator using oracle IC approach.
-
-This is a simplified version that removes ~1200 lines of unnecessary complexity:
-- No honest CV (weight learning is O_p(n^{-1}))
-- No outer splits
-- No two-way clustering
-- Just the theoretically justified oracle IC approach
-"""
+"""Clean implementation of stacked DR estimator using oracle IC approach."""
 
 import numpy as np
 import logging
@@ -365,22 +358,6 @@ class StackedDREstimator(BaseCJEEstimator):
         # NOTE: Sign alignment removed - it's inconsistent to flip IF signs without flipping estimates
         # IF_matrix_clean = self._align_if_signs(IF_matrix_clean)
 
-        # Scale/consistency sanity check for each component
-        for i, est_name in enumerate(used_names):
-            IF_k = IF_matrix_clean[:, i]
-            # Expected SE from IF: sd(IF_k)/sqrt(n)
-            se_if = np.std(IF_k, ddof=1) / np.sqrt(len(IF_k))
-            result = self.component_results[est_name]
-            if result and policy_idx < len(result.standard_errors):
-                se_rep = float(result.standard_errors[policy_idx])
-                # Compare orders of magnitude
-                ratio = se_if / max(se_rep, 1e-12)
-                if ratio < 0.2 or ratio > 5:
-                    logger.warning(
-                        f"IF/SE mismatch for {est_name} on {policy} (ratio={ratio:.2f}); "
-                        f"check scaling. SE_IF={se_if:.4f}, SE_reported={se_rep:.4f}"
-                    )
-
         # Compute optimal weights with regularization
         weights, weight_diagnostics = self._compute_optimal_weights(
             IF_matrix_clean, used_names, policy
@@ -558,26 +535,19 @@ class StackedDREstimator(BaseCJEEstimator):
             except Exception:
                 mc_used = False
 
-        # Check condition number before regularization
+        # Check condition number before regularization (for diagnostics)
         eigenvalues = np.linalg.eigvalsh(Sigma)
         condition_pre = eigenvalues.max() / max(eigenvalues.min(), 1e-10)
 
         # Add regularization for numerical stability
         Sigma_reg = Sigma + self.covariance_regularization * np.eye(K)
 
+        # Ensure symmetry for numerical stability
+        Sigma_reg = 0.5 * (Sigma_reg + Sigma_reg.T)
+
         # Check condition number after regularization
         eigenvalues_post = np.linalg.eigvalsh(Sigma_reg)
         condition_post = eigenvalues_post.max() / eigenvalues_post.min()
-
-        # Warn if matrix is ill-conditioned
-        if condition_pre > 1e6:
-            logger.warning(
-                f"Covariance matrix is ill-conditioned (κ={condition_pre:.2e} → "
-                f"{condition_post:.2e} after regularization)"
-            )
-
-        # Ensure symmetry for numerical stability
-        Sigma_reg = 0.5 * (Sigma_reg + Sigma_reg.T)
 
         # Guard against extreme conditioning
         if condition_post > 1e8:
@@ -989,8 +959,10 @@ class StackedDREstimator(BaseCJEEstimator):
     def _build_diagnostics(
         self, valid_estimators: List[str], result: EstimationResult
     ) -> Optional[Any]:
-        """Build diagnostics object if applicable."""
-        # Aggregate MC diagnostics from DR components
+        """Build DRDiagnostics by aggregating component metrics using stacking weights."""
+        from ..diagnostics.models import DRDiagnostics, Status
+
+        # Aggregate MC diagnostics from DR components (keep existing logic)
         mc_diagnostics: Dict[str, Dict[str, Any]] = {}
         for est_name in valid_estimators:
             if est_name in self.component_results:
@@ -1038,5 +1010,143 @@ class StackedDREstimator(BaseCJEEstimator):
             if all_M_max_values:
                 result.metadata["M_max"] = max(all_M_max_values)
 
-        # For now, return None as stacking has its own diagnostics in metadata
-        return None
+        # Now aggregate component diagnostics using stacking weights
+        policies = list(self.sampler.target_policies)
+
+        # Collect per-policy weighted metrics
+        weighted_r2_per_policy = {}
+        weighted_rmse_per_policy = {}
+        max_tail_per_policy = {}
+
+        for policy in policies:
+            stacking_weights = result.metadata.get("stacking_weights", {}).get(
+                policy, []
+            )
+            components = (
+                result.metadata.get("stacking_diagnostics", {})
+                .get(policy, {})
+                .get("components", [])
+            )
+
+            if len(stacking_weights) == 0 or len(components) == 0:
+                continue
+
+            r2_values = []
+            rmse_values = []
+            tail_values = []
+
+            for comp, alpha in zip(components, stacking_weights):
+                if alpha < 0.001:  # Skip negligible weights
+                    continue
+                comp_result = self.component_results.get(comp)
+                if comp_result and comp_result.diagnostics:
+                    d = comp_result.diagnostics
+
+                    # Get per-policy values if available
+                    if (
+                        hasattr(d, "dr_diagnostics_per_policy")
+                        and policy in d.dr_diagnostics_per_policy
+                    ):
+                        pd = d.dr_diagnostics_per_policy[policy]
+                        r2 = pd.get("r2_oof", 0)
+                        rmse = pd.get("residual_rmse", 0)
+                        tail = pd.get("if_tail_ratio_99_5", 0)
+                    else:
+                        # Fallback to aggregate values
+                        r2 = (
+                            d.outcome_r2_range[0]
+                            if hasattr(d, "outcome_r2_range")
+                            else 0
+                        )
+                        rmse = (
+                            d.outcome_rmse_mean
+                            if hasattr(d, "outcome_rmse_mean")
+                            else 0
+                        )
+                        tail = (
+                            d.worst_if_tail_ratio
+                            if hasattr(d, "worst_if_tail_ratio")
+                            else 0
+                        )
+
+                    r2_values.append(alpha * r2)
+                    rmse_values.append(alpha * rmse)
+                    tail_values.append(tail)
+
+            if r2_values:
+                weighted_r2_per_policy[policy] = sum(r2_values)
+                weighted_rmse_per_policy[policy] = sum(rmse_values)
+                max_tail_per_policy[policy] = max(tail_values) if tail_values else 0.0
+
+        # Aggregate across policies
+        if weighted_r2_per_policy:
+            min_r2 = min(weighted_r2_per_policy.values())
+            max_r2 = max(weighted_r2_per_policy.values())
+            avg_rmse = np.mean(list(weighted_rmse_per_policy.values()))
+            max_tail = max(max_tail_per_policy.values())
+        else:
+            min_r2, max_r2, avg_rmse, max_tail = 0.0, 0.0, 0.0, 0.0
+
+        # Get weight diagnostics from first component (they all share same weights)
+        weight_ess = 0.0
+        ess_per_policy = {}
+        max_weight_per_policy = {}
+        weight_status = Status.WARNING
+
+        for comp_result in self.component_results.values():
+            if comp_result and comp_result.diagnostics:
+                d = comp_result.diagnostics
+                if hasattr(d, "weight_ess") and d.weight_ess > 0:
+                    weight_ess = d.weight_ess
+                    ess_per_policy = (
+                        d.ess_per_policy if hasattr(d, "ess_per_policy") else {}
+                    )
+                    max_weight_per_policy = (
+                        d.max_weight_per_policy
+                        if hasattr(d, "max_weight_per_policy")
+                        else {}
+                    )
+                    weight_status = (
+                        d.weight_status
+                        if hasattr(d, "weight_status")
+                        else Status.WARNING
+                    )
+                    break  # Found weight diagnostics, use them
+
+        # Create DRDiagnostics
+        estimates_dict = {p: result.estimates[i] for i, p in enumerate(policies)}
+        se_dict = {p: result.standard_errors[i] for i, p in enumerate(policies)}
+
+        diagnostics = DRDiagnostics(
+            estimator_type="Stacked-DR",
+            method="stacked_dr",
+            n_samples_total=(
+                len(self.sampler.dataset.samples)
+                if hasattr(self.sampler, "dataset")
+                else 0
+            ),
+            n_samples_valid=(
+                self.sampler.n_valid_samples
+                if hasattr(self.sampler, "n_valid_samples")
+                else 0
+            ),
+            n_policies=len(policies),
+            policies=policies,
+            estimates=estimates_dict,
+            standard_errors=se_dict,
+            n_samples_used=result.n_samples_used,
+            # Weight metrics from components (all share same importance weights)
+            weight_ess=weight_ess,
+            weight_status=weight_status,
+            ess_per_policy=ess_per_policy,
+            max_weight_per_policy=max_weight_per_policy,
+            # DR-specific metrics (weighted averages)
+            dr_cross_fitted=True,
+            dr_n_folds=self.n_folds,
+            outcome_r2_range=(min_r2, max_r2),
+            outcome_rmse_mean=avg_rmse,
+            worst_if_tail_ratio=max_tail,
+            # Store stacking-specific info in metadata (already in result.metadata)
+        )
+
+        return diagnostics

@@ -4,16 +4,14 @@ This directory contains a real-world sample dataset from Chatbot Arena for demon
 
 ## Contents
 
-- `dataset.jsonl` - Main dataset with 100 samples
+- `dataset.jsonl` - Main dataset with 1000 samples
   - Logged responses from a base policy
   - Judge scores and oracle labels for calibration
-  - Log probabilities for 4 target policies
+  - Log probabilities for 2 target policies
 
 - `responses/` - Fresh draws for doubly-robust estimation
-  - `clone_responses.jsonl` - Responses from clone policy
-  - `parallel_universe_prompt_responses.jsonl` - Alternative prompt formulation
-  - `premium_responses.jsonl` - Premium policy responses
-  - `unhelpful_responses.jsonl` - Intentionally poor responses
+  - `clone_responses.jsonl` - Responses from clone policy (1000 draws)
+  - `parallel_universe_prompt_responses.jsonl` - Alternative prompt formulation (1000 draws)
 
 ## Format
 
@@ -28,9 +26,7 @@ Each line is a JSON object with:
   "base_policy_logprob": -60.88,
   "target_policy_logprobs": {
     "clone": -60.88,
-    "premium": -128.40,
-    "parallel_universe_prompt": -59.75,
-    "unhelpful": -113.23
+    "parallel_universe_prompt": -59.75
   },
   "metadata": {
     "judge_score": 0.85,
@@ -68,9 +64,9 @@ results = analyze_dataset(str(DATA_PATH), estimator="calibrated-ips")
 ### In Tests
 
 The test suite references this data via fixtures in `cje/tests/conftest.py`:
-- `arena_sample` - Full 100-sample dataset
+- `arena_sample` - Full 1000-sample dataset
 - `arena_sample_small` - First 20 samples
-- `arena_fresh_draws` - Fresh draw responses
+- `arena_fresh_draws` - Fresh draw responses (clone and parallel_universe_prompt)
 - `arena_calibrated` - Pre-calibrated version
 
 ## Data Source

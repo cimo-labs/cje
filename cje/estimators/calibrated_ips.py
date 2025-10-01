@@ -52,6 +52,7 @@ class CalibratedIPS(BaseCJEEstimator):
         include_baseline: Whether to include raw weights in the stack (default False) [only used if calibrate_weights=True]
         baseline_shrink: Shrinkage toward baseline for stability (default 0.0) [only used if calibrate_weights=True]
         refuse_unreliable: Whether to refuse (return NaN) for unreliable estimates (default False)
+        suppress_overlap_warnings: Whether to suppress overlap warnings (default False, used when IPS is internal to DR)
         use_outer_cv: Whether to use outer CV for honest weight learning (default True)
         n_outer_folds: Number of outer folds for honest inference (default 5)
         outer_cv_seed: Random seed for outer CV folds (default 1042, set to match DR folds for alignment)
@@ -71,6 +72,7 @@ class CalibratedIPS(BaseCJEEstimator):
         baseline_shrink: float = 0.0,
         run_diagnostics: bool = True,
         refuse_unreliable: bool = False,
+        suppress_overlap_warnings: bool = False,
         oua_jackknife: bool = True,
         use_outer_cv: bool = True,
         n_outer_folds: int = 5,
@@ -94,6 +96,7 @@ class CalibratedIPS(BaseCJEEstimator):
         self.include_baseline = include_baseline if calibrate_weights else True
         self.baseline_shrink = baseline_shrink if calibrate_weights else 0.0
         self.refuse_unreliable = refuse_unreliable
+        self.suppress_overlap_warnings = suppress_overlap_warnings
         self.use_outer_cv = use_outer_cv
         self.n_outer_folds = n_outer_folds
         self.outer_cv_seed = outer_cv_seed
@@ -607,15 +610,34 @@ class CalibratedIPS(BaseCJEEstimator):
                 reasons.append(f"top_5%={top_5pct_weight:.1%} with CV={cv_weights:.1f}")
 
             if refuse:
-                # Provide detailed explanation of what low ESS means practically
-                warning_msg = (
-                    f"Policy '{policy}' has poor overlap: ESS fraction = {ess:.1%} (heavy-tailed weighting). "
-                    f"Estimates may be dominated by a small subset of samples. "
-                    f"Reasons: {', '.join(reasons)}. "
-                    f"Solutions: (1) Use policies with better overlap, "
-                    f"(2) Try DR methods with fresh draws, "
-                    f"(3) Collect data from more diverse base policies."
-                )
+                # Build warning message that clarifies calibrated vs raw overlap issues
+                if raw_near_zero > 0.85 and ess > 0.30:
+                    # Calibration helped but raw overlap is poor
+                    warning_msg = (
+                        f"Policy '{policy}' has poor raw overlap ({raw_near_zero:.1%} of raw weights near-zero) "
+                        f"despite calibration improving ESS to {ess:.1%}. "
+                        f"Estimates may be dominated by a small subset of samples. "
+                    )
+                else:
+                    # Low ESS or other issues
+                    warning_msg = (
+                        f"Policy '{policy}' has poor overlap: ESS fraction = {ess:.1%}. "
+                        f"Estimates may be dominated by a small subset of samples. "
+                    )
+
+                warning_msg += f"Reasons: {', '.join(reasons)}. "
+
+                # Provide context-appropriate solutions
+                if self.suppress_overlap_warnings:
+                    # Being used internally by DR - no warning needed
+                    pass
+                else:
+                    # Standalone IPS usage - suggest DR
+                    warning_msg += (
+                        "Solutions: (1) Collect fresh generations from target policy and use DR methods, "
+                        "(2) Use policies with better overlap, "
+                        "(3) Collect data from more diverse base policies."
+                    )
 
                 if self.refuse_unreliable:
                     logger.error(f"Cannot reliably estimate {warning_msg}")
@@ -623,8 +645,8 @@ class CalibratedIPS(BaseCJEEstimator):
                     standard_errors.append(np.nan)
                     influence_functions[policy] = np.full(n, np.nan)
                     continue
-                else:
-                    # Provide estimate with strong warning
+                elif not self.suppress_overlap_warnings:
+                    # Provide estimate with strong warning (unless suppressed)
                     logger.warning(f"⚠️ UNRELIABLE ESTIMATE: {warning_msg}")
 
             # ---------- Point estimate (use in-fold rewards) ----------

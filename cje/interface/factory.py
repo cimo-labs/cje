@@ -183,10 +183,8 @@ def _build_stacked_dr(
     calibration_result: Optional[Any],
     verbose: bool,
 ) -> StackedDREstimator:
-    estimators = config.get(
-        "estimators",
-        ["dr-cpo", "tmle", "mrdr", "oc-dr-cpo", "tr-cpo-e"],
-    )
+    # Let StackedDREstimator use its own default if not specified
+    estimators = config.get("estimators", None)
     parallel = config.get("parallel", True)
     seed = config.get("seed", 42)
     n_folds = config.get("n_folds", 5)
