@@ -1,6 +1,6 @@
 """End-to-end tests for CJE features using real arena data.
 
-Tests major features like IIC, SIMCal, oracle augmentation, and cross-fitting
+Tests major features like SIMCal, oracle augmentation, and cross-fitting
 in realistic scenarios with the arena dataset.
 """
 
@@ -147,7 +147,7 @@ class TestIntegrationScenarios:
     def test_full_pipeline_with_all_features(
         self, arena_sample: Dataset, arena_fresh_draws: Dict[str, FreshDrawDataset]
     ) -> None:
-        """Test complete pipeline with IIC, SIMCal, cross-fitting, and oracle augmentation."""
+        """Test complete pipeline with SIMCal, cross-fitting, and oracle augmentation."""
         import random
 
         random.seed(42)
@@ -183,7 +183,6 @@ class TestIntegrationScenarios:
             sampler,
             reward_calibrator=cal_result.calibrator,
             n_folds=5,
-            use_iic=True,  # IIC enabled
             # variance_cap removed as it's not supported by DRCPOEstimator
         )
 
@@ -199,8 +198,7 @@ class TestIntegrationScenarios:
         assert all(0 <= e <= 1 for e in results.estimates)
         assert all(se > 0 for se in results.standard_errors)
 
-        # Check all features are reflected in metadata/diagnostics
-        assert "iic_diagnostics" in results.metadata
+        # Check features are reflected in metadata/diagnostics
         assert results.diagnostics is not None
 
         # Check diagnostics summary includes all components

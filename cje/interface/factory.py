@@ -158,7 +158,6 @@ def _build_tr_cpo(
 
     n_folds = config.get("n_folds", 5)
     weight_mode = config.get("weight_mode", "hajek")
-    use_iic = config.get("use_iic", True)
     use_efficient_tr = config.get("use_efficient_tr", True)
     if calibration_result and getattr(calibration_result, "calibrator", None):
         if verbose:
@@ -167,7 +166,6 @@ def _build_tr_cpo(
             sampler,
             n_folds=n_folds,
             weight_mode=weight_mode,
-            use_iic=use_iic,
             use_efficient_tr=use_efficient_tr,
             reward_calibrator=calibration_result.calibrator,
         )
@@ -175,7 +173,6 @@ def _build_tr_cpo(
         sampler,
         n_folds=n_folds,
         weight_mode=weight_mode,
-        use_iic=use_iic,
         use_efficient_tr=use_efficient_tr,
     )
 
@@ -194,7 +191,6 @@ def _build_stacked_dr(
     seed = config.get("seed", 42)
     n_folds = config.get("n_folds", 5)
     covariance_regularization = config.get("covariance_regularization", 1e-4)
-    use_iic = config.get("use_iic", False)
     use_calibrated_weights = config.get("use_calibrated_weights", True)
     weight_mode = config.get("weight_mode", "hajek")
     if verbose:
@@ -206,7 +202,6 @@ def _build_stacked_dr(
         "seed": seed,
         "n_folds": n_folds,
         "covariance_regularization": covariance_regularization,
-        "use_iic": use_iic,
         "use_calibrated_weights": use_calibrated_weights,
         "weight_mode": weight_mode,
     }

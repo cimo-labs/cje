@@ -358,25 +358,7 @@ class OrthogonalizedCalibratedIPS(CalibratedIPS):
             # φ = contrib - V̂  (we build IF directly from the per-sample contributions)
             phi = contrib - V_hat
 
-            # Apply IIC if enabled (variance reduction via residualization)
-            if self.use_iic:
-                n_folds = self.n_folds
-                seed = self.random_seed
-                prompt_ids = [
-                    d.get("prompt_id", f"sample_{i}") for i, d in enumerate(data)
-                ]
-                fold_ids = np.array(
-                    [get_fold(pid, n_folds, seed) for pid in prompt_ids]
-                )
-                phi, iic_adjustment = self._apply_iic(phi, policy, fold_ids=fold_ids)
-
-                # Store IIC adjustment
-                if not hasattr(self, "_iic_adjustments"):
-                    self._iic_adjustments = {}
-                self._iic_adjustments[policy] = iic_adjustment
-
-                # IIC is variance-only: it residualizes the IF but does NOT change the point estimate
-                # The point estimate V_hat remains unchanged
+            # IIC removed - use influence functions directly
 
             # Cluster-robust SE across folds (accounts for within-fold dependence)
             # Get fold assignments for clustering
@@ -438,11 +420,6 @@ class OrthogonalizedCalibratedIPS(CalibratedIPS):
                 "calibrate": self.calibrate_weights,
                 "use_orthogonalization": self.use_orthogonalization,
                 "orthogonalization_diagnostics": self._orthogonalization_diagnostics,
-                "iic_applied_to_if": bool(
-                    self.use_iic
-                ),  # IIC applied to influence functions
-                "iic_estimate_adjusted": False,  # Point estimates unchanged by IIC
-                "iic_adjustments": getattr(self, "_iic_adjustments", {}),
                 # augmentation_diagnostics removed - using OUA jackknife only
             },
         )

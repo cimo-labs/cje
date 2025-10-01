@@ -55,7 +55,6 @@ class CalibratedIPS(BaseCJEEstimator):
         use_outer_cv: Whether to use outer CV for honest weight learning (default True)
         n_outer_folds: Number of outer folds for honest inference (default 5)
         outer_cv_seed: Random seed for outer CV folds (default 1042, set to match DR folds for alignment)
-        honest_iic: Whether to apply honest IIC with outer CV (default False)
         **kwargs: Additional arguments passed to BaseCJEEstimator (e.g., oracle_slice_config)
     """
 
@@ -76,7 +75,6 @@ class CalibratedIPS(BaseCJEEstimator):
         use_outer_cv: bool = True,
         n_outer_folds: int = 5,
         outer_cv_seed: int = 1042,
-        honest_iic: bool = False,
         **kwargs: Any,
     ):
         # Pass OUA parameters to base class
@@ -99,7 +97,6 @@ class CalibratedIPS(BaseCJEEstimator):
         self.use_outer_cv = use_outer_cv
         self.n_outer_folds = n_outer_folds
         self.outer_cv_seed = outer_cv_seed
-        self.honest_iic = honest_iic
         self._no_overlap_policies: Set[str] = set()
         self._calibration_info: Dict[str, Dict] = {}  # Store calibration details
         self._diagnostics: Optional[IPSDiagnostics] = None
@@ -708,7 +705,6 @@ class CalibratedIPS(BaseCJEEstimator):
 
             # Check if we should use honest IFs with outer CV
             calib_info = self._calibration_info.get(policy, {})
-            iic_adjustment = 0.0  # Initialize to avoid UnboundLocalError
             if self.use_outer_cv and "outer_fold_ids" in calib_info:
                 # Honest influence functions using outer CV structure
                 influence = np.zeros(n)
@@ -743,124 +739,6 @@ class CalibratedIPS(BaseCJEEstimator):
                         - train_estimate
                         * (w_test - mean_w_train)  # Use train mean weight
                     ) / denom_train
-
-                # Apply honest IIC if requested (fit on train, apply to test)
-                if self.honest_iic:
-                    # Get judge scores for IIC
-                    S_vec = np.array(
-                        [d.get("judge_score", np.nan) for d in data], dtype=float
-                    )
-
-                    # Track diagnostics
-                    rsq_by_fold = {}
-                    iic_applied = np.zeros(n, dtype=bool)
-                    n_folds_applied = 0
-
-                    # Process each fold for honest IIC
-                    for v in range(self.n_outer_folds):
-                        test_mask = outer_fold_ids == v
-                        train_mask = ~test_mask
-
-                        # Quick guards (very cheap)
-                        n_train = np.sum(train_mask)
-                        n_test = np.sum(test_mask)
-                        if n_train < 30 or n_test < 5:
-                            rsq_by_fold[v] = 0.0
-                            continue
-
-                        # Check unique S values in training
-                        S_train = S_vec[train_mask]
-                        valid_S_train = S_train[~np.isnan(S_train)]
-                        n_unique_S = len(np.unique(valid_S_train))
-                        if n_unique_S < 8:
-                            rsq_by_fold[v] = 0.0
-                            continue
-
-                        # Build training IFs using training estimates
-                        train_estimate_dict = per_fold_train_estimates.get(v, {})
-                        psi_train = float(train_estimate_dict.get("psi", psi_w))
-                        mean_w_train = float(train_estimate_dict.get("mean_w", mean_w))
-
-                        w_train = weights[train_mask]
-                        R_train = R_oof[train_mask]
-                        phi_train = self._build_honest_train_IF(
-                            w_train, R_train, psi_train, mean_w_train
-                        )
-
-                        # Fit isotonic regression on training data
-                        try:
-                            from sklearn.isotonic import IsotonicRegression
-
-                            iso = IsotonicRegression(out_of_bounds="clip")
-                            iso.fit(S_train, phi_train)
-                            h_train = iso.predict(S_train)
-
-                            # Compute quick R² (in-sample, no CV)
-                            rsq = self._compute_quick_rsq(phi_train, h_train)
-                            rsq_by_fold[v] = rsq
-
-                            # Gate: only apply if R² is non-trivial
-                            if rsq < 0.02:
-                                continue
-
-                            # Apply to test fold (residualize test IFs)
-                            S_test = S_vec[test_mask]
-                            valid_test = ~np.isnan(S_test)
-                            if np.any(valid_test):
-                                h_test = iso.predict(S_test[valid_test])
-                                # Only residualize samples with valid scores
-                                test_indices = np.where(test_mask)[0]
-                                valid_test_indices = test_indices[valid_test]
-                                influence[valid_test_indices] -= h_test
-                                iic_applied[valid_test_indices] = True
-                                n_folds_applied += 1
-
-                        except Exception as e:
-                            logger.debug(f"Honest IIC failed for fold {v}: {e}")
-                            rsq_by_fold[v] = 0.0
-
-                    # Store honest IIC diagnostics
-                    if not hasattr(self, "_iic_diagnostics"):
-                        self._iic_diagnostics = {}
-                    self._iic_diagnostics[policy] = {
-                        "honest_iic": True,
-                        "rsq_by_fold": rsq_by_fold,
-                        "folds_applied": n_folds_applied,
-                        "samples_residualized": float(np.mean(iic_applied)),
-                        "mean_rsq": float(np.mean(list(rsq_by_fold.values()))),
-                    }
-
-                    logger.debug(
-                        f"Honest IIC for {policy}: applied to {n_folds_applied}/{self.n_outer_folds} folds, "
-                        f"mean R²={np.mean(list(rsq_by_fold.values())):.3f}"
-                    )
-                elif self.use_iic:
-                    # Apply non-honest IIC as a fallback even under outer CV
-                    # This residualizes the already-built honest IF vector against S
-                    # using the same outer_fold_ids for clustering consistency.
-                    try:
-                        S_vec = np.array(
-                            [d.get("judge_score", np.nan) for d in data], dtype=float
-                        )
-                        # Use _apply_iic residualization (variance-only)
-                        influence, iic_adjustment = self._apply_iic(
-                            influence, policy, fold_ids=outer_fold_ids
-                        )
-                        # Track diagnostics
-                        if not hasattr(self, "_iic_diagnostics"):
-                            self._iic_diagnostics = {}
-                        self._iic_diagnostics[policy] = {
-                            "honest_iic": False,
-                            "folds_applied": int(len(np.unique(outer_fold_ids))),
-                            "samples_residualized": 1.0,  # applied to all valid samples
-                        }
-                    except Exception as e:
-                        logger.debug(
-                            f"Fallback IIC residualization under outer CV failed for {policy}: {e}"
-                        )
-                        iic_adjustment = 0.0
-                else:
-                    iic_adjustment = 0.0
             else:
                 # Standard single-pass influence functions
                 # Ratio IF for Hajek term (use the same weights used in ψ̂_w)
@@ -874,20 +752,7 @@ class CalibratedIPS(BaseCJEEstimator):
                 # No augmentation - OUA jackknife handles oracle uncertainty via variance
                 influence = ratio_if
 
-                # Note: fold_ids already computed above for OOF rewards, reuse for IIC if needed
-
-                # Apply IIC for variance reduction (if enabled)
-                influence, iic_adjustment = self._apply_iic(
-                    influence, policy, fold_ids=fold_ids
-                )
-
-            # Store IIC adjustment for transparency
-            if not hasattr(self, "_iic_adjustments"):
-                self._iic_adjustments = {}
-            self._iic_adjustments[policy] = iic_adjustment
-
-            # IIC is variance-only: it residualizes the IF but does NOT change the point estimate
-            # The point estimate remains unchanged
+            # IIC removed - use influence functions directly
 
             # Optional: Center influence functions for numerical stability
             influence = influence - np.mean(influence)
@@ -954,18 +819,6 @@ class CalibratedIPS(BaseCJEEstimator):
             diagnostics=None,  # Will be set below
             metadata={
                 "target_policies": list(self.sampler.target_policies),
-                "iic_diagnostics": (
-                    self._iic_diagnostics if (self.use_iic or self.honest_iic) else None
-                ),
-                "iic_adjustments": getattr(
-                    self, "_iic_adjustments", {}
-                ),  # IIC adjustments applied
-                "iic_applied_to_if": bool(
-                    self.use_iic or self.honest_iic
-                ),  # IIC applied to influence functions
-                "iic_estimate_adjusted": False,  # Point estimates unchanged by IIC
-                "honest_iic": self.honest_iic
-                and self.use_outer_cv,  # Honest IIC only with outer CV
                 "calibration_method": "simcal" if self.calibrate_weights else None,
                 "ess_floor": self.ess_floor,
                 "var_cap": self.var_cap,

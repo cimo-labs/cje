@@ -233,7 +233,7 @@ estimator = CalibratedIPS(sampler)  # use_outer_cv=True by default
 estimator = CalibratedIPS(
     sampler,
     n_outer_folds=10,       # More folds for stability
-    honest_iic=True         # Apply honest IIC for variance reduction
+    # Honest IIC removed - feature no longer supported
 )
 ```
 

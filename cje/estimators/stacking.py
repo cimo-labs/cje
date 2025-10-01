@@ -46,7 +46,6 @@ class StackedDREstimator(BaseCJEEstimator):
         parallel: bool = True,
         seed: int = 42,
         n_folds: int = 5,
-        use_iic: bool = False,
         oua_jackknife: bool = True,
         force_uniform_weights: bool = False,  # Hidden flag for sanity checks
         **kwargs: Any,
@@ -63,7 +62,6 @@ class StackedDREstimator(BaseCJEEstimator):
             parallel: If True, run component estimators in parallel
             seed: Random seed for reproducibility
             n_folds: Number of folds for component cross-fitting
-            use_iic: If True, component estimators use IIC
             oua_jackknife: If True, enable OUA for component estimators
             force_uniform_weights: If True, force uniform weights (for debugging)
             **kwargs: Additional arguments (reward_calibrator, etc.)
@@ -82,7 +80,6 @@ class StackedDREstimator(BaseCJEEstimator):
         self.parallel = parallel
         self.seed = seed
         self.n_folds = n_folds
-        self.use_iic = use_iic
         self.oua_jackknife = oua_jackknife
         self.force_uniform_weights = force_uniform_weights
 
@@ -746,7 +743,6 @@ class StackedDREstimator(BaseCJEEstimator):
                 reward_calibrator=self.reward_calibrator,
                 n_folds=self.n_folds,
                 weight_mode=self.weight_mode,  # TR-CPO does accept weight_mode
-                use_iic=self.use_iic,
                 oua_jackknife=self.oua_jackknife,
                 use_efficient_tr=True,  # Ensure we're using the efficient version
             )
@@ -759,7 +755,7 @@ class StackedDREstimator(BaseCJEEstimator):
                 omega_mode="w",  # Use weights for omega
                 use_calibrated_weights=self.use_calibrated_weights,
                 weight_mode=self.weight_mode,
-                # MRDR doesn't take use_iic or oua_jackknife
+                # MRDR doesn't take oua_jackknife
             )
         else:
             # DR-CPO, TMLE, OC-DR-CPO all accept these parameters
@@ -769,7 +765,6 @@ class StackedDREstimator(BaseCJEEstimator):
                 n_folds=self.n_folds,
                 use_calibrated_weights=self.use_calibrated_weights,
                 weight_mode=self.weight_mode,
-                use_iic=self.use_iic,
                 oua_jackknife=self.oua_jackknife,
             )
 
@@ -964,7 +959,6 @@ class StackedDREstimator(BaseCJEEstimator):
             "failed_estimators": [
                 e for e in self.estimators if e not in valid_estimators
             ],
-            "component_iic": self.use_iic,
             "n_folds": self.n_folds,
             "covariance_regularization": self.covariance_regularization,
         }

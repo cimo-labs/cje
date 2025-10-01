@@ -502,10 +502,7 @@ class MRDREstimator(DREstimator):
             # Compute influence functions and standard error
             if_contrib = g_fresh + ips_corr_total - psi
 
-            # Apply IIC if enabled
-            if self.use_iic:
-                if_contrib, _ = self._apply_iic(if_contrib, policy)
-                # IIC is variance-only: it residualizes the IF but does NOT change the point estimate
+            # IIC removed - use influence functions directly
 
             se = (
                 float(np.std(if_contrib, ddof=1) / np.sqrt(len(if_contrib)))
@@ -562,14 +559,6 @@ class MRDREstimator(DREstimator):
             "cross_fitted": True,
             "n_folds": self.n_folds,
         }
-
-        # Add IIC metadata
-        metadata["iic_applied_to_if"] = bool(
-            self.use_iic
-        )  # IIC applied to influence functions
-        metadata["iic_estimate_adjusted"] = False  # Point estimates unchanged by IIC
-        if self.use_iic and self._iic_diagnostics:
-            metadata["iic_diagnostics"] = self._iic_diagnostics
 
         # Add sample indices for IF alignment in stacking
         if hasattr(self, "_if_sample_indices"):

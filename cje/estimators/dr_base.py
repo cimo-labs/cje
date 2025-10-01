@@ -99,7 +99,7 @@ class DREstimator(BaseCJEEstimator):
             diagnostic_config=None,  # Will use defaults
             reward_calibrator=reward_calibrator,
             oua_jackknife=oua_jackknife,
-            **kwargs,  # Passes remaining kwargs (e.g., oracle_slice_config, use_iic)
+            **kwargs,  # Passes remaining kwargs (e.g., oracle_slice_config)
         )
 
         self.n_folds = n_folds
@@ -619,29 +619,7 @@ class DREstimator(BaseCJEEstimator):
             # Compute standard error using influence function
             if_contributions = g_fresh + ips_correction_base - dr_estimate
 
-            # Get fold assignments if using IIC
-            fold_ids = None
-            if self.use_iic:
-                # Compute fold assignments for cross-fitting
-                from ..data.folds import get_fold
-
-                seed = self.random_seed if hasattr(self, "random_seed") else 42
-                fold_ids = np.array(
-                    [get_fold(pid, self.n_folds, seed) for pid in logged_prompt_ids]
-                )
-
-            # Apply IIC for variance reduction (if enabled)
-            if_contributions, iic_adjustment = self._apply_iic(
-                if_contributions, policy, fold_ids=fold_ids
-            )
-
-            # Store IIC adjustment for metadata (for transparency)
-            if not hasattr(self, "_iic_adjustments"):
-                self._iic_adjustments = {}
-            self._iic_adjustments[policy] = iic_adjustment
-
-            # IIC is variance-only: it residualizes the IF but does NOT change the point estimate
-            # The point estimate dr_estimate remains unchanged
+            # IIC removed - influence functions used directly
 
             # Base SE from influence functions (using cluster-robust SE on outcome folds)
             from ..diagnostics.robust_inference import (
@@ -930,7 +908,7 @@ class DREstimator(BaseCJEEstimator):
                 }
 
         # Build metadata (keep dr_diagnostics for backward compatibility with visualization)
-        metadata = {
+        metadata: Dict[str, Any] = {
             "target_policies": list(self.sampler.target_policies),
             "weight_method": "calibrated" if self.use_calibrated_weights else "raw",
             "dr_diagnostics": dr_diagnostics_per_policy,  # Keep for visualization
@@ -938,13 +916,6 @@ class DREstimator(BaseCJEEstimator):
             "orthogonality_scores": self._orthogonality_scores,  # New: orthogonality diagnostics
             "dm_ips_decompositions": self._dm_ips_decompositions,  # New: DM-IPS breakdown
             "dr_influence": self._influence_functions,  # Store influence functions for analysis
-            "iic_adjustments": getattr(
-                self, "_iic_adjustments", {}
-            ),  # IIC adjustments applied
-            "iic_applied_to_if": bool(
-                self.use_iic
-            ),  # IIC applied to influence functions
-            "iic_estimate_adjusted": False,  # Point estimates unchanged by IIC
         }
         # Attach SE diagnostics for ablation runner to use t-critical
         if self._se_diagnostics:
@@ -963,10 +934,6 @@ class DREstimator(BaseCJEEstimator):
             dr_diagnostics_per_policy,
             ips_diag,
         )
-
-        # Add IIC diagnostics to metadata
-        if self.use_iic and self._iic_diagnostics:
-            metadata["iic_diagnostics"] = self._iic_diagnostics
 
         # Attach calibration-floor meta if available
         if calibration_floor_meta:

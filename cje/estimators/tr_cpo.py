@@ -32,7 +32,7 @@ import logging
 import numpy as np
 from sklearn.isotonic import IsotonicRegression
 
-from .dr_base import DREstimator  # outcome model, fresh draws, OUA, IIC scaffolding
+from .dr_base import DREstimator  # outcome model, fresh draws, OUA scaffolding
 from ..data.precomputed_sampler import PrecomputedSampler
 from ..data.models import EstimationResult
 from ..data.folds import get_fold
@@ -52,7 +52,6 @@ class TRCPOEstimator(DREstimator):
         random_seed: Seed for fold hashing
         min_pi: Lower clip for π̂_L (default 1e-3)
         max_pi: Upper clip for π̂_L (default 1 - 1e-3)
-        use_iic: Residualize IF against S to reduce variance
         run_diagnostics: Build DR-like diagnostics
         oua_jackknife: Enable oracle uncertainty augmentation via delete-fold jackknife
         use_efficient_tr: If True (default), use m̂(S)=E[W|S] in TR correction for
@@ -72,7 +71,6 @@ class TRCPOEstimator(DREstimator):
         random_seed: int = 42,
         min_pi: float = 1e-3,
         max_pi: float = 1 - 1e-3,
-        use_iic: bool = False,
         run_diagnostics: bool = True,
         oua_jackknife: bool = True,
         use_efficient_tr: bool = True,  # Default to variance-reduced version
@@ -96,7 +94,6 @@ class TRCPOEstimator(DREstimator):
         self.weight_mode = weight_mode  # Store weight_mode as instance attribute
         self.min_pi = float(min_pi)
         self.max_pi = float(max_pi)
-        self.use_iic = bool(use_iic)
         self.use_efficient_tr = bool(use_efficient_tr)
         self.anchor_on_simcal = bool(anchor_on_simcal)
         self.add_orthogonalizer = bool(add_orthogonalizer)
@@ -120,7 +117,6 @@ class TRCPOEstimator(DREstimator):
                     use_outer_cv=True,
                     n_outer_folds=n_folds,
                     outer_cv_seed=random_seed,
-                    honest_iic=False,
                 )
             except Exception as e:
                 logger.warning(
@@ -326,7 +322,7 @@ class TRCPOEstimator(DREstimator):
     # ---------- Estimate ----------
 
     def estimate(self) -> EstimationResult:
-        """Compute TR-CPO estimates + IF-based SEs (IIC optional)."""
+        """Compute TR-CPO estimates + IF-based SEs."""
         self._validate_fitted()
         self._auto_load_fresh_draws()  # ensure DM fresh draws are available
 
@@ -558,11 +554,7 @@ class TRCPOEstimator(DREstimator):
             # IF is simply the centered contributions
             phi = contrib - V_hat
 
-            # Optional IIC (variance-only tightening)
-            if self.use_iic:
-                phi, _ = self._apply_iic(phi, policy, fold_ids=fold_ids)
-                # IIC is variance-only: it residualizes the IF but does NOT change the point estimate
-                # The point estimate V_hat remains unchanged
+            # IIC removed - use influence functions directly
 
             # CRITICAL FIX: Use cluster-robust SE for fold dependence
             res_if = cluster_robust_se(
@@ -675,7 +667,6 @@ class TRCPOEstimator(DREstimator):
                 "max_pi_hat": float(np.max(pi_oof)) if pi_oof.size else None,
                 "weight_mode": self.weight_mode,
                 "uses_oof_rewards": bool(not np.allclose(R, R_oof)),
-                "iic_applied": bool(self.use_iic),
                 "uses_efficient_correction": uses_efficient_correction,
                 "use_efficient_tr": self.use_efficient_tr,
                 "anchor_on_simcal": bool(self.anchor_on_simcal),
@@ -783,8 +774,6 @@ class TRCPOEstimator(DREstimator):
             metadata={
                 "target_policies": list(self.sampler.target_policies),
                 "tr_diagnostics": self._tr_diagnostics,
-                "iic_applied_to_if": bool(self.use_iic),
-                "iic_estimate_adjusted": False,  # Point estimates unchanged by IIC
                 "weight_mode": self.weight_mode,
                 "anchor_on_simcal": bool(self.anchor_on_simcal),
                 "add_orthogonalizer": bool(self.add_orthogonalizer),
@@ -793,7 +782,6 @@ class TRCPOEstimator(DREstimator):
                 ),
                 "if_mean": if_mean,
                 "mc_variance_diagnostics": getattr(self, "_mc_diagnostics", None),
-                "iic_diagnostics": getattr(self, "_iic_diagnostics", None),
                 # Add sample indices for IF alignment in stacking
                 "if_sample_indices": getattr(self, "_if_sample_indices", {}),
             },

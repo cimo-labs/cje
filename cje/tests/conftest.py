@@ -500,3 +500,11 @@ def pytest_configure(config: Any) -> None:
     config.addinivalue_line(
         "markers", "deprecated: marks tests superseded by E2E tests"
     )
+
+
+# ============================================================================
+# Thread Cleanup (prevents pytest hanging after tests complete)
+# ============================================================================
+
+
+# Thread cleanup not needed - hypothesis plugin (the real culprit) has been removed

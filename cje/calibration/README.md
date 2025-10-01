@@ -31,8 +31,7 @@ calibration/
 ├── isotonic.py          # Core isotonic regression and variance control
 ├── judge.py             # Judge score calibration to oracle labels
 ├── oracle_slice.py      # Oracle slice configuration (deprecated)
-├── simcal.py            # Stacked SIMCal implementation
-└── iic.py               # Isotonic Influence Control for variance reduction
+└── simcal.py            # Stacked SIMCal implementation
 ```
 
 ## Core Concepts
@@ -60,9 +59,6 @@ When we calibrate judge scores using only a subset of oracle labels (e.g., 10% c
 **Oracle Uncertainty Augmentation (OUA)**: The default approach that uses fold-jackknife to add a **variance** component to CIs, accounting for calibration-induced uncertainty. Used by all Cal-IPS/DR estimators.
 
 **Oracle Slice Augmentation**: An optional point-estimate **bias correction** term `(L/π_L)m̂(S)(Y-f̂(S))` used **only** in TR-CPO under MAR with fitted π_L(S), or optionally as an MCAR engineering fallback (off by default).
-
-### 5. Isotonic Influence Control (IIC)
-A variance reduction technique that residualizes influence functions against judge scores. By fitting E[φ|S] using spline or isotonic regression and computing residuals φ̃ = φ - Ê[φ|S], IIC reduces variance without changing the estimand. This is "free" variance reduction that can be enabled in estimators that support it (CalibratedIPS, OrthogonalizedIPS, DR-CPO, and all DR variants). It is disabled by default to preserve standard methodology.
 
 ## Module Descriptions
 
@@ -133,39 +129,6 @@ Implements the optional point-estimate bias correction (used primarily in TR-CPO
   - Unbiased correction for proxy-truth gap under MAR/MCAR
 - **Usage**: Enabled in TR-CPO for MAR setting; optional MCAR fallback (off by default)
 - **Note**: This is separate from OUA jackknife variance (the default uncertainty method)
-
-### `iic.py` - Isotonic Influence Control
-Advanced variance reduction through influence function residualization:
-
-**Core Mechanism:**
-- `IsotonicInfluenceControl`: Main class that residualizes influence functions against judge scores
-- Fits E[φ|S] using either spline regression (default) or isotonic regression
-- Returns residuals φ̃ = φ - Ê[φ|S] with guaranteed variance reduction
-- **Critical**: Centers fitted values to preserve mean exactly (E[φ̃] = E[φ] = 0)
-
-**Implementation Features:**
-- **Flexible regression modes**:
-  - Spline regression (default): Cubic splines with configurable knots for smooth fits
-  - Isotonic regression: Monotone fit with automatic direction selection via Spearman correlation
-- **Cross-fitting support**: Uses same folds as reward calibration for consistency
-- **Automatic fallback**: Handles edge cases (insufficient data, non-finite values) gracefully
-- **Comprehensive diagnostics**: R², variance reduction ratio, ESS improvement, regression type used
-
-**Configuration via `IICConfig`:**
-- `use_splines`: Enable spline regression (default=True, more flexible than isotonic)
-- `n_knots`: Number of spline knots (default=8)
-- `spline_degree`: Degree of spline polynomials (default=3 for cubic)
-- `use_cross_fit`: Apply fold-honest fitting (default=True)
-- `min_samples_for_iic`: Minimum samples required (default=50)
-
-**Key Properties:**
-- **Variance-only**: Point estimates remain unchanged, only standard errors are reduced
-- **Guaranteed improvement**: Var(φ̃) ≤ Var(φ) by construction
-- **Typical reductions**: 5-20% SE reduction depending on R²(φ|S)
-- **Free lunch**: No additional data or assumptions required
-- **Disabled by default**: IIC must be explicitly enabled with use_iic=True
-
-**Why it works**: Influence functions often correlate with judge scores because both relate to outcome quality. By removing the predictable component E[φ|S], we eliminate systematic variation while preserving the estimand.
 
 ## Key Design Decisions
 
@@ -306,37 +269,6 @@ result = calibrator.fit_cv(
 
 # Get out-of-fold predictions
 oof_predictions = calibrator.predict_oof(judge_scores, fold_ids)
-```
-
-### Isotonic Influence Control (IIC)
-```python
-from cje.calibration import IsotonicInfluenceControl, IICConfig
-
-# Configure IIC with spline regression
-config = IICConfig(
-    use_splines=True,      # Use flexible splines instead of isotonic
-    n_knots=8,            # Number of spline knots
-    spline_degree=3,      # Cubic splines
-    use_cross_fit=True,   # Fold-honest fitting
-    compute_diagnostics=True
-)
-
-# Apply IIC to reduce influence function variance
-iic = IsotonicInfluenceControl(config)
-residualized_if, diagnostics = iic.residualize(
-    influence=influence_function,
-    judge_scores=judge_scores,
-    policy="target_policy",
-    fold_ids=fold_ids  # Optional: for cross-fitting
-)
-
-print(f"R²(φ|S): {diagnostics['r_squared']:.3f}")
-print(f"Variance reduction: {diagnostics['var_reduction']:.1%}")
-print(f"Regression type: {diagnostics['regression_type']}")
-
-# IIC can be enabled in estimators that support it (disabled by default)
-from cje import CalibratedIPS
-estimator = CalibratedIPS(sampler, use_iic=True)  # Enable IIC for variance reduction
 ```
 
 ### Oracle Uncertainty (Default: OUA Jackknife)

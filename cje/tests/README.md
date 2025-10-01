@@ -13,7 +13,7 @@ tests/
 │
 ├── E2E Tests                    
 │   ├── test_e2e_estimators.py    # Complete pipelines for all estimators
-│   ├── test_e2e_features.py      # IIC, SIMCal, cross-fitting
+│   ├── test_e2e_features.py      # SIMCal, cross-fitting
 │   └── test_interface_integration.py # High-level API testing
 │
 ├── Core Tests

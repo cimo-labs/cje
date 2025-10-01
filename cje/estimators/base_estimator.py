@@ -7,7 +7,6 @@ import logging
 
 from ..data.models import Dataset, EstimationResult
 from ..data.precomputed_sampler import PrecomputedSampler
-from ..calibration.iic import IsotonicInfluenceControl, IICConfig
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +27,6 @@ class BaseCJEEstimator(ABC):
         sampler: PrecomputedSampler,
         run_diagnostics: bool = True,
         diagnostic_config: Optional[Dict[str, Any]] = None,
-        use_iic: bool = False,  # Default to False - not part of core methodology
-        iic_config: Optional[IICConfig] = None,
         reward_calibrator: Optional[Any] = None,
         oua_jackknife: bool = True,  # Default to True for oracle uncertainty augmentation
     ):
@@ -39,8 +36,6 @@ class BaseCJEEstimator(ABC):
             sampler: Data sampler with precomputed log probabilities
             run_diagnostics: Whether to compute diagnostics (default True)
             diagnostic_config: Optional configuration dict (for future use)
-            use_iic: Whether to use Isotonic Influence Control for variance reduction (default False)
-            iic_config: Optional IIC configuration (uses defaults if None)
             reward_calibrator: Optional reward calibrator for OUA jackknife
             oua_jackknife: Whether to enable Oracle Uncertainty Augmentation (default True)
         """
@@ -51,11 +46,6 @@ class BaseCJEEstimator(ABC):
         self._weights_cache: Dict[str, np.ndarray] = {}
         self._influence_functions: Dict[str, np.ndarray] = {}
         self._results: Optional[EstimationResult] = None
-
-        # Configure IIC for variance reduction
-        self.use_iic = use_iic
-        self.iic = IsotonicInfluenceControl(iic_config) if use_iic else None
-        self._iic_diagnostics: Dict[str, Dict] = {}  # Store IIC diagnostics
 
         # Configure OUA for oracle uncertainty augmentation
         self.reward_calibrator = reward_calibrator
@@ -173,66 +163,6 @@ class BaseCJEEstimator(ABC):
         """
         class_name = self.__class__.__name__
         return any(x in class_name for x in ["DR", "MRDR", "TMLE"])
-
-    def _apply_iic(
-        self, influence: np.ndarray, policy: str, fold_ids: Optional[np.ndarray] = None
-    ) -> Tuple[np.ndarray, float]:
-        """Apply Isotonic Influence Control to reduce variance.
-
-        This residualizes the influence function against judge scores,
-        reducing variance without changing the estimand.
-
-        Args:
-            influence: Raw influence function values
-            policy: Policy name
-            fold_ids: Optional fold assignments for cross-fitting
-
-        Returns:
-            Tuple of (residualized influence function, point estimate adjustment)
-        """
-        if not self.use_iic or self.iic is None:
-            return influence, 0.0
-
-        # Get judge scores for this policy
-        data = self.sampler.get_data_for_policy(policy)
-        if not data:
-            logger.warning(f"No data for policy {policy}, skipping IIC")
-            return influence, 0.0
-
-        judge_scores = np.array([d.get("judge_score", np.nan) for d in data])
-
-        # Handle missing judge scores
-        if np.all(np.isnan(judge_scores)):
-            logger.warning(f"All judge scores missing for {policy}, skipping IIC")
-            return influence, 0.0
-
-        # Get fold IDs from data for cross-fitting if not provided
-        if fold_ids is None and data:
-            # Try to get fold IDs from the data (cv_fold field)
-            fold_ids_list = [d.get("cv_fold", -1) for d in data]
-            if any(f >= 0 for f in fold_ids_list):
-                fold_ids = np.array(fold_ids_list)
-            else:
-                fold_ids = None  # No valid folds available
-
-        # Apply IIC
-        residualized, diagnostics = self.iic.residualize(
-            influence, judge_scores, policy, fold_ids
-        )
-
-        # Store diagnostics
-        self._iic_diagnostics[policy] = diagnostics
-
-        # Extract point estimate adjustment
-        adjustment = diagnostics.get("point_estimate_adjustment", 0.0)
-
-        if diagnostics.get("applied", False):
-            logger.debug(
-                f"IIC applied to {policy}: SE reduction={diagnostics.get('se_reduction', 0):.1%}, "
-                f"estimate adjustment={adjustment:.6f}"
-            )
-
-        return residualized, adjustment
 
     def _apply_oua_jackknife(self, result: EstimationResult) -> None:
         """Apply Oracle Uncertainty Augmentation via jackknife resampling.

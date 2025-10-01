@@ -40,7 +40,7 @@ langchain-google-genai = "*"
 google-generativeai = "*"
 boto3 = "^1.38.28"
 langchain-together = "^0.3.0"
-hypothesis = "^6.135.7"
+# hypothesis = "^6.135.7"  # Removed - causes pytest hanging and isn't used
 python-dotenv = "^1.1.0"
 labelbox = "^7.0.0"
 langchain = "^0.3.27"
@@ -74,3 +74,11 @@ disallow_untyped_defs = true
 check_untyped_defs = true
 ignore_missing_imports = true
 exclude = []
+
+[tool.pytest.ini_options]
+# Pytest configuration
+addopts = [
+    "--strict-markers",
+    "--tb=short"
+]
+testpaths = ["cje/tests"]

@@ -190,7 +190,6 @@ class TestE2EEstimators:
             reward_calibrator=cal_result.calibrator,
             use_calibrated_weights=True,
             use_orthogonalization=True,
-            use_iic=True,
             n_folds=5,
         )
 
@@ -425,7 +424,6 @@ class TestE2EEstimators:
             reward_calibrator=cal_result.calibrator,
             n_folds=5,
             weight_mode="hajek",  # Test Hájek normalization
-            use_iic=True,  # Test influence-based correction
         )
 
         # 4. Add fresh draws for each policy

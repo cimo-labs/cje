@@ -16,7 +16,7 @@ Properties:
 - Preserves SIMCal’s tail stability by anchoring on W̃.
 
 Implementation notes:
-- Reuses DREstimator's infrastructure (fresh draws, outcome model, IIC).
+- Reuses DREstimator's infrastructure (fresh draws, outcome model).
 - Cross-fits m̂^OOF(S) locally per-policy subset via isotonic W~S, using per-policy folds.
 - Fetches OOF rewards for the residual corrections by DATASET INDEX if available
   (calibrator.predict_oof_by_index). Falls back to fold-based OOF or plain predict() with a warning.
@@ -36,7 +36,7 @@ from sklearn.isotonic import IsotonicRegression
 
 from .dr_base import (
     DREstimator,
-)  # Base DR implementation (fresh draws, outcome model, OUA, IIC)
+)  # Base DR implementation (fresh draws, outcome model, OUA)
 from ..data.precomputed_sampler import PrecomputedSampler
 from ..data.models import EstimationResult
 from ..data.folds import get_fold
@@ -86,7 +86,6 @@ class OrthogonalizedCalibratedDRCPO(DREstimator):
         reward_calibrator: Optional[Any] = None,
         random_seed: int = 42,
         run_diagnostics: bool = True,
-        use_iic: bool = False,
         use_orthogonalization: bool = True,
         **kwargs: Any,
     ):
@@ -99,7 +98,6 @@ class OrthogonalizedCalibratedDRCPO(DREstimator):
             reward_calibrator: Reward calibrator f̂; used for R and OOF predictions
             random_seed: Seed for deterministic fold assignment
             run_diagnostics: Whether to compute diagnostics
-            use_iic: Apply IIC residualization to IF for SE tightening
             use_orthogonalization: If False, falls back to simple DR-CPO
             **kwargs: forwarded to DREstimator (e.g., oracle_slice_config)
         """
@@ -112,10 +110,8 @@ class OrthogonalizedCalibratedDRCPO(DREstimator):
             reward_calibrator=reward_calibrator,
             random_seed=random_seed,
             run_diagnostics=run_diagnostics,
-            use_iic=use_iic,  # Pass use_iic explicitly
             **kwargs,
         )
-        self.use_iic = use_iic
         self.use_orthogonalization = use_orthogonalization
         self._m_hat_oof_cache: Dict[str, np.ndarray] = {}
         self._orthogonalization_diagnostics: Dict[str, Dict[str, Any]] = {}
@@ -421,12 +417,7 @@ class OrthogonalizedCalibratedDRCPO(DREstimator):
             # ---------- Influence function (perfectly aligned with estimator) ----------
             phi = contrib - V_hat
 
-            # Optional IIC residualization (variance reduction)
-            if self.use_iic:
-                # Use per-prompt folds (already built) for the residualizer
-                phi, _ = self._apply_iic(phi, policy, fold_ids=fold_ids)
-                # IIC is variance-only: it residualizes the IF but does NOT change the point estimate
-                # The point estimate V_hat remains unchanged
+            # IIC removed - use influence functions directly
 
             # CRITICAL FIX: Use cluster-robust SE for fold dependence
             res_if = cluster_robust_se(
@@ -525,9 +516,6 @@ class OrthogonalizedCalibratedDRCPO(DREstimator):
                 "target_policies": list(self.sampler.target_policies),
                 "orthogonalization_diagnostics": self._orthogonalization_diagnostics,
                 "orthogonality_scores": self._orthogonality_scores,  # Include orthogonality scores
-                "iic_applied_to_if": bool(self.use_iic),
-                "iic_estimate_adjusted": False,  # Point estimates unchanged by IIC
-                "iic_diagnostics": getattr(self, "_iic_diagnostics", None),
                 # Add sample indices for IF alignment in stacking
                 "if_sample_indices": getattr(self, "_if_sample_indices", {}),
                 # oracle_augmentation removed - using OUA jackknife only
