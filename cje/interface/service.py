@@ -97,6 +97,7 @@ class AnalysisService:
         results = estimator_obj.fit_and_estimate()
 
         # Add metadata
+        results.metadata["mode"] = "direct"
         results.metadata["estimator"] = chosen_estimator
         results.metadata["target_policies"] = target_policies
         results.metadata["fresh_draws_dir"] = config.fresh_draws_dir
@@ -149,6 +150,7 @@ class AnalysisService:
         results = estimator_obj.fit_and_estimate()
 
         # Add metadata
+        results.metadata["mode"] = "direct"
         results.metadata["logged_data_path"] = config.logged_data_path
         results.metadata["estimator"] = chosen_estimator
         results.metadata["target_policies"] = target_policies
@@ -179,15 +181,44 @@ class AnalysisService:
         )
 
         # Auto mode detection
+        detected_mode: Optional[str] = None
         if chosen_estimator == "auto":
-            chosen_estimator, mode_explanation = detect_analysis_mode(
+            mode, mode_explanation = detect_analysis_mode(
                 calibrated_dataset, config.fresh_draws_dir
             )
+            detected_mode = mode
             if config.verbose:
                 logger.info(f"Mode detection: {mode_explanation}")
+
+            # Map mode to default estimator
+            mode_to_estimator = {
+                "ips": "calibrated-ips",
+                "dr": "stacked-dr",
+                "direct": "direct",
+            }
+            chosen_estimator = mode_to_estimator[mode]
+
+            if config.verbose:
+                logger.info(f"Selected estimator: {chosen_estimator} for {mode} mode")
         else:
             if config.verbose:
                 logger.info(f"Using explicitly specified estimator: {chosen_estimator}")
+
+            # Infer mode from estimator if manually specified
+            if chosen_estimator in {"direct", "calibrated-direct"}:
+                detected_mode = "direct"
+            elif chosen_estimator in {"calibrated-ips", "raw-ips"}:
+                detected_mode = "ips"
+            elif chosen_estimator in {
+                "stacked-dr",
+                "dr-cpo",
+                "oc-dr-cpo",
+                "mrdr",
+                "tmle",
+                "tr-cpo",
+                "tr-cpo-e",
+            }:
+                detected_mode = "dr"
 
         # Branch: Direct mode vs IPS/DR mode
         if chosen_estimator in {"direct", "calibrated-direct"}:
@@ -239,6 +270,8 @@ class AnalysisService:
         # Minimal metadata enrichment
         results.metadata["logged_data_path"] = config.logged_data_path
         results.metadata["estimator"] = chosen_estimator
+        if detected_mode:
+            results.metadata["mode"] = detected_mode
         results.metadata["target_policies"] = list(sampler.target_policies)
         if config.estimator_config:
             results.metadata["estimator_config"] = config.estimator_config

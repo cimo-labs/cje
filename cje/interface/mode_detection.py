@@ -24,10 +24,10 @@ def detect_analysis_mode(
     Returns:
         Tuple of (mode_name, explanation)
 
-    Modes:
-        - "direct": Dataset can support Direct mode with calibration
-        - "calibrated-ips": Has logprobs but no fresh draws (IPS only)
-        - "stacked-dr": Has both logprobs and fresh draws (DR preferred)
+        Mode names returned:
+        - "ips": Importance sampling mode (logged data with logprobs, no fresh draws)
+        - "dr": Doubly robust mode (logged data with logprobs AND fresh draws)
+        - "direct": Direct evaluation mode (fresh draws available, insufficient logprobs for IPS/DR)
 
     Logic:
         1. Check if we have valid logprobs (base_policy_logprob + target_policy_logprobs)
@@ -35,18 +35,18 @@ def detect_analysis_mode(
         3. Select mode based on what's available
 
     Examples:
-        >>> # Case 1: Logged data with logprobs only
+        >>> # Case 1: Logged data with logprobs only → IPS mode
         >>> dataset = load_dataset("logs.jsonl")
         >>> mode, msg = detect_analysis_mode(dataset, None)
-        >>> # Returns: ("calibrated-ips", "Using IPS...")
+        >>> # Returns: ("ips", "Using IPS mode...")
 
-        >>> # Case 2: Logged data with logprobs + fresh draws
+        >>> # Case 2: Logged data with logprobs + fresh draws → DR mode
         >>> mode, msg = detect_analysis_mode(dataset, "responses/")
-        >>> # Returns: ("stacked-dr", "Using DR...")
+        >>> # Returns: ("dr", "Using DR mode...")
 
-        >>> # Case 3: Logged data but no logprobs, has fresh draws
+        >>> # Case 3: Logged data but no logprobs, has fresh draws → Direct mode
         >>> mode, msg = detect_analysis_mode(dataset, "responses/")
-        >>> # Returns: ("direct", "Using Direct with calibration...")
+        >>> # Returns: ("direct", "Using Direct mode with calibration...")
     """
     # Count samples with valid logprobs
     n_total = len(dataset.samples)
@@ -76,45 +76,45 @@ def detect_analysis_mode(
     # Decision logic: Choose between IPS, DR, or Direct (with calibration)
 
     if has_fresh_draws and logprob_coverage >= 0.5:
-        # Has both fresh draws and logprobs: use DR (most accurate)
-        mode = "stacked-dr"
+        # Has both fresh draws and logprobs: use DR mode
+        mode = "dr"
         explanation = (
-            f"Using DR mode: {logprob_coverage:.1%} of samples have valid logprobs "
+            f"DR mode: {logprob_coverage:.1%} of samples have valid logprobs "
             f"and fresh draws are available. This combines importance weighting with "
             f"outcome models for best accuracy."
         )
 
     elif has_fresh_draws and logprob_coverage < 0.1:
-        # Has fresh draws but few/no logprobs: use Direct with calibration from logged data
+        # Has fresh draws but few/no logprobs: use Direct mode with calibration from logged data
         mode = "direct"
         if logprob_coverage > 0:
             explanation = (
-                f"Using Direct mode with calibration: Only {logprob_coverage:.1%} of samples have logprobs "
+                f"Direct mode with calibration: Only {logprob_coverage:.1%} of samples have logprobs "
                 f"(insufficient for IPS/DR), but fresh draws are available. Using logged data for "
                 f"calibration only, computing on-policy evaluation on fresh draws. "
                 f"Note: This does NOT estimate counterfactual deployment value."
             )
         else:
             explanation = (
-                "Using Direct mode with calibration: No logprobs detected. Using logged data for "
+                "Direct mode with calibration: No logprobs detected. Using logged data for "
                 "calibration, evaluating fresh draws from target policies. "
                 "Note: This does NOT estimate counterfactual deployment value."
             )
 
     elif logprob_coverage >= 0.5:
-        # Has logprobs but no fresh draws: use IPS
-        mode = "calibrated-ips"
+        # Has logprobs but no fresh draws: use IPS mode
+        mode = "ips"
         explanation = (
-            f"Using IPS mode: {logprob_coverage:.1%} of samples have valid logprobs. "
+            f"IPS mode: {logprob_coverage:.1%} of samples have valid logprobs. "
             f"Reweighting logged samples to estimate target policies via importance sampling. "
             f"Tip: Provide --fresh-draws-dir for more accurate DR estimates."
         )
 
     elif has_fresh_draws and 0.1 <= logprob_coverage < 0.5:
-        # Ambiguous: some logprobs, has fresh draws
+        # Ambiguous: some logprobs, has fresh draws - prefer Direct mode
         mode = "direct"
         explanation = (
-            f"Using Direct mode with calibration: {logprob_coverage:.1%} of samples have logprobs "
+            f"Direct mode with calibration: {logprob_coverage:.1%} of samples have logprobs "
             f"(below 50% threshold for reliable IPS/DR). Using logged data for calibration, "
             f"evaluating fresh draws. Warning: Mixed data - consider computing logprobs for all "
             f"samples to enable DR mode."

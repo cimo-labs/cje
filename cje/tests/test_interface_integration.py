@@ -63,6 +63,7 @@ def test_service_auto_selects_calibrated_ips_without_fresh_draws() -> None:
     )
     results = svc.run(cfg)
 
+    assert results.metadata.get("mode") == "ips"
     assert results.metadata.get("estimator") == "calibrated-ips"
     assert len(results.estimates) > 0
 
@@ -84,6 +85,7 @@ def test_service_auto_selects_stacked_dr_with_fresh_draws() -> None:
     )
     results = svc.run(cfg)
 
+    assert results.metadata.get("mode") == "dr"
     assert results.metadata.get("estimator") == "stacked-dr"
     assert len(results.estimates) > 0
 
@@ -164,7 +166,7 @@ def test_mode_detection_three_modes() -> None:
     )
 
     mode, explanation = detect_analysis_mode(dataset_ips, fresh_draws_dir=None)
-    assert mode == "calibrated-ips"
+    assert mode == "ips"
     assert "IPS mode" in explanation
     assert "100.0% of samples have valid logprobs" in explanation
 
@@ -203,7 +205,7 @@ def test_mode_detection_three_modes() -> None:
     mode, explanation = detect_analysis_mode(
         dataset_ips, fresh_draws_dir=str(responses_dir)
     )
-    assert mode == "stacked-dr"
+    assert mode == "dr"
     assert "DR mode" in explanation
     assert "combines importance weighting with outcome models" in explanation
 

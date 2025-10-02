@@ -3,26 +3,32 @@
 Example 1: Understanding CJE's Three Analysis Modes
 
 CJE automatically selects the best analysis mode based on your data.
-This example explains the three modes and when each is used.
+This example demonstrates the three modes and how they differ.
 
 Three Modes:
 ------------
-1. Direct Mode: On-policy evaluation (fresh draws, no logprobs needed)
-   - Estimand: "Which policy performs best on this evaluation set?"
-   - Use when: You have responses from multiple policies, no logprobs
-
-2. IPS Mode: Off-policy evaluation via importance sampling
+1. IPS Mode: Off-policy evaluation via importance sampling
    - Estimand: "What would deployment value be if we switched policies?"
-   - Use when: You have logged data with logprobs, no fresh draws
+   - Data needed: Logged data with logprobs, no fresh draws
+   - Default estimator: calibrated-ips
 
-3. DR Mode: Doubly robust (combines IPS with outcome models)
+2. DR Mode: Doubly robust (combines IPS with outcome models)
    - Estimand: "What would deployment value be?" (most accurate)
-   - Use when: You have both logprobs and fresh draws
+   - Data needed: Logged data with logprobs AND fresh draws
+   - Default estimator: stacked-dr
+
+3. Direct Mode: On-policy evaluation
+   - Estimand: "Which policy performs best on this evaluation set?"
+   - Data needed: Fresh draws (with optional logged data for calibration)
+   - Default estimator: direct
 
 Key Difference:
 ---------------
-Direct mode: Compares policies on your specific eval set (non-counterfactual)
-IPS/DR modes: Estimates counterfactual deployment value (causal inference)
+IPS/DR modes: Estimate counterfactual deployment value (causal inference)
+Direct mode: Compare policies on your specific eval set (non-counterfactual)
+
+Note: Mode is determined by your DATA. Within each mode, you can choose
+different ESTIMATORS (e.g., calibrated-ips vs raw-ips for IPS mode).
 """
 
 from pathlib import Path
@@ -36,7 +42,7 @@ print("CJE's Three Analysis Modes")
 print("=" * 70)
 print()
 
-# Mode 1: IPS (logged data only)
+# Mode 1: IPS (logged data only, auto-selects calibrated-ips estimator)
 print("Mode 1: IPS (Importance Sampling)")
 print("-" * 70)
 print("Data: Logged responses with logprobs")
@@ -45,15 +51,16 @@ print()
 
 results_ips = analyze_dataset(
     logged_data_path=str(DATA_PATH),
-    estimator="calibrated-ips",
+    estimator="auto",  # Auto-selects mode based on data
     verbose=False,
 )
-print(f"Mode selected: {results_ips.metadata['estimator']}")
+print(f"Detected mode: {results_ips.metadata['mode']}")
+print(f"Selected estimator: {results_ips.metadata['estimator']}")
 print(f"Estimates: {results_ips.estimates}")
 print(f"Method: Reweight logged data using importance weights")
 print()
 
-# Mode 2: DR (logged data + fresh draws)
+# Mode 2: DR (logged data + fresh draws, auto-selects stacked-dr estimator)
 print("Mode 2: DR (Doubly Robust)")
 print("-" * 70)
 print("Data: Logged responses + fresh draws from target policies")
@@ -63,43 +70,44 @@ print()
 results_dr = analyze_dataset(
     logged_data_path=str(DATA_PATH),
     fresh_draws_dir=str(FRESH_DRAWS_DIR),
-    estimator="stacked-dr",
+    estimator="auto",  # Auto-selects mode based on data
     estimator_config={"parallel": False},
     verbose=False,
 )
-print(f"Mode selected: {results_dr.metadata['estimator']}")
+print(f"Detected mode: {results_dr.metadata['mode']}")
+print(f"Selected estimator: {results_dr.metadata['estimator']}")
 print(f"Estimates: {results_dr.estimates}")
 print(f"Method: Combine importance weights with outcome models")
 print()
 
-# Mode 3: Direct (requires fresh draws)
+# Mode 3: Direct (fresh draws only, auto-selects direct estimator)
 print("Mode 3: Direct (On-Policy Evaluation)")
 print("-" * 70)
-print("Data: Fresh responses from target policies (requires fresh_draws_dir)")
+print("Data: Fresh responses from target policies")
 print("Estimand: Performance on this specific evaluation set")
 print()
 
 results_direct = analyze_dataset(
-    logged_data_path=str(DATA_PATH),
     fresh_draws_dir=str(FRESH_DRAWS_DIR),
-    estimator="direct",
+    estimator="auto",  # Auto-selects mode based on data
     verbose=False,
 )
-print(f"Mode selected: {results_direct.metadata['mode']}")
+print(f"Detected mode: {results_direct.metadata['mode']}")
+print(f"Selected estimator: {results_direct.metadata['estimator']}")
 print(f"Estimates: {results_direct.estimates}")
-print(f"Method: Average calibrated rewards on fresh draws")
-print(f"Note: {results_direct.metadata.get('caveat', '')}")
+print(f"Method: Average judge scores on fresh draws")
+print(f"Calibration: {results_direct.metadata.get('calibration', 'none')}")
 print()
 
 # Summary comparison
 print("=" * 70)
-print("Comparison")
+print("Mode Comparison")
 print("=" * 70)
-print(f"{'Mode':<20} {'Counterfactual?':<20} {'Needs Logged Data?':<20}")
+print(f"{'Mode':<20} {'Counterfactual?':<20} {'Data Requirements':<30}")
 print("-" * 70)
-print(f"{'IPS':<20} {'Yes':<20} {'Yes':<20}")
-print(f"{'DR':<20} {'Yes':<20} {'Yes (+ fresh draws)':<20}")
-print(f"{'Direct':<20} {'No':<20} {'Optional (for calibration)':<20}")
+print(f"{'IPS':<20} {'Yes':<20} {'Logged data + logprobs':<30}")
+print(f"{'DR':<20} {'Yes':<20} {'Logged data + fresh draws':<30}")
+print(f"{'Direct':<20} {'No':<20} {'Fresh draws only':<30}")
 print()
 
 print("When to use each mode:")
@@ -107,6 +115,10 @@ print("  • IPS: Logged data with logprobs, want counterfactual estimates")
 print("  • DR: Have both logged data and fresh draws, want most accurate estimates")
 print("  • Direct: Have fresh draws, just want on-policy comparison")
 print()
-print("Note: Direct mode can work with just fresh_draws_dir (no logged data)")
-print("      Adding logged data enables calibration for better accuracy")
-print("Pro tip: Use estimator='auto' and CJE will choose for you!")
+print("Within each mode, you can choose different estimators:")
+print("  • IPS mode: calibrated-ips (default), raw-ips")
+print("  • DR mode: stacked-dr (default), dr-cpo, tmle, mrdr")
+print("  • Direct mode: direct (calibrated if logged data available)")
+print()
+print("Pro tip: Use estimator='auto' and CJE will choose the mode AND")
+print("         the best default estimator for you!")
