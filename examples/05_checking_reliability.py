@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Example 4: Checking Estimate Reliability
+Example 5: Checking Estimate Reliability
 
 CJE provides diagnostics to help you assess whether estimates are trustworthy.
 Key metric: Effective Sample Size (ESS) - higher is better.
@@ -12,7 +12,7 @@ from cje import analyze_dataset
 DATA_PATH = Path(__file__).parent / "arena_sample" / "dataset.jsonl"
 
 # Auto mode selects calibrated-ips when no fresh draws provided
-results = analyze_dataset(str(DATA_PATH))
+results = analyze_dataset(logged_data_path=str(DATA_PATH))
 
 # Check overall diagnostics
 diag = results.diagnostics

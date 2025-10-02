@@ -156,7 +156,7 @@ class CalibratedIPS(BaseCJEEstimator):
             if np.all(np.isnan(S_policy)):
                 raise ValueError(
                     f"Judge scores are required for SIMCal calibration of policy '{policy}'. "
-                    "Ensure samples have 'judge_score' in metadata."
+                    "Ensure samples have 'judge_score' field."
                 )
 
             # Get rewards for this policy (always needed for influence functions)

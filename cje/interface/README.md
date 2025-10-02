@@ -1,71 +1,96 @@
 # CJE Interface
 
-Simple, reliable off-policy evaluation for LLM systems.
+Simple, reliable LLM evaluation with automatic mode selection.
 
 ## Quick Start
 
+CJE supports three modes - it automatically selects the best one for your data:
+
 ```python
 from cje import analyze_dataset
 
-# Most robust analysis (default)
-results = analyze_dataset(
-    "your_logs.jsonl",
-    fresh_draws_dir="responses/"  # Required for stacked-dr
-)
-print(f"Policy value: {results.estimates[0]:.3f} ± {1.96*results.standard_errors[0]:.3f}")
+# Mode 1: Direct (simplest - compare policies on eval set)
+results = analyze_dataset(fresh_draws_dir="responses/")
 
-# Fast analysis (no fresh draws needed)  
+# Mode 2: IPS (counterfactual with logged data)
+results = analyze_dataset(logged_data_path="logs.jsonl", estimator="calibrated-ips")
+
+# Mode 3: DR (most accurate - both logged data and fresh draws)
 results = analyze_dataset(
-    "your_logs.jsonl",
-    estimator="calibrated-ips"
+    logged_data_path="logs.jsonl",
+    fresh_draws_dir="responses/"
 )
+
+# Print results
+print(f"Policy value: {results.estimates[0]:.3f} ± {1.96*results.standard_errors[0]:.3f}")
 ```
 
-## Choosing an Estimator
+## Three Analysis Modes
 
-| Your Situation | Use This | Command |
-|---------------|----------|---------|
-| **Have fresh draws** → Most robust | `stacked-dr` (default) | `analyze_dataset("data.jsonl", fresh_draws_dir="responses/")` |
-| **No fresh draws** → Fast & good | `calibrated-ips` | `analyze_dataset("data.jsonl", estimator="calibrated-ips")` |
-| **Need triple robustness** → Robust to all errors | `tr-cpo-e` | `analyze_dataset("data.jsonl", estimator="tr-cpo-e", fresh_draws_dir="responses/")` |
-| **Want orthogonalized IPS** → Robust calibration | `orthogonalized-ips` | `analyze_dataset("data.jsonl", estimator="orthogonalized-ips")` |
-| **Debugging** → Baseline | `raw-ips` | `analyze_dataset("data.jsonl", estimator="raw-ips")` |
+| Mode | Data Needed | Estimand | When to Use |
+|------|-------------|----------|-------------|
+| **Direct** | Fresh draws only | On-policy comparison | Simplest setup, no logprobs needed |
+| **IPS** | Logged data with logprobs | Counterfactual deployment | Have production logs, want fast estimates |
+| **DR** | Both logged + fresh draws | Counterfactual (most accurate) | High-stakes decisions, maximum accuracy |
+
+### Automatic Mode Selection
+
+Use `estimator="auto"` (default) and CJE will choose:
+- **`direct`** if only `fresh_draws_dir` provided
+- **`calibrated-ips`** if only `logged_data_path` provided
+- **`stacked-dr`** if both provided
 
 ### What are fresh draws?
-Fresh draws are new responses from your target policy π' that have been scored by the judge. Required for doubly-robust (DR) methods. Store as JSONL files in a directory, one per policy.
+Fresh draws are new responses from your target policies evaluated by the judge. For Direct mode, these are your only data source. For DR mode, they supplement logged data for better accuracy.
+
+Format: JSONL files per policy in a directory (e.g., `responses/gpt4_responses.jsonl`)
 
 ## Common Workflows
 
-### Basic Analysis
+### Basic Analysis (Direct Mode)
 ```python
 from cje import analyze_dataset
 
-# Analyze with automatic defaults
-results = analyze_dataset("logs.jsonl")
-
-# Check reliability
-if results.diagnostics.weight_ess < 0.1:
-    print("⚠️ Low effective sample size - results may be unreliable")
+# Simplest workflow - just fresh draws
+results = analyze_dataset(fresh_draws_dir="responses/")
 
 # Get estimates for each policy
 for i, policy in enumerate(results.metadata["target_policies"]):
     print(f"{policy}: {results.estimates[i]:.3f} ± {1.96*results.standard_errors[i]:.3f}")
+
+# Note: Direct mode auto-discovers policies from filenames
+print(f"Found policies: {results.metadata['target_policies']}")
 ```
 
-### Comparing Policies
+### IPS Analysis (With Logged Data)
 ```python
-# Run robust analysis
+# Analyze logged production data
+results = analyze_dataset(logged_data_path="logs.jsonl", estimator="calibrated-ips")
+
+# Check reliability (important for IPS!)
+if results.diagnostics.weight_ess < 0.1:
+    print("⚠️ Low effective sample size - consider using DR mode with fresh draws")
+
+# Get estimates
+for i, policy in enumerate(results.metadata["target_policies"]):
+    print(f"{policy}: {results.estimates[i]:.3f} ± {1.96*results.standard_errors[i]:.3f}")
+```
+
+### DR Analysis (Maximum Accuracy)
+```python
+# Combine logged data with fresh draws for best accuracy
 results = analyze_dataset(
-    "production_logs.jsonl",
-    fresh_draws_dir="fresh_responses/"
+    logged_data_path="production_logs.jsonl",
+    fresh_draws_dir="responses/",
+    estimator="stacked-dr"  # or "auto"
 )
 
-# Compare policies
+# Compare policies using built-in method
 baseline_idx = 0
 for i in range(1, len(results.estimates)):
-    diff = results.estimates[i] - results.estimates[baseline_idx]
-    # Note: This is a simplified comparison - proper inference would account for correlation
-    print(f"Policy {i} vs baseline: {diff:+.3f}")
+    comparison = results.compare_policies(i, baseline_idx)
+    sig = "*" if comparison["significant"] else ""
+    print(f"Policy {i} vs baseline: {comparison['difference']:+.3f} (p={comparison['p_value']:.3f}) {sig}")
 ```
 
 ### Export Results
@@ -101,23 +126,33 @@ python -m cje validate logs.jsonl --verbose
 
 ## Data Format
 
-Minimal required fields:
+### Direct Mode (fresh draws only):
+```json
+{
+  "prompt_id": "0",
+  "prompt": "User question",
+  "response": "Model response",
+  "policy": "gpt4",           // Optional if using separate files per policy
+  "metadata": {
+    "judge_score": 0.85       // Required
+  }
+}
+```
+Store as: `responses/gpt4_responses.jsonl`, `responses/claude_responses.jsonl`, etc.
+
+### IPS/DR Modes (logged data):
 ```json
 {
   "prompt": "User question here",
-  "response": "Model response here", 
+  "response": "Model response here",
   "base_policy_logprob": -35.7,
   "target_policy_logprobs": {"policy_a": -33.1, "policy_b": -34.2},
   "metadata": {
     "judge_score": 0.85,      // Required
-    "oracle_label": 0.90       // Optional (for calibration)
+    "oracle_label": 0.90       // Optional (for calibration, 5-10% is enough)
   }
 }
 ```
-
-Fresh draws format (same structure, in separate files per policy):
-- `responses/policy_a_responses.jsonl`
-- `responses/policy_b_responses.jsonl`
 
 ## Troubleshooting
 
@@ -155,24 +190,34 @@ with open("logs.jsonl") as f:
 
 ```python
 def analyze_dataset(
-    dataset_path: str,
-    estimator: str = "stacked-dr",  # Default: most robust
-    judge_field: str = "judge_score",
-    oracle_field: str = "oracle_label", 
-    estimator_config: Optional[Dict[str, Any]] = None,
+    logged_data_path: Optional[str] = None,  # NEW: Optional (for Direct mode)
     fresh_draws_dir: Optional[str] = None,
+    estimator: str = "auto",  # NEW: Auto mode selection
+    judge_field: str = "judge_score",
+    oracle_field: str = "oracle_label",
+    estimator_config: Optional[Dict[str, Any]] = None,
     verbose: bool = False,
 ) -> EstimationResult:
 ```
 
 **Parameters:**
-- `dataset_path`: Path to JSONL file with logged data
-- `estimator`: One of: stacked-dr, calibrated-ips, raw-ips, dr-cpo, oc-dr-cpo, tr-cpo, orthogonalized-ips, mrdr, tmle
-- `fresh_draws_dir`: Directory with fresh draw responses (required for DR methods)
-- `verbose`: Print progress messages
+- `logged_data_path`: Path to JSONL file with logged data (optional for Direct mode)
+- `fresh_draws_dir`: Directory with fresh draw response files
+- `estimator`: Estimator name or "auto" for automatic selection
+  - Use "auto" (default) for automatic mode selection
+  - Manual: `direct`, `calibrated-ips`, `stacked-dr`, `dr-cpo`, `tmle`, `mrdr`, etc.
+- `judge_field`: Metadata field with judge scores (default: "judge_score")
+- `oracle_field`: Metadata field with oracle labels (default: "oracle_label")
+- `verbose`: Print detailed progress
 
 **Returns:**
-- `EstimationResult` with `.estimates`, `.standard_errors`, `.diagnostics`, `.metadata`
+- `EstimationResult` with:
+  - `.estimates`: Policy value estimates (numpy array)
+  - `.standard_errors`: Standard errors for each estimate
+  - `.diagnostics`: Diagnostic metrics (ESS, overlap quality, etc.)
+  - `.metadata`: Mode, estimator, data sources, etc.
+
+**At least one of `logged_data_path` or `fresh_draws_dir` must be provided.**
 
 ### CLI Commands
 
@@ -223,9 +268,23 @@ python -m cje.interface.hydra_entry \
 
 ## Summary
 
-1. **Default to `stacked-dr`** with fresh draws for most robust results
-2. **Use `calibrated-ips`** when you need speed or don't have fresh draws
-3. **Check diagnostics** especially `weight_ess` for reliability
-4. **Fresh draws required** for all DR methods (stacked-dr, dr-cpo, mrdr, tmle)
+**Three modes, three use cases:**
 
-For more details, see the full documentation (coming soon on cimo-labs.com).
+1. **Direct Mode** (`fresh_draws_dir` only)
+   - Simplest setup - no logprobs needed
+   - On-policy comparison: "Which policy is best on this eval set?"
+   - Auto-discovers policies from filenames
+
+2. **IPS Mode** (`logged_data_path` only)
+   - Fast counterfactual estimates from logged data
+   - Check `diagnostics.weight_ess` for reliability
+   - Use when you can't generate fresh draws
+
+3. **DR Mode** (both `logged_data_path` + `fresh_draws_dir`)
+   - Maximum accuracy combining IPS and outcome modeling
+   - Recommended for production decisions
+   - Robust to model misspecification
+
+**Best practice:** Use `estimator="auto"` and let CJE choose the right mode.
+
+For more details, see the [examples](../../examples/) and full documentation.

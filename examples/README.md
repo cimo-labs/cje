@@ -1,38 +1,44 @@
 # CJE Examples
 
-Focused examples showing common CJE workflows. Each example is ~20 lines and teaches one concept.
+Focused examples showing CJE's three analysis modes. Each example is ~20 lines and teaches one concept.
 
 ## Running Examples
 
 ```bash
 # From the repo root
-poetry run python examples/01_minimal.py
-poetry run python examples/02_with_fresh_draws.py
-poetry run python examples/03_comparing_policies.py
-poetry run python examples/04_checking_reliability.py
+poetry run python examples/01_understanding_modes.py
+poetry run python examples/02_minimal.py
+poetry run python examples/03_with_fresh_draws.py
+poetry run python examples/04_comparing_policies.py
+poetry run python examples/05_checking_reliability.py
 ```
 
 ## What Each Example Shows
 
-### 1. Minimal Usage (`01_minimal.py`)
+### 1. Understanding Modes (`01_understanding_modes.py`)
+Comprehensive overview of CJE's three analysis modes: Direct, IPS, and DR.
+
+**Key concept:** When to use each mode and what they estimate.
+
+### 2. Minimal Usage (`02_minimal.py`)
 The absolute simplest CJE workflow - load data and get estimates.
 
 **Key concept:** Getting started with CJE in ~10 lines of code.
 
-### 2. With Fresh Draws (`02_with_fresh_draws.py`)
+### 3. With Fresh Draws (`03_with_fresh_draws.py`)
 Shows how to use doubly-robust estimation with fresh draws from target policies.
 
-**Key concept:** Fresh draws enable more robust estimates via DR methods.
+**Key concept:** Fresh draws enable more accurate estimates via DR methods.
 
-### 3. Comparing Policies (`03_comparing_policies.py`)
-Find the best policy and compare against a baseline.
+### 4. Comparing Policies (`04_comparing_policies.py`)
+Find the best policy and compare against a baseline using proper statistical inference.
 
-**Key concept:** Policy selection and comparison.
+**Key concept:** Policy selection and comparison with significance testing.
 
-### 4. Checking Reliability (`04_checking_reliability.py`)
+### 5. Checking Reliability (`05_checking_reliability.py`)
 Use diagnostics to assess whether your estimates are trustworthy.
 
-**Key concept:** Effective Sample Size (ESS) and reliability assessment.
+**Key concept:** Effective Sample Size (ESS) and reliability assessment for IPS mode.
 
 ## Data
 

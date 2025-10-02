@@ -34,7 +34,7 @@ def test_analyze_dataset_ips_path_works() -> None:
     dataset_path, _ = _arena_paths()
 
     results = analyze_dataset(
-        dataset_path=str(dataset_path),
+        logged_data_path=str(dataset_path),
         estimator="calibrated-ips",
         verbose=False,
     )
@@ -51,7 +51,7 @@ def test_service_auto_selects_calibrated_ips_without_fresh_draws() -> None:
 
     svc = AnalysisService()
     cfg = AnalysisConfig(
-        dataset_path=str(dataset_path),
+        logged_data_path=str(dataset_path),
         judge_field="judge_score",
         oracle_field="oracle_label",
         estimator="auto",
@@ -71,7 +71,7 @@ def test_service_auto_selects_stacked_dr_with_fresh_draws() -> None:
 
     svc = AnalysisService()
     cfg = AnalysisConfig(
-        dataset_path=str(dataset_path),
+        logged_data_path=str(dataset_path),
         judge_field="judge_score",
         oracle_field="oracle_label",
         estimator="auto",
@@ -130,7 +130,155 @@ def test_stacked_dr_without_fresh_draws_raises_helpful_error() -> None:
 
     with pytest.raises(ValueError, match="DR estimators require fresh draws"):
         analyze_dataset(
-            dataset_path=str(dataset_path),
+            logged_data_path=str(dataset_path),
             estimator="stacked-dr",
             fresh_draws_dir=None,  # Missing!
         )
+
+
+def test_mode_detection_three_modes() -> None:
+    """Test that mode detection correctly identifies all three modes."""
+    from cje.interface.mode_detection import detect_analysis_mode
+    from cje.data.models import Dataset, Sample
+
+    # Case 1: Dataset with logprobs only (IPS mode)
+    samples_with_logprobs = [
+        Sample(
+            prompt_id=f"p{i}",
+            prompt="test",
+            response="response",
+            reward=0.5 + i * 0.05,
+            base_policy_logprob=-1.0,
+            target_policy_logprobs={"policy_a": -1.5, "policy_b": -2.0},
+            metadata={"judge_score": 0.5 + i * 0.05},
+        )
+        for i in range(10)
+    ]
+    dataset_ips = Dataset(
+        samples=samples_with_logprobs,
+        target_policies=["policy_a", "policy_b"],
+    )
+
+    mode, explanation = detect_analysis_mode(dataset_ips, fresh_draws_dir=None)
+    assert mode == "calibrated-ips"
+    assert "IPS mode" in explanation
+    assert "100.0% of samples have valid logprobs" in explanation
+
+    # Case 2: Dataset with no logprobs but fresh draws directory (Direct mode with calibration)
+    samples_no_logprobs = [
+        Sample(
+            prompt_id=f"p{i}",
+            prompt="test",
+            response="response",
+            reward=0.5 + i * 0.05,
+            base_policy_logprob=None,
+            # Include policies in dict but with None values
+            target_policy_logprobs={"policy_a": None, "policy_b": None},
+            metadata={"judge_score": 0.5 + i * 0.05, "policy": "policy_a"},
+        )
+        for i in range(10)
+    ]
+    dataset_no_logprobs = Dataset(
+        samples=samples_no_logprobs,
+        target_policies=["policy_a", "policy_b"],
+    )
+
+    # Dataset with no logprobs but fresh draws should select Direct mode
+    dataset_path, responses_dir = _arena_paths()
+    mode, explanation = detect_analysis_mode(
+        dataset_no_logprobs, fresh_draws_dir=str(responses_dir)
+    )
+    assert mode == "direct"
+    assert "Direct mode with calibration" in explanation
+
+    # Case 3: Dataset with logprobs AND fresh draws directory (DR mode)
+    dataset_path, responses_dir = _arena_paths()
+
+    mode, explanation = detect_analysis_mode(
+        dataset_ips, fresh_draws_dir=str(responses_dir)
+    )
+    assert mode == "stacked-dr"
+    assert "DR mode" in explanation
+    assert "combines importance weighting with outcome models" in explanation
+
+
+def test_mode_detection_insufficient_data() -> None:
+    """Test that mode detection raises clear error when data is insufficient."""
+    from cje.interface.mode_detection import detect_analysis_mode
+    from cje.data.models import Dataset, Sample
+
+    # Dataset with no logprobs, no rewards, and no fresh draws
+    samples_insufficient = [
+        Sample(
+            prompt_id=f"p{i}",
+            prompt="test",
+            response="response",
+            reward=None,  # No rewards!
+            base_policy_logprob=None,
+            target_policy_logprobs={"policy_a": None},
+            metadata={"judge_score": 0.5},
+        )
+        for i in range(10)
+    ]
+    dataset = Dataset(
+        samples=samples_insufficient,
+        target_policies=["policy_a"],
+    )
+
+    with pytest.raises(ValueError, match="Insufficient data"):
+        detect_analysis_mode(dataset, fresh_draws_dir=None)
+
+
+def test_direct_mode_with_explicit_estimator() -> None:
+    """Test that direct estimator can be explicitly selected with fresh draws."""
+    dataset_path, responses_dir = _arena_paths()
+
+    # Explicitly select direct mode (requires fresh_draws_dir)
+    results = analyze_dataset(
+        logged_data_path=str(dataset_path),
+        fresh_draws_dir=str(responses_dir),
+        estimator="direct",
+        verbose=False,
+    )
+
+    assert results is not None
+    assert results.metadata.get("mode") == "direct"
+    assert (
+        results.metadata.get("estimand") == "on-policy evaluation on provided prompts"
+    )
+    assert len(results.estimates) > 0
+    assert "target_policies" in results.metadata
+
+
+def test_direct_mode_without_fresh_draws_raises_error() -> None:
+    """Test that direct mode requires either fresh_draws_dir or logged_data."""
+    # Direct mode with logged data but no fresh draws should error
+    dataset_path, _ = _arena_paths()
+
+    with pytest.raises(ValueError, match="Direct mode requires fresh_draws_dir"):
+        analyze_dataset(
+            logged_data_path=str(dataset_path),
+            estimator="direct",
+            fresh_draws_dir=None,  # Missing!
+            verbose=False,
+        )
+
+
+def test_direct_only_mode_works() -> None:
+    """Test that Direct-only mode works with just fresh_draws_dir (no logged data)."""
+    _, responses_dir = _arena_paths()
+
+    # Direct-only mode: fresh draws without logged data
+    results = analyze_dataset(
+        fresh_draws_dir=str(responses_dir),
+        estimator="auto",  # Should auto-select "direct"
+        verbose=False,
+    )
+
+    assert results is not None
+    assert results.metadata.get("mode") == "direct"
+    assert (
+        results.metadata.get("calibration") == "none"
+    )  # No calibration without logged data
+    assert len(results.estimates) > 0
+    assert "target_policies" in results.metadata

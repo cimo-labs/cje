@@ -83,12 +83,14 @@ def add_rewards_to_existing_data(
     # Build mapping from prompt_id -> (judge_score, sample)
     prompt_to_sample = {}
     for sample in dataset.samples:
-        # Get judge score from sample
-        if judge_score_field in sample.metadata:
-            score = sample.metadata[judge_score_field]
+        # Get judge score - standard field is top-level, custom fields in metadata
+        score = None
+        if judge_score_field == "judge_score":
+            score = sample.judge_score  # Top-level field (can be None)
         else:
-            # Will need to get from raw data later
-            score = None
+            # Custom field name - check metadata
+            score = sample.metadata.get(judge_score_field)
+        # If still None, will need to get from raw data later
 
         prompt_to_sample[sample.prompt_id] = (score, sample)
 

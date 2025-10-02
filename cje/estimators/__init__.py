@@ -8,6 +8,7 @@ This module contains:
 
 from .base_estimator import BaseCJEEstimator
 from .calibrated_ips import CalibratedIPS
+from .direct_method import CalibratedDirectEstimator
 from .orthogonalized_ips import OrthogonalizedCalibratedIPS
 from .orthogonalized_calibrated_dr import OrthogonalizedCalibratedDRCPO
 from .stacking import StackedDREstimator
@@ -34,6 +35,7 @@ __all__ = [
     # Estimators
     "BaseCJEEstimator",
     "CalibratedIPS",
+    "CalibratedDirectEstimator",
     "OrthogonalizedCalibratedIPS",
     "OrthogonalizedCalibratedDRCPO",
     "StackedDREstimator",

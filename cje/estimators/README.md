@@ -8,6 +8,7 @@ Causal inference methods for unbiased off-policy evaluation of LLMs, transformin
 
 ```
 BaseCJEEstimator (abstract)
+├── CalibratedDirectEstimator  # Direct (on-policy) evaluation with fresh draws
 ├── CalibratedIPS              # IPS with optional SIMCal weight calibration
 │   └── OrthogonalizedCalibratedIPS  # OC-IPS with robustness to calibration errors
 ├── StackedDREstimator         # Optimal stacking of DR estimators
@@ -21,30 +22,33 @@ BaseCJEEstimator (abstract)
 
 ## Core Concepts
 
-### 1. Importance Sampling (IPS)
+### 1. Direct Method (On-Policy Evaluation)
+Evaluates target policies using fresh draws sampled directly from those policies. No importance weighting needed since samples come from the target distribution. Supports optional reward calibration (judge → oracle) when logged data with oracle labels is available.
+
+### 2. Importance Sampling (IPS)
 Foundation of off-policy evaluation. Reweights logged data to estimate performance under new policies using importance weights W = π_target/π_base.
 
-### 2. SIMCal Weight Calibration
+### 3. SIMCal Weight Calibration
 Stabilizes importance weights through monotone projection with variance control. Independent of reward calibration. CalibratedIPS now uses outer CV by default (`use_outer_cv=True`) for honest inference accounting for weight learning uncertainty.
 
-### 3. Doubly Robust (DR) Estimation
+### 4. Doubly Robust (DR) Estimation
 Combines direct method (outcome model) with IPS correction. Provides two chances to get the estimate right - if either the outcome model OR the weights are correct, DR is consistent.
 
-### 4. Multiple Robustness (MRDR)
+### 5. Multiple Robustness (MRDR)
 Achieves robustness to outcome model misspecification, propensity score misspecification, and both simultaneously through cross-fitting.
 
-### 5. Targeted Learning (TMLE)
+### 6. Targeted Learning (TMLE)
 Optimally combines outcome models and importance weights through targeted fluctuation to achieve optimal asymptotic efficiency.
 
-### 6. Estimator Stacking
+### 7. Estimator Stacking
 Forms optimal convex combination of DR estimators by minimizing combined influence function variance. Uses oracle IC approach (w₀ᵀφ(Z)) with ridge regularization for numerical stability.
 
-### 7. Orthogonalized Estimators
+### 8. Orthogonalized Estimators
 Achieve first-order insensitivity to nuisance estimation errors:
 - **OC-IPS**: Robust to errors in f̂(S) and m̂(S)
 - **OC-DR-CPO**: Additionally robust to q̂(X,A) errors
 
-### 8. Triply Robust (TR-CPO)
+### 9. Triply Robust (TR-CPO)
 Robust to weight calibration, reward calibration, and outcome model errors simultaneously. TR-CPO-E variant (recommended) uses m̂(S)=E[W|S] for variance reduction.
 
 ## File Structure
@@ -52,6 +56,7 @@ Robust to weight calibration, reward calibration, and outcome model errors simul
 ```
 estimators/
 ├── base_estimator.py               # Abstract base
+├── direct_method.py               # Direct (on-policy) estimator
 ├── calibrated_ips.py              # IPS with optional SIMCal
 ├── orthogonalized_ips.py          # OC-IPS
 ├── stacking.py                    # Optimal stacking

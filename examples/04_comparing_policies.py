@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Example 3: Comparing Policies
+Example 4: Comparing Policies
 
-Find the best policy and compare against a baseline.
+Find the best policy and compare against a baseline using proper statistical inference.
 """
 
 from pathlib import Path
@@ -14,7 +14,7 @@ FRESH_DRAWS_DIR = Path(__file__).parent / "arena_sample" / "responses"
 
 # Auto mode selects stacked-dr when fresh draws are provided
 results = analyze_dataset(
-    str(DATA_PATH),
+    logged_data_path=str(DATA_PATH),
     fresh_draws_dir=str(FRESH_DRAWS_DIR),
 )
 

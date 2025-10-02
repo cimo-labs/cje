@@ -64,22 +64,39 @@ def calibrate_dataset(
         )
 
     for i, sample in enumerate(dataset.samples):
-        # Look for judge score in metadata
-        if judge_field not in sample.metadata:
-            raise ValueError(
-                f"Judge field '{judge_field}' not found in sample metadata"
-            )
+        # Get judge score - must be top-level field for standard "judge_score"
+        # (Custom field names could be in metadata, but standard fields are always top-level after loading)
+        if judge_field == "judge_score":
+            if not hasattr(sample, "judge_score") or sample.judge_score is None:
+                raise ValueError(
+                    f"Judge field 'judge_score' not found or is None for sample {i}. "
+                    f"Ensure data was loaded through DatasetLoader which promotes judge_score to top-level."
+                )
+            judge_score = sample.judge_score
+        else:
+            # Custom field name - check metadata
+            if judge_field not in sample.metadata:
+                raise ValueError(
+                    f"Custom judge field '{judge_field}' not found in sample metadata"
+                )
+            judge_score = sample.metadata[judge_field]
+            if judge_score is None:
+                raise ValueError(f"Judge score is None for sample {i}")
 
-        judge_score = sample.metadata[judge_field]
         judge_scores.append(float(judge_score))
         prompt_ids.append(sample.prompt_id)
 
-        # Look for oracle label (only add if present and not None)
-        if (
-            oracle_field in sample.metadata
-            and sample.metadata[oracle_field] is not None
-        ):
-            oracle_labels.append(float(sample.metadata[oracle_field]))
+        # Get oracle label - must be top-level field for standard "oracle_label"
+        oracle_value = None
+        if oracle_field == "oracle_label":
+            oracle_value = sample.oracle_label  # Can be None - that's OK
+        else:
+            # Custom field name - check metadata
+            oracle_value = sample.metadata.get(oracle_field)
+
+        # Only add if present and not None
+        if oracle_value is not None:
+            oracle_labels.append(float(oracle_value))
             oracle_mask.append(i)  # Store index instead of boolean
 
     # Convert to arrays
@@ -128,14 +145,9 @@ def calibrate_dataset(
     calibrated_samples = []
     oracle_labels_dict = dict(zip(oracle_mask_array, oracle_labels_array))
     for i, sample in enumerate(dataset.samples):
-        # Create new sample with calibrated reward
-        new_metadata = sample.metadata.copy()
-        new_metadata[judge_field] = judge_scores[i]  # Preserve original
-        if i in oracle_labels_dict:
-            new_metadata[oracle_field] = oracle_labels_dict[i]
-
-        # Note: We no longer store cv_fold in metadata
-        # Folds are computed on-demand from prompt_id using the unified system
+        # Get judge_score and oracle_label for this sample
+        judge_score_value = judge_scores[i]
+        oracle_label_value = oracle_labels_dict.get(i)  # None if not in oracle set
 
         # Choose reward based on oracle coverage
         if has_full_coverage and i in oracle_labels_dict:
@@ -145,6 +157,7 @@ def calibrate_dataset(
             # With partial coverage or no oracle for this sample, use calibrated score
             reward_value = float(result.calibrated_scores[i])
 
+        # Create new sample with calibrated reward and preserved judge_score/oracle_label
         calibrated_sample = Sample(
             prompt_id=sample.prompt_id,
             prompt=sample.prompt,
@@ -152,7 +165,9 @@ def calibrate_dataset(
             reward=reward_value,
             base_policy_logprob=sample.base_policy_logprob,
             target_policy_logprobs=sample.target_policy_logprobs,
-            metadata=new_metadata,
+            judge_score=judge_score_value,
+            oracle_label=oracle_label_value,
+            metadata=sample.metadata.copy(),  # Preserve other metadata
         )
         calibrated_samples.append(calibrated_sample)
 

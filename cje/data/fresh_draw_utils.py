@@ -26,11 +26,9 @@ def compute_fresh_draw_prompt_stats(
     # Group scores by prompt_id
     for sample in fresh_dataset.samples:
         pid = str(sample.prompt_id)
-        # Get judge score from metadata
-        if hasattr(sample, "judge_score"):
+        # Get judge score from sample
+        if hasattr(sample, "judge_score") and sample.judge_score is not None:
             score = float(sample.judge_score)
-        elif hasattr(sample, "metadata") and "judge_score" in sample.metadata:
-            score = float(sample.metadata["judge_score"])
         elif hasattr(sample, "reward") and sample.reward is not None:
             # Try reward as fallback
             score = float(sample.reward)

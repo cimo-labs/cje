@@ -296,7 +296,15 @@ def create_synthetic_fresh_draws(
     samples: List[FreshDrawSample] = []
     for sample in valid_samples:
         prompt_id = sample.prompt_id
-        base_score = sample.metadata.get("judge_score", 0.5)
+
+        # Must have judge_score to generate synthetic draws
+        if sample.judge_score is None:
+            raise ValueError(
+                f"Sample {prompt_id} has no judge_score. "
+                f"Synthetic draws require judge scores to generate correlated samples."
+            )
+
+        base_score = sample.judge_score
 
         for draw_idx in range(draws_per_prompt):
             # Generate correlated score
@@ -465,3 +473,47 @@ def save_fresh_draws_to_jsonl(
 
     total_samples = sum(len(d.samples) for d in datasets.values())
     logger.info(f"Saved {total_samples} fresh draws to {path_obj}")
+
+
+def discover_policies_from_fresh_draws(fresh_draws_dir: Path) -> List[str]:
+    """Discover target policies from fresh draws directory.
+
+    Looks for files matching patterns:
+    - {policy}_responses.jsonl
+    - {policy}.jsonl
+
+    Args:
+        fresh_draws_dir: Directory containing fresh draw files
+
+    Returns:
+        List of discovered policy names
+
+    Raises:
+        ValueError: If no fresh draw files found
+    """
+    fresh_draws_path = Path(fresh_draws_dir)
+    if not fresh_draws_path.exists():
+        raise ValueError(f"Fresh draws directory not found: {fresh_draws_dir}")
+
+    policies = []
+
+    # Pattern 1: {policy}_responses.jsonl
+    for path in fresh_draws_path.glob("*_responses.jsonl"):
+        policy = path.stem.replace("_responses", "")
+        policies.append(policy)
+
+    # Pattern 2: {policy}.jsonl (if no _responses files found)
+    if not policies:
+        for path in fresh_draws_path.glob("*.jsonl"):
+            # Skip files that don't look like policy files
+            if path.stem not in ["dataset", "data", "logs"]:
+                policies.append(path.stem)
+
+    if not policies:
+        raise ValueError(
+            f"No fresh draw files found in {fresh_draws_dir}. "
+            f"Expected files like 'policy_a_responses.jsonl' or 'policy_a.jsonl'"
+        )
+
+    logger.info(f"Discovered {len(policies)} policies from fresh draws: {policies}")
+    return sorted(policies)

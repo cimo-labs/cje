@@ -239,7 +239,7 @@ folds = get_folds_for_dataset(dataset, n_folds=5, seed=42)
 
 # Balanced oracle distribution (for calibration)
 from cje.data.folds import get_folds_with_oracle_balance
-oracle_mask = np.array([s.metadata.get("oracle_label") is not None for s in dataset.samples])
+oracle_mask = np.array([s.oracle_label is not None for s in dataset.samples])
 balanced_folds = get_folds_with_oracle_balance(prompt_ids, oracle_mask, n_folds=5)
 ```
 

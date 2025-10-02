@@ -324,15 +324,13 @@ class DREstimator(BaseCJEEstimator):
         valid_indices_list = sorted(valid_for_any)
 
         # Upfront validation: Check all samples have judge scores
-        missing_judge_scores = []
-        invalid_judge_scores = []
+        missing_judge_scores: list[tuple[int, str]] = []
+        invalid_judge_scores: list[tuple[int, str]] = []
         for idx in valid_indices_list:
             sample = self.sampler.dataset.samples[idx]
-            if "judge_score" not in sample.metadata:
+            if sample.judge_score is None:
                 missing_judge_scores.append((idx, sample.prompt_id))
-            elif sample.metadata["judge_score"] is None:
-                invalid_judge_scores.append((idx, sample.prompt_id))
-            elif not isinstance(sample.metadata["judge_score"], (int, float)):
+            elif not isinstance(sample.judge_score, (int, float)):
                 invalid_judge_scores.append((idx, sample.prompt_id))
 
         if missing_judge_scores:
@@ -369,10 +367,9 @@ class DREstimator(BaseCJEEstimator):
                 raise ValueError("All samples must have calibrated rewards for DR")
 
             # Get judge score from metadata
-            if "judge_score" in sample.metadata:
-                judge_scores.append(sample.metadata["judge_score"])
-            else:
+            if sample.judge_score is None:
                 raise ValueError("All samples must have judge scores for DR")
+            judge_scores.append(sample.judge_score)
 
             # Get fold assignment using unified system
             # Note: We compute fold from prompt_id to handle filtered data correctly

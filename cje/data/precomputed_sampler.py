@@ -11,26 +11,26 @@ purposes:
 Example Data Flow:
 -----------------
     # Original Sample object
-    sample.metadata["judge_score"] = 0.8
+    sample.judge_score = 0.8  # Top-level field
     sample.reward = 0.75
 
     # After get_data_for_policy("gpt-4")
-    data["judge_score"] = 0.8  # Flattened from metadata
-    data["reward"] = 0.75      # Direct from sample
+    data["judge_score"] = 0.8  # From sample.judge_score
+    data["reward"] = 0.75      # From sample.reward
     data["cv_fold"] = 2        # Computed from prompt_id
 
 Key Differences:
 ---------------
-    # WRONG - looking in metadata after get_data_for_policy
+    # WRONG - looking in metadata
     data = sampler.get_data_for_policy("gpt-4")
     score = data[0]["metadata"]["judge_score"]  # ❌ KeyError!
 
-    # RIGHT - judge_score is flattened to top level
+    # RIGHT - judge_score is top-level in dict
     data = sampler.get_data_for_policy("gpt-4")
     score = data[0]["judge_score"]  # ✓ Correct
 
     # ALSO RIGHT - accessing original samples directly
-    score = sampler.dataset.samples[0].metadata["judge_score"]  # ✓ Correct
+    score = sampler.dataset.samples[0].judge_score  # ✓ Correct
 
 See PolicyDataDict for the complete structure returned by get_data_for_policy().
 """
@@ -262,8 +262,8 @@ class PrecomputedSampler:
                 "prompt": str,                      # From sample.prompt
                 "response": str,                    # From sample.response
                 "prompt_id": str,                   # From sample.prompt_id
-                "judge_score": Optional[float],     # From sample.metadata["judge_score"]
-                "oracle_label": Optional[float],    # From sample.metadata["oracle_label"]
+                "judge_score": Optional[float],     # From sample.judge_score
+                "oracle_label": Optional[float],    # From sample.oracle_label
                 "cv_fold": int,                     # Computed from prompt_id
             }
 
@@ -297,8 +297,8 @@ class PrecomputedSampler:
                         "prompt": record["context"],
                         "response": record["response"],
                         "prompt_id": sample.prompt_id,
-                        "judge_score": sample.metadata.get("judge_score"),
-                        "oracle_label": sample.metadata.get("oracle_label"),
+                        "judge_score": sample.judge_score,
+                        "oracle_label": sample.oracle_label,
                         # Compute cv_fold on-demand from prompt_id
                         # Use metadata if available, else defaults
                         "cv_fold": get_fold(
@@ -527,7 +527,7 @@ class PrecomputedSampler:
         judge_scores = []
         for idx in self._formatted_to_dataset_idx:
             sample = self.dataset.samples[idx]
-            score = sample.metadata.get("judge_score")
+            score = sample.judge_score
             if score is None:
                 return None  # Not all samples have judge scores
             judge_scores.append(score)
@@ -630,10 +630,7 @@ class PrecomputedSampler:
             return None
 
         for sample in self.dataset.samples:
-            if (
-                "oracle_label" in sample.metadata
-                and sample.metadata["oracle_label"] is not None
-            ):
+            if sample.oracle_label is not None:
                 n_with_oracle += 1
 
         # If we found any oracle labels, return the coverage

@@ -113,7 +113,8 @@ class TestEdgeCases:
             reward=0.5,
             base_policy_logprob=-10.0,
             target_policy_logprobs={"policy": -9.0},
-            metadata={"judge_score": 0.5},  # Add judge score for CalibratedIPS
+            judge_score=0.5,  # Top-level judge score for CalibratedIPS
+            metadata={},
         )
 
         dataset = Dataset(samples=[sample], target_policies=["policy"])
@@ -165,7 +166,8 @@ class TestEdgeCases:
                 reward=0.5,
                 base_policy_logprob=base_logprob,
                 target_policy_logprobs={"policy": target_logprob},
-                metadata={"judge_score": 0.5},  # Add judge score
+                judge_score=0.5,  # Top-level judge score
+                metadata={},
             )
             samples.append(sample)
 
@@ -199,7 +201,8 @@ class TestEdgeCases:
                 reward=0.5,
                 base_policy_logprob=-10.0 if i % 2 == 0 else None,
                 target_policy_logprobs=target_logprobs,
-                metadata={"judge_score": 0.5},  # Add judge score
+                judge_score=0.5,  # Top-level judge score
+                metadata={},
             )
             samples.append(sample)
 
@@ -229,7 +232,8 @@ class TestEdgeCases:
                 reward=0.7,  # All same
                 base_policy_logprob=-10.0,
                 target_policy_logprobs={"policy": -9.0},
-                metadata={"judge_score": 0.7},  # Add judge score matching reward
+                judge_score=0.7,  # Top-level judge score matching reward
+                metadata={},
             )
             samples.append(sample)
 

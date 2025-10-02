@@ -167,10 +167,30 @@ class DatasetLoader:
         # Get target log probs
         target_logprobs = record.get(self.target_policy_logprobs_field, {})
 
-        # Collect all other fields into metadata
-        metadata = record.get("metadata", {})
+        # Extract judge_score and oracle_label - prioritize top-level, fallback to metadata
+        judge_score = None
+        oracle_label = None
+        metadata_dict = record.get("metadata", {})
 
-        # Add any fields that aren't core fields to metadata
+        # Judge score: check top-level first, then metadata
+        if "judge_score" in record and record["judge_score"] is not None:
+            judge_score = float(record["judge_score"])
+        elif (
+            "judge_score" in metadata_dict and metadata_dict["judge_score"] is not None
+        ):
+            judge_score = float(metadata_dict["judge_score"])
+
+        # Oracle label: check top-level first, then metadata
+        if "oracle_label" in record and record["oracle_label"] is not None:
+            oracle_label = float(record["oracle_label"])
+        elif (
+            "oracle_label" in metadata_dict
+            and metadata_dict["oracle_label"] is not None
+        ):
+            oracle_label = float(metadata_dict["oracle_label"])
+
+        # Collect all other fields into metadata (excluding judge_score/oracle_label now)
+        metadata = {}
         core_fields = {
             "prompt_id",
             self.prompt_field,
@@ -178,14 +198,22 @@ class DatasetLoader:
             self.reward_field,
             self.base_policy_field,
             self.target_policy_logprobs_field,
+            "judge_score",  # Now a core field
+            "oracle_label",  # Now a core field
             "metadata",
         }
 
+        # Add non-core fields from top level
         for key, value in record.items():
             if key not in core_fields:
                 metadata[key] = value
 
-        # Create Sample object
+        # Add metadata dict fields (excluding judge_score/oracle_label which are now top-level)
+        for key, value in metadata_dict.items():
+            if key not in {"judge_score", "oracle_label"}:
+                metadata[key] = value
+
+        # Create Sample object with judge_score and oracle_label as top-level fields
         return Sample(
             prompt_id=prompt_id,
             prompt=record[self.prompt_field],
@@ -193,6 +221,8 @@ class DatasetLoader:
             reward=reward,
             base_policy_logprob=base_logprob,
             target_policy_logprobs=target_logprobs,
+            judge_score=judge_score,
+            oracle_label=oracle_label,
             metadata=metadata,
         )
 

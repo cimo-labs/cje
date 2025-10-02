@@ -42,10 +42,9 @@ def create_test_dataset(oracle_coverage: float = 1.0, n_samples: int = 100) -> D
             reward=reward,  # Add reward field
             base_policy_logprob=-2.0,
             target_policy_logprobs={"target": -1.5},
-            metadata={
-                "judge_score": judge_score,
-                "oracle_label": 1 if i < n_oracle else None,
-            },
+            judge_score=judge_score,  # Top-level field
+            oracle_label=1 if i < n_oracle else None,  # Top-level field
+            metadata={},
         )
         samples.append(sample)
 

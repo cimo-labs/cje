@@ -33,43 +33,64 @@ poetry install  # or pip install -e .
 
 ## Quick Start
 
+CJE supports three modes depending on your data:
+
 ```python
 from cje import analyze_dataset
 
-# Get unbiased estimate with confidence intervals
-result = analyze_dataset("your_data.jsonl", estimator="calibrated-ips")
+# Mode 1: Direct (simplest - just fresh draws)
+result = analyze_dataset(fresh_draws_dir="responses/")
 print(f"Policy value: {result.estimates[0]:.3f} ± {result.standard_errors[0]:.3f}")
-```
 
-For production use with fresh samples (most accurate):
-```python
-# With fresh draws from target policy (best accuracy)
-result = analyze_dataset("logs.jsonl", estimator="stacked-dr",
-                        fresh_draws_dir="responses/")
+# Mode 2: IPS (logged data with logprobs)
+result = analyze_dataset(logged_data_path="logs.jsonl", estimator="calibrated-ips")
+
+# Mode 3: DR (logged data + fresh draws - most accurate)
+result = analyze_dataset(
+    logged_data_path="logs.jsonl",
+    fresh_draws_dir="responses/",
+    estimator="stacked-dr"
+)
 ```
 
 CLI usage:
 ```bash
-# Quick evaluation
-python -m cje analyze data.jsonl --estimator calibrated-ips -o results.json
+# Direct mode (fresh draws only)
+python -m cje analyze --fresh-draws-dir responses/
 
-# Production evaluation with fresh samples
-python -m cje analyze data.jsonl --estimator stacked-dr --fresh-draws-dir responses/
+# IPS mode (logged data)
+python -m cje analyze logs.jsonl --estimator calibrated-ips
+
+# DR mode (both)
+python -m cje analyze logs.jsonl --fresh-draws-dir responses/
 ```
 
-## How It Works
+## Three Analysis Modes
 
-CJE transforms biased judge scores into unbiased policy estimates:
+CJE automatically selects the best mode based on your data:
 
-```
-Your Data → Judge Calibration → Importance Weighting → Unbiased Estimate + CI
-(logs.jsonl)  (maps judge→truth)   (reweights samples)    (with diagnostics)
-```
+### 1. **Direct Mode** (Fresh draws only)
+- **Use when:** You have responses from target policies, no logprobs needed
+- **Estimand:** "Which policy performs best on this eval set?" (on-policy comparison)
+- **Data needed:** Fresh responses with judge scores
+- **Example:** Comparing 3 model variants on 1000 prompts
+
+### 2. **IPS Mode** (Logged data with logprobs)
+- **Use when:** You have logged data with importance weights, no fresh draws
+- **Estimand:** "What would happen if we deployed this policy?" (counterfactual)
+- **Data needed:** Logged responses with base/target logprobs
+- **Example:** Evaluating a new model on production traffic logs
+
+### 3. **DR Mode** (Both logged data and fresh draws)
+- **Use when:** You want maximum accuracy and have both
+- **Estimand:** Counterfactual deployment value (most accurate)
+- **Data needed:** Both logged data and fresh draws
+- **Example:** High-stakes A/B decision for model deployment
 
 ## When to Use CJE
 
 ✅ **Perfect for:**
-- A/B testing LLMs before deployment
+- Comparing LLM policies before deployment
 - Evaluating multiple model variants
 - Reusing existing data for new evaluations
 - High-stakes decisions needing confidence intervals
@@ -77,24 +98,40 @@ Your Data → Judge Calibration → Importance Weighting → Unbiased Estimate +
 ❌ **Not for:**
 - Online learning (CJE is offline)
 - Real-time scoring (CJE is batch)
-- Small samples (<1000 examples)
+- Very small samples (<100 examples)
 
 ## Data Requirements
 
-CJE expects JSONL with these fields:
+Requirements depend on which mode you're using:
 
+### For Direct Mode (fresh draws only):
+```json
+{
+  "prompt_id": "0",
+  "prompt": "What is 2+2?",
+  "response": "4",
+  "policy": "gpt4",
+  "metadata": {
+    "judge_score": 0.9                       // Required: judge evaluation
+  }
+}
+```
+
+### For IPS/DR Modes (logged data):
 ```json
 {
   "prompt": "What is 2+2?",
   "response": "4",
-  "base_policy_logprob": -2.3,               // Log P(response|prompt) for current model
-  "target_policy_logprobs": {"gpt4": -1.8},  // Same for model(s) to evaluate
+  "base_policy_logprob": -2.3,               // Required: log P(response|prompt) for logging policy
+  "target_policy_logprobs": {"gpt4": -1.8},  // Required: same for policies to evaluate
   "metadata": {
-    "judge_score": 0.9,                      // Your LLM judge's score
-    "oracle_label": 1.0                      // Ground truth (5-10% labeled is enough)
+    "judge_score": 0.9,                      // Required: judge evaluation
+    "oracle_label": 1.0                      // Optional: ground truth (5-10% is enough for calibration)
   }
 }
 ```
+
+**Key difference:** Direct mode doesn't need logprobs! Just responses from each policy with judge scores.
 
 ### Generating Log Probabilities
 
@@ -117,11 +154,18 @@ This handles chat templates, tokenization, and API calls automatically. See `cje
 
 ## Choosing an Estimator
 
-- **`calibrated-ips`** (default for quick start): Fast, reliable, no fresh samples needed
-- **`stacked-dr`** (recommended for production): Most accurate, requires fresh samples from target
-- **Individual estimators** (`dr-cpo`, `tmle`, `mrdr`): For research and debugging
+**Most users should use `estimator="auto"`** - CJE will automatically select:
+- **`direct`** when you only provide `fresh_draws_dir`
+- **`calibrated-ips`** when you only provide `logged_data_path`
+- **`stacked-dr`** when you provide both
 
-See the documentation for estimator details.
+**Manual selection:**
+- **`direct`**: On-policy comparison (no counterfactual inference)
+- **`calibrated-ips`**: Fast IPS with variance-reduced weights
+- **`stacked-dr`**: Robust ensemble of DR estimators (recommended for production)
+- **Individual DR estimators**: `dr-cpo`, `tmle`, `mrdr`, `tr-cpo` (for research)
+
+See the [examples](examples/) for mode-specific workflows.
 
 ## Documentation
 

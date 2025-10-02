@@ -40,9 +40,13 @@ class TestE2EEstimators:
         np.random.seed(42)
 
         # Mask 50% of oracle labels to simulate realistic scenario
+        new_samples = []
         for i, sample in enumerate(arena_sample.samples):
-            if i % 2 == 1 and "oracle_label" in sample.metadata:
-                sample.metadata["oracle_label"] = None
+            if i % 2 == 1 and sample.oracle_label is not None:
+                new_samples.append(sample.model_copy(update={"oracle_label": None}))
+            else:
+                new_samples.append(sample)
+        arena_sample.samples = new_samples
 
         calibrated, cal_result = calibrate_dataset(
             arena_sample, judge_field="judge_score", oracle_field="oracle_label"
@@ -94,9 +98,13 @@ class TestE2EEstimators:
         np.random.seed(42)
 
         # Mask 50% of oracle labels to simulate realistic scenario
+        new_samples = []
         for i, sample in enumerate(arena_sample.samples):
-            if i % 2 == 1 and "oracle_label" in sample.metadata:
-                sample.metadata["oracle_label"] = None
+            if i % 2 == 1 and sample.oracle_label is not None:
+                new_samples.append(sample.model_copy(update={"oracle_label": None}))
+            else:
+                new_samples.append(sample)
+        arena_sample.samples = new_samples
 
         calibrated, cal_result = calibrate_dataset(
             arena_sample,
@@ -168,9 +176,13 @@ class TestE2EEstimators:
         np.random.seed(42)
 
         # Use 50% oracle coverage
+        new_samples = []
         for i, sample in enumerate(arena_sample.samples):
-            if i % 2 == 1 and "oracle_label" in sample.metadata:
-                sample.metadata["oracle_label"] = None
+            if i % 2 == 1 and sample.oracle_label is not None:
+                new_samples.append(sample.model_copy(update={"oracle_label": None}))
+            else:
+                new_samples.append(sample)
+        arena_sample.samples = new_samples
 
         calibrated, cal_result = calibrate_dataset(
             arena_sample,
@@ -255,9 +267,13 @@ class TestE2EEstimators:
         np.random.seed(42)
 
         # Use 50% oracle coverage
+        new_samples = []
         for i, sample in enumerate(arena_sample.samples):
-            if i % 2 == 1 and "oracle_label" in sample.metadata:
-                sample.metadata["oracle_label"] = None
+            if i % 2 == 1 and sample.oracle_label is not None:
+                new_samples.append(sample.model_copy(update={"oracle_label": None}))
+            else:
+                new_samples.append(sample)
+        arena_sample.samples = new_samples
 
         calibrated, cal_result = calibrate_dataset(
             arena_sample,
@@ -306,9 +322,13 @@ class TestE2EEstimators:
         random.seed(42)
         np.random.seed(42)
 
+        new_samples = []
         for i, sample in enumerate(arena_sample.samples):
-            if i % 2 == 1 and "oracle_label" in sample.metadata:
-                sample.metadata["oracle_label"] = None
+            if i % 2 == 1 and sample.oracle_label is not None:
+                new_samples.append(sample.model_copy(update={"oracle_label": None}))
+            else:
+                new_samples.append(sample)
+        arena_sample.samples = new_samples
 
         calibrated, cal_result = calibrate_dataset(
             arena_sample,
@@ -356,9 +376,13 @@ class TestE2EEstimators:
         random.seed(42)
         np.random.seed(42)
 
+        new_samples = []
         for i, sample in enumerate(arena_sample.samples):
-            if i % 2 == 1 and "oracle_label" in sample.metadata:
-                sample.metadata["oracle_label"] = None
+            if i % 2 == 1 and sample.oracle_label is not None:
+                new_samples.append(sample.model_copy(update={"oracle_label": None}))
+            else:
+                new_samples.append(sample)
+        arena_sample.samples = new_samples
 
         calibrated, cal_result = calibrate_dataset(
             arena_sample,
@@ -405,9 +429,13 @@ class TestE2EEstimators:
         np.random.seed(42)
 
         # Mask 50% of oracle labels to test label propensity modeling
+        new_samples = []
         for i, sample in enumerate(arena_sample.samples):
-            if i % 2 == 1 and "oracle_label" in sample.metadata:
-                sample.metadata["oracle_label"] = None
+            if i % 2 == 1 and sample.oracle_label is not None:
+                new_samples.append(sample.model_copy(update={"oracle_label": None}))
+            else:
+                new_samples.append(sample)
+        arena_sample.samples = new_samples
 
         calibrated, cal_result = calibrate_dataset(
             arena_sample,
@@ -497,9 +525,13 @@ class TestE2EEstimators:
         random.seed(42)
         np.random.seed(42)
 
+        new_samples = []
         for i, sample in enumerate(arena_sample.samples):
-            if i % 2 == 1 and "oracle_label" in sample.metadata:
-                sample.metadata["oracle_label"] = None
+            if i % 2 == 1 and sample.oracle_label is not None:
+                new_samples.append(sample.model_copy(update={"oracle_label": None}))
+            else:
+                new_samples.append(sample)
+        arena_sample.samples = new_samples
 
         calibrated, cal_result = calibrate_dataset(
             arena_sample,
@@ -584,9 +616,13 @@ class TestEstimatorConsistency:
         np.random.seed(42)
 
         # Prepare dataset with high oracle coverage for better agreement
+        new_samples = []
         for i, sample in enumerate(arena_sample.samples):
-            if i % 4 != 0 and "oracle_label" in sample.metadata:  # Keep 75%
-                sample.metadata["oracle_label"] = None
+            if i % 4 != 0 and sample.oracle_label is not None:  # Keep 75%
+                new_samples.append(sample.model_copy(update={"oracle_label": None}))
+            else:
+                new_samples.append(sample)
+        arena_sample.samples = new_samples
 
         calibrated, cal_result = calibrate_dataset(
             arena_sample,
@@ -663,16 +699,18 @@ class TestEstimatorStress:
 
         # Keep only 10% of oracle labels
         oracle_indices = [
-            i
-            for i, s in enumerate(arena_sample.samples)
-            if "oracle_label" in s.metadata
+            i for i, s in enumerate(arena_sample.samples) if s.oracle_label is not None
         ]
         keep_n = max(2, len(oracle_indices) // 10)
         keep_indices = set(random.sample(oracle_indices, keep_n))
 
+        new_samples = []
         for i, sample in enumerate(arena_sample.samples):
-            if i not in keep_indices and "oracle_label" in sample.metadata:
-                sample.metadata["oracle_label"] = None
+            if i not in keep_indices and sample.oracle_label is not None:
+                new_samples.append(sample.model_copy(update={"oracle_label": None}))
+            else:
+                new_samples.append(sample)
+        arena_sample.samples = new_samples
 
         calibrated, cal_result = calibrate_dataset(
             arena_sample, judge_field="judge_score", oracle_field="oracle_label"

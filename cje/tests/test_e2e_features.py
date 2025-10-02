@@ -34,10 +34,14 @@ class TestSIMCalFeature:
         random.seed(42)
         np.random.seed(42)
 
-        # Prepare dataset
+        # Prepare dataset - mask every other oracle label
+        new_samples = []
         for i, sample in enumerate(arena_sample.samples):
-            if i % 2 == 1 and "oracle_label" in sample.metadata:
-                sample.metadata["oracle_label"] = None
+            if i % 2 == 1 and sample.oracle_label is not None:
+                new_samples.append(sample.model_copy(update={"oracle_label": None}))
+            else:
+                new_samples.append(sample)
+        arena_sample.samples = new_samples
 
         calibrated, _ = calibrate_dataset(
             arena_sample, judge_field="judge_score", oracle_field="oracle_label"
@@ -71,10 +75,14 @@ class TestCrossFitting:
         """Test cross-fitting gives consistent results across runs."""
         import random
 
-        # Prepare dataset
+        # Prepare dataset - mask every other oracle label
+        new_samples = []
         for i, sample in enumerate(arena_sample.samples):
-            if i % 2 == 1 and "oracle_label" in sample.metadata:
-                sample.metadata["oracle_label"] = None
+            if i % 2 == 1 and sample.oracle_label is not None:
+                new_samples.append(sample.model_copy(update={"oracle_label": None}))
+            else:
+                new_samples.append(sample)
+        arena_sample.samples = new_samples
 
         calibrated, cal_result = calibrate_dataset(
             arena_sample,
@@ -156,16 +164,18 @@ class TestIntegrationScenarios:
 
         # Prepare dataset with 60% oracle coverage
         oracle_indices = [
-            i
-            for i, s in enumerate(arena_sample.samples)
-            if "oracle_label" in s.metadata
+            i for i, s in enumerate(arena_sample.samples) if s.oracle_label is not None
         ]
         keep_n = int(len(oracle_indices) * 0.6)
         keep_indices = set(random.sample(oracle_indices, keep_n))
 
+        new_samples = []
         for i, sample in enumerate(arena_sample.samples):
-            if i not in keep_indices and "oracle_label" in sample.metadata:
-                sample.metadata["oracle_label"] = None
+            if i not in keep_indices and sample.oracle_label is not None:
+                new_samples.append(sample.model_copy(update={"oracle_label": None}))
+            else:
+                new_samples.append(sample)
+        arena_sample.samples = new_samples
 
         # Calibrate with cross-fitting
         calibrated, cal_result = calibrate_dataset(

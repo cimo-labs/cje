@@ -9,6 +9,7 @@ import logging
 
 from ..data.precomputed_sampler import PrecomputedSampler
 from ..estimators.calibrated_ips import CalibratedIPS
+from ..estimators.direct_method import CalibratedDirectEstimator
 from ..estimators.orthogonalized_ips import OrthogonalizedCalibratedIPS
 from ..estimators.dr_base import DRCPOEstimator
 from ..estimators.orthogonalized_calibrated_dr import OrthogonalizedCalibratedDRCPO
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 BuilderFn = Callable[
     [PrecomputedSampler, Dict[str, Any], Optional[Any], bool],
     Union[
+        CalibratedDirectEstimator,
         CalibratedIPS,
         OrthogonalizedCalibratedIPS,
         DRCPOEstimator,
@@ -48,6 +50,22 @@ def _build_calibrated_ips(
                 "Using reward_calibrator for DR-aware SIMCal direction selection"
             )
     return CalibratedIPS(sampler, **cfg)
+
+
+def _build_calibrated_direct(
+    sampler: PrecomputedSampler,
+    config: Dict[str, Any],
+    calibration_result: Optional[Any],
+    verbose: bool,
+) -> CalibratedDirectEstimator:
+    """Build direct method estimator for on-policy evaluation."""
+    cfg = dict(config)
+    if calibration_result and getattr(calibration_result, "calibrator", None):
+        cfg.setdefault("reward_calibrator", calibration_result.calibrator)
+        if verbose:
+            logger.info("Using reward_calibrator for direct method OUA")
+    # DirectEstimator takes target_policies, not sampler
+    return CalibratedDirectEstimator(target_policies=sampler.target_policies, **cfg)
 
 
 def _build_raw_ips(
@@ -212,6 +230,8 @@ def _build_stacked_dr(
 
 REGISTRY: Dict[str, BuilderFn] = {
     "calibrated-ips": _build_calibrated_ips,
+    "calibrated-direct": _build_calibrated_direct,
+    "direct": _build_calibrated_direct,  # Alias
     "orthogonalized-ips": _build_orthogonalized_ips,
     "raw-ips": _build_raw_ips,
     "dr-cpo": _build_dr_cpo,

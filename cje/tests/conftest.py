@@ -99,9 +99,7 @@ def arena_calibrated(arena_sample: Dataset) -> Dataset:
 
     # Mask 50% of oracle labels to simulate partial coverage
     samples_with_oracle = [
-        i
-        for i, s in enumerate(dataset.samples)
-        if "oracle_label" in s.metadata and s.metadata["oracle_label"] is not None
+        i for i, s in enumerate(dataset.samples) if s.oracle_label is not None
     ]
 
     if len(samples_with_oracle) > 2:
@@ -110,10 +108,15 @@ def arena_calibrated(arena_sample: Dataset) -> Dataset:
         n_keep = max(2, len(samples_with_oracle) // 2)
         keep_indices = set(random.sample(samples_with_oracle, n_keep))
 
-        for i in range(len(dataset.samples)):
-            if i not in keep_indices and "oracle_label" in dataset.samples[i].metadata:
+        # Create new samples with masked oracle labels
+        new_samples = []
+        for i, sample in enumerate(dataset.samples):
+            if i not in keep_indices and sample.oracle_label is not None:
                 # Remove oracle label for this sample
-                dataset.samples[i].metadata["oracle_label"] = None
+                new_samples.append(sample.model_copy(update={"oracle_label": None}))
+            else:
+                new_samples.append(sample)
+        dataset.samples = new_samples
 
     calibrated_dataset, _ = calibrate_dataset(
         dataset, judge_field="judge_score", oracle_field="oracle_label"

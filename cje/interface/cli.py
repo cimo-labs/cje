@@ -157,7 +157,7 @@ def run_analysis(args: argparse.Namespace) -> int:
             print(f"Running CJE analysis on {args.dataset}")
             print("=" * 50)
 
-        results = analyze_dataset(args.dataset, **kwargs)
+        results = analyze_dataset(logged_data_path=args.dataset, **kwargs)
 
         # Display results
         if not args.quiet:
@@ -261,10 +261,10 @@ def validate_data(args: argparse.Namespace) -> int:
             judge_scores = []
             oracle_labels = []
             for s in dataset.samples:
-                if "judge_score" in s.metadata:
-                    judge_scores.append(s.metadata["judge_score"])
-                if "oracle_label" in s.metadata:
-                    oracle_labels.append(s.metadata["oracle_label"])
+                if s.judge_score is not None:
+                    judge_scores.append(s.judge_score)
+                if s.oracle_label is not None:
+                    oracle_labels.append(s.oracle_label)
 
             if judge_scores:
                 import numpy as np

@@ -51,9 +51,15 @@ class Sample(BaseModel):
     target_policy_logprobs: Dict[str, Optional[float]] = Field(
         ..., description="Log probs under target policies (None for failures)"
     )
+    judge_score: Optional[float] = Field(
+        None, ge=0, le=1, description="Judge evaluation score [0,1]"
+    )
+    oracle_label: Optional[float] = Field(
+        None, ge=0, le=1, description="Ground truth oracle label [0,1]"
+    )
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
-        description="Optional metadata (judge_score, oracle_label, etc.)",
+        description="Additional metadata (timestamps, model info, etc.)",
     )
 
     @field_validator("base_policy_logprob")

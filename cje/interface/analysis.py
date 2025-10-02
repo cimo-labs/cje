@@ -18,56 +18,72 @@ logger = logging.getLogger(__name__)
 
 
 def analyze_dataset(
-    dataset_path: str,
+    logged_data_path: Optional[str] = None,
+    fresh_draws_dir: Optional[str] = None,
     estimator: str = "auto",
     judge_field: str = "judge_score",
     oracle_field: str = "oracle_label",
     estimator_config: Optional[Dict[str, Any]] = None,
-    fresh_draws_dir: Optional[str] = None,
     verbose: bool = False,
 ) -> EstimationResult:
     """
-    Analyze a CJE dataset with automatic workflow orchestration.
+    Analyze policies using logged data and/or fresh draws.
 
     This high-level function handles:
     - Data loading and validation
-    - Automatic reward handling (pre-computed, oracle direct, or calibration)
+    - Automatic reward calibration (judge → oracle mapping)
     - Estimator selection and configuration
-    - Fresh draw loading for DR estimators
+    - Fresh draw loading for DR/Direct estimators
     - Complete analysis workflow
 
     Args:
-        dataset_path: Path to JSONL dataset file
-        estimator: Estimator type (default "auto"; also "calibrated-ips", "stacked-dr", "raw-ips", "dr-cpo", "mrdr", "tmle")
-        judge_field: Metadata field containing judge scores
-        oracle_field: Metadata field containing oracle labels
+        logged_data_path: Path to logged data JSONL file (responses from base/production policy).
+            Required for: IPS mode (must have logprobs), DR mode.
+            Optional for: Direct mode (if provided, used for calibration only).
+        fresh_draws_dir: Directory containing fresh draw response files.
+            Required for: DR mode, Direct mode.
+            Optional for: IPS mode (ignored).
+        estimator: Estimator type. Options:
+            - "auto" (default): Automatically select based on available data
+            - "calibrated-ips": Importance sampling (requires logged_data_path with logprobs)
+            - "stacked-dr": Doubly robust (requires both logged_data_path and fresh_draws_dir)
+            - "direct": On-policy evaluation (requires fresh_draws_dir)
+        judge_field: Metadata field containing judge scores (default "judge_score")
+        oracle_field: Metadata field containing oracle labels (default "oracle_label")
         estimator_config: Optional configuration dict for the estimator
-        fresh_draws_dir: Directory containing fresh draw response files (for DR)
         verbose: Whether to print progress messages
 
     Returns:
         EstimationResult with estimates, standard errors, and metadata
 
     Raises:
-        FileNotFoundError: If dataset file doesn't exist
-        ValueError: If dataset is invalid or estimation fails
+        ValueError: If required data is missing for the selected estimator
 
     Example:
-        >>> # Simple usage
-        >>> results = analyze_dataset("my_data.jsonl")
-        >>> print(f"Best estimate: {results.estimates.max():.3f}")
+        >>> # IPS mode: Logged data only
+        >>> results = analyze_dataset(logged_data_path="logs.jsonl")
 
-        >>> # Advanced usage with DR
+        >>> # DR mode: Both logged data and fresh draws
         >>> results = analyze_dataset(
-        ...     "my_data.jsonl",
-        ...     estimator="dr-cpo",
-        ...     estimator_config={"n_folds": 10},
+        ...     logged_data_path="logs.jsonl",
         ...     fresh_draws_dir="responses/"
         ... )
+
+        >>> # Direct mode: Fresh draws only
+        >>> results = analyze_dataset(
+        ...     fresh_draws_dir="responses/",
+        ...     estimator="direct"
+        ... )
     """
+    # Validate that at least one data source is provided
+    if logged_data_path is None and fresh_draws_dir is None:
+        raise ValueError(
+            "Must provide at least one of: logged_data_path, fresh_draws_dir"
+        )
+
     # Delegate to the AnalysisService with typed config
     cfg = AnalysisConfig(
-        dataset_path=dataset_path,
+        logged_data_path=logged_data_path,
         estimator=estimator,
         judge_field=judge_field,
         oracle_field=oracle_field,

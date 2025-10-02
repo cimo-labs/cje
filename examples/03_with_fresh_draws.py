@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Example 2: Using Fresh Draws for Doubly-Robust Estimation
+Example 3: Using Fresh Draws for Doubly-Robust Estimation
 
 Fresh draws (new responses from target policies) enable more robust estimation
-via doubly-robust methods. These are less sensitive to model misspecification.
+via doubly-robust methods. These are less sensitive to model misspecification
+and provide the most accurate counterfactual estimates.
 """
 
 from pathlib import Path
@@ -17,12 +18,12 @@ FRESH_DRAWS = DATA_DIR / "responses"  # Directory with {policy}_responses.jsonl 
 # Auto mode selects stacked-dr when fresh draws are available
 # Stacked-DR combines multiple DR estimators for robustness
 results = analyze_dataset(
-    str(DATASET),
+    logged_data_path=str(DATASET),
     fresh_draws_dir=str(FRESH_DRAWS),
 )
 
 # Compare with calibrated-ips (no fresh draws needed)
-results_ips = analyze_dataset(str(DATASET), estimator="calibrated-ips")
+results_ips = analyze_dataset(logged_data_path=str(DATASET), estimator="calibrated-ips")
 
 print("Stacked-DR vs Calibrated-IPS:")
 print(f"{'Policy':<30} {'Stacked-DR':>12} {'Cal-IPS':>12}")

@@ -4,12 +4,13 @@ Encapsulates the end-to-end workflow and uses the estimator registry.
 The public API still exposes analyze_dataset(...) for simplicity.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import logging
 from pathlib import Path
 
 from .config import AnalysisConfig
 from .factory import create_estimator
+from .mode_detection import detect_analysis_mode
 from ..data import load_dataset_from_jsonl
 from ..data.models import Dataset, EstimationResult
 from ..data.precomputed_sampler import PrecomputedSampler
@@ -23,10 +24,151 @@ class AnalysisService:
         pass
 
     def run(self, config: AnalysisConfig) -> EstimationResult:
-        if config.verbose:
-            logger.info(f"Loading dataset from {config.dataset_path}")
+        # Determine estimator choice early
+        chosen_estimator = config.estimator.lower() if config.estimator else "auto"
 
-        dataset = load_dataset_from_jsonl(config.dataset_path)
+        # Check if we're in Direct-only mode (no logged data)
+        is_direct_only = (
+            config.logged_data_path is None and config.fresh_draws_dir is not None
+        )
+
+        if is_direct_only:
+            # Direct-only mode: fresh draws without logged data
+            if chosen_estimator == "auto":
+                chosen_estimator = "direct"
+            elif chosen_estimator not in {"direct", "calibrated-direct"}:
+                raise ValueError(
+                    f"Without logged_data_path, only Direct mode is supported. "
+                    f"Got estimator={chosen_estimator}. Either provide logged_data_path "
+                    f"or use estimator='direct'."
+                )
+
+            return self._run_direct_only(config, chosen_estimator)
+
+        # IPS/DR mode: requires logged data
+        if config.logged_data_path is None:
+            raise ValueError(
+                "Must provide logged_data_path for IPS/DR modes, or "
+                "provide fresh_draws_dir for Direct mode"
+            )
+
+        return self._run_with_logged_data(config, chosen_estimator)
+
+    def _run_direct_only(
+        self, config: AnalysisConfig, chosen_estimator: str
+    ) -> EstimationResult:
+        """Run Direct mode without logged data (fresh draws only)."""
+        from ..data.fresh_draws import (
+            discover_policies_from_fresh_draws,
+            load_fresh_draws_auto,
+        )
+
+        if config.verbose:
+            logger.info("Direct mode: Using fresh draws only (no logged data)")
+
+        # Discover policies from fresh draws directory
+        target_policies = discover_policies_from_fresh_draws(
+            Path(config.fresh_draws_dir)
+        )
+
+        if config.verbose:
+            logger.info(
+                f"Discovered {len(target_policies)} policies: {', '.join(target_policies)}"
+            )
+
+        # No calibration in Direct-only mode (use judge scores as-is)
+        from ..estimators.direct_method import CalibratedDirectEstimator
+
+        estimator_obj = CalibratedDirectEstimator(
+            target_policies=target_policies,
+            reward_calibrator=None,  # No calibration
+            run_diagnostics=True,
+            oua_jackknife=False,  # No oracle uncertainty without calibration
+            **config.estimator_config,
+        )
+
+        # Load fresh draws for each policy
+        for policy in target_policies:
+            fd = load_fresh_draws_auto(
+                Path(config.fresh_draws_dir), policy, verbose=config.verbose
+            )
+            estimator_obj.add_fresh_draws(policy, fd)
+
+        results = estimator_obj.fit_and_estimate()
+
+        # Add metadata
+        results.metadata["estimator"] = chosen_estimator
+        results.metadata["target_policies"] = target_policies
+        results.metadata["fresh_draws_dir"] = config.fresh_draws_dir
+        results.metadata["calibration"] = "none"
+        if config.estimator_config:
+            results.metadata["estimator_config"] = config.estimator_config
+
+        return results
+
+    def _run_direct_with_calibration(
+        self,
+        config: AnalysisConfig,
+        chosen_estimator: str,
+        target_policies: List[str],
+        calibration_result: Optional[Any],
+    ) -> EstimationResult:
+        """Run Direct mode with logged data for calibration."""
+        from ..data.fresh_draws import load_fresh_draws_auto
+        from ..estimators.direct_method import CalibratedDirectEstimator
+
+        if not config.fresh_draws_dir:
+            raise ValueError(
+                "Direct mode requires fresh_draws_dir. "
+                "Provide fresh draws or use IPS/DR mode."
+            )
+
+        if config.verbose:
+            logger.info(
+                "Direct mode: Using logged data for calibration, fresh draws for evaluation"
+            )
+
+        # Create Direct estimator with calibrator from logged data
+        estimator_obj = CalibratedDirectEstimator(
+            target_policies=target_policies,
+            reward_calibrator=(
+                calibration_result.calibrator if calibration_result else None
+            ),
+            run_diagnostics=True,
+            oua_jackknife=True,  # Include oracle uncertainty
+            **config.estimator_config,
+        )
+
+        # Load fresh draws for each policy
+        for policy in target_policies:
+            fd = load_fresh_draws_auto(
+                Path(config.fresh_draws_dir), policy, verbose=config.verbose
+            )
+            estimator_obj.add_fresh_draws(policy, fd)
+
+        results = estimator_obj.fit_and_estimate()
+
+        # Add metadata
+        results.metadata["logged_data_path"] = config.logged_data_path
+        results.metadata["estimator"] = chosen_estimator
+        results.metadata["target_policies"] = target_policies
+        results.metadata["fresh_draws_dir"] = config.fresh_draws_dir
+        results.metadata["calibration"] = "from_logged_data"
+        results.metadata["judge_field"] = config.judge_field
+        results.metadata["oracle_field"] = config.oracle_field
+        if config.estimator_config:
+            results.metadata["estimator_config"] = config.estimator_config
+
+        return results
+
+    def _run_with_logged_data(
+        self, config: AnalysisConfig, chosen_estimator: str
+    ) -> EstimationResult:
+        """Run IPS/DR/Direct mode with logged data."""
+        if config.verbose:
+            logger.info(f"Loading dataset from {config.logged_data_path}")
+
+        dataset = load_dataset_from_jsonl(config.logged_data_path)
 
         if config.verbose:
             logger.info(f"Loaded {dataset.n_samples} samples")
@@ -36,18 +178,27 @@ class AnalysisService:
             dataset, config.judge_field, config.oracle_field, config.verbose
         )
 
+        # Auto mode detection
+        if chosen_estimator == "auto":
+            chosen_estimator, mode_explanation = detect_analysis_mode(
+                calibrated_dataset, config.fresh_draws_dir
+            )
+            if config.verbose:
+                logger.info(f"Mode detection: {mode_explanation}")
+        else:
+            if config.verbose:
+                logger.info(f"Using explicitly specified estimator: {chosen_estimator}")
+
+        # Branch: Direct mode vs IPS/DR mode
+        if chosen_estimator in {"direct", "calibrated-direct"}:
+            return self._run_direct_with_calibration(
+                config, chosen_estimator, dataset.target_policies, calibration_result
+            )
+
+        # IPS/DR mode: create sampler
         sampler = PrecomputedSampler(calibrated_dataset)
         if config.verbose:
             logger.info(f"Valid samples after filtering: {sampler.n_valid_samples}")
-
-        # Determine estimator (support 'auto' default)
-        chosen_estimator = (
-            config.estimator.lower() if config.estimator else "calibrated-ips"
-        )
-        if chosen_estimator == "auto":
-            chosen_estimator = (
-                "stacked-dr" if config.fresh_draws_dir else "calibrated-ips"
-            )
 
         estimator_obj = create_estimator(
             chosen_estimator,
@@ -57,8 +208,8 @@ class AnalysisService:
             config.verbose,
         )
 
-        # DR estimators require explicit fresh draws directory
-        if chosen_estimator in (
+        # Estimators that can use fresh draws
+        dr_estimators = {
             "dr-cpo",
             "oc-dr-cpo",
             "mrdr",
@@ -66,7 +217,10 @@ class AnalysisService:
             "tr-cpo",
             "tr-cpo-e",
             "stacked-dr",
-        ):
+        }
+
+        # DR estimators require fresh draws
+        if chosen_estimator in dr_estimators:
             from ..data.fresh_draws import load_fresh_draws_auto
 
             if not config.fresh_draws_dir:
@@ -83,7 +237,7 @@ class AnalysisService:
         results: EstimationResult = estimator_obj.fit_and_estimate()
 
         # Minimal metadata enrichment
-        results.metadata["dataset_path"] = config.dataset_path
+        results.metadata["logged_data_path"] = config.logged_data_path
         results.metadata["estimator"] = chosen_estimator
         results.metadata["target_policies"] = list(sampler.target_policies)
         if config.estimator_config:

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Example 1: Minimal CJE Usage
+Example 2: Minimal CJE Usage
 
 The simplest possible CJE workflow - load data and get estimates.
+Auto mode will select the best estimator based on your data.
 """
 
 from pathlib import Path
@@ -12,7 +13,7 @@ from cje import analyze_dataset
 DATA_PATH = Path(__file__).parent / "arena_sample" / "dataset.jsonl"
 
 # Run analysis (auto-selects calibrated-ips when no fresh draws provided)
-results = analyze_dataset(str(DATA_PATH))
+results = analyze_dataset(logged_data_path=str(DATA_PATH))
 
 # Print results with 95% confidence intervals
 print("Policy Estimates:")
