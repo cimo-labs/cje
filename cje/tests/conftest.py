@@ -37,14 +37,14 @@ def arena_dataset() -> Dataset:
     Use this for integration tests and realistic scenarios.
     Session-scoped for performance.
 
-    Data location: examples/arena_sample/dataset.jsonl
+    Data location: examples/arena_sample/logged_data.jsonl
     """
     # Point to examples directory (shared with tutorials)
     data_path = (
         Path(__file__).parent.parent.parent
         / "examples"
         / "arena_sample"
-        / "dataset.jsonl"
+        / "logged_data.jsonl"
     )
     if not data_path.exists():
         pytest.skip(f"Arena sample not found at {data_path}")
@@ -57,14 +57,14 @@ def arena_sample() -> Dataset:
 
     Function-scoped version for tests that modify the dataset.
 
-    Data location: examples/arena_sample/dataset.jsonl
+    Data location: examples/arena_sample/logged_data.jsonl
     """
     # Point to examples directory (shared with tutorials)
     data_path = (
         Path(__file__).parent.parent.parent
         / "examples"
         / "arena_sample"
-        / "dataset.jsonl"
+        / "logged_data.jsonl"
     )
     if not data_path.exists():
         pytest.skip(f"Arena sample not found at {data_path}")
@@ -145,13 +145,16 @@ def arena_fresh_draws() -> Dict[str, FreshDrawDataset]:
     This uses load_fresh_draws_auto() to test the actual production code path
     that users will rely on.
 
-    Data location: examples/arena_sample/responses/
+    Data location: examples/arena_sample/fresh_draws/
     """
     from cje.data.fresh_draws import load_fresh_draws_auto
 
     # Point to examples directory (shared with tutorials)
     responses_dir = (
-        Path(__file__).parent.parent.parent / "examples" / "arena_sample" / "responses"
+        Path(__file__).parent.parent.parent
+        / "examples"
+        / "arena_sample"
+        / "fresh_draws"
     )
 
     if not responses_dir.exists():

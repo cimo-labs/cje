@@ -19,14 +19,16 @@ pytestmark = [pytest.mark.integration, pytest.mark.uses_arena_sample]
 
 
 def _arena_paths() -> tuple[Path, Path]:
-    """Return (dataset_path, responses_dir) from examples directory."""
+    """Return (dataset_path, fresh_draws_dir) from examples directory."""
     here = Path(__file__).parent
     # Point to examples directory (shared with tutorials)
-    dataset_path = here.parent.parent / "examples" / "arena_sample" / "dataset.jsonl"
-    responses_dir = here.parent.parent / "examples" / "arena_sample" / "responses"
+    dataset_path = (
+        here.parent.parent / "examples" / "arena_sample" / "logged_data.jsonl"
+    )
+    fresh_draws_dir = here.parent.parent / "examples" / "arena_sample" / "fresh_draws"
     if not dataset_path.exists():
         pytest.skip(f"Arena sample not found: {dataset_path}")
-    return dataset_path, responses_dir
+    return dataset_path, fresh_draws_dir
 
 
 def test_analyze_dataset_ips_path_works() -> None:
@@ -150,7 +152,9 @@ def test_mode_detection_three_modes() -> None:
             reward=0.5 + i * 0.05,
             base_policy_logprob=-1.0,
             target_policy_logprobs={"policy_a": -1.5, "policy_b": -2.0},
-            metadata={"judge_score": 0.5 + i * 0.05},
+            judge_score=0.5 + i * 0.05,
+            oracle_label=None,
+            metadata={},
         )
         for i in range(10)
     ]
@@ -174,7 +178,9 @@ def test_mode_detection_three_modes() -> None:
             base_policy_logprob=None,
             # Include policies in dict but with None values
             target_policy_logprobs={"policy_a": None, "policy_b": None},
-            metadata={"judge_score": 0.5 + i * 0.05, "policy": "policy_a"},
+            judge_score=0.5 + i * 0.05,
+            oracle_label=None,
+            metadata={"policy": "policy_a"},
         )
         for i in range(10)
     ]
@@ -216,7 +222,9 @@ def test_mode_detection_insufficient_data() -> None:
             reward=None,  # No rewards!
             base_policy_logprob=None,
             target_policy_logprobs={"policy_a": None},
-            metadata={"judge_score": 0.5},
+            judge_score=0.5,
+            oracle_label=None,
+            metadata={},
         )
         for i in range(10)
     ]

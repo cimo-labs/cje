@@ -28,8 +28,8 @@ IPS/DR modes: Estimates counterfactual deployment value (causal inference)
 from pathlib import Path
 from cje import analyze_dataset
 
-DATA_PATH = Path(__file__).parent / "arena_sample" / "dataset.jsonl"
-FRESH_DRAWS_DIR = Path(__file__).parent / "arena_sample" / "responses"
+DATA_PATH = Path(__file__).parent / "arena_sample" / "logged_data.jsonl"
+FRESH_DRAWS_DIR = Path(__file__).parent / "arena_sample" / "fresh_draws"
 
 print("=" * 70)
 print("CJE's Three Analysis Modes")

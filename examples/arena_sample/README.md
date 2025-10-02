@@ -4,18 +4,19 @@ This directory contains a real-world sample dataset from Chatbot Arena for demon
 
 ## Contents
 
-- `dataset.jsonl` - Main dataset with 1000 samples
-  - Logged responses from a base policy
+- `logged_data.jsonl` - Logged data from base/production policy (1000 samples)
+  - Logged responses from the base policy
   - Judge scores and oracle labels for calibration
-  - Log probabilities for 2 target policies
+  - Log probabilities under target policies (for importance weighting)
 
-- `responses/` - Fresh draws for doubly-robust estimation
+- `fresh_draws/` - Teacher-forced responses from target policies (for DR estimation)
   - `clone_responses.jsonl` - Responses from clone policy (1000 draws)
   - `parallel_universe_prompt_responses.jsonl` - Alternative prompt formulation (1000 draws)
+  - `unhelpful_responses.jsonl` - Intentionally poor responses (1000 draws)
 
 ## Format
 
-### Main Dataset (`dataset.jsonl`)
+### Logged Data (`logged_data.jsonl`)
 
 Each line is a JSON object with:
 ```json
@@ -28,23 +29,25 @@ Each line is a JSON object with:
     "clone": -60.88,
     "parallel_universe_prompt": -59.75
   },
+  "judge_score": 0.85,
+  "oracle_label": 0.7,
   "metadata": {
-    "judge_score": 0.85,
-    "oracle_label": 0.7
+    "prompt_id": "arena_123"
   }
 }
 ```
 
-### Fresh Draws (`responses/*.jsonl`)
+### Fresh Draws (`fresh_draws/*.jsonl`)
 
-Each line contains a fresh response from a target policy:
+Each line contains a teacher-forced response from a target policy:
 ```json
 {
   "prompt_id": "arena_0",
   "response": "Fresh response text",
   "policy": "clone",
+  "judge_score": 0.85,
   "metadata": {
-    "judge_score": 0.85
+    "judge_model": "gpt-4"
   }
 }
 ```
@@ -57,8 +60,20 @@ Each line contains a fresh response from a target policy:
 from pathlib import Path
 from cje import analyze_dataset
 
-DATA_PATH = Path(__file__).parent / "arena_sample" / "dataset.jsonl"
-results = analyze_dataset(str(DATA_PATH), estimator="calibrated-ips")
+# IPS mode: logged data only
+LOGGED_DATA = Path(__file__).parent / "arena_sample" / "logged_data.jsonl"
+results = analyze_dataset(logged_data_path=str(LOGGED_DATA), estimator="calibrated-ips")
+
+# DR mode: logged data + fresh draws
+FRESH_DRAWS = Path(__file__).parent / "arena_sample" / "fresh_draws"
+results = analyze_dataset(
+    logged_data_path=str(LOGGED_DATA),
+    fresh_draws_dir=str(FRESH_DRAWS),
+    estimator="stacked-dr"
+)
+
+# Direct mode: fresh draws only
+results = analyze_dataset(fresh_draws_dir=str(FRESH_DRAWS), estimator="direct")
 ```
 
 ### In Tests

@@ -23,8 +23,8 @@ tests/
 │
 └── data/                          # Test datasets
     ├── arena_sample/              # Real Arena 10K subset (100 samples)
-    │   ├── dataset.jsonl          # Main dataset with judge scores
-    │   └── responses/             # Fresh draws for DR estimation
+    │   ├── logged_data.jsonl      # Main dataset with judge scores
+    │   └── fresh_draws/           # Fresh draws for DR estimation
     └── *.jsonl                    # Synthetic test data for edge cases
 ```
 

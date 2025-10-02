@@ -9,8 +9,8 @@ from pathlib import Path
 from cje import analyze_dataset
 import numpy as np
 
-DATA_PATH = Path(__file__).parent / "arena_sample" / "dataset.jsonl"
-FRESH_DRAWS_DIR = Path(__file__).parent / "arena_sample" / "responses"
+DATA_PATH = Path(__file__).parent / "arena_sample" / "logged_data.jsonl"
+FRESH_DRAWS_DIR = Path(__file__).parent / "arena_sample" / "fresh_draws"
 
 # Auto mode selects stacked-dr when fresh draws are provided
 results = analyze_dataset(

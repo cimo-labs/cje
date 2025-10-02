@@ -75,6 +75,8 @@ class TestFoldInfrastructure:
                 reward=0.5,
                 base_policy_logprob=-10.0,
                 target_policy_logprobs={"policy": -9.0},
+                judge_score=None,
+                oracle_label=None,
             )
             for i in range(20)
         ]
@@ -114,6 +116,7 @@ class TestEdgeCases:
             base_policy_logprob=-10.0,
             target_policy_logprobs={"policy": -9.0},
             judge_score=0.5,  # Top-level judge score for CalibratedIPS
+            oracle_label=None,
             metadata={},
         )
 
@@ -145,6 +148,8 @@ class TestEdgeCases:
                 reward=np.nan,
                 base_policy_logprob=-10.0,
                 target_policy_logprobs={"policy": -9.0},
+                judge_score=None,
+                oracle_label=None,
             )
 
     def test_extreme_weights(self) -> None:
@@ -167,6 +172,7 @@ class TestEdgeCases:
                 base_policy_logprob=base_logprob,
                 target_policy_logprobs={"policy": target_logprob},
                 judge_score=0.5,  # Top-level judge score
+                oracle_label=None,
                 metadata={},
             )
             samples.append(sample)
@@ -202,6 +208,7 @@ class TestEdgeCases:
                 base_policy_logprob=-10.0 if i % 2 == 0 else None,
                 target_policy_logprobs=target_logprobs,
                 judge_score=0.5,  # Top-level judge score
+                oracle_label=None,
                 metadata={},
             )
             samples.append(sample)
@@ -233,6 +240,7 @@ class TestEdgeCases:
                 base_policy_logprob=-10.0,
                 target_policy_logprobs={"policy": -9.0},
                 judge_score=0.7,  # Top-level judge score matching reward
+                oracle_label=None,
                 metadata={},
             )
             samples.append(sample)
@@ -267,6 +275,8 @@ class TestDataIntegrity:
                 reward=0.5 + i * 0.01,
                 base_policy_logprob=-10.0,
                 target_policy_logprobs={"policy": -9.0},
+                judge_score=None,
+                oracle_label=None,
             )
             samples.append(sample)
 
@@ -297,6 +307,8 @@ class TestDataIntegrity:
                 reward=0.5,
                 base_policy_logprob=-10.0,
                 target_policy_logprobs={"policy_a": -9.0, "policy_b": -11.0},
+                judge_score=None,
+                oracle_label=None,
             )
             samples.append(sample)
 

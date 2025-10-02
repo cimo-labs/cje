@@ -10,7 +10,7 @@ from pathlib import Path
 from cje import analyze_dataset
 
 # Use the arena sample data included with CJE examples
-DATA_PATH = Path(__file__).parent / "arena_sample" / "dataset.jsonl"
+DATA_PATH = Path(__file__).parent / "arena_sample" / "logged_data.jsonl"
 
 # Run analysis (auto-selects calibrated-ips when no fresh draws provided)
 results = analyze_dataset(logged_data_path=str(DATA_PATH))

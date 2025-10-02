@@ -12,8 +12,8 @@ from cje import analyze_dataset
 
 # Paths to arena sample data (included with examples)
 DATA_DIR = Path(__file__).parent / "arena_sample"
-DATASET = DATA_DIR / "dataset.jsonl"
-FRESH_DRAWS = DATA_DIR / "responses"  # Directory with {policy}_responses.jsonl files
+DATASET = DATA_DIR / "logged_data.jsonl"
+FRESH_DRAWS = DATA_DIR / "fresh_draws"  # Directory with {policy}_responses.jsonl files
 
 # Auto mode selects stacked-dr when fresh draws are available
 # Stacked-DR combines multiple DR estimators for robustness
