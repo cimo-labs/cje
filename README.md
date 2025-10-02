@@ -33,7 +33,7 @@ poetry install  # or pip install -e .
 
 ## Quick Start
 
-CJE supports three modes depending on your data:
+CJE automatically selects the right mode based on your data:
 
 ```python
 from cje import analyze_dataset
@@ -43,13 +43,12 @@ result = analyze_dataset(fresh_draws_dir="responses/")
 print(f"Policy value: {result.estimates[0]:.3f} ± {result.standard_errors[0]:.3f}")
 
 # Mode 2: IPS (logged data with logprobs)
-result = analyze_dataset(logged_data_path="logs.jsonl", estimator="calibrated-ips")
+result = analyze_dataset(logged_data_path="logs.jsonl")  # Auto-selects IPS mode
 
 # Mode 3: DR (logged data + fresh draws - most accurate)
 result = analyze_dataset(
     logged_data_path="logs.jsonl",
-    fresh_draws_dir="responses/",
-    estimator="stacked-dr"
+    fresh_draws_dir="responses/"  # Auto-selects DR mode
 )
 ```
 
@@ -58,10 +57,10 @@ CLI usage:
 # Direct mode (fresh draws only)
 python -m cje analyze --fresh-draws-dir responses/
 
-# IPS mode (logged data)
-python -m cje analyze logs.jsonl --estimator calibrated-ips
+# IPS mode (logged data) - auto-selects calibrated-ips
+python -m cje analyze logs.jsonl
 
-# DR mode (both)
+# DR mode (both) - auto-selects stacked-dr
 python -m cje analyze logs.jsonl --fresh-draws-dir responses/
 ```
 

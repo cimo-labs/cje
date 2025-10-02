@@ -4,7 +4,7 @@ Simple, reliable LLM evaluation with automatic mode selection.
 
 ## Quick Start
 
-CJE supports three modes - it automatically selects the best one for your data:
+CJE automatically selects the best mode and estimator for your data:
 
 ```python
 from cje import analyze_dataset
@@ -13,12 +13,12 @@ from cje import analyze_dataset
 results = analyze_dataset(fresh_draws_dir="responses/")
 
 # Mode 2: IPS (counterfactual with logged data)
-results = analyze_dataset(logged_data_path="logs.jsonl", estimator="calibrated-ips")
+results = analyze_dataset(logged_data_path="logs.jsonl")  # Auto-selects IPS mode
 
 # Mode 3: DR (most accurate - both logged data and fresh draws)
 results = analyze_dataset(
     logged_data_path="logs.jsonl",
-    fresh_draws_dir="responses/"
+    fresh_draws_dir="responses/"  # Auto-selects DR mode
 )
 
 # Print results
@@ -35,10 +35,12 @@ print(f"Policy value: {results.estimates[0]:.3f} ± {1.96*results.standard_error
 
 ### Automatic Mode Selection
 
-Use `estimator="auto"` (default) and CJE will choose:
-- **`direct`** if only `fresh_draws_dir` provided
-- **`calibrated-ips`** if only `logged_data_path` provided
-- **`stacked-dr`** if both provided
+Use `estimator="auto"` (default) and CJE will:
+1. Detect the **mode** based on your data (Direct/IPS/DR)
+2. Select the best **estimator** for that mode:
+   - **Direct mode** → `direct` estimator
+   - **IPS mode** → `calibrated-ips` estimator (default for IPS)
+   - **DR mode** → `stacked-dr` estimator (default for DR)
 
 ### What are fresh draws?
 Fresh draws are new responses from your target policies evaluated by the judge. For Direct mode, these are your only data source. For DR mode, they supplement logged data for better accuracy.
