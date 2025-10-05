@@ -106,31 +106,36 @@ Requirements depend on which mode you're using:
 ### For Direct Mode (fresh draws only):
 ```json
 {
-  "prompt_id": "0",
+  "prompt_id": "arena_0",
   "prompt": "What is 2+2?",
   "response": "4",
-  "policy": "gpt4",
-  "metadata": {
-    "judge_score": 0.9                       // Required: judge evaluation
-  }
+  "policy": "clone",
+  "judge_score": 0.85,                       // Required: judge evaluation
+  "oracle_label": 0.86                       // Optional: ground truth (50% coverage enables calibration)
 }
 ```
+
+**Calibration**: If 50%+ of fresh draws have `oracle_label`, Direct mode automatically learns judge→oracle calibration and applies calibrated rewards.
 
 ### For IPS/DR Modes (logged data):
 ```json
 {
   "prompt": "What is 2+2?",
   "response": "4",
-  "base_policy_logprob": -2.3,               // Required: log P(response|prompt) for logging policy
-  "target_policy_logprobs": {"gpt4": -1.8},  // Required: same for policies to evaluate
-  "metadata": {
-    "judge_score": 0.9,                      // Required: judge evaluation
-    "oracle_label": 1.0                      // Optional: ground truth (5-10% is enough for calibration)
-  }
+  "base_policy_logprob": -14.7,              // Required: log P(response|prompt) for logging policy
+  "target_policy_logprobs": {                // Required: same for policies to evaluate
+    "clone": -14.7,
+    "parallel_universe_prompt": -18.3,
+    "unhelpful": -42.1
+  },
+  "judge_score": 0.85,                       // Required: judge evaluation
+  "oracle_label": 0.86                       // Optional: ground truth (5-10% is enough for calibration)
 }
 ```
 
-**Key difference:** Direct mode doesn't need logprobs! Just responses from each policy with judge scores.
+**Key difference:** Direct mode doesn't need logprobs! Just responses from each policy with judge scores (and optionally oracle labels for calibration).
+
+**Working example:** See [`examples/arena_sample/`](examples/arena_sample/) for complete dataset examples with logged data and fresh draws.
 
 ### Generating Log Probabilities
 

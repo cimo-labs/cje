@@ -126,21 +126,21 @@ Every sample must have:
 ### Example JSONL Entry
 ```json
 {
-  "prompt_id": "example_001",
+  "prompt_id": "arena_001",
   "prompt": "What is machine learning?",
   "response": "Machine learning is a subset of AI...",
-  "base_policy_logprob": -45.67,
+  "base_policy_logprob": -14.7,
   "target_policy_logprobs": {
-    "gpt4": -42.31,
-    "claude": -44.89
+    "clone": -14.7,
+    "parallel_universe_prompt": -18.3,
+    "unhelpful": -42.1
   },
-  "reward": 0.85,
-  "metadata": {
-    "judge_score": 0.82,
-    "oracle_label": 0.90
-  }
+  "judge_score": 0.85,
+  "oracle_label": 0.86
 }
 ```
+
+See `examples/arena_sample/` for a complete working example with logged data and fresh draws.
 
 ## Key Design Decisions
 
@@ -266,7 +266,7 @@ class CustomDataSource:
 # Use with factory
 factory = DatasetFactory()
 source = CustomDataSource()
-dataset = factory.loader.load_from_source(source, target_policies=["gpt4"])
+dataset = factory.loader.load_from_source(source, target_policies=["clone", "parallel_universe_prompt"])
 ```
 
 ### Fresh Draws for DR
@@ -276,16 +276,17 @@ from cje.data.fresh_draws import FreshDrawDataset, FreshDrawSample
 # Create fresh draws
 samples = [
     FreshDrawSample(
-        prompt_id="p1",
-        target_policy="gpt4",
-        judge_score=0.9,
+        prompt_id="arena_1",
+        target_policy="clone",
+        judge_score=0.85,
+        oracle_label=0.86,
         draw_idx=0
     ),
     # ... more samples
 ]
 
 fresh_dataset = FreshDrawDataset(
-    target_policy="gpt4",
+    target_policy="clone",
     draws_per_prompt=5,
     samples=samples
 )

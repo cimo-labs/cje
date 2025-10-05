@@ -131,15 +131,15 @@ python -m cje validate logs.jsonl --verbose
 ### Direct Mode (fresh draws only):
 ```json
 {
-  "prompt_id": "0",
+  "prompt_id": "arena_0",
   "prompt": "User question",
   "response": "Model response",
-  "policy": "gpt4",           // Optional if using separate files per policy
+  "policy": "clone",          // Optional if using separate files per policy
   "judge_score": 0.85,        // Required
-  "oracle_label": 0.90        // Optional (for calibration - 50% coverage recommended)
+  "oracle_label": 0.86        // Optional (for calibration - 50% coverage recommended)
 }
 ```
-Store as: `responses/gpt4_responses.jsonl`, `responses/claude_responses.jsonl`, etc.
+Store as: `responses/clone_responses.jsonl`, `responses/parallel_universe_prompt_responses.jsonl`, etc.
 
 **Calibration in Direct mode**: If 50% or more of fresh draws have `oracle_label`, Direct mode will automatically learn judge→oracle calibration and apply calibrated rewards. Otherwise, uses raw judge scores.
 
@@ -148,14 +148,20 @@ Store as: `responses/gpt4_responses.jsonl`, `responses/claude_responses.jsonl`, 
 {
   "prompt": "User question here",
   "response": "Model response here",
-  "base_policy_logprob": -35.7,
-  "target_policy_logprobs": {"policy_a": -33.1, "policy_b": -34.2},
+  "base_policy_logprob": -14.7,
+  "target_policy_logprobs": {
+    "clone": -14.7,
+    "parallel_universe_prompt": -18.3,
+    "unhelpful": -42.1
+  },
   "judge_score": 0.85,        // Required
-  "oracle_label": 0.90        // Optional (for calibration, 5-10% is enough)
+  "oracle_label": 0.86        // Optional (for calibration, 5-10% is enough)
 }
 ```
 
 Note: `judge_score` and `oracle_label` can be at top-level (preferred) or in `metadata` (backward compatible).
+
+**Working example:** See [`examples/arena_sample/`](../../examples/arena_sample/) for complete dataset examples.
 
 ## Troubleshooting
 

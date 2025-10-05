@@ -113,9 +113,9 @@ fig = plot_calibration_comparison(
 
 # Policy estimates
 fig = plot_policy_estimates(
-    estimates={"policy_a": 0.75, "policy_b": 0.82},
-    standard_errors={"policy_a": 0.02, "policy_b": 0.03},
-    oracle_values={"policy_a": 0.74, "policy_b": 0.85}
+    estimates={"clone": 0.74, "parallel_universe_prompt": 0.76, "unhelpful": 0.17},
+    standard_errors={"clone": 0.02, "parallel_universe_prompt": 0.03, "unhelpful": 0.01},
+    oracle_values={"clone": 0.74, "parallel_universe_prompt": 0.77, "unhelpful": 0.18}
 )
 ```
 
