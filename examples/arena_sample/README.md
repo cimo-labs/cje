@@ -9,10 +9,11 @@ This directory contains a real-world sample dataset from Chatbot Arena for demon
   - Judge scores and oracle labels for calibration
   - Log probabilities under target policies (for importance weighting)
 
-- `fresh_draws/` - Teacher-forced responses from target policies (for DR estimation)
-  - `clone_responses.jsonl` - Responses from clone policy (1000 draws)
-  - `parallel_universe_prompt_responses.jsonl` - Alternative prompt formulation (1000 draws)
-  - `unhelpful_responses.jsonl` - Intentionally poor responses (1000 draws)
+- `fresh_draws/` - Teacher-forced responses from target policies (for DR/Direct estimation)
+  - `clone_responses.jsonl` - Responses from clone policy (1000 draws, 50% oracle coverage)
+  - `parallel_universe_prompt_responses.jsonl` - Alternative prompt formulation (1000 draws, 50% oracle coverage)
+  - `unhelpful_responses.jsonl` - Intentionally poor responses (1000 draws, 50% oracle coverage)
+  - All fresh draws share the same 1000 prompts (matching logged_data.jsonl)
 
 ## Format
 
@@ -46,11 +47,17 @@ Each line contains a teacher-forced response from a target policy:
   "response": "Fresh response text",
   "policy": "clone",
   "judge_score": 0.85,
+  "oracle_label": 0.86,  // 50% of samples have oracle labels for calibration
   "metadata": {
     "judge_model": "gpt-4"
   }
 }
 ```
+
+**Oracle coverage**: 50% of samples in each file have `oracle_label` values. This enables:
+- Direct mode to learn calibration without logged data
+- Cross-validation during calibration
+- Proper uncertainty quantification
 
 ## Usage
 
@@ -72,8 +79,8 @@ results = analyze_dataset(
     estimator="stacked-dr"
 )
 
-# Direct mode: fresh draws only
-results = analyze_dataset(fresh_draws_dir=str(FRESH_DRAWS), estimator="direct")
+# Direct mode: fresh draws only (learns calibration from oracle labels in fresh draws)
+results = analyze_dataset(fresh_draws_dir=str(FRESH_DRAWS), estimator="auto")
 ```
 
 ### In Tests

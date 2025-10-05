@@ -135,12 +135,13 @@ python -m cje validate logs.jsonl --verbose
   "prompt": "User question",
   "response": "Model response",
   "policy": "gpt4",           // Optional if using separate files per policy
-  "metadata": {
-    "judge_score": 0.85       // Required
-  }
+  "judge_score": 0.85,        // Required
+  "oracle_label": 0.90        // Optional (for calibration - 50% coverage recommended)
 }
 ```
 Store as: `responses/gpt4_responses.jsonl`, `responses/claude_responses.jsonl`, etc.
+
+**Calibration in Direct mode**: If 50% or more of fresh draws have `oracle_label`, Direct mode will automatically learn judge→oracle calibration and apply calibrated rewards. Otherwise, uses raw judge scores.
 
 ### IPS/DR Modes (logged data):
 ```json
@@ -149,12 +150,12 @@ Store as: `responses/gpt4_responses.jsonl`, `responses/claude_responses.jsonl`, 
   "response": "Model response here",
   "base_policy_logprob": -35.7,
   "target_policy_logprobs": {"policy_a": -33.1, "policy_b": -34.2},
-  "metadata": {
-    "judge_score": 0.85,      // Required
-    "oracle_label": 0.90       // Optional (for calibration, 5-10% is enough)
-  }
+  "judge_score": 0.85,        // Required
+  "oracle_label": 0.90        // Optional (for calibration, 5-10% is enough)
 }
 ```
+
+Note: `judge_score` and `oracle_label` can be at top-level (preferred) or in `metadata` (backward compatible).
 
 ## Troubleshooting
 
