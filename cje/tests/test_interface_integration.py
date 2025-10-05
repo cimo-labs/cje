@@ -287,8 +287,8 @@ def test_direct_only_mode_works() -> None:
 
     assert results is not None
     assert results.metadata.get("mode") == "direct"
-    assert (
-        results.metadata.get("calibration") == "none"
-    )  # No calibration without logged data
+    # Fresh draws have oracle labels, so calibration should be learned from them
+    assert results.metadata.get("calibration") == "from_fresh_draws"
+    assert results.metadata.get("oracle_coverage", 0) > 0
     assert len(results.estimates) > 0
     assert "target_policies" in results.metadata

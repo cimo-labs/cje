@@ -80,23 +80,24 @@ print(f"Estimates: {results_dr.estimates}")
 print(f"Method: Combine importance weights with outcome models")
 print()
 
-# Mode 3: Direct (fresh draws only, auto-selects direct estimator)
+# Mode 3: Direct (fresh draws only - learns calibration from oracle labels in fresh draws)
 print("Mode 3: Direct (On-Policy Evaluation)")
 print("-" * 70)
-print("Data: Fresh responses from target policies")
+print("Data: Fresh responses from target policies (with 50% oracle coverage)")
 print("Estimand: Performance on this specific evaluation set")
 print()
 
 results_direct = analyze_dataset(
-    fresh_draws_dir=str(FRESH_DRAWS_DIR),
-    estimator="auto",  # Auto-selects mode based on data
+    fresh_draws_dir=str(FRESH_DRAWS_DIR),  # Fresh draws only, no logged data!
+    estimator="auto",  # Auto-selects Direct mode
     verbose=False,
 )
 print(f"Detected mode: {results_direct.metadata['mode']}")
 print(f"Selected estimator: {results_direct.metadata['estimator']}")
 print(f"Estimates: {results_direct.estimates}")
-print(f"Method: Average judge scores on fresh draws")
+print(f"Method: Average calibrated rewards (calibration learned from fresh draws)")
 print(f"Calibration: {results_direct.metadata.get('calibration', 'none')}")
+print(f"Oracle coverage: {results_direct.metadata.get('oracle_coverage', 0):.0%}")
 print()
 
 # Summary comparison
@@ -107,7 +108,7 @@ print(f"{'Mode':<20} {'Counterfactual?':<20} {'Data Requirements':<30}")
 print("-" * 70)
 print(f"{'IPS':<20} {'Yes':<20} {'Logged data + logprobs':<30}")
 print(f"{'DR':<20} {'Yes':<20} {'Logged data + fresh draws':<30}")
-print(f"{'Direct':<20} {'No':<20} {'Fresh draws only':<30}")
+print(f"{'Direct':<20} {'No':<20} {'Fresh draws + calibration':<30}")
 print()
 
 print("When to use each mode:")

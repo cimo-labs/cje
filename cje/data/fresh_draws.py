@@ -23,6 +23,9 @@ class FreshDrawSample(BaseModel):
     prompt_id: str = Field(..., description="ID to align with logged data")
     target_policy: str = Field(..., description="Policy that generated this response")
     judge_score: float = Field(..., ge=0, le=1, description="Judge evaluation score")
+    oracle_label: Optional[float] = Field(
+        None, ge=0, le=1, description="Ground truth oracle label (for calibration)"
+    )
     response: Optional[str] = Field(None, description="Generated response (optional)")
     draw_idx: int = Field(
         ..., ge=0, description="Draw index for this prompt (0, 1, 2...)"
@@ -398,11 +401,23 @@ def load_fresh_draws_auto(
                                 f"in {file_path}. Fresh draws require judge scores."
                             )
 
+                        # Extract oracle_label if present (for calibration)
+                        oracle_label = None
+                        if "oracle_label" in data and data["oracle_label"] is not None:
+                            oracle_label = data["oracle_label"]
+                        elif (
+                            "metadata" in data
+                            and "oracle_label" in data["metadata"]
+                            and data["metadata"]["oracle_label"] is not None
+                        ):
+                            oracle_label = data["metadata"]["oracle_label"]
+
                         fresh_sample = FreshDrawSample(
                             prompt_id=str(data.get("prompt_id")),
                             target_policy=policy,
                             response=data.get("response", ""),
                             judge_score=judge_score,
+                            oracle_label=oracle_label,
                             draw_idx=data.get("draw_idx", 0),
                             fold_id=data.get("fold_id"),
                         )

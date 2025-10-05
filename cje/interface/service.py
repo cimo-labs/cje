@@ -62,6 +62,7 @@ class AnalysisService:
             discover_policies_from_fresh_draws,
             load_fresh_draws_auto,
         )
+        from ..data.models import Dataset, Sample
 
         if config.verbose:
             logger.info("Direct mode: Using fresh draws only (no logged data)")
@@ -76,14 +77,66 @@ class AnalysisService:
                 f"Discovered {len(target_policies)} policies: {', '.join(target_policies)}"
             )
 
-        # No calibration in Direct-only mode (use judge scores as-is)
+        # Load all fresh draws and check for oracle labels to enable calibration
+        all_fresh_draws = []
+        for policy in target_policies:
+            fd = load_fresh_draws_auto(
+                Path(config.fresh_draws_dir), policy, verbose=config.verbose
+            )
+            all_fresh_draws.extend(fd.samples)
+
+        # Check if fresh draws have oracle labels for calibration
+        n_with_oracle = sum(1 for s in all_fresh_draws if s.oracle_label is not None)
+        oracle_coverage = n_with_oracle / len(all_fresh_draws) if all_fresh_draws else 0
+
+        calibration_result = None
+        if oracle_coverage > 0:
+            if config.verbose:
+                logger.info(
+                    f"Found {n_with_oracle}/{len(all_fresh_draws)} samples with oracle labels ({oracle_coverage:.1%})"
+                )
+                logger.info("Learning calibration from fresh draws")
+
+            # Convert FreshDrawSample to Sample for calibration
+            calibration_samples = []
+            for fd_sample in all_fresh_draws:
+                # Create dummy Sample with required fields for calibration
+                sample = Sample(
+                    prompt_id=fd_sample.prompt_id,
+                    prompt="",  # Not needed for calibration
+                    response=fd_sample.response or "",
+                    reward=None,  # Will be calibrated
+                    base_policy_logprob=-1.0,  # Dummy value
+                    target_policy_logprobs={p: -1.0 for p in target_policies},
+                    judge_score=fd_sample.judge_score,
+                    oracle_label=fd_sample.oracle_label,
+                    metadata={},
+                )
+                calibration_samples.append(sample)
+
+            # Create temporary dataset from fresh draws for calibration
+            fresh_dataset = Dataset(
+                samples=calibration_samples, target_policies=target_policies
+            )
+
+            # Learn calibration from fresh draws
+            _, calibration_result = calibrate_dataset(
+                fresh_dataset,
+                judge_field=config.judge_field,
+                oracle_field=config.oracle_field,
+                enable_cross_fit=True,
+                n_folds=5,
+            )
+
         from ..estimators.direct_method import CalibratedDirectEstimator
 
         estimator_obj = CalibratedDirectEstimator(
             target_policies=target_policies,
-            reward_calibrator=None,  # No calibration
+            reward_calibrator=(
+                calibration_result.calibrator if calibration_result else None
+            ),
             run_diagnostics=True,
-            oua_jackknife=False,  # No oracle uncertainty without calibration
+            oua_jackknife=calibration_result is not None,  # Include OUA if calibrated
             **config.estimator_config,
         )
 
@@ -101,7 +154,11 @@ class AnalysisService:
         results.metadata["estimator"] = chosen_estimator
         results.metadata["target_policies"] = target_policies
         results.metadata["fresh_draws_dir"] = config.fresh_draws_dir
-        results.metadata["calibration"] = "none"
+        results.metadata["calibration"] = (
+            "from_fresh_draws" if calibration_result else "none"
+        )
+        if calibration_result:
+            results.metadata["oracle_coverage"] = oracle_coverage
         if config.estimator_config:
             results.metadata["estimator_config"] = config.estimator_config
 
