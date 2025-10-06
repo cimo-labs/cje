@@ -292,3 +292,142 @@ def test_direct_only_mode_works() -> None:
     assert results.metadata.get("oracle_coverage", 0) > 0
     assert len(results.estimates) > 0
     assert "target_policies" in results.metadata
+
+
+def test_three_modes_estimate_clone_accurately() -> None:
+    """All three modes should accurately estimate clone policy value.
+
+    Clone policy is nearly identical to the base policy (same model, same prompts).
+    Ground truth is the mean calibrated reward in the logged data.
+    Each mode should estimate within 0.05 of this truth.
+
+    This tests:
+    - Estimation accuracy against ground truth for A/A-like scenario
+    - Each mode independently produces correct estimates
+    - Regression protection for all three mode implementations
+    """
+    from cje.data import load_dataset_from_jsonl
+    from cje.calibration import calibrate_dataset
+    import numpy as np
+
+    dataset_path, fresh_draws_dir = _arena_paths()
+
+    # Calculate ground truth: mean calibrated reward in logged data
+    dataset = load_dataset_from_jsonl(str(dataset_path))
+    calibrated_dataset, _ = calibrate_dataset(
+        dataset,
+        judge_field="judge_score",
+        oracle_field="oracle_label",
+        enable_cross_fit=True,
+        n_folds=5,
+    )
+    ground_truth = float(np.mean([s.reward for s in calibrated_dataset.samples]))
+
+    # Run IPS mode (logged data only)
+    results_ips = analyze_dataset(
+        logged_data_path=str(dataset_path),
+        estimator="calibrated-ips",
+        verbose=False,
+    )
+
+    # Run DR mode (logged + fresh draws)
+    results_dr = analyze_dataset(
+        logged_data_path=str(dataset_path),
+        fresh_draws_dir=str(fresh_draws_dir),
+        estimator="stacked-dr",
+        verbose=False,
+    )
+
+    # Run Direct mode (fresh draws only)
+    results_direct = analyze_dataset(
+        fresh_draws_dir=str(fresh_draws_dir),
+        estimator="auto",
+        verbose=False,
+    )
+
+    # Find clone policy index in each result
+    clone_idx_ips = results_ips.metadata["target_policies"].index("clone")
+    clone_idx_dr = results_dr.metadata["target_policies"].index("clone")
+    clone_idx_direct = results_direct.metadata["target_policies"].index("clone")
+
+    # Extract clone estimates
+    clone_ips = float(results_ips.estimates[clone_idx_ips])
+    clone_dr = float(results_dr.estimates[clone_idx_dr])
+    clone_direct = float(results_direct.estimates[clone_idx_direct])
+
+    # All estimates should be valid
+    assert 0 <= clone_ips <= 1, f"IPS estimate {clone_ips} out of range"
+    assert 0 <= clone_dr <= 1, f"DR estimate {clone_dr} out of range"
+    assert 0 <= clone_direct <= 1, f"Direct estimate {clone_direct} out of range"
+
+    # Each mode should be within 0.05 of ground truth
+    assert abs(clone_ips - ground_truth) < 0.05, (
+        f"IPS ({clone_ips:.3f}) differs from truth ({ground_truth:.3f}) by "
+        f"{abs(clone_ips - ground_truth):.3f}"
+    )
+    assert abs(clone_dr - ground_truth) < 0.05, (
+        f"DR ({clone_dr:.3f}) differs from truth ({ground_truth:.3f}) by "
+        f"{abs(clone_dr - ground_truth):.3f}"
+    )
+    assert abs(clone_direct - ground_truth) < 0.05, (
+        f"Direct ({clone_direct:.3f}) differs from truth ({ground_truth:.3f}) by "
+        f"{abs(clone_direct - ground_truth):.3f}"
+    )
+
+    # IPS should show good overlap for clone (since it's similar to base)
+    if hasattr(results_ips.diagnostics, "ess_per_policy"):
+        clone_ess = results_ips.diagnostics.ess_per_policy.get("clone", 0)
+        assert (
+            clone_ess > 0.5
+        ), f"Clone should have decent overlap, got ESS={clone_ess:.1%}"
+
+
+def test_dr_and_direct_rank_unhelpful_as_worst() -> None:
+    """DR and Direct modes should both rank unhelpful as the worst policy.
+
+    The unhelpful policy is intentionally poor and should be ranked lowest among
+    all three policies (clone, parallel_universe_prompt, unhelpful).
+
+    This tests:
+    - Ranking correctness across all policies
+    - Both DR and Direct can distinguish quality differences
+    - Sign correctness (not just magnitude accuracy)
+    """
+    dataset_path, fresh_draws_dir = _arena_paths()
+
+    # Run DR mode (logged + fresh draws)
+    results_dr = analyze_dataset(
+        logged_data_path=str(dataset_path),
+        fresh_draws_dir=str(fresh_draws_dir),
+        estimator="stacked-dr",
+        verbose=False,
+    )
+
+    # Run Direct mode (fresh draws only)
+    results_direct = analyze_dataset(
+        fresh_draws_dir=str(fresh_draws_dir),
+        estimator="auto",
+        verbose=False,
+    )
+
+    # Get all policy estimates for DR
+    policies_dr = results_dr.metadata["target_policies"]
+    unhelpful_idx_dr = policies_dr.index("unhelpful")
+    unhelpful_dr = float(results_dr.estimates[unhelpful_idx_dr])
+
+    # Get all policy estimates for Direct
+    policies_direct = results_direct.metadata["target_policies"]
+    unhelpful_idx_direct = policies_direct.index("unhelpful")
+    unhelpful_direct = float(results_direct.estimates[unhelpful_idx_direct])
+
+    # DR: unhelpful should be the minimum across all policies
+    assert unhelpful_dr == min(results_dr.estimates), (
+        f"DR mode: unhelpful ({unhelpful_dr:.3f}) should be lowest, "
+        f"but estimates are {[f'{e:.3f}' for e in results_dr.estimates]}"
+    )
+
+    # Direct: unhelpful should be the minimum across all policies
+    assert unhelpful_direct == min(results_direct.estimates), (
+        f"Direct mode: unhelpful ({unhelpful_direct:.3f}) should be lowest, "
+        f"but estimates are {[f'{e:.3f}' for e in results_direct.estimates]}"
+    )
