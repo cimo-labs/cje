@@ -1,7 +1,9 @@
-"""Dataset calibration utilities.
+"""Dataset calibration utilities (AutoCal-R API).
 
-This module provides functions to calibrate datasets with judge scores
-to match oracle labels, creating calibrated rewards for CJE analysis.
+This module provides the main AutoCal-R entry points for calibrating datasets
+with judge scores to match oracle labels, creating calibrated rewards for CJE
+analysis. AutoCal-R automatically selects between monotone and flexible
+calibration based on the relationship structure.
 """
 
 from typing import Dict, List, Any, Optional, Tuple, Literal, cast
@@ -20,12 +22,12 @@ def calibrate_dataset(
     calibration_mode: Optional[str] = None,
     random_seed: int = 42,
 ) -> Tuple[Dataset, CalibrationResult]:
-    """Calibrate judge scores in a dataset to match oracle labels.
+    """Calibrate judge scores in a dataset to match oracle labels (AutoCal-R).
 
-    This function extracts judge scores and oracle labels from the dataset,
-    calibrates the judge scores to match the oracle distribution, and returns
-    a new dataset with calibrated rewards. By default, uses auto mode to
-    automatically select between monotone and flexible calibration.
+    This is the main AutoCal-R entry point. It extracts judge scores and oracle
+    labels from the dataset, applies AutoCal-R to learn a mean-preserving calibration
+    function, and returns a new dataset with calibrated rewards. By default, uses
+    'auto' mode to automatically select between monotone and flexible calibration.
 
     Args:
         dataset: Dataset containing judge scores and oracle labels

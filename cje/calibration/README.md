@@ -2,7 +2,11 @@
 
 ## Overview
 
-The calibration module implements the core mathematical machinery that enables unbiased causal inference from judge-based evaluations. It provides three distinct calibration approaches that work together to transform raw logged data into reliable policy value estimates with controlled variance.
+The calibration module implements **AutoCal-R** (Automatic Calibration for Rewards), the core mathematical machinery that enables unbiased causal inference from judge-based evaluations. AutoCal-R provides three distinct calibration approaches that work together to transform raw logged data into reliable policy value estimates with controlled variance:
+
+1. **Judge→Oracle calibration**: Maps judge scores to oracle labels with automatic mode selection
+2. **Weight stabilization (SIMCal)**: Stabilizes importance weights for off-policy estimation
+3. **Cross-fitted models**: Enables orthogonality guarantees for doubly robust methods
 
 ## When to Use Each Calibration
 
@@ -36,12 +40,12 @@ calibration/
 
 ## Core Concepts
 
-### 1. Judge Score Calibration
-Maps cheap LLM judge scores to expensive oracle labels. Default is 'auto' mode which automatically selects between:
+### 1. Judge Score Calibration (AutoCal-R Core)
+AutoCal-R maps cheap LLM judge scores to expensive oracle labels with automatic mode selection. Default is 'auto' mode which automatically chooses between:
 - **Monotone calibration**: Standard isotonic regression (when relationship is monotone)
 - **Flexible calibration**: Two-stage g(S)→isotonic for non-monotone relationships
 
-Auto mode detects non-monotonicity by comparing regional performance and selects the appropriate method. The selected mode is stored in metadata for transparency.
+Auto mode detects non-monotonicity by comparing regional performance and selects the appropriate method. The selected mode is stored in metadata for transparency. This automatic selection is a key feature of AutoCal-R.
 
 ### 2. Weight Calibration (SIMCal)
 Stabilizes importance weights through score-indexed monotone projection:
@@ -62,16 +66,16 @@ When we calibrate judge scores using only a subset of oracle labels (e.g., 10% c
 
 ## Module Descriptions
 
-### `dataset.py` - Dataset Calibration Workflows
-High-level functions that orchestrate the calibration process for entire datasets:
-- `calibrate_dataset()`: Transforms Dataset objects with judge scores into calibrated rewards
+### `dataset.py` - Dataset Calibration Workflows (AutoCal-R API)
+High-level functions that orchestrate the AutoCal-R calibration process for entire datasets:
+- `calibrate_dataset()`: Main AutoCal-R entry point - transforms Dataset objects with judge scores into calibrated rewards
 - `calibrate_from_raw_data()`: Works with raw dictionaries for pipeline integration
 - Handles both standard and cross-fitted calibration
 - Preserves metadata and adds calibration diagnostics
 
-### `judge.py` - Judge Calibration
-Implements calibration from judge scores to oracle labels with auto mode selection:
-- `JudgeCalibrator`: Main calibration class with flexible mode support
+### `judge.py` - Judge Calibration (AutoCal-R Implementation)
+Implements the core AutoCal-R algorithm for calibration from judge scores to oracle labels:
+- `JudgeCalibrator`: Core AutoCal-R class with flexible mode support and automatic selection
 - `fit_transform()`: Standard calibration on oracle subset
 - `fit_cv()`: Cross-fitted calibration for DR methods
 - `index()`: Returns transformation for outcome models (S for monotone, g(S) for two-stage)

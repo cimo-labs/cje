@@ -1,7 +1,9 @@
-"""Judge score calibration using isotonic regression.
+"""Judge score calibration using isotonic regression (AutoCal-R).
 
-Calibrates cheap LLM judge scores to actual business KPIs/oracle labels
-using monotonic regression on a labeled subset.
+This module implements AutoCal-R (Automatic Calibration for Rewards), which
+calibrates cheap LLM judge scores to actual business KPIs/oracle labels using
+monotonic regression on a labeled subset. AutoCal-R automatically selects
+between monotone and two-stage calibration based on the relationship structure.
 """
 
 import numpy as np
@@ -42,10 +44,16 @@ class CalibrationResult:
 
 
 class JudgeCalibrator:
-    """Calibrate judge scores to oracle labels using isotonic regression.
+    """Calibrate judge scores to oracle labels using isotonic regression (AutoCal-R core).
+
+    This is the core implementation of AutoCal-R (Automatic Calibration for Rewards),
+    which provides mean-preserving, largely monotone mapping from judge scores to
+    oracle labels with automatic mode selection.
 
     Args:
         random_seed: Random seed for reproducibility
+        balance_oracle_folds: Whether to balance oracle samples across folds
+        calibration_mode: AutoCal-R mode - 'auto' (default), 'monotone', or 'two_stage'
     """
 
     def __init__(
