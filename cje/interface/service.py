@@ -162,6 +162,16 @@ class AnalysisService:
         if config.estimator_config:
             results.metadata["estimator_config"] = config.estimator_config
 
+        # Add mode_selection metadata
+        results.metadata["mode_selection"] = {
+            "mode": "direct",
+            "estimator": chosen_estimator,
+            "logprob_coverage": 0.0,  # Direct-only mode has no logged data
+            "has_fresh_draws": True,
+            "has_logged_data": False,
+            "reason": "Direct-only mode: Fresh draws without logged data",
+        }
+
         return results
 
     def _run_direct_with_calibration(
@@ -218,6 +228,18 @@ class AnalysisService:
         if config.estimator_config:
             results.metadata["estimator_config"] = config.estimator_config
 
+        # Add mode_selection metadata
+        # Note: This is Direct mode with logged data for calibration
+        # Logprob coverage is not computed here (would need to scan dataset)
+        results.metadata["mode_selection"] = {
+            "mode": "direct",
+            "estimator": chosen_estimator,
+            "logprob_coverage": None,  # Not computed for Direct mode
+            "has_fresh_draws": True,
+            "has_logged_data": True,
+            "reason": "Direct mode: Using logged data for calibration, fresh draws for evaluation",
+        }
+
         return results
 
     def _run_with_logged_data(
@@ -239,8 +261,12 @@ class AnalysisService:
 
         # Auto mode detection
         detected_mode: Optional[str] = None
-        if chosen_estimator == "auto":
-            mode, mode_explanation = detect_analysis_mode(
+        logprob_coverage: float = 0.0
+        mode_explanation: str = ""
+        is_auto_mode: bool = chosen_estimator == "auto"
+
+        if is_auto_mode:
+            mode, mode_explanation, logprob_coverage = detect_analysis_mode(
                 calibrated_dataset, config.fresh_draws_dir
             )
             detected_mode = mode
@@ -334,6 +360,20 @@ class AnalysisService:
             results.metadata["estimator_config"] = config.estimator_config
         results.metadata["judge_field"] = config.judge_field
         results.metadata["oracle_field"] = config.oracle_field
+
+        # Add mode_selection metadata
+        results.metadata["mode_selection"] = {
+            "mode": detected_mode or "unknown",
+            "estimator": chosen_estimator,
+            "logprob_coverage": logprob_coverage if is_auto_mode else None,
+            "has_fresh_draws": config.fresh_draws_dir is not None,
+            "has_logged_data": True,
+            "reason": (
+                mode_explanation
+                if is_auto_mode
+                else f"Explicitly specified: {chosen_estimator}"
+            ),
+        }
 
         return results
 
