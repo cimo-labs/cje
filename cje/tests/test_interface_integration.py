@@ -165,10 +165,13 @@ def test_mode_detection_three_modes() -> None:
         target_policies=["policy_a", "policy_b"],
     )
 
-    mode, explanation = detect_analysis_mode(dataset_ips, fresh_draws_dir=None)
+    mode, explanation, coverage = detect_analysis_mode(
+        dataset_ips, fresh_draws_dir=None
+    )
     assert mode == "ips"
     assert "IPS mode" in explanation
     assert "100.0% of samples have valid logprobs" in explanation
+    assert coverage == 1.0  # 100% coverage
 
     # Case 2: Dataset with no logprobs but fresh draws directory (Direct mode with calibration)
     samples_no_logprobs = [
@@ -193,21 +196,23 @@ def test_mode_detection_three_modes() -> None:
 
     # Dataset with no logprobs but fresh draws should select Direct mode
     dataset_path, responses_dir = _arena_paths()
-    mode, explanation = detect_analysis_mode(
+    mode, explanation, coverage = detect_analysis_mode(
         dataset_no_logprobs, fresh_draws_dir=str(responses_dir)
     )
     assert mode == "direct"
-    assert "Direct mode with calibration" in explanation
+    assert "Direct mode" in explanation
+    assert coverage == 0.0  # No logprobs
 
     # Case 3: Dataset with logprobs AND fresh draws directory (DR mode)
     dataset_path, responses_dir = _arena_paths()
 
-    mode, explanation = detect_analysis_mode(
+    mode, explanation, coverage = detect_analysis_mode(
         dataset_ips, fresh_draws_dir=str(responses_dir)
     )
     assert mode == "dr"
     assert "DR mode" in explanation
     assert "combines importance weighting with outcome models" in explanation
+    assert coverage == 1.0  # 100% coverage
 
 
 def test_mode_detection_insufficient_data() -> None:
@@ -237,6 +242,51 @@ def test_mode_detection_insufficient_data() -> None:
 
     with pytest.raises(ValueError, match="Insufficient data"):
         detect_analysis_mode(dataset, fresh_draws_dir=None)
+
+
+def test_mode_selection_metadata_populated() -> None:
+    """Test that mode_selection metadata is properly populated in results."""
+    dataset_path, responses_dir = _arena_paths()
+
+    # Test auto mode with DR selection
+    result = analyze_dataset(
+        logged_data_path=str(dataset_path),
+        fresh_draws_dir=str(responses_dir),
+        estimator="auto",
+        verbose=False,
+    )
+
+    # Verify mode_selection metadata exists
+    assert "mode_selection" in result.metadata
+    mode_sel = result.metadata["mode_selection"]
+
+    # Verify all required fields
+    assert "mode" in mode_sel
+    assert "estimator" in mode_sel
+    assert "logprob_coverage" in mode_sel
+    assert "has_fresh_draws" in mode_sel
+    assert "has_logged_data" in mode_sel
+    assert "reason" in mode_sel
+
+    # Verify correct values for DR mode
+    assert mode_sel["mode"] == "dr"
+    assert mode_sel["estimator"] == "stacked-dr"  # Default for DR mode
+    assert mode_sel["has_fresh_draws"] is True
+    assert mode_sel["has_logged_data"] is True
+    assert mode_sel["logprob_coverage"] is not None  # Should be computed
+
+    # Test IPS mode (no fresh draws)
+    result_ips = analyze_dataset(
+        logged_data_path=str(dataset_path),
+        estimator="auto",
+        verbose=False,
+    )
+
+    mode_sel_ips = result_ips.metadata["mode_selection"]
+    assert mode_sel_ips["mode"] == "ips"
+    assert mode_sel_ips["estimator"] == "calibrated-ips"  # Default for IPS mode
+    assert mode_sel_ips["has_fresh_draws"] is False
+    assert mode_sel_ips["has_logged_data"] is True
 
 
 def test_direct_mode_with_explicit_estimator() -> None:
