@@ -107,31 +107,43 @@ influence = result.influence_functions # For inference
 
 **Use StackedDREstimator** - Combines multiple DR methods (DR-CPO, TMLE, MRDR, OC-DR-CPO, TR-CPO-E) via optimal weighting to minimize variance. Requires fresh draws. Provides modest improvements (1-5% SE reduction) over best single method.
 
-## Refusal Gates
+## Diagnostic Warnings & Quality Detection
 
-CalibratedIPS includes safety mechanisms that detect when estimates would be unreliable due to poor overlap:
+CalibratedIPS provides estimates while detecting quality issues through comprehensive diagnostics. When overlap problems are detected, actionable warnings guide you toward fixes.
 
-1. **ESS < 30%**: Over 70% of data effectively ignored
-2. **Raw near-zero > 85%**: Severe distribution mismatch that calibration may mask
-3. **Top 5% concentration > 30% with CV > 2.0**: Few outliers dominate estimate
+**Quality indicators checked:**
 
-Default behavior: Provides estimates with warnings. Set `refuse_unreliable=True` to return NaN for unreliable policies.
+1. **ESS < 30%**: Low effective sample size - over 70% of data has negligible weight
+2. **Raw near-zero > 85%**: Severe distribution mismatch - policies very different
+3. **Top 5% concentration > 30% with CV > 2.0**: Few outliers dominate - unstable estimate
+
+**Default workflow: Detect → Fix → Re-run**
 
 ```python
-# Default: Warn but estimate
+# Run analysis - always get estimates + diagnostics
 estimator = CalibratedIPS(sampler)
+result = estimator.fit_and_estimate()
 
-# Strict mode: Return NaN for unreliable
+# Check diagnostics
+if result.diagnostics.weight_ess < 0.30:
+    print("⚠️ Low ESS detected")
+    print("Fixes: (1) Use DR mode, (2) Restrict cohort, (3) Collect more diverse data")
+    # Apply fix and re-run
+
+# Optional: Strict validation mode (returns NaN for quality issues)
 estimator = CalibratedIPS(sampler, refuse_unreliable=True)
 ```
+
+**Philosophy:** Provide estimates with health metrics, let users decide when to iterate. Critical issues trigger warnings with specific remediation steps.
 
 
 ## Key Design Decisions
 
-1. **Transparency**: Default to warnings over silent failures
-2. **Influence Functions**: Always computed for proper inference
-3. **Diagnostics**: Automatically attached to all results
-4. **Modularity**: DR estimators compose CalibratedIPS for weights
+1. **Always estimate**: Provide results with diagnostics rather than hard failures
+2. **Actionable warnings**: Each issue includes specific fixes to try
+3. **Influence Functions**: Always computed for proper inference
+4. **Diagnostics**: Automatically attached to all results
+5. **Modularity**: DR estimators compose CalibratedIPS for weights
 
 ## Outcome Models
 

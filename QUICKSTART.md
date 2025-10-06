@@ -68,45 +68,69 @@ What this means:
 - **Confidence interval**: We're 95% sure it's between 71.2% and 75.0%
 - **ESS 43.2%**: Good overlap between policies (>30% is good)
 
-## Step 5: Check Reliability (1 minute)
+## Step 5: The Detect → Fix → Re-run Workflow (2 minutes)
+
+CJE provides estimates with diagnostics, even when data quality isn't perfect. Use diagnostics to decide if you need to improve and re-run:
 
 ```python
-# Always check diagnostics before trusting results
+# Check diagnostics (CJE provides estimates regardless)
 diagnostics = result.diagnostics
 
-if diagnostics.overall_status.value == "CRITICAL":
-    print("⚠️ Results may be unreliable!")
-    print(diagnostics.summary())
-else:
-    print("✅ Results are reliable")
-
-# For detailed analysis
+# Inspect overall health
+print(f"Status: {diagnostics.overall_status.value}")
 print(f"ESS: {diagnostics.weight_ess:.1%}")
+
+# Check per-policy diagnostics
 for policy, ess in diagnostics.ess_per_policy.items():
     print(f"  {policy}: {ess:.1%}")
+
+if diagnostics.overall_status.value == "CRITICAL":
+    print("\n⚠️ Diagnostics suggest improvements needed")
+    print("Current estimates provided, but consider fixes below before production use")
+    print(diagnostics.summary())
+else:
+    print("\n✅ Diagnostics look good - estimates are reliable")
 ```
 
-## Common Issues & Solutions
+**Workflow:**
+1. **Run analysis** - Get estimates + diagnostics
+2. **Check diagnostics** - Review health metrics
+3. **If issues detected** - Apply fixes below and re-run
+4. **Ship with confidence** - Use improved estimates
 
-### "Low ESS warning"
-Your policies are very different. Solutions:
-1. Use doubly-robust estimation (requires fresh samples)
-2. Collect more diverse training data
-3. Use a less different target policy
+## Common Issues & How to Fix Them
 
-### "No oracle labels found"
-Add ground truth to 5-10% of samples:
+### Issue: "Low ESS" (Effective Sample Size < 30%)
+
+**What it means:** Policies are very different from logging policy
+
+**Fixes to try (in order):**
 ```python
-# Before running CJE, add some labels
+# Fix 1: Use DR mode with fresh draws (usually best)
+result = analyze_dataset(
+    "logs.jsonl",
+    fresh_draws_dir="fresh_draws/",
+    estimator="stacked-dr"
+)
+
+# Fix 2: Restrict to overlapping cohort
+# Filter data to prompts where policies have similar behavior
+
+# Fix 3: Collect more diverse base policy data
+# Use multiple base policies or sample more broadly
+```
+
+### Issue: "No oracle labels found"
+
+**What it means:** Can't calibrate judge scores to ground truth
+
+**Fix:**
+```python
+# Add ground truth to 5-10% of samples
 import random
 labeled_sample_ids = random.sample(all_ids, k=int(0.1 * len(all_ids)))
-# Add oracle_label to metadata for these samples
-```
-
-### "ValueError: DR estimators require fresh draws"
-Generate new samples from target policy using CJE's Fireworks integration:
-```python
-from cje.teacher_forcing import compute_teacher_forced_logprob
+# Label these samples and add oracle_label field
+# Re-run analysis
 
 # Generate log probabilities for your target model
 for sample in your_data:
