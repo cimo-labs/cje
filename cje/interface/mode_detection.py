@@ -21,6 +21,20 @@ def detect_analysis_mode(
     NOTE: This is only called when logged_data_path is provided.
     Direct-only mode (fresh_draws_dir without logged_data) is handled separately.
 
+    Mode detection is based on **logprob coverage**:
+        logprob_coverage = (samples with complete logprobs) / total_samples
+
+    A sample has "complete logprobs" if:
+        - base_policy_logprob is not None
+        - target_policy_logprobs[policy] is not None for ALL target policies
+
+    Decision rules:
+        - ≥50% coverage + fresh_draws → "dr" mode (doubly robust)
+        - ≥50% coverage, no fresh_draws → "ips" mode (importance sampling)
+        - <10% coverage + fresh_draws → "direct" mode (on-policy evaluation)
+        - 10-50% coverage + fresh_draws → "direct" mode (insufficient for IPS/DR)
+        - <50% coverage, no fresh_draws → ValueError (insufficient data)
+
     Returns:
         Tuple of (mode_name, explanation)
 
@@ -29,24 +43,19 @@ def detect_analysis_mode(
         - "dr": Doubly robust mode (logged data with logprobs AND fresh draws)
         - "direct": Direct evaluation mode (fresh draws available, insufficient logprobs for IPS/DR)
 
-    Logic:
-        1. Check if we have valid logprobs (base_policy_logprob + target_policy_logprobs)
-        2. Check if we have fresh draws directory
-        3. Select mode based on what's available
-
     Examples:
-        >>> # Case 1: Logged data with logprobs only → IPS mode
-        >>> dataset = load_dataset("logs.jsonl")
+        >>> # Case 1: 100% logprob coverage, no fresh draws → IPS mode
+        >>> dataset = load_dataset("logs.jsonl")  # All samples have logprobs
         >>> mode, msg = detect_analysis_mode(dataset, None)
-        >>> # Returns: ("ips", "Using IPS mode...")
+        >>> # Returns: ("ips", "IPS mode: 100.0% of samples have valid logprobs...")
 
-        >>> # Case 2: Logged data with logprobs + fresh draws → DR mode
+        >>> # Case 2: 80% logprob coverage + fresh draws → DR mode
         >>> mode, msg = detect_analysis_mode(dataset, "responses/")
-        >>> # Returns: ("dr", "Using DR mode...")
+        >>> # Returns: ("dr", "DR mode: 80.0% of samples have valid logprobs...")
 
-        >>> # Case 3: Logged data but no logprobs, has fresh draws → Direct mode
+        >>> # Case 3: 20% logprob coverage + fresh draws → Direct mode
         >>> mode, msg = detect_analysis_mode(dataset, "responses/")
-        >>> # Returns: ("direct", "Using Direct mode with calibration...")
+        >>> # Returns: ("direct", "Direct mode: Only 20.0% of samples have logprobs...")
     """
     # Count samples with valid logprobs
     n_total = len(dataset.samples)

@@ -66,7 +66,13 @@ python -m cje analyze logs.jsonl --fresh-draws-dir responses/
 
 ## Three Analysis Modes
 
-CJE automatically selects the best mode based on your data:
+CJE automatically selects the best mode based on your data. Mode selection depends on **logprob coverage** (fraction of samples with complete logprobs) and whether you provide fresh draws:
+
+- **≥50% coverage + fresh draws** → DR mode (most accurate)
+- **≥50% coverage, no fresh draws** → IPS mode (counterfactual from logs)
+- **<50% coverage + fresh draws** → Direct mode (on-policy comparison)
+
+See [Interface README](cje/interface/README.md#how-mode-detection-works) for details.
 
 ### 1. **Direct Mode** (Fresh draws only)
 - **Use when:** You have responses from target policies, no logprobs needed
@@ -158,12 +164,21 @@ This handles chat templates, tokenization, and API calls automatically. See `cje
 
 ## Choosing an Estimator
 
-**Most users should use `estimator="auto"`** - CJE will automatically select:
+**Most users should use `estimator="auto"`** (the default) - CJE will automatically select:
 - **`direct`** when you only provide `fresh_draws_dir`
 - **`calibrated-ips`** when you only provide `logged_data_path`
 - **`stacked-dr`** when you provide both
 
-**Manual selection:**
+**You can override automatic selection** by specifying an estimator explicitly:
+```python
+# Use IPS even with fresh draws available
+analyze_dataset("logs.jsonl", fresh_draws_dir="responses/", estimator="calibrated-ips")
+
+# Use Direct mode for on-policy comparison instead of DR
+analyze_dataset("logs.jsonl", fresh_draws_dir="responses/", estimator="direct")
+```
+
+**Manual estimator options:**
 - **`direct`**: On-policy comparison (no counterfactual inference)
 - **`calibrated-ips`**: Fast IPS with variance-reduced weights
 - **`stacked-dr`**: Robust ensemble of DR estimators (recommended for production)

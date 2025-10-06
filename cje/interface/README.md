@@ -42,10 +42,60 @@ Use `estimator="auto"` (default) and CJE will:
    - **IPS mode** → `calibrated-ips` estimator (default for IPS)
    - **DR mode** → `stacked-dr` estimator (default for DR)
 
+### How Mode Detection Works
+
+When you use `estimator="auto"` (the default), CJE automatically detects the mode by checking **logprob coverage**:
+
+```python
+logprob_coverage = (samples with complete logprobs) / total_samples
+```
+
+A sample has "complete logprobs" if it has:
+- `base_policy_logprob` (not None)
+- `target_policy_logprobs[policy]` for ALL target policies (not None)
+
+**Decision rules:**
+- **≥50% coverage + fresh draws** → DR mode (best accuracy)
+- **≥50% coverage, no fresh draws** → IPS mode (counterfactual from logged data)
+- **<10% coverage + fresh draws** → Direct mode (on-policy comparison)
+- **<50% coverage, no fresh draws** → Error (insufficient data)
+
+Example: If you have 1000 logged samples but only 400 have complete logprobs:
+```python
+logprob_coverage = 400/1000 = 40%  # Below 50% threshold
+# With fresh draws → Direct mode
+# Without fresh draws → Error
+```
+
+**Overriding automatic selection:**
+You can explicitly choose a mode/estimator instead of using `"auto"`:
+```python
+# Force IPS mode even with fresh draws available
+results = analyze_dataset(
+    logged_data_path="logs.jsonl",
+    fresh_draws_dir="responses/",
+    estimator="calibrated-ips"  # Explicitly choose IPS instead of auto DR
+)
+
+# Force Direct mode even with >50% logprob coverage
+results = analyze_dataset(
+    logged_data_path="logs.jsonl",
+    fresh_draws_dir="responses/",
+    estimator="direct"  # Use Direct mode for on-policy comparison
+)
+
+# Choose specific DR variant
+results = analyze_dataset(
+    logged_data_path="logs.jsonl",
+    fresh_draws_dir="responses/",
+    estimator="tmle"  # Use TMLE instead of default stacked-dr
+)
+```
+
 ### What are fresh draws?
 Fresh draws are new responses from your target policies evaluated by the judge. For Direct mode, these are your only data source. For DR mode, they supplement logged data for better accuracy.
 
-Format: JSONL files per policy in a directory (e.g., `responses/gpt4_responses.jsonl`)
+Format: JSONL files per policy in a directory (e.g., `responses/clone_responses.jsonl`)
 
 ## Common Workflows
 
@@ -184,14 +234,46 @@ analyze_dataset("logs.jsonl", estimator="calibrated-ips")
 
 ### Missing judge scores
 **Error**: "Judge field 'judge_score' not found"
-**Solution**: Ensure your data has `metadata.judge_score` field:
+**Solution**: Ensure your data has `judge_score` field:
 ```python
 # Check your data
 import json
 with open("logs.jsonl") as f:
     sample = json.loads(f.readline())
-    print(sample.get("metadata", {}).get("judge_score"))  # Should not be None
+    print(sample.get("judge_score"))  # Should not be None
 ```
+
+### "Insufficient data" or low logprob coverage
+**Error**: "only 25.0% of samples have logprobs" or "Insufficient data for any analysis mode"
+
+**Cause**: Not enough samples have complete logprobs (need both `base_policy_logprob` and all `target_policy_logprobs`)
+
+**Check your coverage:**
+```python
+import json
+
+with open("logs.jsonl") as f:
+    samples = [json.loads(line) for line in f]
+
+n_valid = 0
+for s in samples:
+    has_base = s.get("base_policy_logprob") is not None
+    has_all_targets = all(
+        s.get("target_policy_logprobs", {}).get(p) is not None
+        for p in ["clone", "parallel_universe_prompt"]  # Your target policies
+    )
+    if has_base and has_all_targets:
+        n_valid += 1
+
+print(f"Logprob coverage: {n_valid}/{len(samples)} = {n_valid/len(samples):.1%}")
+```
+
+**Solutions:**
+1. **Compute missing logprobs** using `cje/teacher_forcing/` (see README section on "Generating Log Probabilities")
+2. **Provide fresh draws** to use Direct mode (no logprobs needed)
+3. **Accept lower coverage** by using Direct mode explicitly: `estimator="direct"` with `fresh_draws_dir`
+
+**Why 50% threshold?** IPS/DR modes need reliable importance weights. With <50% coverage, most samples are unusable for reweighting, making estimates unreliable.
 
 ## API Reference
 
