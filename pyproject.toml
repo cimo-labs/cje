@@ -7,7 +7,7 @@ license = "MIT"
 packages = [{ include = "cje" }]
 readme = "README.md"
 homepage = "https://cimo-labs.com/cje"
-repository = "https://github.com/fondutech/causal-judge-evaluation"
+repository = "https://github.com/cimo-labs/cje"
 keywords = ["evaluation", "llm", "causal-inference", "off-policy", "importance-sampling", "doubly-robust"]
 classifiers = [
     "Development Status :: 4 - Beta",
