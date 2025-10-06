@@ -1,6 +1,6 @@
 # CJE Interface
 
-Simple, reliable LLM evaluation with automatic mode selection.
+Simple, reliable LLM evaluation with automatic mode selection and AutoCal-R calibration.
 
 ## Quick Start
 
@@ -36,15 +36,17 @@ print(f"Policy value: {results.estimates[0]:.3f} ± {1.96*results.standard_error
 ### Automatic Mode Selection
 
 Use `estimator="auto"` (default) and CJE will:
-1. Detect the **mode** based on your data (Direct/IPS/DR)
+1. Detect the **mode** based on your data (Direct/IPS/DR) using the 4-rule system
 2. Select the best **estimator** for that mode:
    - **Direct mode** → `direct` estimator
-   - **IPS mode** → `calibrated-ips` estimator (default for IPS)
-   - **DR mode** → `stacked-dr` estimator (default for DR)
+   - **IPS mode** → `calibrated-ips` estimator (IPS with variance-reduced weights via SIMCal)
+   - **DR mode** → `stacked-dr` estimator (ensemble of DR-CPO, TMLE, MRDR, OC-DR-CPO, TR-CPO-E)
+
+**Note:** In the paper, "Calibrated DR" refers to DR mode, which defaults to `stacked-dr` in the implementation. Stacked DR is an optimal convex combination of multiple DR estimators that typically outperforms any single variant.
 
 ### How Mode Detection Works
 
-When you use `estimator="auto"` (the default), CJE automatically detects the mode by checking **logprob coverage**:
+When you use `estimator="auto"` (the default), CJE automatically detects the mode using a **4-rule system** based on **logprob coverage**:
 
 ```python
 logprob_coverage = (samples with complete logprobs) / total_samples
@@ -54,18 +56,26 @@ A sample has "complete logprobs" if it has:
 - `base_policy_logprob` (not None)
 - `target_policy_logprobs[policy]` for ALL target policies (not None)
 
-**Decision rules:**
-- **≥50% coverage + fresh draws** → DR mode (best accuracy)
-- **≥50% coverage, no fresh draws** → IPS mode (counterfactual from logged data)
-- **<10% coverage + fresh draws** → Direct mode (on-policy comparison)
-- **<50% coverage, no fresh draws** → Error (insufficient data)
+**Decision rules (4-rule system):**
+1. **fresh_draws present + coverage ≥50%** → DR mode (doubly robust - best accuracy)
+2. **fresh_draws absent + coverage ≥50%** → IPS mode (importance sampling - counterfactual)
+3. **fresh_draws present + coverage <50%** → Direct mode (on-policy comparison)
+4. **Otherwise (no fresh draws + coverage <50%)** → Error (insufficient data)
 
 Example: If you have 1000 logged samples but only 400 have complete logprobs:
 ```python
 logprob_coverage = 400/1000 = 40%  # Below 50% threshold
-# With fresh draws → Direct mode
-# Without fresh draws → Error
+# With fresh draws → Direct mode (rule 3)
+# Without fresh draws → Error (rule 4)
 ```
+
+**Mode selection metadata:** Results include `result.metadata["mode_selection"]` with:
+- `mode`: Selected mode ("dr", "ips", or "direct")
+- `estimator`: Actual estimator used (e.g., "stacked-dr")
+- `logprob_coverage`: Coverage fraction
+- `has_fresh_draws`: Whether fresh draws were provided
+- `has_logged_data`: Whether logged data was provided
+- `reason`: Human-readable explanation of selection
 
 **Overriding automatic selection:**
 You can explicitly choose a mode/estimator instead of using `"auto"`:
@@ -191,7 +201,7 @@ python -m cje validate logs.jsonl --verbose
 ```
 Store as: `responses/clone_responses.jsonl`, `responses/parallel_universe_prompt_responses.jsonl`, etc.
 
-**Calibration in Direct mode**: If 50% or more of fresh draws have `oracle_label`, Direct mode will automatically learn judge→oracle calibration and apply calibrated rewards. Otherwise, uses raw judge scores.
+**AutoCal-R in Direct mode**: If 50% or more of fresh draws have `oracle_label`, Direct mode automatically applies AutoCal-R to learn judge→oracle calibration and uses calibrated rewards. Otherwise, uses raw judge scores.
 
 ### IPS/DR Modes (logged data):
 ```json

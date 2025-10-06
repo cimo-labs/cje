@@ -7,6 +7,7 @@ This guide gets you from zero to your first unbiased LLM evaluation in 5 minutes
 ✅ Python 3.9+ installed
 ✅ 1000+ examples with judge scores
 ✅ Log probabilities from your models
+✅ 5-10% samples with oracle labels (for AutoCal-R calibration)
 
 ## Step 1: Install (30 seconds)
 
@@ -122,15 +123,15 @@ result = analyze_dataset(
 
 ### Issue: "No oracle labels found"
 
-**What it means:** Can't calibrate judge scores to ground truth
+**What it means:** AutoCal-R can't calibrate judge scores to ground truth without oracle labels
 
 **Fix:**
 ```python
-# Add ground truth to 5-10% of samples
+# Add ground truth to 5-10% of samples for AutoCal-R
 import random
 labeled_sample_ids = random.sample(all_ids, k=int(0.1 * len(all_ids)))
 # Label these samples and add oracle_label field
-# Re-run analysis
+# Re-run analysis - AutoCal-R will automatically calibrate
 
 # Generate log probabilities for your target model
 for sample in your_data:
@@ -213,7 +214,7 @@ for i, policy in enumerate(result.metadata["target_policies"]):
 ## FAQ
 
 **Q: How much ground truth do I need?**
-A: 5-10% of samples with oracle labels is usually sufficient.
+A: 5-10% of samples with oracle labels is usually sufficient for AutoCal-R to learn accurate calibration.
 
 **Q: Can I use this without log probabilities?**
 A: No, log probs are essential for importance weighting.

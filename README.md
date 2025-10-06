@@ -16,7 +16,7 @@ CJE makes it possible. Get unbiased estimates of how your new model will perform
 ## Why CJE?
 
 🎯 **Problem**: Your LLM-judge scores are noisy, biased, and untrustworthy
-✅ **Solution**: CJE uses causal inference to debias them, giving you reliable estimates with confidence intervals without compromising on judge flexibility
+✅ **Solution**: CJE uses **AutoCal-R** (Automatic Calibration for Rewards) and causal inference to debias them, giving you reliable estimates with confidence intervals without compromising on judge flexibility
 
 ## Installation
 
@@ -66,11 +66,12 @@ python -m cje analyze logs.jsonl --fresh-draws-dir responses/
 
 ## Three Analysis Modes
 
-CJE automatically selects the best mode based on your data. Mode selection depends on **logprob coverage** (fraction of samples with complete logprobs) and whether you provide fresh draws:
+CJE automatically selects the best mode based on your data. Mode selection follows a simple **4-rule system** based on logprob coverage (fraction of samples with complete logprobs) and data sources:
 
-- **≥50% coverage + fresh draws** → DR mode (most accurate)
-- **≥50% coverage, no fresh draws** → IPS mode (counterfactual from logs)
-- **<50% coverage + fresh draws** → Direct mode (on-policy comparison)
+1. **fresh_draws + coverage ≥50%** → DR mode (doubly robust - most accurate)
+2. **no fresh_draws + coverage ≥50%** → IPS mode (importance sampling - counterfactual)
+3. **fresh_draws + coverage <50%** → Direct mode (on-policy comparison)
+4. **no fresh_draws + coverage <50%** → Error (insufficient data)
 
 See [Interface README](cje/interface/README.md#how-mode-detection-works) for details.
 
@@ -90,7 +91,10 @@ See [Interface README](cje/interface/README.md#how-mode-detection-works) for det
 - **Use when:** You want maximum accuracy and have both
 - **Estimand:** Counterfactual deployment value (most accurate)
 - **Data needed:** Both logged data and fresh draws
+- **Default estimator:** `stacked-dr` (ensemble of DR-CPO, TMLE, MRDR, OC-DR-CPO, TR-CPO-E)
 - **Example:** High-stakes A/B decision for model deployment
+
+**Note:** The paper's "Calibrated DR" refers to DR mode, which defaults to `stacked-dr` - an optimal convex combination of multiple DR estimators for robustness and tighter intervals.
 
 ## When to Use CJE
 
@@ -121,7 +125,7 @@ Requirements depend on which mode you're using:
 }
 ```
 
-**Calibration**: If 50%+ of fresh draws have `oracle_label`, Direct mode automatically learns judge→oracle calibration and applies calibrated rewards.
+**AutoCal-R**: If 50%+ of fresh draws have `oracle_label`, Direct mode automatically applies AutoCal-R to learn judge→oracle calibration and uses calibrated rewards.
 
 ### For IPS/DR Modes (logged data):
 ```json
@@ -139,7 +143,7 @@ Requirements depend on which mode you're using:
 }
 ```
 
-**Key difference:** Direct mode doesn't need logprobs! Just responses from each policy with judge scores (and optionally oracle labels for calibration).
+**Key difference:** Direct mode doesn't need logprobs! Just responses from each policy with judge scores (and optionally oracle labels for AutoCal-R calibration).
 
 **Working example:** See [`examples/arena_sample/`](examples/arena_sample/) for complete dataset examples with logged data and fresh draws.
 
@@ -179,10 +183,14 @@ analyze_dataset("logs.jsonl", fresh_draws_dir="responses/", estimator="direct")
 ```
 
 **Manual estimator options:**
-- **`direct`**: On-policy comparison (no counterfactual inference)
-- **`calibrated-ips`**: Fast IPS with variance-reduced weights
-- **`stacked-dr`**: Robust ensemble of DR estimators (recommended for production)
-- **Individual DR estimators**: `dr-cpo`, `tmle`, `mrdr`, `tr-cpo` (for research)
+- **`direct`**: On-policy comparison (Direct mode - no counterfactual inference)
+- **`calibrated-ips`**: IPS with SIMCal weight stabilization (IPS mode default)
+- **`stacked-dr`**: Ensemble of DR estimators (DR mode default - recommended for production)
+  - Optimally combines: DR-CPO, TMLE, MRDR, OC-DR-CPO, TR-CPO-E
+  - Provides robustness and tighter confidence intervals
+- **Individual DR estimators**: `dr-cpo`, `tmle`, `mrdr`, `oc-dr-cpo`, `tr-cpo`, `tr-cpo-e` (for research)
+
+**Paper terminology:** "Calibrated DR" in the paper = DR mode with `stacked-dr` estimator in the code.
 
 See the [examples](examples/) for mode-specific workflows.
 
