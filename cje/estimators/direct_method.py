@@ -247,7 +247,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             "target_policies": list(self.target_policies),
             "paired_comparison": self.paired_comparison,
             "se_components": {
-                "includes_oracle_uncertainty": True,
+                "includes_oracle_uncertainty": False,  # Will be set to True by _apply_oua_jackknife()
                 "includes_mc_variance": False,
             },
         }
