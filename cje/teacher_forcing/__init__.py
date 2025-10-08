@@ -4,38 +4,48 @@ This module provides:
 - Fireworks API integration for teacher forcing
 - Chat to completions format conversion
 - Support for various model templates
+
+Note: Requires optional 'teacher-forcing' dependencies (fireworks-ai, transformers).
+Install with: pip install cje-eval[teacher-forcing]
 """
 
-# API implementations
-from .api import (
-    compute_teacher_forced_logprob,
-)
-
-# Template configurations
+# Template configurations (no dependencies)
 from .templates import (
     ChatTemplateConfig,
     Llama3TemplateConfig,
-    HuggingFaceTemplateConfig,
     FireworksTemplateConfig,
     FireworksTemplateError,
 )
 
-# Chat utilities
+# Chat utilities (no dependencies)
 from .chat import (
     compute_chat_logprob,
     convert_chat_to_completions,
 )
 
 __all__ = [
-    # Fireworks teacher forcing
-    "compute_teacher_forced_logprob",
-    # Template configurations
+    # Template configurations (always available)
     "ChatTemplateConfig",
     "Llama3TemplateConfig",
-    "HuggingFaceTemplateConfig",
     "FireworksTemplateConfig",
     "FireworksTemplateError",
-    # Chat support
+    # Chat support (always available)
     "compute_chat_logprob",
     "convert_chat_to_completions",
 ]
+
+# Optional: Fireworks API (requires fireworks-ai)
+try:
+    from .api import compute_teacher_forced_logprob
+
+    __all__.append("compute_teacher_forced_logprob")
+except ImportError:
+    pass  # Silently skip - api/__init__.py already warned
+
+# Optional: HuggingFace templates (requires transformers)
+try:
+    from .templates import HuggingFaceTemplateConfig
+
+    __all__.append("HuggingFaceTemplateConfig")
+except ImportError:
+    pass  # Silently skip - will fail when user tries to use it
