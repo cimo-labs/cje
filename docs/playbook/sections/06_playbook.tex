@@ -171,10 +171,10 @@ This section is a step-by-step guide for practitioners. It covers the full evalu
 \begin{enumerate}
 \item[$\square$] Checked score coverage ($\ge 85\%$)?
 \item[$\square$] Checked calibration reliability (OOF MAE $< 0.10$, mean preservation OK)?
+\item[$\square$] Checked judge stability ($\tau \ge 0.90$ or no temporal drift)?
+\item[$\square$] Checked \oua{} share (if $> 50\%$, consider adding labels)?
 \item[$\square$] (Off-policy) Checked ESS ($\ge 10\%$) and Hill index ($\alpha \ge 2$)?
 \item[$\square$] (DR) Checked orthogonality (CI contains zero)?
-\item[$\square$] Checked \oua{} share (if $> 50\%$, consider adding labels)?
-\item[$\square$] Checked judge stability (if using old logs)?
 \item[$\square$] Reported CIs that include \oua?
 \item[$\square$] Included diagnostic plots and summary in the report?
 \item[$\square$] Documented judge config, prompt set, oracle sampling procedure?
