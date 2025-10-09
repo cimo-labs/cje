@@ -291,9 +291,13 @@ print(f"Logprob coverage: {n_valid}/{len(samples)} = {n_valid/len(samples):.1%}"
 
 ```python
 def analyze_dataset(
-    logged_data_path: Optional[str] = None,  # NEW: Optional (for Direct mode)
+    logged_data_path: Optional[str] = None,
     fresh_draws_dir: Optional[str] = None,
-    estimator: str = "auto",  # NEW: Auto mode selection
+    calibration_data_path: Optional[str] = None,
+    combine_oracle_sources: bool = True,
+    timestamp_field: Optional[str] = None,
+    check_drift: bool = False,
+    estimator: str = "auto",
     judge_field: str = "judge_score",
     oracle_field: str = "oracle_label",
     estimator_config: Optional[Dict[str, Any]] = None,
@@ -304,6 +308,10 @@ def analyze_dataset(
 **Parameters:**
 - `logged_data_path`: Path to JSONL file with logged data (optional for Direct mode)
 - `fresh_draws_dir`: Directory with fresh draw response files
+- `calibration_data_path`: Path to dedicated calibration dataset with oracle labels. Used to learn judge→oracle mapping separately from evaluation data.
+- `combine_oracle_sources`: Pool oracle labels from all sources (calibration + logged + fresh) for maximum data efficiency. Default: `True`. Set `False` to use only calibration_data_path.
+- `timestamp_field`: Metadata field containing timestamps (Unix int or ISO string) for temporal drift detection.
+- `check_drift`: Enable temporal drift detection. Requires `timestamp_field` to be set.
 - `estimator`: Estimator name or "auto" for automatic selection
   - Use "auto" (default) for automatic mode selection
   - Manual: `direct`, `calibrated-ips`, `stacked-dr`, `dr-cpo`, `tmle`, `mrdr`, etc.
@@ -316,7 +324,13 @@ def analyze_dataset(
   - `.estimates`: Policy value estimates (numpy array)
   - `.standard_errors`: Standard errors for each estimate
   - `.diagnostics`: Diagnostic metrics (ESS, overlap quality, etc.)
-  - `.metadata`: Mode, estimator, data sources, etc.
+  - `.metadata`: Mode, estimator, data sources (see additional fields below)
+
+**Additional metadata fields** (when using calibration/drift features):
+- `metadata["oracle_sources"]`: Breakdown of oracle labels by source (calibration_data, logged_data, fresh_draws)
+- `metadata["oracle_sources"]["distribution_mismatch"]`: KS test results comparing calibration vs. evaluation distributions
+- `metadata["oracle_sources"]["temporal_staleness"]`: Time gap warnings between calibration and evaluation data
+- `metadata["drift_diagnostics"]`: Temporal stability metrics when `check_drift=True`
 
 **At least one of `logged_data_path` or `fresh_draws_dir` must be provided.**
 
@@ -343,6 +357,91 @@ Options:
 ```
 
 ## Advanced Usage
+
+### Dedicated Calibration Sets
+
+Use a separate high-quality calibration dataset to learn the judge→oracle mapping:
+
+```python
+# Learn calibration from curated oracle set, apply to evaluation data
+results = analyze_dataset(
+    logged_data_path="production_logs.jsonl",      # 10K samples, 100 with oracle labels
+    calibration_data_path="human_labels.jsonl",     # 500 samples, all with high-quality oracle labels
+    estimator="calibrated-ips"
+)
+
+# Check oracle source breakdown
+print(results.metadata["oracle_sources"])
+# {
+#   "calibration_data": {"n_oracle": 500, "coverage": 1.0},
+#   "logged_data": {"n_oracle": 100, "coverage": 0.01},
+#   "total_oracle": 600,  # Auto-combined for efficiency
+#   "priority_order": ["calibration_data", "fresh_draws", "logged_data"]
+# }
+```
+
+**Key features**:
+- **Auto-combining** (default): Pools oracle labels from calibration_data + logged_data + fresh_draws for maximum data efficiency
+- **Priority ordering**: calibration_data (highest) > fresh_draws > logged_data (lowest)
+- **Conflict detection**: Warns if duplicate prompt_ids have different oracle values (>5% difference)
+
+**Use cases**:
+1. **Curated calibration sets**: You have expensive human labels in a separate file
+2. **Distribution mismatch**: Your logged data has different characteristics than your eval set
+3. **Temporal separation**: Oracle labels were collected at a different time
+
+**Disable combining** to use only calibration data:
+```python
+results = analyze_dataset(
+    logged_data_path="eval_data.jsonl",
+    calibration_data_path="oracle_labels.jsonl",
+    combine_oracle_sources=False,  # Use ONLY calibration data for learning f̂
+    estimator="calibrated-ips"
+)
+```
+
+**Metadata outputs**:
+- `oracle_sources`: Breakdown of oracle labels by source
+- `distribution_mismatch`: KS test comparing calibration vs. evaluation judge score distributions
+- `temporal_staleness`: Time gap warnings if timestamp_field provided
+
+### Drift Detection
+
+Monitor judge stability over time using temporal data:
+
+```python
+# Detect if judge behavior changes over time
+results = analyze_dataset(
+    logged_data_path="logs_q1_q2.jsonl",
+    timestamp_field="created_at",  # Unix timestamp or ISO string
+    check_drift=True,
+    verbose=True
+)
+
+# Check drift diagnostics
+drift = results.metadata["drift_diagnostics"]
+if drift["drift_detection"]["has_drift"]:
+    print(f"⚠️ Judge drift detected at batches: {drift['drift_detection']['drift_points']}")
+    print(f"Overall stability: τ = {drift['drift_detection']['overall_stability']:.3f}")
+```
+
+**How it works**:
+1. Sorts data by `timestamp_field`
+2. Divides into temporal batches
+3. Computes Kendall τ correlation between consecutive batches
+4. Flags drift if τ < 0.8 (p < 0.05)
+
+**Outputs**:
+- `drift_diagnostics["drift_detection"]`: Batch-level drift points, τ sequence
+- `drift_diagnostics["temporal_info"]`: Time range, span in days
+- `drift_diagnostics["tau_with_oracle_per_batch"]`: Calibration stability (if oracle labels available)
+
+**Use cases**:
+- Multi-month production logs
+- Judge model updates during data collection
+- Evolving task distributions
+
+**Note**: Uses existing `diagnostics.compute_stability_diagnostics()` - see `cje/diagnostics/stability.py` for details.
 
 ### Custom Configuration
 ```python

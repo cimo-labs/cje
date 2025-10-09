@@ -15,6 +15,7 @@ from ..data import load_dataset_from_jsonl
 from ..data.models import Dataset, EstimationResult
 from ..data.precomputed_sampler import PrecomputedSampler
 from ..calibration import calibrate_dataset
+from ..diagnostics import compute_stability_diagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -77,56 +78,130 @@ class AnalysisService:
                 f"Discovered {len(target_policies)} policies: {', '.join(target_policies)}"
             )
 
-        # Load all fresh draws and check for oracle labels to enable calibration
+        # Load all fresh draws for calibration
+        fresh_draws_dict = {}
         all_fresh_draws = []
         for policy in target_policies:
             fd = load_fresh_draws_auto(
                 Path(config.fresh_draws_dir), policy, verbose=config.verbose
             )
+            fresh_draws_dict[policy] = fd
             all_fresh_draws.extend(fd.samples)
 
-        # Check if fresh draws have oracle labels for calibration
-        n_with_oracle = sum(1 for s in all_fresh_draws if s.oracle_label is not None)
-        oracle_coverage = n_with_oracle / len(all_fresh_draws) if all_fresh_draws else 0
-
+        # NEW: Handle calibration_data_path and oracle combining
+        oracle_sources_metadata = None
         calibration_result = None
-        if oracle_coverage > 0:
+        calibration_dataset_for_rewards = None
+
+        if config.calibration_data_path:
             if config.verbose:
                 logger.info(
-                    f"Found {n_with_oracle}/{len(all_fresh_draws)} samples with oracle labels ({oracle_coverage:.1%})"
+                    f"Loading calibration dataset from {config.calibration_data_path}"
                 )
-                logger.info("Learning calibration from fresh draws")
 
-            # Convert FreshDrawSample to Sample for calibration
-            calibration_samples = []
-            for fd_sample in all_fresh_draws:
-                # Create dummy Sample with required fields for calibration
-                sample = Sample(
-                    prompt_id=fd_sample.prompt_id,
-                    prompt="",  # Not needed for calibration
-                    response=fd_sample.response or "",
-                    reward=None,  # Will be calibrated
-                    base_policy_logprob=-1.0,  # Dummy value
-                    target_policy_logprobs={p: -1.0 for p in target_policies},
-                    judge_score=fd_sample.judge_score,
-                    oracle_label=fd_sample.oracle_label,
-                    metadata={},
+            calibration_dataset = load_dataset_from_jsonl(config.calibration_data_path)
+
+            if config.verbose:
+                logger.info(
+                    f"Loaded calibration dataset: {calibration_dataset.n_samples} samples"
                 )
-                calibration_samples.append(sample)
 
-            # Create temporary dataset from fresh draws for calibration
-            fresh_dataset = Dataset(
-                samples=calibration_samples, target_policies=target_policies
-            )
+            # Combine or use exclusively based on combine_oracle_sources flag
+            if config.combine_oracle_sources:
+                if config.verbose:
+                    logger.info(
+                        "Combining oracle sources from calibration data and fresh draws"
+                    )
 
-            # Learn calibration from fresh draws
+                # Combine oracle sources (no logged data in Direct mode)
+                combined_dataset, oracle_sources_metadata = (
+                    self._combine_oracle_sources(
+                        calibration_dataset,
+                        None,  # No logged dataset in Direct mode
+                        fresh_draws_dict,
+                        target_policies,
+                        config.judge_field,
+                        config.oracle_field,
+                        config.verbose,
+                    )
+                )
+                calibration_dataset_for_rewards = combined_dataset
+            else:
+                # Use ONLY calibration_data_path for learning calibration
+                if config.verbose:
+                    logger.info(
+                        "Using calibration data exclusively (combine_oracle_sources=False)"
+                    )
+                calibration_dataset_for_rewards = calibration_dataset
+
+                # Still track metadata
+                n_calib_oracle = sum(
+                    1 for s in calibration_dataset.samples if s.oracle_label is not None
+                )
+                oracle_sources_metadata = {
+                    "calibration_data": {
+                        "n_oracle": n_calib_oracle,
+                        "coverage": n_calib_oracle / calibration_dataset.n_samples,
+                    },
+                    "total_oracle": n_calib_oracle,
+                    "combine_enabled": False,
+                }
+
+            # Learn calibration from combined/calibration-only dataset
             _, calibration_result = calibrate_dataset(
-                fresh_dataset,
+                calibration_dataset_for_rewards,
                 judge_field=config.judge_field,
                 oracle_field=config.oracle_field,
                 enable_cross_fit=True,
                 n_folds=5,
             )
+
+        else:
+            # Original behavior: Check if fresh draws have oracle labels for calibration
+            n_with_oracle = sum(
+                1 for s in all_fresh_draws if s.oracle_label is not None
+            )
+            oracle_coverage = (
+                n_with_oracle / len(all_fresh_draws) if all_fresh_draws else 0
+            )
+
+            if oracle_coverage > 0:
+                if config.verbose:
+                    logger.info(
+                        f"Found {n_with_oracle}/{len(all_fresh_draws)} samples with oracle labels ({oracle_coverage:.1%})"
+                    )
+                    logger.info("Learning calibration from fresh draws")
+
+                # Convert FreshDrawSample to Sample for calibration
+                calibration_samples = []
+                for fd_sample in all_fresh_draws:
+                    # Create dummy Sample with required fields for calibration
+                    sample = Sample(
+                        prompt_id=fd_sample.prompt_id,
+                        prompt="",  # Not needed for calibration
+                        response=fd_sample.response or "",
+                        reward=None,  # Will be calibrated
+                        base_policy_logprob=-1.0,  # Dummy value
+                        target_policy_logprobs={p: -1.0 for p in target_policies},
+                        judge_score=fd_sample.judge_score,
+                        oracle_label=fd_sample.oracle_label,
+                        metadata={},
+                    )
+                    calibration_samples.append(sample)
+
+                # Create temporary dataset from fresh draws for calibration
+                fresh_dataset = Dataset(
+                    samples=calibration_samples, target_policies=target_policies
+                )
+
+                # Learn calibration from fresh draws
+                _, calibration_result = calibrate_dataset(
+                    fresh_dataset,
+                    judge_field=config.judge_field,
+                    oracle_field=config.oracle_field,
+                    enable_cross_fit=True,
+                    n_folds=5,
+                )
 
         from ..estimators.direct_method import CalibratedDirectEstimator
 
@@ -154,13 +229,35 @@ class AnalysisService:
         results.metadata["estimator"] = chosen_estimator
         results.metadata["target_policies"] = target_policies
         results.metadata["fresh_draws_dir"] = config.fresh_draws_dir
-        results.metadata["calibration"] = (
-            "from_fresh_draws" if calibration_result else "none"
-        )
-        if calibration_result:
-            results.metadata["oracle_coverage"] = oracle_coverage
+
+        # Calibration source metadata
+        if config.calibration_data_path:
+            results.metadata["calibration"] = (
+                "from_calibration_data_combined"
+                if config.combine_oracle_sources
+                else "from_calibration_data_only"
+            )
+            results.metadata["calibration_data_path"] = config.calibration_data_path
+        else:
+            results.metadata["calibration"] = (
+                "from_fresh_draws" if calibration_result else "none"
+            )
+            if calibration_result and not config.calibration_data_path:
+                # Only set oracle_coverage for fresh-draws-only calibration
+                oracle_coverage = (
+                    sum(1 for s in all_fresh_draws if s.oracle_label is not None)
+                    / len(all_fresh_draws)
+                    if all_fresh_draws
+                    else 0
+                )
+                results.metadata["oracle_coverage"] = oracle_coverage
+
         if config.estimator_config:
             results.metadata["estimator_config"] = config.estimator_config
+
+        # NEW: Add oracle sources metadata if available
+        if oracle_sources_metadata:
+            results.metadata["oracle_sources"] = oracle_sources_metadata
 
         # Add mode_selection metadata
         results.metadata["mode_selection"] = {
@@ -255,9 +352,117 @@ class AnalysisService:
             logger.info(f"Loaded {dataset.n_samples} samples")
             logger.info(f"Target policies: {', '.join(dataset.target_policies)}")
 
+        # NEW: Handle calibration_data_path and oracle combining
+        oracle_sources_metadata = None
+        calibration_dataset_for_rewards = dataset  # Default: use logged data
+
+        if config.calibration_data_path:
+            if config.verbose:
+                logger.info(
+                    f"Loading calibration dataset from {config.calibration_data_path}"
+                )
+
+            calibration_dataset = load_dataset_from_jsonl(config.calibration_data_path)
+
+            if config.verbose:
+                logger.info(
+                    f"Loaded calibration dataset: {calibration_dataset.n_samples} samples"
+                )
+
+            # If combining oracle sources, load fresh draws early and combine
+            if config.combine_oracle_sources:
+                if config.verbose:
+                    logger.info("Combining oracle sources from all available data")
+
+                # Load fresh draws if available
+                fresh_draws_dict = None
+                if config.fresh_draws_dir:
+                    fresh_draws_dict = self._load_all_fresh_draws(config)
+
+                # Combine oracle sources
+                combined_dataset, oracle_sources_metadata = (
+                    self._combine_oracle_sources(
+                        calibration_dataset,
+                        dataset,
+                        fresh_draws_dict,
+                        dataset.target_policies,
+                        config.judge_field,
+                        config.oracle_field,
+                        config.verbose,
+                    )
+                )
+                calibration_dataset_for_rewards = combined_dataset
+            else:
+                # Use ONLY calibration_data_path for learning calibration
+                if config.verbose:
+                    logger.info(
+                        "Using calibration data exclusively (combine_oracle_sources=False)"
+                    )
+                calibration_dataset_for_rewards = calibration_dataset
+
+                # Still track metadata
+                n_calib_oracle = sum(
+                    1 for s in calibration_dataset.samples if s.oracle_label is not None
+                )
+                oracle_sources_metadata = {
+                    "calibration_data": {
+                        "n_oracle": n_calib_oracle,
+                        "coverage": n_calib_oracle / calibration_dataset.n_samples,
+                    },
+                    "total_oracle": n_calib_oracle,
+                    "combine_enabled": False,
+                }
+
+            # Check for distribution mismatch between calibration and evaluation data
+            if config.verbose:
+                logger.info(
+                    "Checking calibration data distribution vs. evaluation data"
+                )
+
+            distribution_check = self._check_distribution_mismatch(
+                calibration_dataset, dataset, config.judge_field, config.verbose
+            )
+
+            # Add to metadata
+            if oracle_sources_metadata:
+                oracle_sources_metadata["distribution_mismatch"] = distribution_check
+
+            # Check for temporal staleness if timestamps are available
+            if config.timestamp_field:
+                if config.verbose:
+                    logger.info(
+                        f"Checking temporal staleness using field '{config.timestamp_field}'"
+                    )
+
+                staleness_check = self._check_temporal_staleness(
+                    calibration_dataset, dataset, config.timestamp_field, config.verbose
+                )
+
+                if oracle_sources_metadata:
+                    oracle_sources_metadata["temporal_staleness"] = staleness_check
+
         calibrated_dataset, calibration_result = self._prepare_rewards(
-            dataset, config.judge_field, config.oracle_field, config.verbose
+            calibration_dataset_for_rewards,
+            config.judge_field,
+            config.oracle_field,
+            config.verbose,
         )
+
+        # Check for drift if requested
+        drift_diagnostics = None
+        if config.check_drift and config.timestamp_field:
+            if config.verbose:
+                logger.info(
+                    f"Computing temporal drift diagnostics using '{config.timestamp_field}'"
+                )
+
+            drift_diagnostics = self._compute_drift_diagnostics(
+                dataset,  # Use original logged dataset for drift detection
+                config.timestamp_field,
+                config.judge_field,
+                config.oracle_field,
+                config.verbose,
+            )
 
         # Auto mode detection
         detected_mode: Optional[str] = None
@@ -361,6 +566,14 @@ class AnalysisService:
         results.metadata["judge_field"] = config.judge_field
         results.metadata["oracle_field"] = config.oracle_field
 
+        # NEW: Add oracle sources metadata if available
+        if oracle_sources_metadata:
+            results.metadata["oracle_sources"] = oracle_sources_metadata
+
+        # Add drift diagnostics if computed
+        if drift_diagnostics:
+            results.metadata["drift_diagnostics"] = drift_diagnostics
+
         # Add mode_selection metadata
         results.metadata["mode_selection"] = {
             "mode": detected_mode or "unknown",
@@ -376,6 +589,519 @@ class AnalysisService:
         }
 
         return results
+
+    def _load_all_fresh_draws(self, config: AnalysisConfig) -> Dict[str, Any]:
+        """Load fresh draws for all policies (helper for oracle combining)."""
+        from ..data.fresh_draws import (
+            discover_policies_from_fresh_draws,
+            load_fresh_draws_auto,
+        )
+
+        policies = discover_policies_from_fresh_draws(Path(config.fresh_draws_dir))
+        fresh_draws = {}
+        for policy in policies:
+            fd = load_fresh_draws_auto(
+                Path(config.fresh_draws_dir), policy, verbose=config.verbose
+            )
+            fresh_draws[policy] = fd
+        return fresh_draws
+
+    def _combine_oracle_sources(
+        self,
+        calibration_dataset: Optional[Dataset],
+        logged_dataset: Optional[Dataset],
+        fresh_draws_per_policy: Optional[Dict[str, Any]],
+        target_policies: List[str],
+        judge_field: str,
+        oracle_field: str,
+        verbose: bool = False,
+    ) -> tuple[Dataset, Dict[str, Any]]:
+        """
+        Combine oracle labels from multiple sources with priority handling.
+
+        Priority order (highest to lowest):
+        1. calibration_dataset
+        2. fresh_draws_per_policy
+        3. logged_dataset
+
+        Args:
+            calibration_dataset: Optional calibration dataset with oracle labels
+            logged_dataset: Optional logged dataset (can be None in Direct mode)
+            fresh_draws_per_policy: Optional dict of fresh draws by policy
+            target_policies: List of target policy names (for dataset construction)
+            judge_field: Field name for judge scores
+            oracle_field: Field name for oracle labels
+            verbose: Whether to log progress
+
+        Returns:
+            Tuple of (combined_dataset, oracle_sources_metadata)
+        """
+        from ..data.models import Sample
+        import numpy as np
+
+        # Track oracle samples by prompt_id: {prompt_id: (oracle, source, judge_score)}
+        oracle_map: Dict[str, tuple[float, str, float]] = {}
+        conflicts: List[Dict[str, Any]] = []
+
+        # Priority 3: Logged data (lowest priority)
+        n_from_logged = 0
+        if logged_dataset:
+            for sample in logged_dataset.samples:
+                oracle_val = (
+                    sample.oracle_label
+                    if oracle_field == "oracle_label"
+                    else sample.metadata.get(oracle_field)
+                )
+                if oracle_val is not None:
+                    judge_val = (
+                        sample.judge_score
+                        if judge_field == "judge_score"
+                        else sample.metadata.get(judge_field)
+                    )
+                    if judge_val is not None:
+                        oracle_map[sample.prompt_id] = (
+                            float(oracle_val),
+                            "logged_data",
+                            float(judge_val),
+                        )
+                        n_from_logged += 1
+
+        # Priority 2: Fresh draws
+        n_from_fresh = 0
+        if fresh_draws_per_policy:
+            for policy, fd_dataset in fresh_draws_per_policy.items():
+                for fd_sample in fd_dataset.samples:
+                    if (
+                        fd_sample.oracle_label is not None
+                        and fd_sample.judge_score is not None
+                    ):
+                        if fd_sample.prompt_id in oracle_map:
+                            old_oracle, old_source, _ = oracle_map[fd_sample.prompt_id]
+                            # Check for conflict
+                            if abs(old_oracle - fd_sample.oracle_label) > 0.05:
+                                conflicts.append(
+                                    {
+                                        "prompt_id": fd_sample.prompt_id,
+                                        "old_value": float(old_oracle),
+                                        "old_source": old_source,
+                                        "new_value": float(fd_sample.oracle_label),
+                                        "new_source": "fresh_draws",
+                                        "difference": abs(
+                                            old_oracle - fd_sample.oracle_label
+                                        ),
+                                    }
+                                )
+                        oracle_map[fd_sample.prompt_id] = (
+                            float(fd_sample.oracle_label),
+                            "fresh_draws",
+                            float(fd_sample.judge_score),
+                        )
+                        n_from_fresh += 1
+
+        # Priority 1: Calibration data (highest - overwrites all)
+        n_from_calib = 0
+        if calibration_dataset:
+            for sample in calibration_dataset.samples:
+                oracle_val = (
+                    sample.oracle_label
+                    if oracle_field == "oracle_label"
+                    else sample.metadata.get(oracle_field)
+                )
+                if oracle_val is not None:
+                    judge_val = (
+                        sample.judge_score
+                        if judge_field == "judge_score"
+                        else sample.metadata.get(judge_field)
+                    )
+                    if judge_val is not None:
+                        if sample.prompt_id in oracle_map:
+                            old_oracle, old_source, _ = oracle_map[sample.prompt_id]
+                            # Check for conflict
+                            if abs(old_oracle - oracle_val) > 0.05:
+                                conflicts.append(
+                                    {
+                                        "prompt_id": sample.prompt_id,
+                                        "old_value": float(old_oracle),
+                                        "old_source": old_source,
+                                        "new_value": float(oracle_val),
+                                        "new_source": "calibration_data",
+                                        "difference": abs(old_oracle - oracle_val),
+                                    }
+                                )
+                        oracle_map[sample.prompt_id] = (
+                            float(oracle_val),
+                            "calibration_data",
+                            float(judge_val),
+                        )
+                        n_from_calib += 1
+
+        # Log conflicts if any
+        if conflicts and verbose:
+            logger.warning(
+                f"Found {len(conflicts)} prompts with conflicting oracle labels (diff > 0.05). "
+                f"Using priority: calibration_data > fresh_draws > logged_data"
+            )
+            # Log top 5 conflicts
+            for conflict in conflicts[:5]:
+                logger.debug(
+                    f"  {conflict['prompt_id']}: {conflict['old_source']}={conflict['old_value']:.3f} "
+                    f"→ {conflict['new_source']}={conflict['new_value']:.3f} (diff={conflict['difference']:.3f})"
+                )
+
+        # Build combined dataset with all unique oracle samples
+        combined_samples = []
+        # Use target policies parameter
+        target_policies_dict = {policy: -1.0 for policy in target_policies}
+
+        for prompt_id, (oracle_val, source, judge_val) in oracle_map.items():
+            # Create Sample with judge and oracle
+            sample = Sample(
+                prompt_id=prompt_id,
+                prompt="",  # Not needed for calibration
+                response="",
+                reward=None,  # Will be calibrated
+                base_policy_logprob=-1.0,  # Dummy
+                target_policy_logprobs=target_policies_dict.copy(),  # Match logged dataset policies
+                judge_score=judge_val,
+                oracle_label=oracle_val,
+                metadata={"source": source},
+            )
+            combined_samples.append(sample)
+
+        if verbose:
+            logger.info(
+                f"Combined oracle sources: {len(combined_samples)} total "
+                f"(calib={n_from_calib}, fresh={n_from_fresh}, logged={n_from_logged})"
+            )
+
+        # Build metadata
+        oracle_sources_metadata = {
+            "calibration_data": {
+                "n_oracle": n_from_calib,
+                "coverage": (
+                    n_from_calib / calibration_dataset.n_samples
+                    if calibration_dataset
+                    else 0.0
+                ),
+            },
+            "logged_data": {
+                "n_oracle": n_from_logged,
+                "coverage": (
+                    n_from_logged / logged_dataset.n_samples if logged_dataset else 0.0
+                ),
+            },
+            "fresh_draws": {
+                "n_oracle": n_from_fresh,
+                "coverage": None,  # Can't compute without knowing total fresh draws
+            },
+            "total_oracle": len(combined_samples),
+            "n_conflicts": len(conflicts),
+            "priority_order": ["calibration_data", "fresh_draws", "logged_data"],
+        }
+
+        if conflicts:
+            # Limit to top 10 for metadata size
+            oracle_sources_metadata["conflicts"] = conflicts[:10]
+
+        # Create combined dataset using target_policies parameter
+        combined_dataset = Dataset(
+            samples=combined_samples,
+            target_policies=target_policies,
+            metadata={"combined_oracle_sources": True},
+        )
+
+        return combined_dataset, oracle_sources_metadata
+
+    def _check_distribution_mismatch(
+        self,
+        calibration_dataset: Dataset,
+        evaluation_dataset: Dataset,
+        judge_field: str = "judge_score",
+        verbose: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Check if calibration and evaluation data have different judge score distributions.
+
+        Uses Kolmogorov-Smirnov test to compare distributions.
+
+        Args:
+            calibration_dataset: Dataset used for learning calibration
+            evaluation_dataset: Dataset being evaluated
+            judge_field: Field containing judge scores
+            verbose: Whether to log warnings
+
+        Returns:
+            Dict with KS test results and mismatch warnings
+        """
+        import numpy as np
+        from scipy.stats import ks_2samp
+
+        # Extract judge scores from both datasets
+        calib_scores = []
+        for sample in calibration_dataset.samples:
+            score = (
+                sample.judge_score
+                if judge_field == "judge_score"
+                else sample.metadata.get(judge_field)
+            )
+            if score is not None:
+                calib_scores.append(float(score))
+
+        eval_scores = []
+        for sample in evaluation_dataset.samples:
+            score = (
+                sample.judge_score
+                if judge_field == "judge_score"
+                else sample.metadata.get(judge_field)
+            )
+            if score is not None:
+                eval_scores.append(float(score))
+
+        if not calib_scores or not eval_scores:
+            return {
+                "ks_statistic": None,
+                "p_value": None,
+                "warning": "Insufficient data for distribution comparison",
+            }
+
+        calib_array = np.array(calib_scores)
+        eval_array = np.array(eval_scores)
+
+        # Perform KS test
+        ks_stat, p_value = ks_2samp(calib_array, eval_array)
+
+        # Check for significant mismatch (p < 0.05 indicates different distributions)
+        has_mismatch = p_value < 0.05
+
+        # Compute distribution statistics for context
+        calib_stats = {
+            "mean": float(np.mean(calib_array)),
+            "std": float(np.std(calib_array)),
+            "q25": float(np.percentile(calib_array, 25)),
+            "median": float(np.percentile(calib_array, 50)),
+            "q75": float(np.percentile(calib_array, 75)),
+        }
+
+        eval_stats = {
+            "mean": float(np.mean(eval_array)),
+            "std": float(np.std(eval_array)),
+            "q25": float(np.percentile(eval_array, 25)),
+            "median": float(np.percentile(eval_array, 50)),
+            "q75": float(np.percentile(eval_array, 75)),
+        }
+
+        if has_mismatch and verbose:
+            logger.warning(
+                f"Distribution mismatch detected (KS test p={p_value:.4f} < 0.05). "
+                f"Calibration data may not be representative of evaluation data. "
+                f"Calib mean={calib_stats['mean']:.3f}, Eval mean={eval_stats['mean']:.3f}"
+            )
+
+        return {
+            "ks_statistic": float(ks_stat),
+            "p_value": float(p_value),
+            "has_mismatch": has_mismatch,
+            "calibration_stats": calib_stats,
+            "evaluation_stats": eval_stats,
+            "warning": (
+                "Calibration data distribution differs significantly from evaluation data"
+                if has_mismatch
+                else None
+            ),
+        }
+
+    def _check_temporal_staleness(
+        self,
+        calibration_dataset: Dataset,
+        evaluation_dataset: Dataset,
+        timestamp_field: str,
+        verbose: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Check if calibration data is temporally stale compared to evaluation data.
+
+        Compares timestamp ranges to detect significant time gaps.
+
+        Args:
+            calibration_dataset: Dataset used for learning calibration
+            evaluation_dataset: Dataset being evaluated
+            timestamp_field: Metadata field containing timestamps
+            verbose: Whether to log warnings
+
+        Returns:
+            Dict with staleness check results
+        """
+        import numpy as np
+        from datetime import datetime
+
+        # Extract timestamps
+        calib_timestamps = []
+        for sample in calibration_dataset.samples:
+            ts = sample.metadata.get(timestamp_field)
+            if ts is not None:
+                # Handle both Unix timestamps and ISO strings
+                if isinstance(ts, str):
+                    try:
+                        ts = datetime.fromisoformat(ts).timestamp()
+                    except:
+                        continue
+                calib_timestamps.append(float(ts))
+
+        eval_timestamps = []
+        for sample in evaluation_dataset.samples:
+            ts = sample.metadata.get(timestamp_field)
+            if ts is not None:
+                if isinstance(ts, str):
+                    try:
+                        ts = datetime.fromisoformat(ts).timestamp()
+                    except:
+                        continue
+                eval_timestamps.append(float(ts))
+
+        if not calib_timestamps or not eval_timestamps:
+            return {
+                "has_staleness": False,
+                "warning": f"Missing timestamps in field '{timestamp_field}'",
+            }
+
+        calib_array = np.array(calib_timestamps)
+        eval_array = np.array(eval_timestamps)
+
+        # Compute time ranges
+        calib_min, calib_max = calib_array.min(), calib_array.max()
+        eval_min, eval_max = eval_array.min(), eval_array.max()
+
+        # Check for time gap (calibration data ends before evaluation data starts)
+        time_gap_days = 0.0
+        if calib_max < eval_min:
+            # Calibration data is entirely before evaluation data
+            time_gap_days = (eval_min - calib_max) / (24 * 3600)
+        elif eval_max < calib_min:
+            # Evaluation data is entirely before calibration data (unusual)
+            time_gap_days = (calib_min - eval_max) / (24 * 3600)
+
+        # Flag as stale if gap > 7 days
+        has_staleness = time_gap_days > 7.0
+
+        # Compute temporal overlap
+        overlap_start = max(calib_min, eval_min)
+        overlap_end = min(calib_max, eval_max)
+        has_overlap = overlap_end > overlap_start
+
+        result = {
+            "has_staleness": has_staleness,
+            "time_gap_days": float(time_gap_days) if time_gap_days > 0 else 0.0,
+            "has_temporal_overlap": has_overlap,
+            "calibration_time_range": {
+                "min": float(calib_min),
+                "max": float(calib_max),
+                "span_days": float((calib_max - calib_min) / (24 * 3600)),
+            },
+            "evaluation_time_range": {
+                "min": float(eval_min),
+                "max": float(eval_max),
+                "span_days": float((eval_max - eval_min) / (24 * 3600)),
+            },
+            "warning": (
+                f"Calibration data is stale: {time_gap_days:.1f} day gap from evaluation data"
+                if has_staleness
+                else None
+            ),
+        }
+
+        if has_staleness and verbose:
+            logger.warning(
+                f"Temporal staleness detected: Calibration data has {time_gap_days:.1f} day gap from evaluation data. "
+                f"Consider using more recent calibration data."
+            )
+
+        return result
+
+    def _compute_drift_diagnostics(
+        self,
+        dataset: Dataset,
+        timestamp_field: str,
+        judge_field: str = "judge_score",
+        oracle_field: Optional[str] = None,
+        verbose: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Compute temporal drift diagnostics using timestamps.
+
+        Sorts data by timestamp and applies existing stability diagnostics.
+
+        Args:
+            dataset: Dataset to analyze for drift
+            timestamp_field: Metadata field containing timestamps
+            judge_field: Field containing judge scores
+            oracle_field: Optional field containing oracle labels
+            verbose: Whether to log progress
+
+        Returns:
+            Dict with drift diagnostics from compute_stability_diagnostics()
+        """
+        from datetime import datetime
+        from ..data.models import Sample
+
+        # Extract samples with timestamps
+        samples_with_ts = []
+        for sample in dataset.samples:
+            ts = sample.metadata.get(timestamp_field)
+            if ts is not None:
+                # Convert to Unix timestamp for sorting
+                if isinstance(ts, str):
+                    try:
+                        ts_float = datetime.fromisoformat(ts).timestamp()
+                    except:
+                        continue
+                else:
+                    ts_float = float(ts)
+
+                samples_with_ts.append((ts_float, sample))
+
+        if not samples_with_ts:
+            return {
+                "error": f"No valid timestamps found in field '{timestamp_field}'",
+                "has_drift": False,
+            }
+
+        # Sort by timestamp
+        samples_with_ts.sort(key=lambda x: x[0])
+        sorted_samples = [sample for _, sample in samples_with_ts]
+
+        # Create temporary dataset with sorted samples
+        sorted_dataset = Dataset(
+            samples=sorted_samples,
+            target_policies=dataset.target_policies,
+            metadata=dataset.metadata.copy(),
+        )
+
+        # Use existing drift detection (reuses the codebase's stable implementation)
+        drift_result = compute_stability_diagnostics(
+            sorted_dataset,
+            batch_size=None,  # Auto-determine
+            judge_field=judge_field,
+            oracle_field=oracle_field,
+        )
+
+        # Add temporal info
+        timestamps = [ts for ts, _ in samples_with_ts]
+        drift_result["temporal_info"] = {
+            "timestamp_field": timestamp_field,
+            "time_range_start": float(min(timestamps)),
+            "time_range_end": float(max(timestamps)),
+            "time_span_days": float((max(timestamps) - min(timestamps)) / (24 * 3600)),
+            "sorted_by_timestamp": True,
+        }
+
+        if verbose and drift_result.get("drift_detection", {}).get("has_drift"):
+            drift_points = drift_result["drift_detection"].get("drift_points", [])
+            logger.warning(
+                f"Judge drift detected over time at {len(drift_points)} batch transitions. "
+                f"Consider checking judge stability."
+            )
+
+        return drift_result
 
     def _prepare_rewards(
         self, dataset: Dataset, judge_field: str, oracle_field: str, verbose: bool

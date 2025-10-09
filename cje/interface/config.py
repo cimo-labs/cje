@@ -15,6 +15,25 @@ class AnalysisConfig(BaseModel):
     fresh_draws_dir: Optional[str] = Field(
         None, description="Directory with fresh draws from target policies"
     )
+    calibration_data_path: Optional[str] = Field(
+        None,
+        description="Path to dedicated calibration dataset with oracle labels. "
+        "Used to learn judge→oracle mapping separately from evaluation data.",
+    )
+    combine_oracle_sources: bool = Field(
+        True,
+        description="Pool oracle labels from all sources (calibration + logged + fresh) "
+        "for maximum data efficiency. Set False to use only calibration_data_path.",
+    )
+    timestamp_field: Optional[str] = Field(
+        None,
+        description="Metadata field containing timestamps (Unix int or ISO string) "
+        "for temporal drift detection.",
+    )
+    check_drift: bool = Field(
+        False,
+        description="Enable temporal drift detection. Requires timestamp_field to be set.",
+    )
     estimator: str = Field(
         "auto",
         description="Estimator name: auto, calibrated-ips, stacked-dr, direct, etc.",
