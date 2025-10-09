@@ -92,7 +92,7 @@ ESS ranges from 1 (one weight dominates) to $n$ (all weights equal).
 \begin{itemize}
 \item \textbf{Pass:} ESS $\ge 50\%$ of $n$ (excellent overlap).
 \item \textbf{Warn:} ESS $\in [10\%, 50\%)$ (moderate overlap; \dr{} recommended).
-\item \textbf{Fail:} ESS $< 10\%$ (poor overlap; estimates unreliable unless \dr{} with strong critic).
+\item \textbf{Fail:} ESS $< 10\%$ (poor overlap; estimates unreliable unless \dr{} with strong outcome model).
 \item \textbf{Critical:} ESS $< 1\%$ (catastrophic; do not trust any estimate).
 \end{itemize}
 
@@ -100,7 +100,7 @@ ESS ranges from 1 (one weight dominates) to $n$ (all weights equal).
 \begin{itemize}
 \item Use \simcal{} with aggressive variance cap $\rho$ (e.g., 0.90).
 \item Restrict to a high-overlap cohort (e.g., prompts where $|\log W_i| < 2$).
-\item Switch from \ips{} to \dr{} with a strong critic.
+\item Switch from \ips{} to \dr{} with a strong outcome model.
 \item If ESS $< 1\%$, regenerate fresh outputs for the candidate policy and use \dm{} instead.
 \end{itemize}
 
@@ -137,17 +137,17 @@ ESS ranges from 1 (one weight dominates) to $n$ (all weights equal).
 
 \paragraph{What it measures.} The empirical moment
 \begin{equation}
-\text{OrthoScore} = \frac{1}{n} \sum_{i=1}^n (W_i - 1) \cdot (R_i - \hat{g}(X_i)),
+\text{OrthoScore} = \frac{1}{n} \sum_{i=1}^n W_i \cdot (R_i - \hat{g}(S_i)),
 \end{equation}
-with a 95\% CI. Under ideal conditions (good weights and good critic), this should be near zero.
+with a 95\% CI. Under ideal conditions (mean-one weights and well-specified outcome model), this should be near zero.
 
-\paragraph{Why it matters.} Orthogonality is the key to doubly robust inference. If the orthogonality score is far from zero, either the weights or the critic (or both) are poor, and \dr{} loses its efficiency and robustness guarantees.
+\paragraph{Why it matters.} Orthogonality is the key to doubly robust inference. If the orthogonality score is far from zero, either the weights or the outcome model (or both) are poor, and \dr{} loses its efficiency and robustness guarantees.
 
 \paragraph{Artifacts to inspect:}
 \begin{itemize}
 \item \textbf{Orthogonality score with CI:} point estimate $\pm 1.96 \cdot \SE$.
-\item \textbf{Residual plot:} $(R_i - \hat{g}(X_i))$ vs.\ $W_i$ to spot patterns.
-\item \textbf{Critic performance:} OOF $R^2$ or MAE on fresh draws.
+\item \textbf{Residual plot:} $(R_i - \hat{g}(S_i))$ vs.\ $W_i$ to spot patterns.
+\item \textbf{Outcome model performance:} OOF $R^2$ or MAE on fresh draws.
 \end{itemize}
 
 \paragraph{Thresholds:}
@@ -159,7 +159,7 @@ with a 95\% CI. Under ideal conditions (good weights and good critic), this shou
 
 \paragraph{Fixes:}
 \begin{itemize}
-\item Improve the critic: add regularization, use a more flexible model, or increase fresh draw sample size.
+\item Improve the outcome model: add regularization, use a more flexible model (e.g., two-stage isotonic), or increase fresh draw sample size.
 \item Revisit \simcal{} settings or overlap diagnostics (poor weights can break orthogonality).
 \item Check cross-fitting: ensure folds are balanced and representative.
 \item If orthogonality fails persistently, fall back to \ips{} or regenerate for \dm.
@@ -239,7 +239,7 @@ Operators can adjust these gates or disable them for exploratory analysis, but t
 \item \textbf{Check calibration reliability.} If regional error is high, enable two-stage \autocal{} or add labels. If pass, continue.
 \item \textbf{(Off-policy only) Check ESS.} If $< 10\%$, use \simcal{} or switch to \dr. If $< 1\%$, regenerate. If pass, continue.
 \item \textbf{(Off-policy only) Check tail index.} If $\alpha < 2$, apply stricter \simcal{} or cohort restriction. If pass, continue.
-\item \textbf{(DR only) Check orthogonality.} If CI excludes zero, improve critic or weights. If pass, trust the estimate.
+\item \textbf{(DR only) Check orthogonality.} If CI excludes zero, improve outcome model or weights. If pass, trust the estimate.
 \item \textbf{Check OUA share.} If $> 50\%$, add labels. If pass, you're done.
 \end{enumerate}
 
@@ -252,7 +252,7 @@ For full audit trails, CJE produces:
 \item \textbf{Calibration curve:} $f(S)$ vs.\ $Y$ with OOF fit and mean-preservation line.
 \item \textbf{Coverage histogram:} oracle $S$ vs.\ evaluation $S$ distributions.
 \item \textbf{Weight distribution:} before/after \simcal, with ESS and Hill index annotations.
-\item \textbf{Orthogonality residual plot:} $(R - \hat{g}(X))$ vs.\ $W$ with CI band.
+\item \textbf{Orthogonality residual plot:} $(R - \hat{g}(S))$ vs.\ $W$ with CI band.
 \item \textbf{OUA variance decomposition:} stacked bar showing $\Var_{\text{main}}$ vs.\ $\Var_{\oua}$.
 \end{itemize}
 
@@ -287,7 +287,7 @@ Baseline policy: gpt-3.5-turbo
 
 [5] DR Orthogonality: 0.03 [-0.02, 0.08] (PASS)
     CI contains zero
-    Critic OOF R^2: 0.67
+    Outcome model OOF R^2: 0.67
 
 [6] OUA Share: 15% (PASS)
     Labels sufficient; variance dominated by prompt variation
