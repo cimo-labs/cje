@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cje-eval"
-version = "0.2.1"
+version = "0.2.2"
 description = "Causal Judge Evaluation - Unbiased LLM evaluation framework"
 authors = ["Eddie Landesberg <eddie@cimolabs.com>"]
 license = "MIT"
@@ -10,7 +10,6 @@ homepage = "https://cimo-labs.com/cje"
 repository = "https://github.com/cimo-labs/cje"
 keywords = ["evaluation", "llm", "causal-inference", "off-policy", "importance-sampling", "doubly-robust"]
 classifiers = [
-    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
