@@ -318,6 +318,7 @@ def create_synthetic_fresh_draws(
                 prompt_id=prompt_id,
                 target_policy=target_policy,
                 judge_score=float(score),
+                oracle_label=None,
                 response=f"Synthetic response for {prompt_id} draw {draw_idx}",
                 draw_idx=draw_idx,
                 fold_id=None,

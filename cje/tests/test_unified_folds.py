@@ -26,6 +26,8 @@ def create_test_dataset(n_samples: int = 100) -> Dataset:
                 reward=np.random.random(),
                 base_policy_logprob=-10.0,
                 target_policy_logprobs={"policy": -10.0},
+                judge_score=np.random.random(),
+                oracle_label=None,
             )
         )
     return Dataset(samples=samples, target_policies=["policy"])

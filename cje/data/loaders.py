@@ -262,6 +262,7 @@ class FreshDrawLoader:
                         prompt_id=data["prompt_id"],
                         target_policy=data["target_policy"],
                         judge_score=data["judge_score"],
+                        oracle_label=data.get("oracle_label"),  # Optional
                         response=data.get("response"),  # Optional
                         draw_idx=data.get(
                             "draw_idx", 0

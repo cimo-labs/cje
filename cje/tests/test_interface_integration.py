@@ -58,6 +58,10 @@ def test_service_auto_selects_calibrated_ips_without_fresh_draws() -> None:
         oracle_field="oracle_label",
         estimator="auto",
         fresh_draws_dir=None,
+        calibration_data_path=None,
+        combine_oracle_sources=True,
+        timestamp_field=None,
+        check_drift=False,
         estimator_config={},
         verbose=False,
     )
@@ -79,6 +83,10 @@ def test_service_auto_selects_stacked_dr_with_fresh_draws() -> None:
         oracle_field="oracle_label",
         estimator="auto",
         fresh_draws_dir=str(responses_dir),
+        calibration_data_path=None,
+        combine_oracle_sources=True,
+        timestamp_field=None,
+        check_drift=False,
         # Disable parallelism in tests to avoid resource contention
         estimator_config={"parallel": False},
         verbose=False,
@@ -371,7 +379,9 @@ def test_three_modes_estimate_clone_accurately() -> None:
         enable_cross_fit=True,
         n_folds=5,
     )
-    ground_truth = float(np.mean([s.reward for s in calibrated_dataset.samples]))
+    ground_truth = float(
+        np.mean([s.reward for s in calibrated_dataset.samples if s.reward is not None])
+    )
 
     # Run IPS mode (logged data only)
     results_ips = analyze_dataset(
@@ -425,7 +435,9 @@ def test_three_modes_estimate_clone_accurately() -> None:
     )
 
     # IPS should show good overlap for clone (since it's similar to base)
-    if hasattr(results_ips.diagnostics, "ess_per_policy"):
+    if results_ips.diagnostics is not None and hasattr(
+        results_ips.diagnostics, "ess_per_policy"
+    ):
         clone_ess = results_ips.diagnostics.ess_per_policy.get("clone", 0)
         assert (
             clone_ess > 0.5

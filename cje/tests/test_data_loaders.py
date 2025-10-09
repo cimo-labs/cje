@@ -149,6 +149,7 @@ class TestFreshDrawLoading:
                         prompt_id=str(rec["prompt_id"]),
                         target_policy="clone",  # From policy field or filename
                         judge_score=judge_score,
+                        oracle_label=None,
                         draw_idx=0,
                         response=rec.get("response"),
                         fold_id=None,

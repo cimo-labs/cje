@@ -28,6 +28,7 @@ class TestMCVariance:
                 draw_idx=i,
                 response=f"response_{i}",
                 judge_score=score,
+                oracle_label=None,
                 fold_id=0,
             )
             samples.append(sample)
@@ -41,6 +42,7 @@ class TestMCVariance:
                 draw_idx=i,
                 response=f"response_{i}",
                 judge_score=score,
+                oracle_label=None,
                 fold_id=0,
             )
             samples.append(sample)
@@ -80,6 +82,7 @@ class TestMCVariance:
                     draw_idx=draw_idx,
                     response=f"response_{prompt_idx}_{draw_idx}",
                     judge_score=0.5 + prompt_idx * 0.1,
+                    oracle_label=None,
                     fold_id=0,
                 )
                 samples.append(sample)
