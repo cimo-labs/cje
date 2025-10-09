@@ -56,6 +56,13 @@ This section is a step-by-step guide for practitioners. It covers the full evalu
 \item Ensure labels are unbiased and representative.
 \end{itemize}
 
+\paragraph{Step 4b (Optional): Use a dedicated calibration set.}
+\begin{itemize}
+\item If you have pre-existing curated oracle labels (e.g., from prior evaluation work), load them via \texttt{calibration\_data\_path} instead of sampling from the evaluation set.
+\item CJE will auto-combine oracle labels from the calibration set with any labels in the evaluation data for maximum efficiency (priority: calibration $>$ fresh $>$ logged).
+\item Inspect \texttt{results.metadata["oracle\_sources"]} for source breakdown and conflicts.
+\end{itemize}
+
 \paragraph{Step 5: Fit AutoCal-R.}
 \begin{itemize}
 \item Use 5-fold cross-fitting to learn $f: S \to [0, 1]$.
@@ -91,6 +98,13 @@ This section is a step-by-step guide for practitioners. It covers the full evalu
 \begin{itemize}
 \item Sample 50--200 examples uniformly from the logged data.
 \item Obtain ground-truth $Y$.
+\end{itemize}
+
+\paragraph{Step 2b (Optional): Use a dedicated calibration set.}
+\begin{itemize}
+\item If you have pre-existing curated oracle labels, load them via \texttt{calibration\_data\_path}.
+\item CJE will auto-combine with logged data oracle labels (priority: calibration $>$ fresh $>$ logged).
+\item Check \texttt{results.metadata["oracle\_sources"]} for distribution mismatch and temporal staleness warnings.
 \end{itemize}
 
 \paragraph{Step 3: Fit AutoCal-R.}

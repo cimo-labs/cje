@@ -92,19 +92,26 @@ from cje import analyze_dataset
 
 # Load your data (JSONL format)
 results = analyze_dataset(
-    data_path="evaluation_data.jsonl",
-    target_policies=["gpt-4", "claude-3"],
-    base_policy="gpt-3.5-turbo",
-    oracle_col="oracle_label",
-    judge_col="judge_score",
+    logged_data_path="evaluation_data.jsonl",
+    fresh_draws_dir="responses/",         # Optional: for DR mode
+    calibration_data_path="oracle_labels.jsonl",  # Optional: dedicated calibration set
+    timestamp_field="timestamp",          # Optional: for drift detection
+    check_drift=True,                     # Optional: automated drift detection
     estimator="auto",  # auto-selects DM, IPS, or DR
-    n_folds=5,
-    output_dir="results/"
+    judge_field="judge_score",
+    oracle_field="oracle_label",
+    verbose=True
 )
 
 # Inspect results
 print(results.summary())
 results.plot_diagnostics()
+
+# Check for drift (if enabled)
+if "drift_diagnostics" in results.metadata:
+    drift = results.metadata["drift_diagnostics"]
+    if drift["drift_detection"]["has_drift"]:
+        print("Warning: Judge drift detected")
 \end{lstlisting}
 
 \subsection{Computational complexity}

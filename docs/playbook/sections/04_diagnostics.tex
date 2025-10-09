@@ -191,6 +191,8 @@ with a 95\% CI. Under ideal conditions (mean-one weights and well-specified outc
 \item Consider using a judging protocol with locked temperature/sampling to reduce stochasticity.
 \end{itemize}
 
+\paragraph{Automated temporal drift detection.} When evaluation data includes timestamps, CJE can automatically detect drift over time using \texttt{timestamp\_field} and \texttt{check\_drift=True}. This sorts samples by timestamp, computes sequential Kendall $\tau$ correlations across time batches, and flags drift points. This automates the anchor-set workflow above for datasets with temporal metadata.
+
 \subsection{Oracle uncertainty (OUA) share diagnostic}
 
 \paragraph{What it measures.} The fraction of total variance attributable to oracle uncertainty (calibrator noise):
