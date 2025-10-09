@@ -115,7 +115,7 @@ More prompts shrink the first term; more labels shrink the second (\oua). For pa
 \subsection{Minimal recipe (pseudocode)}
 
 \begin{lstlisting}[language=Python,caption=DM Recipe]
-# Inputs: prompts X, candidate policies Pi, judge s(·), oracle slice {(S, Y)}
+# Inputs: prompts X, candidate policies Pi, judge s(.), oracle slice {(S, Y)}
 # Output: calibrated means, paired contrasts, and CIs with OUA
 
 # 1) Fit AutoCal-R on oracle (cross-fitted); persist reliability + coverage edges
