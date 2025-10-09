@@ -31,6 +31,14 @@ cd causal-judge-evaluation
 poetry install  # or pip install -e .
 ```
 
+## 🚀 Try it Now - Interactive Demo
+
+**No installation required!** Try CJE in your browser with real Arena data:
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_arena_demo.ipynb)
+
+The notebook demonstrates all three analysis modes (IPS, DR, Direct) with step-by-step explanations and diagnostics interpretation.
+
 ## Quick Start
 
 CJE automatically selects the right mode based on your data:
