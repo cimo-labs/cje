@@ -196,12 +196,12 @@ python -m cje validate logs.jsonl --verbose
   "response": "Model response",
   "policy": "clone",          // Optional if using separate files per policy
   "judge_score": 0.85,        // Required
-  "oracle_label": 0.86        // Optional (for calibration - 50% coverage recommended)
+  "oracle_label": 0.86        // Optional (enables AutoCal-R calibration)
 }
 ```
 Store as: `responses/clone_responses.jsonl`, `responses/parallel_universe_prompt_responses.jsonl`, etc.
 
-**AutoCal-R in Direct mode**: If 50% or more of fresh draws have `oracle_label`, Direct mode automatically applies AutoCal-R to learn judge→oracle calibration and uses calibrated rewards. Otherwise, uses raw judge scores.
+**AutoCal-R in Direct mode**: If any fresh draws have `oracle_label`, Direct mode automatically applies AutoCal-R to learn judge→oracle calibration and uses calibrated rewards. Otherwise, uses raw judge scores. More oracle labels = better calibration (5-10% is often sufficient).
 
 ### IPS/DR Modes (logged data):
 ```json

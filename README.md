@@ -130,11 +130,11 @@ Requirements depend on which mode you're using:
   "response": "4",
   "policy": "clone",
   "judge_score": 0.85,                       // Required: judge evaluation
-  "oracle_label": 0.86                       // Optional: ground truth (50% coverage enables calibration)
+  "oracle_label": 0.86                       // Optional: ground truth (enables AutoCal-R)
 }
 ```
 
-**AutoCal-R**: If 50%+ of fresh draws have `oracle_label`, Direct mode automatically applies AutoCal-R to learn judge→oracle calibration and uses calibrated rewards.
+**AutoCal-R**: If any fresh draws have `oracle_label`, Direct mode automatically applies AutoCal-R to learn judge→oracle calibration and uses calibrated rewards. More oracle labels = better calibration (5-10% is often sufficient).
 
 ### For IPS/DR Modes (logged data):
 ```json
