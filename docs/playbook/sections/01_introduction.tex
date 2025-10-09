@@ -1,0 +1,74 @@
+\section{Introduction}
+
+Large language models (LLMs) are increasingly used as judges: a model (or rubricized prompt) assigns a scalar score $S = s(X, A)$ to an answer $A$ given a prompt $X$. This setup is attractive: it is fast, cheap, and often strongly correlated with human preferences. As a result, many teams now compare policies by averaging raw judge scores and declaring a winner.
+
+\subsection{What practitioners really want}
+
+In day-to-day evaluation work there are two goals: (i) rank candidate policies on a shared prompt set; and (ii) when stakes justify it, estimate levels for a KPI that matters (e.g., pass rate), with a confidence interval. Both questions are causal: \emph{what would happen if we shipped policy $\pi$?} Formally, the target is
+\begin{equation}
+V(\pi) = \E[Y(\pi)],
+\end{equation}
+where $Y \in [0, 1]$ is the outcome of interest under the policy we would deploy.
+
+\subsection{Why the heuristic fails}
+
+Naively averaging judge scores is a heuristic that breaks in predictable ways:
+
+\begin{itemize}
+\item \textbf{Wrong scale.} Judge scores are not on your KPI scale; deltas can be misleading.
+\item \textbf{Hidden drift and slice bias.} The meaning of a score can change across time, prompt families, or length; averages hide this.
+\item \textbf{No uncertainty.} Without CIs it is hard to tell real uplifts from noise, especially at small label budgets.
+\item \textbf{Off-policy illusion.} Reusing one judged log to assess many candidates without correction answers the wrong counterfactual (it reflects the logger, not the candidate).
+\end{itemize}
+
+\subsection{CJE in one paragraph}
+
+\textbf{Causal Judge Evaluation (\cje)} is a practitioner-first wrapper that turns judge scores into causally interpretable estimates and reliable rankings. \cje{} learns a small, mean-preserving mapping from score to outcome (\autocal), evaluates policies either with fresh generations (Direct Modeling, \dm) or by safely reusing a judged log (Calibrated \ips/\dr), and attaches oracle-uncertainty-aware confidence intervals (\oua). For off-policy reuse, \cje{} stabilizes importance weights with a mean-one, score-indexed projection (\simcal) and, when helpful, adds a lightweight critic (an outcome model) to form a doubly robust estimate.
+
+\subsection{On-policy vs. off-policy at a glance}
+
+\begin{itemize}
+\item \textbf{\dm{} (on-policy, offline).} Generate outputs for each policy on the same prompt set, convert scores to calibrated rewards $R = f(S)$, average, and report a CI that includes calibrator noise (\oua).
+
+\item \textbf{Calibrated \ips{} (off-policy).} Reweight calibrated rewards from a single judged log using per-sequence likelihood ratios; stabilize weights with \simcal{} for usable ESS and tame tails.
+
+\item \textbf{Calibrated \dr{} (off-policy + critic).} Combine a critic with stabilized weights to gain robustness and tighter intervals; valid if either weights behave or the critic is decent.
+\end{itemize}
+
+\subsection{High-leverage diagnostics (and how to fix issues)}
+
+\cje{} emphasizes a short checklist that catches the most important failure modes and suggests concrete fixes:
+
+\begin{enumerate}[label=(\alph*)]
+\item \textbf{Score coverage} of the labeled slice across the evaluation $S$-range (fix: targeted labeling in uncovered $S$ bins).
+
+\item \textbf{Calibration reliability} of \autocal{} by region (fix: two-stage \autocal{} or add a coarse index such as prompt family/length; add a few labels).
+
+\item \textbf{Effective sample size (ESS)} for \ips/\dr{} after \simcal{} (fix: cohort restriction or switch to \dr{} with a stronger critic).
+
+\item \textbf{Tail heaviness} of weights (Hill index) (fix: \simcal{} tuning, overlap-aware cohorting, provider TF checks, trimming sensitivity).
+
+\item \textbf{\dr{} orthogonality} moment near zero with a CI (fix: improve critic/regularization or revisit \simcal/overlap).
+\end{enumerate}
+
+These diagnostics are designed to detect when the heuristic breaks and to point directly to high-leverage remediations.
+
+\subsection{What this paper is (and is not)}
+
+The main text is a playbook: assumptions in plain English, minimal recipes for \dm/\ips/\dr, the diagnostics above, and reporting templates with honest CIs. Advanced material---why the projections preserve the target and reduce variance, and full statistical guarantees---lives in the appendix.
+
+\subsection{Contributions}
+
+\begin{itemize}
+\item A clear estimand and three analysis modes (\dm, Calibrated \ips, Calibrated \dr) tailored to common evaluation workflows.
+
+\item \autocal{} to put judge scores on the KPI scale and \oua{} to keep intervals honest.
+
+\item \simcal{} to stabilize off-policy weighting, plus a critic option for \dr{} robustness.
+
+\item A five-diagnostic dashboard with concrete operator fixes and lightweight artifacts for audit and reproducibility.
+\end{itemize}
+
+\subsection{Reader's guide}
+
+We begin with \dm---the default when you can generate on shared prompts---then show how to reuse judged logs with Calibrated \ips{} and Calibrated \dr, followed by diagnostics, assumptions for causal interpretation, a practical playbook, compact case studies, and implementation notes.

@@ -1,0 +1,193 @@
+\section{Implementation Notes}
+
+\subsection{Overview}
+
+This section covers practical implementation details: data formats, software requirements, computational considerations, and integration with existing evaluation pipelines.
+
+\subsection{Data format and schema}
+
+CJE expects data in JSONL format (one JSON object per line). Each record represents one sample (prompt-response-score triple).
+
+\paragraph{Minimal schema (for DM):}
+\begin{lstlisting}[language=Python,caption=DM Data Schema]
+{
+  "prompt_id": "prompt_001",
+  "prompt": "Write a function to reverse a string",
+  "response": "def reverse(s): return s[::-1]",
+  "policy": "gpt-4",
+  "metadata": {
+    "judge_score": 8.5,
+    "oracle_label": 1  # optional, only for oracle slice
+  }
+}
+\end{lstlisting}
+
+\paragraph{Extended schema (for IPS/DR):}
+\begin{lstlisting}[language=Python,caption=Off-Policy Data Schema]
+{
+  "prompt_id": "prompt_001",
+  "prompt": "Write a function to reverse a string",
+  "response": "def reverse(s): return s[::-1]",
+  "base_policy": "gpt-3.5-turbo",
+  "base_policy_logprob": -12.34,
+  "target_policy_logprobs": {
+    "gpt-4": -10.56,
+    "claude-3": -11.23
+  },
+  "metadata": {
+    "judge_score": 8.5,
+    "oracle_label": 1,  # optional
+    "timestamp": "2025-10-01T12:00:00Z",
+    "prompt_family": "code_generation"
+  }
+}
+\end{lstlisting}
+
+\paragraph{Fresh draws (for DR):}
+\begin{lstlisting}[language=Python,caption=Fresh Draw Schema]
+{
+  "prompt_id": "prompt_001",
+  "prompt": "Write a function to reverse a string",
+  "response": "def reverse(s): return s[::-1]",
+  "policy": "gpt-4",
+  "draw_type": "fresh",
+  "metadata": {
+    "judge_score": 9.0
+  }
+}
+\end{lstlisting}
+
+\subsection{Software requirements}
+
+CJE is implemented in Python and requires:
+\begin{itemize}
+\item Python 3.9+
+\item NumPy, SciPy (for numerical computation)
+\item scikit-learn (for isotonic regression, cross-validation)
+\item Pandas (for data manipulation)
+\item Matplotlib, Seaborn (for visualization)
+\item statsmodels (for influence functions and inference)
+\end{itemize}
+
+Optional:
+\begin{itemize}
+\item XGBoost or LightGBM (for DR critic training)
+\item Jupyter (for interactive analysis)
+\end{itemize}
+
+\subsection{Installation and quickstart}
+
+\begin{lstlisting}[language=bash,caption=Installation]
+# Install from PyPI
+pip install cje-eval
+
+# Or install from source
+git clone https://github.com/your-org/cje.git
+cd cje
+pip install -e .
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python,caption=Quickstart Example]
+from cje import analyze_dataset
+
+# Load your data (JSONL format)
+results = analyze_dataset(
+    data_path="evaluation_data.jsonl",
+    target_policies=["gpt-4", "claude-3"],
+    base_policy="gpt-3.5-turbo",
+    oracle_col="oracle_label",
+    judge_col="judge_score",
+    estimator="auto",  # auto-selects DM, IPS, or DR
+    n_folds=5,
+    output_dir="results/"
+)
+
+# Inspect results
+print(results.summary())
+results.plot_diagnostics()
+\end{lstlisting}
+
+\subsection{Computational complexity}
+
+\paragraph{Calibration (AutoCal-R):}
+\begin{itemize}
+\item Isotonic regression: $O(n_{\text{oracle}} \log n_{\text{oracle}})$ per fold.
+\item Cross-fitting (5 folds): $O(K \cdot n_{\text{oracle}} \log n_{\text{oracle}})$.
+\item Typical: 150 oracle samples, 5 folds $\to$ $< 1$ second.
+\end{itemize}
+
+\paragraph{Weight calibration (SIMCal):}
+\begin{itemize}
+\item Isotonic regression for $W$ vs.\ $S$: $O(n \log n)$ per candidate.
+\item Stacking (3 candidates, 5 folds): $O(K \cdot n \log n)$.
+\item Typical: 10,000 samples, 5 folds $\to$ $\approx 5$ seconds.
+\end{itemize}
+
+\paragraph{DR critic training:}
+\begin{itemize}
+\item Depends on model choice. Gradient-boosted trees: $O(m \cdot d \cdot \text{n\_trees})$, where $m$ is fresh draw sample size, $d$ is feature dimension.
+\item Typical: 2,000 fresh draws, 100 trees, 50 features $\to$ $\approx 30$ seconds.
+\end{itemize}
+
+\paragraph{Influence functions and inference:}
+\begin{itemize}
+\item $O(n)$ for IPS; $O(n + m)$ for DR (logged + fresh).
+\item Typical: 10,000 samples $\to$ $< 1$ second.
+\end{itemize}
+
+\paragraph{Total runtime:} For a typical off-policy DR analysis (10k logged, 2k fresh, 150 oracle), expect $< 1$ minute on a laptop.
+
+\subsection{Parallelization and scaling}
+
+\begin{itemize}
+\item \textbf{Cross-fitting:} Folds are independent; parallelize across folds (5-10x speedup).
+\item \textbf{Multiple policies:} Evaluate policies in parallel (one per core).
+\item \textbf{Large datasets:} For $n > 100{,}000$, use mini-batch stacking or subsample for weight calibration (weights are i.i.d. after calibration, so subsampling is safe).
+\item \textbf{Distributed:} For $n > 1{,}000{,}000$, shard by prompt and aggregate influence functions.
+\end{itemize}
+
+\subsection{Integration with existing pipelines}
+
+\paragraph{A/B testing platforms:} CJE complements A/B tests. Use CJE for rapid offline iteration; validate winners with online A/B tests before full deployment.
+
+\paragraph{LLM-as-judge frameworks:} CJE is agnostic to the judge. Plug in any scoring function (OpenAI moderation API, custom rubric, ensemble of judges). Just ensure stability.
+
+\paragraph{Labeling workflows:} Integrate with labeling platforms (e.g., Scale AI, Labelbox). Export a stratified sample for labeling, re-import labels, and run CJE.
+
+\paragraph{CI/CD:} Embed CJE in CI pipelines. Run nightly evaluations on held-out test sets, flag regressions, and auto-generate diagnostic reports.
+
+\subsection{Advanced features}
+
+\paragraph{Stratified evaluation:} Evaluate subgroups (e.g., by prompt family, user segment) separately. CJE supports stratified analysis with per-stratum diagnostics.
+
+\paragraph{Covariate adjustment:} Add prompt-level covariates (length, topic, difficulty) to the critic for better predictions.
+
+\paragraph{Multi-outcome evaluation:} Evaluate multiple KPIs simultaneously (e.g., correctness, helpfulness, safety). Fit separate calibrators for each outcome.
+
+\paragraph{Sequential testing:} For online settings, CJE can be adapted for sequential A/B testing with always-valid CIs (requires additional assumptions; see advanced docs).
+
+\subsection{Debugging and diagnostics}
+
+\paragraph{Common issues:}
+\begin{itemize}
+\item \textbf{``ESS too low'' error:} Check overlap; try cohort restriction or switch to DR.
+\item \textbf{``Coverage < 50\%'' warning:} Add labels in uncovered $S$ bins or narrow prompt set.
+\item \textbf{NaN estimates:} Likely a refusal gate triggered (ESS $< 1\%$ or $\alpha < 2$). Inspect \texttt{diagnostics.summary()}.
+\item \textbf{Import errors:} Ensure \texttt{pip install -e .} was run in the CJE root directory.
+\end{itemize}
+
+\paragraph{Verbose mode:}
+\begin{lstlisting}[language=Python]
+results = analyze_dataset(..., verbose=True)
+# Prints step-by-step progress and intermediate diagnostics
+\end{lstlisting}
+
+\paragraph{Diagnostic export:}
+\begin{lstlisting}[language=Python]
+results.export_diagnostics("diagnostics/")
+# Saves all plots, tables, and metadata for audit
+\end{lstlisting}
+
+\subsection{Summary}
+
+CJE is designed for ease of integration: JSONL data format, simple API, fast runtime ($< 1$ min for typical use cases), and rich diagnostics. Advanced users can extend with stratification, multi-outcome evaluation, and distributed scaling.

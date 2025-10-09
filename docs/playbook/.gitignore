@@ -1,0 +1,27 @@
+# LaTeX auxiliary files
+*.aux
+*.log
+*.out
+*.bbl
+*.blg
+*.toc
+*.lof
+*.lot
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.nav
+*.snm
+*.vrb
+
+# Auto-generated version file
+VERSION.tex
+
+# Build artifacts
+build/
+
+# Editor temporary files
+*.swp
+*.swo
+*~
+.DS_Store

@@ -1,0 +1,150 @@
+\section{Direct Modeling (DM): Calibrated On-Policy Evaluation}
+
+\subsection{What DM solves}
+
+Direct Modeling answers: ``What KPI would we see on this prompt set if we shipped policy $\pi$?'' It is the closest offline analog to an A/B test: generate outputs for each policy on the same prompts (paired design), map judge scores to an outcome scale with \autocal, average the calibrated rewards, and attach confidence intervals that include calibration uncertainty (\oua).
+
+\begin{quickref}
+\textbf{DM in one minute (operator view)}
+\begin{enumerate}
+\item Fix the prompt set $\mathcal{X} = \{X_i\}_{i=1}^m$ for evaluation.
+\item For each candidate policy $\pi$, generate one output $A_{\pi i}$ per prompt $X_i$ (use shared seeds where relevant).
+\item Score each $(X_i, A_{\pi i})$ with the judge to get $S_{\pi i}$.
+\item Calibrate scores to outcome-scale rewards via \autocal: $R_{\pi i} = f(S_{\pi i})$.
+\item Estimate the value and (paired) differences with honest CIs (add \oua).
+\end{enumerate}
+\end{quickref}
+
+\subsection{When to use DM}
+
+\begin{itemize}
+\item You can safely generate fresh outputs for every policy on a shared prompt set.
+\item You want clean causal comparisons without dealing with propensities/overlap.
+\item Your main risks are calibration coverage, judge drift, and label scarcity (handled by \autocal{} + diagnostics + \oua).
+\end{itemize}
+
+\subsection{Inputs \& setup}
+
+\begin{description}
+\item[Prompt set:] a fixed evaluation set; use the same $\mathcal{X}$ for all policies (paired design).
+\item[Judge:] a scalar scoring function that returns $S = s(X, A)$ with fixed rubric/config.
+\item[Oracle slice:] a small, diverse set with ground-truth labels $Y$ to train \autocal.
+\end{description}
+
+\subsection{AutoCal-R: map judge score to outcome}
+
+\autocal{} learns a mean-preserving mapping $f: \mathbb{R} \to [0,1]$ from score $S$ to calibrated reward $R = f(S)$. By default it fits a monotone mapping; when needed, it auto-switches to a light two-stage index (e.g., spline index $\to$ isotonic) if regional miscalibration is detected.
+
+\paragraph{Operator artifacts to check:}
+\begin{itemize}
+\item \textbf{Reliability:} out-of-fold calibration curve and regional error (low/mid/high $S$).
+\item \textbf{Mean preservation:} oracle mean of $f(S)$ matches mean of $Y$.
+\item \textbf{Score coverage:} fraction of evaluated $S$ that lies inside the oracle $S$-range; inspect boundary slopes.
+\end{itemize}
+
+\subsection{Estimator and paired contrasts}
+
+With $R_{\pi i} = f(S_{\pi i})$ on shared prompts,
+\begin{align}
+\est{V}_{\dm}(\pi) &= \frac{1}{m} \sum_{i=1}^m R_{\pi i}, \\
+\est{\Delta}(\pi, \pi') &= \frac{1}{m} \sum_{i=1}^m \left( R_{\pi i} - R_{\pi' i} \right).
+\end{align}
+
+Use paired standard errors for $\est{\Delta}$ (they are tighter because prompt-level noise cancels).
+
+\subsection{Uncertainty that stays honest (OUA)}
+
+Treating $f$ as fixed understates uncertainty when the oracle slice is small. \textbf{\oua{} (oracle-uncertainty aware)} inference refits $f$ across label folds and adds the induced variance:
+\begin{equation}
+\SE^2_{\text{total}} = \Var_{\text{main}} + \Var_{\oua},
+\end{equation}
+and reports 95\% CIs via the usual normal quantile. Always show the \oua{} share $\Var_{\oua}/\SE^2_{\text{total}}$.
+
+\subsection{Diagnostics (highest leverage) \& quick fixes}
+
+\begin{enumerate}[label=(\alph*)]
+\item \textbf{Score coverage} (fraction of evaluated $S$ inside the labeled range; boundary slopes).
+
+\emph{Fix:} add a small number of labels targeting uncovered $S$ bins; consider narrowing the prompt set to the intended deployment slice.
+
+\item \textbf{Calibration reliability} (OOF curve + regional error).
+
+\emph{Fix:} enable the two-stage \autocal{} fallback; add a coarse index (prompt family / length); collect a handful of labels in problematic regions.
+
+\item \textbf{Judge stability / drift} (rank stability on a small anchor set; unchanged judge config).
+
+\emph{Fix:} freeze judge version during the eval window; if drift appears, refresh the oracle slice and re-fit \autocal.
+
+\item \textbf{\oua{} share} (how much labels drive the CI).
+
+\emph{Fix:} if large, add labels (especially in sparse $S$ regions); otherwise more prompts help most.
+\end{enumerate}
+
+\subsection{Reporting template (DM)}
+
+For each policy (and for key pairwise contrasts), report:
+
+\begin{itemize}
+\item Calibrated mean $\est{V}_{\dm}(\pi)$ with 95\% CI (paired for $\est{\Delta}$).
+\item \oua{} share; note if paired design was used.
+\item \autocal{} reliability snippet (with regional error) and the score-coverage badge.
+\item Any drift checks performed on the judge.
+\end{itemize}
+
+\subsection{Sample size \& label planner (rules of thumb)}
+
+Let $\hat{\sigma}_R^2$ be the prompt-level variance of $R$ for a policy on the evaluation set. Then a rough CI half-width for one policy is
+\begin{equation}
+\text{HalfWidth} \approx 1.96 \sqrt{\frac{\hat{\sigma}_R^2}{m} + \Var_{\oua}}.
+\end{equation}
+
+More prompts shrink the first term; more labels shrink the second (\oua). For pairwise contrasts, replace $\hat{\sigma}_R^2$ with the variance of $R_\pi - R_{\pi'}$ (often smaller due to pairing).
+
+\subsection{Common pitfalls (and how to avoid them)}
+
+\begin{itemize}
+\item \textbf{Different prompts across policies.} Always evaluate on the same $\mathcal{X}$; match seeds if stochastic.
+
+\item \textbf{Thin coverage at the edges of $S$.} Target labels to those bins or focus the prompt set; report the coverage badge.
+
+\item \textbf{Calibration curve looks good overall but bad in one region.} Use two-stage \autocal{} or add a coarse index and a few labels.
+
+\item \textbf{Large \oua{} share.} Label more---prioritize regions where $S$ is sparse or where policy comparisons matter.
+\end{itemize}
+
+\subsection{Minimal recipe (pseudocode)}
+
+\begin{lstlisting}[language=Python,caption=DM Recipe]
+# Inputs: prompts X, candidate policies Pi, judge s(·), oracle slice {(S, Y)}
+# Output: calibrated means, paired contrasts, and CIs with OUA
+
+# 1) Fit AutoCal-R on oracle (cross-fitted); persist reliability + coverage edges
+f = fit_autocal_r(oracle_S, oracle_Y, K=5)
+
+# 2) For each policy pi:
+for pi in candidates:
+    for i in range(m):
+        A_pi[i] = generate(pi, X[i])     # same prompts for all
+        S_pi[i] = judge_score(X[i], A_pi[i])
+        R_pi[i] = f(S_pi[i])
+
+    V_hat[pi] = np.mean(R_pi)
+
+# 3) For contrasts (pi, pi'):
+for (pi, pi_prime) in pairs:
+    Delta_hat = np.mean(R_pi - R_pi_prime)    # paired difference
+    SE_main = np.std(R_pi - R_pi_prime) / np.sqrt(m)
+
+# 4) OUA: refit AutoCal-R across K folds of oracle; recompute step (2-3)
+for k in range(K):
+    f_k = fit_autocal_r(oracle_minus_fold_k)
+    # ... recompute V_hat with f_k ...
+SE_total_squared = SE_main**2 + Var_OUA
+
+# 5) Report V_hat, Delta_hat, 95% CI using SE_total, OUA share,
+#    reliability, coverage
+\end{lstlisting}
+
+\subsection{Scope notes}
+
+\dm{} is on-policy for your chosen prompt distribution. If deployment prompts differ materially, treat that as a distribution-shift question: either adapt the prompt set to match deployment or build a small label slice representative of the target domain and re-fit \autocal.
