@@ -25,6 +25,41 @@ Naively averaging judge scores is a heuristic that breaks in predictable ways:
 
 \textbf{Causal Judge Evaluation (\cje)} is a practitioner-first wrapper that turns judge scores into causally interpretable estimates and reliable rankings. \cje{} learns a small, mean-preserving mapping from score to outcome (\autocal), evaluates policies either with fresh generations (Direct Modeling, \dm) or by safely reusing a judged log (Calibrated \ips/\dr), and attaches oracle-uncertainty-aware confidence intervals (\oua). For off-policy reuse, \cje{} stabilizes importance weights with a mean-one, score-indexed projection (\simcal) and, when helpful, adds a lightweight critic (an outcome model) to form a doubly robust estimate.
 
+\subsection{Notation at a glance}
+
+\begin{table}[h]
+\centering
+\caption{Key notation and terminology}
+\label{tab:notation}
+\begin{tabular}{ll}
+\toprule
+\textbf{Symbol/Term} & \textbf{Meaning} \\
+\midrule
+$X$ & Prompt (input) \\
+$A$ & Response (action/output) \\
+$\pi_0$ & Logging policy (baseline, deployed) \\
+$\pi'$ & Candidate policy (target for evaluation) \\
+$S$ & Judge score $S = s(X, A) \in \mathbb{R}$ \\
+$Y$ & Oracle label (ground truth outcome) $\in [0, 1]$ \\
+$R$ & Calibrated reward $R = f(S) \in [0, 1]$ \\
+$W_i$ & Raw importance weight $W_i = \pi'(A_i \mid X_i) / \pi_0(A_i \mid X_i)$ \\
+$\tilde{w}_i$ & Stabilized, mean-one weight after \simcal \\
+$w^{\text{sn}}_i$ & Self-normalized (Hájek) weight $w^{\text{sn}}_i = W_i / \bar{W}$ \\
+\midrule
+\textbf{\autocal} & \textbf{AutoCal-R}: Automatic Calibration for Rewards \\
+ & Isotonic map $f: S \to [0,1]$ learned from oracle slice \\
+\textbf{\simcal} & \textbf{SIMCal}: Score-Indexed Monotone Calibration \\
+ & Stabilizes weights via monotone projection + variance cap \\
+\textbf{\oua} & \textbf{OUA}: Oracle-Uncertainty Aware inference \\
+ & Accounts for calibrator noise in confidence intervals \\
+\midrule
+\textbf{\dm} & Direct Modeling (on-policy, fresh draws only) \\
+\textbf{\ips} & Importance Sampling (off-policy, logged data) \\
+\textbf{\dr} & Doubly Robust (off-policy + critic/outcome model) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \subsection{On-policy vs. off-policy at a glance}
 
 \begin{itemize}
