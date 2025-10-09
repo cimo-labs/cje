@@ -12,6 +12,9 @@ on:
       - 'cje/__version__.py'
       - '.github/workflows/build_playbook.yml'
 
+permissions:
+  contents: write  # Required for softprops/action-gh-release to attach files
+
 jobs:
   build-pdf:
     runs-on: ubuntu-latest
