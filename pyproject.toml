@@ -18,7 +18,7 @@ classifiers = [
 [tool.poetry.dependencies]
 python = ">=3.9,<3.13"
 # Core dependencies
-numpy = ">=1.26,<3.0"
+numpy = ">=1.26,<2.1"  # Match scipy 1.11-1.14 compatibility (requires <2.1)
 pandas = "^2.2"
 scipy = "^1.11.0"
 scikit-learn = "^1.4"
