@@ -43,7 +43,7 @@ def main(cfg: DictConfig) -> int:
     logger.info(f"Running CJE via Hydra | estimator={estimator}")
 
     results = analyze_dataset(
-        dataset_path=dataset,
+        logged_data_path=dataset,
         estimator=estimator,
         judge_field=judge_field,
         oracle_field=oracle_field,

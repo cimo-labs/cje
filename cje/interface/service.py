@@ -69,6 +69,8 @@ class AnalysisService:
             logger.info("Direct mode: Using fresh draws only (no logged data)")
 
         # Discover policies from fresh draws directory
+        if config.fresh_draws_dir is None:
+            raise ValueError("fresh_draws_dir is required for Direct mode")
         target_policies = discover_policies_from_fresh_draws(
             Path(config.fresh_draws_dir)
         )
@@ -81,10 +83,9 @@ class AnalysisService:
         # Load all fresh draws for calibration
         fresh_draws_dict = {}
         all_fresh_draws = []
+        fresh_draws_path = Path(config.fresh_draws_dir)  # Already checked above
         for policy in target_policies:
-            fd = load_fresh_draws_auto(
-                Path(config.fresh_draws_dir), policy, verbose=config.verbose
-            )
+            fd = load_fresh_draws_auto(fresh_draws_path, policy, verbose=config.verbose)
             fresh_draws_dict[policy] = fd
             all_fresh_draws.extend(fd.samples)
 
@@ -216,10 +217,9 @@ class AnalysisService:
         )
 
         # Load fresh draws for each policy
+        fresh_draws_path = Path(config.fresh_draws_dir)  # Already checked above
         for policy in target_policies:
-            fd = load_fresh_draws_auto(
-                Path(config.fresh_draws_dir), policy, verbose=config.verbose
-            )
+            fd = load_fresh_draws_auto(fresh_draws_path, policy, verbose=config.verbose)
             estimator_obj.add_fresh_draws(policy, fd)
 
         results = estimator_obj.fit_and_estimate()
@@ -305,10 +305,9 @@ class AnalysisService:
         )
 
         # Load fresh draws for each policy
+        fresh_draws_path = Path(config.fresh_draws_dir)  # Already checked above
         for policy in target_policies:
-            fd = load_fresh_draws_auto(
-                Path(config.fresh_draws_dir), policy, verbose=config.verbose
-            )
+            fd = load_fresh_draws_auto(fresh_draws_path, policy, verbose=config.verbose)
             estimator_obj.add_fresh_draws(policy, fd)
 
         results = estimator_obj.fit_and_estimate()
@@ -343,6 +342,9 @@ class AnalysisService:
         self, config: AnalysisConfig, chosen_estimator: str
     ) -> EstimationResult:
         """Run IPS/DR/Direct mode with logged data."""
+        if config.logged_data_path is None:
+            raise ValueError("logged_data_path is required")
+
         if config.verbose:
             logger.info(f"Loading dataset from {config.logged_data_path}")
 
@@ -597,12 +599,14 @@ class AnalysisService:
             load_fresh_draws_auto,
         )
 
-        policies = discover_policies_from_fresh_draws(Path(config.fresh_draws_dir))
+        if config.fresh_draws_dir is None:
+            raise ValueError("fresh_draws_dir is required")
+
+        fresh_draws_path = Path(config.fresh_draws_dir)
+        policies = discover_policies_from_fresh_draws(fresh_draws_path)
         fresh_draws = {}
         for policy in policies:
-            fd = load_fresh_draws_auto(
-                Path(config.fresh_draws_dir), policy, verbose=config.verbose
-            )
+            fd = load_fresh_draws_auto(fresh_draws_path, policy, verbose=config.verbose)
             fresh_draws[policy] = fd
         return fresh_draws
 
@@ -750,8 +754,10 @@ class AnalysisService:
 
         # Build combined dataset with all unique oracle samples
         combined_samples = []
-        # Use target policies parameter
-        target_policies_dict = {policy: -1.0 for policy in target_policies}
+        # Use target policies parameter - cast to Dict[str, Optional[float]] for variance
+        target_policies_dict: Dict[str, Optional[float]] = {
+            policy: -1.0 for policy in target_policies
+        }
 
         for prompt_id, (oracle_val, source, judge_val) in oracle_map.items():
             # Create Sample with judge and oracle
