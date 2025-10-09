@@ -48,6 +48,14 @@ All examples use the arena sample dataset included in `cje/tests/data/arena_samp
 - Judge scores and oracle labels for calibration
 - Fresh draws for doubly-robust estimation
 
+## Interactive Demo
+
+**🚀 Try CJE in your browser:**
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/anthropics/cje/blob/main/examples/cje_arena_demo.ipynb)
+
+The Colab notebook (`cje_arena_demo.ipynb`) provides an interactive walkthrough of CJE's three modes using the Arena sample data. No installation required - runs entirely in your browser!
+
 ## Next Steps
 
 - **Quick tutorial:** See [QUICKSTART.md](../QUICKSTART.md) for step-by-step guide
