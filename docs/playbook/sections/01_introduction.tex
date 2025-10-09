@@ -60,6 +60,36 @@ $w^{\text{sn}}_i$ & Self-normalized (Hájek) weight $w^{\text{sn}}_i = W_i / \ba
 \end{tabular}
 \end{table}
 
+\subsection{Quick Start: Direct Mode for Model Comparison}
+
+\textbf{Just want to compare models on an eval set?} This is the fastest path to reliable estimates with confidence intervals.
+
+\paragraph{What you need:}
+\begin{itemize}
+\item 500--2000 prompts representative of deployment
+\item Responses from each policy you want to compare
+\item Judge scores for all responses (any scale works)
+\item 50--150 oracle labels (ground truth on a random sample)
+\end{itemize}
+
+\paragraph{Steps:}
+\begin{enumerate}
+\item Generate outputs from each policy on the same prompts (paired sampling reduces variance).
+\item Score all outputs with your judge (fixed version, frozen config).
+\item Label a random sample of 50--150 examples with ground truth $Y$.
+\item Run \textbf{Direct Mode} (§2)---CJE learns the judge$\to$oracle calibration $f(S)$ automatically via \autocal.
+\item Check three core diagnostics: coverage (§4.1), calibration (§4.2), judge stability (§4.3).
+\item Report estimates with 95\% CIs (includes \oua{} to account for calibrator uncertainty).
+\end{enumerate}
+
+\paragraph{What to read:}
+\begin{itemize}
+\item \textbf{Essential:} §2 (Direct Mode), §4.1--4.4 (core diagnostics), §6.1 (DM workflow).
+\item \textbf{Skip for now:} §3 (off-policy methods), §4.5--4.7 (weight diagnostics).
+\end{itemize}
+
+You can return to off-policy methods (§3) later if you want counterfactual inference (``What if we deployed policy X?'') without regenerating outputs.
+
 \subsection{On-policy vs. off-policy at a glance}
 
 \begin{itemize}
@@ -105,9 +135,11 @@ The main text is a playbook: assumptions in plain English, minimal recipes for \
 
 \item \simcal{} to stabilize off-policy weighting, plus a critic option for \dr{} robustness.
 
-\item A five-diagnostic dashboard with concrete operator fixes and lightweight artifacts for audit and reproducibility.
+\item A six-diagnostic dashboard (four core, three off-policy) with concrete operator fixes and lightweight artifacts for audit and reproducibility.
 \end{itemize}
 
 \subsection{Reader's guide}
 
-We begin with \dm---the default when you can generate on shared prompts---then show how to reuse judged logs with Calibrated \ips{} and Calibrated \dr, followed by diagnostics, assumptions for causal interpretation, a practical playbook, compact case studies, and implementation notes.
+\paragraph{For quick model comparison:} Start with the Quick Start (§1.5), then read §2 (Direct Mode), §4.1--4.4 (core diagnostics), and §6.1 (DM workflow). Skip §3 and §4.5--4.7 unless you later need counterfactual inference.
+
+\paragraph{For comprehensive coverage:} We begin with \dm---the default when you can generate on shared prompts---then show how to reuse judged logs with Calibrated \ips{} and Calibrated \dr, followed by diagnostics, assumptions for causal interpretation, a practical playbook, compact case studies, and implementation notes.
