@@ -7,13 +7,17 @@
 from cje import analyze_dataset
 
 result = analyze_dataset(
-    dataset_path: str,                    # Required: Path to JSONL file
-    estimator: str = "stacked-dr",        # Estimator choice (see below)
-    judge_field: str = "judge_score",     # Where to find judge scores
-    oracle_field: str = "oracle_label",   # Where to find oracle labels
-    estimator_config: Dict = None,        # Estimator-specific config
-    fresh_draws_dir: str = None,          # Path to fresh draws (required for DR)
-    verbose: bool = False                 # Progress logging
+    logged_data_path: str = None,              # Path to logged data JSONL (for IPS/DR)
+    fresh_draws_dir: str = None,               # Path to fresh draws (for DR/Direct)
+    calibration_data_path: str = None,         # Optional: Dedicated calibration set
+    combine_oracle_sources: bool = True,       # Auto-pool oracle labels (default: True)
+    timestamp_field: str = None,               # Field for temporal drift detection
+    check_drift: bool = False,                 # Enable drift detection
+    estimator: str = "auto",                   # Estimator choice (see below)
+    judge_field: str = "judge_score",          # Where to find judge scores
+    oracle_field: str = "oracle_label",        # Where to find oracle labels
+    estimator_config: Dict = None,             # Estimator-specific config
+    verbose: bool = False                      # Progress logging
 ) -> EstimationResult
 ```
 
@@ -236,11 +240,48 @@ python -m cje validate data.jsonl
 
 ## Advanced Features
 
+### Dedicated Calibration Sets
+```python
+# Learn judge→oracle mapping from separate high-quality oracle set
+results = analyze_dataset(
+    logged_data_path="production_logs.jsonl",      # 10K samples, 100 oracle labels
+    calibration_data_path="human_labels.jsonl",    # 500 samples, 500 oracle labels
+    combine_oracle_sources=True,                   # Pool all 600 oracle labels (default)
+    estimator="calibrated-ips"
+)
+
+# Check oracle source breakdown
+oracle_meta = results.metadata["oracle_sources"]
+print(f"Total oracle labels: {oracle_meta['total_oracle']}")
+print(f"From calibration: {oracle_meta['calibration_data']['n_oracle']}")
+print(f"From logged: {oracle_meta['logged_data']['n_oracle']}")
+```
+
+Priority ordering when combining: `calibration_data > fresh_draws > logged_data`
+
+### Temporal Drift Detection
+```python
+# Monitor judge stability over time
+results = analyze_dataset(
+    logged_data_path="logs_q1_q2.jsonl",
+    timestamp_field="created_at",  # Unix timestamp or ISO string
+    check_drift=True
+)
+
+# Check for drift
+drift = results.metadata["drift_diagnostics"]
+if drift["drift_detection"]["has_drift"]:
+    print(f"⚠️ Drift detected at batch transitions: {drift['drift_detection']['drift_points']}")
+```
+
+See `cje/interface/README.md` for complete documentation of these features.
+
 ### Custom Estimator Config
 ```python
 results = analyze_dataset(
-    "data.jsonl",
+    logged_data_path="data.jsonl",
     estimator="stacked-dr",
+    fresh_draws_dir="responses/",
     estimator_config={
         "n_folds": 10,          # More folds = better calibration
         "use_iic": False,       # Disable IIC (on by default)
