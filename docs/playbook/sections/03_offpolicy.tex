@@ -1,5 +1,9 @@
 \section{Off-Policy Evaluation: Calibrated IPS and DR}
 
+\begin{mdframed}[linecolor=cjegray, backgroundcolor=white, linewidth=1pt]
+\textbf{Note for Direct Mode users:} This section covers advanced off-policy methods for reusing logged data and answering counterfactual questions (``What if we deployed policy X?''). If you're just comparing policies on a fresh eval set using Direct Mode, you can \textbf{skip to §6 (Playbook)} or continue reading §4.1--4.4 (core diagnostics). Return here later if you need to reuse logged data without regenerating outputs.
+\end{mdframed}
+
 \subsection{What off-policy evaluation solves}
 
 Off-policy evaluation answers: ``What KPI would we see if we deployed policy $\pi'$ instead of the logging policy $\pi_0$?'' It lets you assess multiple candidate policies by reusing a single judged log---no need to generate fresh outputs for each candidate. The core challenge is adjusting for the fact that the logged responses came from $\pi_0$, not from $\pi'$.
