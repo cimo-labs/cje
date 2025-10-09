@@ -79,6 +79,8 @@ $w^{\text{sn}}_i$ & Self-normalized (Hájek) weight $w^{\text{sn}}_i = W_i / \ba
 
 \item \textbf{Calibration reliability} of \autocal{} by region (fix: two-stage \autocal{} or add a coarse index such as prompt family/length; add a few labels).
 
+\item \textbf{Judge stability} via Kendall $\tau$ on anchor set or temporal batches (fix: freeze judge version, refresh oracle if drift detected).
+
 \item \textbf{Effective sample size (ESS)} for \ips/\dr{} after \simcal{} (fix: cohort restriction or switch to \dr{} with a stronger critic).
 
 \item \textbf{Tail heaviness} of weights (Hill index) (fix: \simcal{} tuning, overlap-aware cohorting, provider TF checks, trimming sensitivity).

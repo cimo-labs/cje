@@ -1,20 +1,29 @@
-\section{Diagnostics: The Five High-Leverage Checks}
+\section{Diagnostics: The Six High-Leverage Checks}
 
 \subsection{Overview}
 
-CJE's diagnostic dashboard is designed to catch the most important failure modes with minimal operator overhead. Each diagnostic points directly to a concrete fix. This section details the five checks, their interpretation, thresholds, and remediations.
+CJE's diagnostic dashboard is designed to catch the most important failure modes with minimal operator overhead. Each diagnostic points directly to a concrete fix. This section details the six checks, their interpretation, thresholds, and remediations.
 
 \subsection{The diagnostic checklist}
 
+\paragraph{Core diagnostics (all modes):}
 \begin{enumerate}
-\item \textbf{Score coverage} (for all modes): Does the oracle slice span the evaluation $S$-range?
-\item \textbf{Calibration reliability} (for all modes): Is $f(S)$ accurate across the $S$ spectrum?
-\item \textbf{Effective sample size (ESS)} (for \ips/\dr): Do we have enough effective samples after reweighting?
-\item \textbf{Tail heaviness} (for \ips/\dr): Are importance weights catastrophically heavy-tailed?
-\item \textbf{DR orthogonality} (for \dr): Is the critic good enough for doubly robust guarantees?
+\item \textbf{Score coverage}: Does the oracle slice span the evaluation $S$-range?
+\item \textbf{Calibration reliability}: Is $f(S)$ accurate across the $S$ spectrum?
+\item \textbf{Judge stability}: Is the judge's scoring consistent over time or across batches?
+\item \textbf{Oracle uncertainty share}: Is label scarcity the bottleneck for precision?
+\end{enumerate}
+
+\paragraph{Off-policy diagnostics (for \ips/\dr{} only):}
+\begin{enumerate}[resume]
+\item \textbf{Effective sample size (ESS)}: Do we have enough effective samples after reweighting?
+\item \textbf{Tail heaviness}: Are importance weights catastrophically heavy-tailed?
+\item \textbf{DR orthogonality} (for \dr{} only): Is the critic good enough for doubly robust guarantees?
 \end{enumerate}
 
 Each diagnostic produces a compact artifact (a number, a CI, or a plot) and a traffic-light signal (pass / warn / fail).
+
+\textbf{If you're using Direct Mode only:} Focus on diagnostics 1--4. Skip diagnostics 5--7 unless you later need counterfactual inference.
 
 \subsection{Diagnostic 1: Score coverage}
 
@@ -68,10 +77,72 @@ Each diagnostic produces a compact artifact (a number, a CI, or a plot) and a tr
 \item Enable two-stage \autocal{} (spline index $\to$ isotonic) for regional adaptivity.
 \item Add a coarse index (prompt family, length bin) to allow family-specific calibration.
 \item Collect 10--30 additional labels in the problematic $S$ region.
-\item Check if judge drift occurred (see judge stability diagnostic).
+\item Check if judge drift occurred (see §4.3).
 \end{itemize}
 
-\subsection{Diagnostic 3: Effective sample size (ESS)}
+\subsection{Diagnostic 3: Judge stability}
+
+\paragraph{What it measures.} Rank stability of judge scores on a small anchor set (20--50 fixed prompts) over time or across batches, measured via Kendall $\tau$ or Spearman $\rho$.
+
+\paragraph{Why it matters.} If the judge's interpretation of scores drifts between the time the log was collected and the time fresh draws are evaluated, calibration breaks. Judge drift affects \emph{all} evaluation modes (DM, IPS, DR) because it invalidates the assumption that $S = s(X, A)$ is stable. This is a fundamental validity check.
+
+\paragraph{Artifacts to inspect:}
+\begin{itemize}
+\item \textbf{Rank correlation:} Kendall $\tau$ between scores at time $t_0$ (logging) and $t_1$ (evaluation).
+\item \textbf{Score drift plot:} scatter of $S_{t_0}$ vs.\ $S_{t_1}$ for anchor prompts.
+\item \textbf{Temporal batch correlation:} sequential $\tau$ across time-ordered batches (if timestamps available).
+\end{itemize}
+
+\paragraph{Thresholds:}
+\begin{itemize}
+\item \textbf{Pass:} $\tau \ge 0.90$ (strong stability).
+\item \textbf{Warn:} $\tau \in [0.75, 0.90)$ (moderate drift; check config).
+\item \textbf{Fail:} $\tau < 0.75$ (severe drift; refresh oracle and re-calibrate).
+\end{itemize}
+
+\paragraph{Fixes:}
+\begin{itemize}
+\item Freeze judge version and config during the evaluation window.
+\item If drift is detected, refresh the oracle slice with new labels and re-fit \autocal.
+\item Consider using a judging protocol with locked temperature/sampling to reduce stochasticity.
+\item Use automated temporal drift detection: set \texttt{check\_drift=True} and \texttt{timestamp\_field} to monitor stability across batches.
+\end{itemize}
+
+\paragraph{Automated detection.} When evaluation data includes timestamps, CJE can automatically detect drift over time using \texttt{timestamp\_field} and \texttt{check\_drift=True}. This sorts samples by timestamp, computes sequential Kendall $\tau$ correlations across time batches, and flags drift points. This automates the anchor-set workflow for datasets with temporal metadata.
+
+\subsection{Diagnostic 4: Oracle uncertainty (OUA) share}
+
+\paragraph{What it measures.} The fraction of total variance attributable to oracle uncertainty (calibrator noise):
+\begin{equation}
+\text{OUA share} = \frac{\Var_{\oua}}{\SE^2_{\text{total}}}.
+\end{equation}
+
+\paragraph{Why it matters.} High OUA share means label scarcity is the bottleneck, not prompt scarcity. Adding more prompts won't help; you need more labels.
+
+\paragraph{Artifacts to inspect:}
+\begin{itemize}
+\item \textbf{OUA share:} reported as a percentage.
+\item \textbf{Variance decomposition:} $\SE^2_{\text{total}} = \Var_{\text{main}} + \Var_{\oua}$.
+\end{itemize}
+
+\paragraph{Thresholds:}
+\begin{itemize}
+\item \textbf{Pass:} OUA share $< 20\%$ (labels sufficient).
+\item \textbf{Warn:} OUA share $\in [20\%, 50\%]$ (labels becoming a bottleneck).
+\item \textbf{Fail:} OUA share $> 50\%$ (labels are the main source of uncertainty).
+\end{itemize}
+
+\paragraph{Fixes:}
+\begin{itemize}
+\item Add labels, prioritizing regions where $S$ is sparse or where policy comparisons are sensitive.
+\item For high OUA share, adding prompts yields diminishing returns; focus labeling budget on coverage and regional balance.
+\end{itemize}
+
+\subsection*{Off-Policy Diagnostics (IPS/DR Only)}
+
+The following diagnostics only apply when reusing logged data. \textbf{If you're using Direct Mode, you can skip to §4.8.}
+
+\subsection{Diagnostic 5: Effective sample size (ESS)}
 
 \paragraph{What it measures.} The number of ``effective'' independent samples after importance weighting:
 \begin{equation}
@@ -104,7 +175,7 @@ where $\tilde{w}_i$ are the stabilized, mean-one weights after \simcal. ESS rang
 \item If ESS $< 1\%$, regenerate fresh outputs for the candidate policy and use \dm{} instead.
 \end{itemize}
 
-\subsection{Diagnostic 4: Tail heaviness (Hill index)}
+\subsection{Diagnostic 6: Tail heaviness (Hill index)}
 
 \paragraph{What it measures.} The tail index $\alpha$ of the weight distribution, estimated via the Hill estimator. If $\alpha < 2$, the weights have infinite variance; if $\alpha < 1$, infinite mean.
 
@@ -133,7 +204,7 @@ where $\tilde{w}_i$ are the stabilized, mean-one weights after \simcal. ESS rang
 \item If $\alpha < 2$ persists, switch to \dr{} or regenerate.
 \end{itemize}
 
-\subsection{Diagnostic 5: DR orthogonality score}
+\subsection{Diagnostic 7: DR orthogonality score}
 
 \paragraph{What it measures.} The empirical moment
 \begin{equation}
@@ -163,62 +234,6 @@ with a 95\% CI, where $\tilde{w}_i$ are the stabilized, mean-one weights after \
 \item Revisit \simcal{} settings or overlap diagnostics (poor weights can break orthogonality).
 \item Check cross-fitting: ensure folds are balanced and representative.
 \item If orthogonality fails persistently, fall back to \ips{} or regenerate for \dm.
-\end{itemize}
-
-\subsection{Judge stability diagnostic (supplementary)}
-
-\paragraph{What it measures.} Rank stability of judge scores on a small anchor set (20--50 fixed prompts) over time, measured via Kendall $\tau$ or Spearman $\rho$.
-
-\paragraph{Why it matters.} If the judge's interpretation of scores drifts between the time the log was collected and the time fresh draws are evaluated, calibration breaks. This is especially critical for off-policy evaluation.
-
-\paragraph{Artifacts to inspect:}
-\begin{itemize}
-\item \textbf{Rank correlation:} Kendall $\tau$ between scores at time $t_0$ (logging) and $t_1$ (evaluation).
-\item \textbf{Score drift plot:} scatter of $S_{t_0}$ vs.\ $S_{t_1}$ for anchor prompts.
-\end{itemize}
-
-\paragraph{Thresholds:}
-\begin{itemize}
-\item \textbf{Pass:} $\tau \ge 0.90$ (strong stability).
-\item \textbf{Warn:} $\tau \in [0.75, 0.90)$ (moderate drift; check config).
-\item \textbf{Fail:} $\tau < 0.75$ (severe drift; refresh oracle and re-calibrate).
-\end{itemize}
-
-\paragraph{Fixes:}
-\begin{itemize}
-\item Freeze judge version and config during the evaluation window.
-\item If drift is detected, refresh the oracle slice with new labels and re-fit \autocal.
-\item Consider using a judging protocol with locked temperature/sampling to reduce stochasticity.
-\end{itemize}
-
-\paragraph{Automated temporal drift detection.} When evaluation data includes timestamps, CJE can automatically detect drift over time using \texttt{timestamp\_field} and \texttt{check\_drift=True}. This sorts samples by timestamp, computes sequential Kendall $\tau$ correlations across time batches, and flags drift points. This automates the anchor-set workflow above for datasets with temporal metadata.
-
-\subsection{Oracle uncertainty (OUA) share diagnostic}
-
-\paragraph{What it measures.} The fraction of total variance attributable to oracle uncertainty (calibrator noise):
-\begin{equation}
-\text{OUA share} = \frac{\Var_{\oua}}{\SE^2_{\text{total}}}.
-\end{equation}
-
-\paragraph{Why it matters.} High OUA share means label scarcity is the bottleneck, not prompt scarcity. Adding more prompts won't help; you need more labels.
-
-\paragraph{Artifacts to inspect:}
-\begin{itemize}
-\item \textbf{OUA share:} reported as a percentage.
-\item \textbf{Variance decomposition:} $\SE^2_{\text{total}} = \Var_{\text{main}} + \Var_{\oua}$.
-\end{itemize}
-
-\paragraph{Thresholds:}
-\begin{itemize}
-\item \textbf{Pass:} OUA share $< 20\%$ (labels sufficient).
-\item \textbf{Warn:} OUA share $\in [20\%, 50\%]$ (labels becoming a bottleneck).
-\item \textbf{Fail:} OUA share $> 50\%$ (labels are the main source of uncertainty).
-\end{itemize}
-
-\paragraph{Fixes:}
-\begin{itemize}
-\item Add labels, prioritizing regions where $S$ is sparse or where policy comparisons are sensitive.
-\item For high OUA share, adding prompts yields diminishing returns; focus labeling budget on coverage and regional balance.
 \end{itemize}
 
 \subsection{Traffic-light summary and refusal gates}
@@ -261,13 +276,19 @@ Operators can adjust these gates or disable them for exploratory analysis, but t
 
 \subsection{Diagnostic workflow (flowchart)}
 
+\paragraph{Core diagnostics (all modes):}
 \begin{enumerate}
 \item \textbf{Check score coverage.} If $< 85\%$, add labels or narrow scope. If pass, continue.
 \item \textbf{Check calibration reliability.} If regional error is high, enable two-stage \autocal{} or add labels. If pass, continue.
-\item \textbf{(Off-policy only) Check ESS.} If $< 30\%$ (WARN), review diagnostics and consider \dr. If $< 10\%$ (FAIL), use \simcal{} or switch to \dr. If $< 1\%$ (REFUSE), regenerate. If pass, continue.
-\item \textbf{(Off-policy only) Check tail index.} If $\alpha < 2$, apply stricter \simcal{} or cohort restriction. If pass, continue.
+\item \textbf{Check judge stability.} If $\tau < 0.75$, freeze judge config and refresh oracle. If pass, continue.
+\item \textbf{Check OUA share.} If $> 50\%$, add labels. If pass, you're done (for Direct Mode).
+\end{enumerate}
+
+\paragraph{Additional checks for off-policy (IPS/DR):}
+\begin{enumerate}[resume]
+\item \textbf{Check ESS.} If $< 30\%$ (WARN), review diagnostics and consider \dr. If $< 10\%$ (FAIL), use \simcal{} or switch to \dr. If $< 1\%$ (REFUSE), regenerate. If pass, continue.
+\item \textbf{Check tail index.} If $\alpha < 2$, apply stricter \simcal{} or cohort restriction. If pass, continue.
 \item \textbf{(DR only) Check orthogonality.} If CI excludes zero, improve outcome model or weights. If pass, trust the estimate.
-\item \textbf{Check OUA share.} If $> 50\%$, add labels. If pass, you're done.
 \end{enumerate}
 
 If any diagnostic fails and the fix is not immediately available, report the failure and do not ship the estimate.
@@ -294,6 +315,7 @@ Estimator: stacked-dr
 Target policy: gpt-4-mini
 Baseline policy: gpt-3.5-turbo
 
+== Core Diagnostics ==
 [1] Score Coverage: 92% (PASS)
     Oracle S range: [2.1, 9.8]
     Eval S range: [1.9, 9.9]
@@ -303,21 +325,26 @@ Baseline policy: gpt-3.5-turbo
     Mean preservation: -0.01 (excellent)
     Regional MAE: low=0.03, mid=0.04, high=0.05 (balanced)
 
-[3] ESS: 342 / 1000 = 34% (WARN)
+[3] Judge Stability: tau = 0.93 (PASS)
+    Temporal batches: 5
+    No drift detected across time periods
+
+[4] OUA Share: 15% (PASS)
+    Labels sufficient; variance dominated by prompt variation
+
+== Off-Policy Diagnostics ==
+[5] ESS: 342 / 1000 = 34% (WARN)
     Raw ESS: 18%
     Post-SIMCal ESS: 34%
     Recommendation: acceptable for DR; consider cohort restriction if CI too wide
 
-[4] Tail Index: alpha = 2.8 (PASS)
+[6] Tail Index: alpha = 2.8 (PASS)
     Max/median weight ratio: 12.3
     Tail behavior: well-behaved
 
-[5] DR Orthogonality: 0.03 [-0.02, 0.08] (PASS)
+[7] DR Orthogonality: 0.03 [-0.02, 0.08] (PASS)
     CI contains zero
     Outcome model OOF R^2: 0.67
-
-[6] OUA Share: 15% (PASS)
-    Labels sufficient; variance dominated by prompt variation
 
 Overall: PASS (with ESS warning)
 Recommendation: Estimate is reliable. Consider adding fresh draws or cohort restriction for tighter CIs.
@@ -325,4 +352,10 @@ Recommendation: Estimate is reliable. Consider adding fresh draws or cohort rest
 
 \subsection{Summary}
 
-The five diagnostics (coverage, reliability, ESS, tail index, orthogonality) catch the most common failure modes. Each produces a compact artifact, a traffic-light signal, and a concrete fix. Always inspect diagnostics before trusting estimates, and always report them alongside results.
+The six diagnostics are organized into two groups:
+
+\textbf{Core diagnostics (all modes):} Coverage (§4.1), calibration reliability (§4.2), judge stability (§4.3), and OUA share (§4.4) apply to all evaluation modes. These catch fundamental validity issues like extrapolation, miscalibration, judge drift, and label scarcity.
+
+\textbf{Off-policy diagnostics (IPS/DR only):} ESS (§4.5), tail heaviness (§4.6), and DR orthogonality (§4.7) only apply when reusing logged data. These diagnose overlap, weight behavior, and critic quality.
+
+Each diagnostic produces a compact artifact, a traffic-light signal, and a concrete fix. Always inspect diagnostics before trusting estimates, and always report them alongside results.
