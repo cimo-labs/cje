@@ -21,44 +21,17 @@ Naively averaging judge scores is a heuristic that breaks in predictable ways:
 \item \textbf{Off-policy illusion.} Reusing one judged log to assess many candidates without correction answers the wrong counterfactual (it reflects the logger, not the candidate).
 \end{itemize}
 
-\subsection{CJE in one paragraph}
+\subsection{How CJE works}
 
-\textbf{Causal Judge Evaluation (\cje)} is a practitioner-first wrapper that turns judge scores into causally interpretable estimates and reliable rankings. \cje{} learns a small, mean-preserving mapping from score to outcome (\autocal), evaluates policies either with fresh generations (Direct Modeling, \dm) or by safely reusing a judged log (Calibrated \ips/\dr), and attaches oracle-uncertainty-aware confidence intervals (\oua). For off-policy reuse, \cje{} stabilizes importance weights with a mean-one, score-indexed projection (\simcal) and, when helpful, adds a lightweight critic (an outcome model) to form a doubly robust estimate.
+\textbf{Causal Judge Evaluation (\cje)} turns judge scores into reliable estimates with confidence intervals. The core workflow:
 
-\subsection{Notation at a glance}
+\begin{enumerate}
+\item \textbf{Calibrate:} Learn a mapping from judge scores to oracle labels on a small random sample (\autocal).
+\item \textbf{Evaluate:} For on-policy comparison (\textbf{Direct Mode}), generate responses from each policy and average calibrated scores. For counterfactual inference (\textbf{Off-Policy}), reuse logged data with importance weighting.
+\item \textbf{Report:} Confidence intervals that account for all uncertainty (\oua).
+\end{enumerate}
 
-\begin{table}[h]
-\centering
-\caption{Key notation and terminology}
-\label{tab:notation}
-\begin{tabular}{ll}
-\toprule
-\textbf{Symbol/Term} & \textbf{Meaning} \\
-\midrule
-$X$ & Prompt (input) \\
-$A$ & Response (action/output) \\
-$\pi_0$ & Logging policy (baseline, deployed) \\
-$\pi'$ & Candidate policy (target for evaluation) \\
-$S$ & Judge score $S = s(X, A) \in \mathbb{R}$ \\
-$Y$ & Oracle label (ground truth outcome) $\in [0, 1]$ \\
-$R$ & Calibrated reward $R = f(S) \in [0, 1]$ \\
-$W_i$ & Raw importance weight $W_i = \pi'(A_i \mid X_i) / \pi_0(A_i \mid X_i)$ \\
-$\tilde{w}_i$ & Stabilized, mean-one weight after \simcal \\
-$w^{\text{sn}}_i$ & Self-normalized (Hájek) weight $w^{\text{sn}}_i = W_i / \bar{W}$ \\
-\midrule
-\textbf{\autocal} & \textbf{AutoCal-R}: Automatic Calibration for Rewards \\
- & Isotonic map $f: S \to [0,1]$ learned from oracle slice \\
-\textbf{\simcal} & \textbf{SIMCal}: Score-Indexed Monotone Calibration \\
- & Stabilizes weights via monotone projection + variance cap \\
-\textbf{\oua} & \textbf{OUA}: Oracle-Uncertainty Aware inference \\
- & Accounts for calibrator noise in confidence intervals \\
-\midrule
-\textbf{\dm} & Direct Modeling (on-policy, fresh draws only) \\
-\textbf{\ips} & Importance Sampling (off-policy, logged data) \\
-\textbf{\dr} & Doubly Robust (off-policy + critic/outcome model) \\
-\bottomrule
-\end{tabular}
-\end{table}
+Most users only need \textbf{Direct Mode}: generate outputs, calibrate judge scores, report CIs. For off-policy evaluation, \cje{} stabilizes importance weights (\simcal) and optionally adds a critic (\dr) for robustness. See §3 for details.
 
 \subsection{Quick Start: Direct Mode for Model Comparison}
 
@@ -90,53 +63,99 @@ $w^{\text{sn}}_i$ & Self-normalized (Hájek) weight $w^{\text{sn}}_i = W_i / \ba
 
 You can return to off-policy methods (§3) later if you want counterfactual inference (``What if we deployed policy X?'') without regenerating outputs.
 
-\subsection{On-policy vs. off-policy at a glance}
+\subsection{Notation at a glance}
+
+\begin{table}[h]
+\centering
+\caption{Key notation and terminology}
+\label{tab:notation}
+\begin{tabular}{ll}
+\toprule
+\textbf{Symbol/Term} & \textbf{Meaning} \\
+\midrule
+\multicolumn{2}{l}{\textit{Core symbols (all modes):}} \\
+$X$ & Prompt (input) \\
+$A$ & Response (action/output) \\
+$S$ & Judge score $S = s(X, A) \in \mathbb{R}$ \\
+$Y$ & Oracle label (ground truth outcome) $\in [0, 1]$ \\
+$R$ & Calibrated reward $R = f(S) \in [0, 1]$ \\
+\textbf{\autocal} & \textbf{AutoCal-R}: Automatic Calibration for Rewards \\
+ & Isotonic map $f: S \to [0,1]$ learned from oracle slice \\
+\textbf{\oua} & \textbf{OUA}: Oracle-Uncertainty Aware inference \\
+ & Accounts for calibrator noise in confidence intervals \\
+\textbf{\dm} & Direct Modeling (on-policy, fresh draws only) \\
+\midrule
+\multicolumn{2}{l}{\textit{Off-policy symbols (§3 only):}} \\
+$\pi_0$ & Logging policy (baseline, deployed) \\
+$\pi'$ & Candidate policy (target for evaluation) \\
+$W_i$ & Raw importance weight $W_i = \pi'(A_i \mid X_i) / \pi_0(A_i \mid X_i)$ \\
+$\tilde{w}_i$ & Stabilized, mean-one weight after \simcal \\
+$w^{\text{sn}}_i$ & Self-normalized (Hájek) weight $w^{\text{sn}}_i = W_i / \bar{W}$ \\
+\textbf{\simcal} & \textbf{SIMCal}: Score-Indexed Monotone Calibration \\
+ & Stabilizes weights via monotone projection + variance cap \\
+\textbf{\ips} & Importance Sampling (off-policy, logged data) \\
+\textbf{\dr} & Doubly Robust (off-policy + critic/outcome model) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{When you need more: Off-policy evaluation}
+
+Direct Mode requires generating fresh outputs for each policy. If you want to answer counterfactual questions without regenerating---``What if we deployed policy X instead of our current baseline?''---you need off-policy methods:
 
 \begin{itemize}
-\item \textbf{\dm{} (on-policy, offline).} Generate outputs for each policy on the same prompt set, convert scores to calibrated rewards $R = f(S)$, average, and report a CI that includes calibrator noise (\oua).
+\item \textbf{Calibrated \ips{}} reuses a single logged dataset to evaluate multiple candidate policies by reweighting with importance ratios. Requires per-sequence log probabilities.
 
-\item \textbf{Calibrated \ips{} (off-policy).} Reweight calibrated rewards from a single judged log using per-sequence likelihood ratios; stabilize weights with \simcal{} for usable ESS and tame tails.
-
-\item \textbf{Calibrated \dr{} (off-policy + critic).} Combine a critic with stabilized weights to gain robustness and tighter intervals; valid if either weights behave or the critic is decent.
+\item \textbf{Calibrated \dr{}} combines importance weighting with an outcome model for robustness and tighter confidence intervals. Requires both logged data and a small set of fresh draws.
 \end{itemize}
 
-\subsection{High-leverage diagnostics (and how to fix issues)}
+Off-policy methods enable fast iteration (no regeneration), but introduce complexity (importance weights, overlap diagnostics). See §3 for full details, assumptions, and diagnostics. Most users should start with Direct Mode and adopt off-policy methods only when needed.
 
-\cje{} emphasizes a short checklist that catches the most important failure modes and suggests concrete fixes:
+\subsection{Core diagnostics}
+
+All CJE modes share three essential diagnostics that catch the most common failure modes:
 
 \begin{enumerate}[label=(\alph*)]
-\item \textbf{Score coverage} of the labeled slice across the evaluation $S$-range (fix: targeted labeling in uncovered $S$ bins).
+\item \textbf{Score coverage:} Does the oracle slice span the evaluation $S$-range? (fix: add labels in uncovered bins)
 
-\item \textbf{Calibration reliability} of \autocal{} by region (fix: two-stage \autocal{} or add a coarse index such as prompt family/length; add a few labels).
+\item \textbf{Calibration reliability:} Is $f(S)$ accurate across the $S$ spectrum? (fix: two-stage \autocal{} or add labels in problematic regions)
 
-\item \textbf{Judge stability} via Kendall $\tau$ on anchor set or temporal batches (fix: freeze judge version, refresh oracle if drift detected).
-
-\item \textbf{Effective sample size (ESS)} for \ips/\dr{} after \simcal{} (fix: cohort restriction or switch to \dr{} with a stronger critic).
-
-\item \textbf{Tail heaviness} of weights (Hill index) (fix: \simcal{} tuning, overlap-aware cohorting, provider TF checks, trimming sensitivity).
-
-\item \textbf{\dr{} orthogonality} moment near zero with a CI (fix: improve critic/regularization or revisit \simcal/overlap).
+\item \textbf{Judge stability:} Is the judge's scoring consistent over time? (fix: freeze judge version, refresh oracle if drift detected)
 \end{enumerate}
 
-These diagnostics are designed to detect when the heuristic breaks and to point directly to high-leverage remediations.
+These three checks apply whether you're using Direct Mode or off-policy methods. For off-policy evaluation (§3), three additional diagnostics are required:
 
-\subsection{What this paper is (and is not)}
+\begin{enumerate}[label=(\alph*),resume]
+\item \textbf{Effective sample size (ESS):} Do we have enough effective samples after reweighting? (fix: cohort restriction or switch to DR)
 
-The main text is a playbook: assumptions in plain English, minimal recipes for \dm/\ips/\dr, the diagnostics above, and reporting templates with honest CIs. Advanced material---why the projections preserve the target and reduce variance, and full statistical guarantees---lives in the appendix.
+\item \textbf{Tail heaviness:} Are importance weights catastrophically heavy-tailed? (fix: SIMCal tuning or overlap-aware cohorting)
 
-\cje{} builds on the broader treatment effect estimation literature, particularly work on efficient estimation with surrogates and limited outcome data \cite{kallus2024role}. Like that work, we avoid restrictive surrogacy conditions (e.g., statistical surrogacy requiring $Y \perp T \mid S$) and instead study efficiency gains when surrogates supplement---rather than replace---primary outcomes under standard missing-at-random assumptions.
+\item \textbf{DR orthogonality:} Is the outcome model orthogonal to the weights? (fix: improve critic or revisit weight calibration)
+\end{enumerate}
 
-\subsection{Contributions}
+See §4 for detailed thresholds, interpretation, and fixes for each diagnostic.
+
+\subsection{What CJE provides}
+
+\cje{} gives practitioners a complete workflow for reliable LLM evaluation:
 
 \begin{itemize}
-\item A clear estimand and three analysis modes (\dm, Calibrated \ips, Calibrated \dr) tailored to common evaluation workflows.
+\item \textbf{Three analysis modes:} Direct Mode for on-policy comparison (simplest), Calibrated IPS for off-policy reuse, Calibrated DR for maximum accuracy when you have both logged data and fresh draws.
 
-\item \autocal{} to put judge scores on the KPI scale and \oua{} to keep intervals honest.
+\item \textbf{Automatic calibration:} \autocal{} maps judge scores to oracle labels on a small random sample, putting estimates on the right scale.
 
-\item \simcal{} to stabilize off-policy weighting, plus a critic option for \dr{} robustness.
+\item \textbf{Honest confidence intervals:} \oua{} accounts for calibrator uncertainty, not just sampling noise.
 
-\item A six-diagnostic dashboard (four core, three off-policy) with concrete operator fixes and lightweight artifacts for audit and reproducibility.
+\item \textbf{Six diagnostics:} Three core checks (coverage, calibration, judge stability) plus three off-policy checks (ESS, tail heaviness, orthogonality). Each includes thresholds, interpretation, and concrete fixes.
+
+\item \textbf{Off-policy robustness:} \simcal{} stabilizes importance weights via monotone projection, and DR adds an outcome model for double robustness.
 \end{itemize}
+
+\subsection{Scope and positioning}
+
+This playbook focuses on practical implementation: assumptions in plain English, minimal recipes, diagnostics with actionable fixes, and reporting templates. Advanced material (theoretical guarantees, projection properties, semiparametric efficiency) lives in the appendix.
+
+\cje{} builds on the treatment effect estimation literature, particularly work on efficient estimation with surrogates and limited outcome data \cite{kallus2024role}. Like that work, we avoid restrictive surrogacy conditions and instead study efficiency gains when surrogates supplement---rather than replace---primary outcomes under standard missing-at-random assumptions.
 
 \subsection{Reader's guide}
 
