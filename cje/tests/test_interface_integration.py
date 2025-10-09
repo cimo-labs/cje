@@ -181,7 +181,7 @@ def test_mode_detection_three_modes() -> None:
     assert "100.0% of samples have valid logprobs" in explanation
     assert coverage == 1.0  # 100% coverage
 
-    # Case 2: Dataset with no logprobs but fresh draws directory (Direct mode with calibration)
+    # Case 2: Dataset with no logprobs but fresh draws directory (DR mode - degrades to outcome-only)
     samples_no_logprobs = [
         Sample(
             prompt_id=f"p{i}",
@@ -202,13 +202,16 @@ def test_mode_detection_three_modes() -> None:
         target_policies=["policy_a", "policy_b"],
     )
 
-    # Dataset with no logprobs but fresh draws should select Direct mode
+    # Dataset with no logprobs but fresh draws should select DR mode (but warn it's outcome-only)
     dataset_path, responses_dir = _arena_paths()
     mode, explanation, coverage = detect_analysis_mode(
         dataset_no_logprobs, fresh_draws_dir=str(responses_dir)
     )
-    assert mode == "direct"
-    assert "Direct mode" in explanation
+    assert mode == "dr"
+    assert "DR mode" in explanation
+    assert (
+        "No valid logprobs" in explanation or "equivalent to Direct mode" in explanation
+    )
     assert coverage == 0.0  # No logprobs
 
     # Case 3: Dataset with logprobs AND fresh draws directory (DR mode)
@@ -219,7 +222,7 @@ def test_mode_detection_three_modes() -> None:
     )
     assert mode == "dr"
     assert "DR mode" in explanation
-    assert "combines importance weighting with outcome models" in explanation
+    assert "Combining importance weighting with outcome models" in explanation
     assert coverage == 1.0  # 100% coverage
 
 

@@ -9,14 +9,19 @@
 [![Tests](https://img.shields.io/badge/tests-passing-green)](https://github.com/cimo-labs/cje/actions)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**What if your AI evals looked like A/B tests with reliable confidence intervals and causal guarantees?**
+**Evaluate LLM policies with statistical rigor - as simple as comparing responses, as powerful as A/B testing.**
 
-CJE makes it possible. Get unbiased estimates of how your new model will perform before deployment, with the statistical rigor you'd expect from production experimentation.
+CJE turns your LLM-judge evaluations into reliable estimates with confidence intervals. Compare policies head-to-head, or estimate counterfactual deployment value from logged data.
 
 ## Why CJE?
 
-🎯 **Problem**: Your LLM-judge scores are noisy, biased, and untrustworthy
-✅ **Solution**: CJE uses **AutoCal-R** (Automatic Calibration for Rewards) and causal inference to debias them, giving you reliable estimates with confidence intervals without compromising on judge flexibility
+🎯 **Problem**: LLM-judge scores are noisy and biased
+✅ **Solution**: Automatic calibration (AutoCal-R) learns judge→oracle mapping to debias scores and provide reliable estimates with confidence intervals
+
+**Three modes, one interface:**
+- **Direct mode**: Compare policies on an eval set (simplest - no logprobs needed)
+- **IPS mode**: Estimate counterfactual value from logged data (reuse existing logs)
+- **DR mode**: Combine both for maximum accuracy (doubly robust)
 
 ## Installation
 
@@ -41,80 +46,76 @@ The notebook demonstrates all three analysis modes (IPS, DR, Direct) with step-b
 
 ## Quick Start
 
-CJE automatically selects the right mode based on your data:
+**Simplest workflow - Direct mode (no logprobs needed):**
 
 ```python
 from cje import analyze_dataset
 
-# Mode 1: Direct (simplest - just fresh draws)
+# Compare policies on an eval set
 result = analyze_dataset(fresh_draws_dir="responses/")
-print(f"Policy value: {result.estimates[0]:.3f} ± {result.standard_errors[0]:.3f}")
 
-# Mode 2: IPS (logged data with logprobs)
-result = analyze_dataset(logged_data_path="logs.jsonl")  # Auto-selects IPS mode
+# Get estimates with confidence intervals
+for i, policy in enumerate(result.metadata["target_policies"]):
+    est = result.estimates[i]
+    se = result.standard_errors[i]
+    print(f"{policy}: {est:.3f} ± {1.96*se:.3f}")
+```
 
-# Mode 3: DR (logged data + fresh draws - most accurate)
+Your `responses/` directory just needs JSONL files like:
+```json
+{"prompt_id": "eval_0", "policy": "model_a", "judge_score": 0.85}
+{"prompt_id": "eval_0", "policy": "model_b", "judge_score": 0.72}
+```
+
+That's it! CJE handles the rest - auto-discovers policies, applies calibration if oracle labels are present, and returns reliable estimates.
+
+**Advanced: Reuse logged data (IPS/DR modes)**
+
+If you have production logs with log probabilities, CJE can estimate counterfactual deployment value:
+
+```python
+# IPS mode: Use logged data only
+result = analyze_dataset(logged_data_path="logs.jsonl")
+
+# DR mode: Combine logged data + fresh draws (most accurate)
 result = analyze_dataset(
     logged_data_path="logs.jsonl",
-    fresh_draws_dir="responses/"  # Auto-selects DR mode
+    fresh_draws_dir="responses/"
 )
 ```
 
-CLI usage:
-```bash
-# Direct mode (fresh draws only)
-python -m cje analyze --fresh-draws-dir responses/
-
-# IPS mode (logged data) - auto-selects calibrated-ips
-python -m cje analyze logs.jsonl
-
-# DR mode (both) - auto-selects stacked-dr
-python -m cje analyze logs.jsonl --fresh-draws-dir responses/
-```
+See [Data Requirements](#data-requirements) for IPS/DR data format and [Teacher Forcing](#generating-log-probabilities) for computing logprobs.
 
 ## Three Analysis Modes
 
-CJE automatically selects the best mode based on your data. Mode selection follows a simple **4-rule system** based on logprob coverage (fraction of samples with complete logprobs) and data sources:
+CJE automatically selects the best mode based on your data:
 
-1. **fresh_draws + coverage ≥50%** → DR mode (doubly robust - most accurate)
-2. **no fresh_draws + coverage ≥50%** → IPS mode (importance sampling - counterfactual)
-3. **fresh_draws + coverage <50%** → Direct mode (on-policy comparison)
-4. **no fresh_draws + coverage <50%** → Error (insufficient data)
+| Mode | Data | What it tells you | Best for |
+|------|------|-------------------|----------|
+| **Direct** | Responses from each policy | Which policy is best on this eval set? | Quick comparisons, A/B testing |
+| **IPS** | Logged data with logprobs | What if we deployed policy X? (counterfactual) | Reusing existing logs, fast iteration |
+| **DR** | Both logged + responses | Counterfactual value (most accurate) | High-stakes decisions, maximum accuracy |
 
-See [Interface README](cje/interface/README.md#how-mode-detection-works) for details.
+**Automatic mode selection:**
+- `fresh_draws_dir` only → Direct mode
+- `logged_data_path` only → IPS mode (importance sampling)
+- Both → DR mode (doubly robust)
 
-### 1. **Direct Mode** (Fresh draws only)
-- **Use when:** You have responses from target policies, no logprobs needed
-- **Estimand:** "Which policy performs best on this eval set?" (on-policy comparison)
-- **Data needed:** Fresh responses with judge scores
-- **Example:** Comparing 3 model variants on 1000 prompts
+**Direct mode** is the simplest - just provide responses from each policy with judge scores. No logprobs needed!
 
-### 2. **IPS Mode** (Logged data with logprobs)
-- **Use when:** You have logged data with importance weights, no fresh draws
-- **Estimand:** "What would happen if we deployed this policy?" (counterfactual)
-- **Data needed:** Logged responses with base/target logprobs
-- **Example:** Evaluating a new model on production traffic logs
-
-### 3. **DR Mode** (Both logged data and fresh draws)
-- **Use when:** You want maximum accuracy and have both
-- **Estimand:** Counterfactual deployment value (most accurate)
-- **Data needed:** Both logged data and fresh draws
-- **Default estimator:** `stacked-dr` (ensemble of DR-CPO, TMLE, MRDR, OC-DR-CPO, TR-CPO-E)
-- **Example:** High-stakes A/B decision for model deployment
-
-**Note:** The paper's "Calibrated DR" refers to DR mode, which defaults to `stacked-dr` - an optimal convex combination of multiple DR estimators for robustness and tighter intervals.
+**IPS/DR modes** enable counterfactual inference: "What would happen if we deployed this policy?" This requires log probabilities from your models. See [Generating Log Probabilities](#generating-log-probabilities) below for Fireworks API integration.
 
 ## When to Use CJE
 
-✅ **Perfect for:**
-- Comparing LLM policies before deployment
-- Evaluating multiple model variants
-- Reusing existing data for new evaluations
-- High-stakes decisions needing confidence intervals
+✅ **Use CJE when you need:**
+- Statistical rigor (confidence intervals, p-values)
+- Debiased judge scores (automatic calibration)
+- Policy comparisons or counterfactual estimates
+- To reuse logged data for new evaluations
 
-❌ **Not for:**
-- Online learning (CJE is offline)
-- Real-time scoring (CJE is batch)
+❌ **Don't use CJE for:**
+- Online learning (CJE is offline/batch)
+- Real-time scoring (use raw judge for that)
 - Very small samples (<100 examples)
 
 ## Data Requirements
@@ -157,7 +158,7 @@ Requirements depend on which mode you're using:
 
 ### Generating Log Probabilities
 
-CJE includes built-in **Fireworks API integration** for computing teacher-forced log probabilities:
+**For IPS/DR modes, you need log probabilities.** CJE includes built-in Fireworks API integration:
 
 ```python
 from cje.teacher_forcing import compute_teacher_forced_logprob
@@ -172,35 +173,23 @@ if result.status == "success":
     logprob = result.value  # e.g., -2.3
 ```
 
-This handles chat templates, tokenization, and API calls automatically. See `cje/teacher_forcing/` for details.
+This handles chat templates, tokenization, and API calls automatically. Supports all Fireworks models.
 
-## Choosing an Estimator
+**Don't have Fireworks access?** Direct mode doesn't need logprobs - just use `fresh_draws_dir` with judge scores.
 
-**Most users should use `estimator="auto"`** (the default) - CJE will automatically select:
-- **`direct`** when you only provide `fresh_draws_dir`
-- **`calibrated-ips`** when you only provide `logged_data_path`
-- **`stacked-dr`** when you provide both
+See [`cje/teacher_forcing/README.md`](cje/teacher_forcing/README.md) for batch processing and advanced options.
 
-**You can override automatic selection** by specifying an estimator explicitly:
-```python
-# Use IPS even with fresh draws available
-analyze_dataset("logs.jsonl", fresh_draws_dir="responses/", estimator="calibrated-ips")
+## Advanced: Choosing an Estimator
 
-# Use Direct mode for on-policy comparison instead of DR
-analyze_dataset("logs.jsonl", fresh_draws_dir="responses/", estimator="direct")
-```
+**Most users:** Use `estimator="auto"` (the default). CJE auto-selects the best estimator for your mode.
 
-**Manual estimator options:**
-- **`direct`**: On-policy comparison (Direct mode - no counterfactual inference)
-- **`calibrated-ips`**: IPS with SIMCal weight stabilization (IPS mode default)
-- **`stacked-dr`**: Ensemble of DR estimators (DR mode default - recommended for production)
-  - Optimally combines: DR-CPO, TMLE, MRDR, OC-DR-CPO, TR-CPO-E
-  - Provides robustness and tighter confidence intervals
-- **Individual DR estimators**: `dr-cpo`, `tmle`, `mrdr`, `oc-dr-cpo`, `tr-cpo`, `tr-cpo-e` (for research)
+**For researchers:** You can specify estimators explicitly:
+- `direct`: On-policy comparison (no counterfactual inference)
+- `calibrated-ips`: IPS with variance-reduced weights (SIMCal)
+- `stacked-dr`: Ensemble of DR estimators (recommended for production)
+- Individual DR variants: `dr-cpo`, `tmle`, `mrdr`, `oc-dr-cpo`, `tr-cpo-e`
 
-**Paper terminology:** "Calibrated DR" in the paper = DR mode with `stacked-dr` estimator in the code.
-
-See the [examples](examples/) for mode-specific workflows.
+See [`cje/estimators/README.md`](cje/estimators/README.md) for technical details on each estimator.
 
 ## Documentation
 

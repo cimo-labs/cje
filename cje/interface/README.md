@@ -36,7 +36,7 @@ print(f"Policy value: {results.estimates[0]:.3f} ± {1.96*results.standard_error
 ### Automatic Mode Selection
 
 Use `estimator="auto"` (default) and CJE will:
-1. Detect the **mode** based on your data (Direct/IPS/DR) using the 4-rule system
+1. Detect the **mode** based on your data (Direct/IPS/DR) using the 3-rule system
 2. Select the best **estimator** for that mode:
    - **Direct mode** → `direct` estimator
    - **IPS mode** → `calibrated-ips` estimator (IPS with variance-reduced weights via SIMCal)
@@ -46,27 +46,27 @@ Use `estimator="auto"` (default) and CJE will:
 
 ### How Mode Detection Works
 
-When you use `estimator="auto"` (the default), CJE automatically detects the mode using a **4-rule system** based on **logprob coverage**:
+When you use `estimator="auto"` (the default), CJE automatically detects the mode using a **simple 3-rule system** based on available data:
 
-```python
-logprob_coverage = (samples with complete logprobs) / total_samples
-```
+**Decision rules:**
+1. **fresh_draws + logged_data** → DR mode (doubly robust - best accuracy)
+2. **logged_data only** → IPS mode (importance sampling - counterfactual)
+3. **fresh_draws only** → Direct mode (on-policy comparison)
 
-A sample has "complete logprobs" if it has:
-- `base_policy_logprob` (not None)
-- `target_policy_logprobs[policy]` for ALL target policies (not None)
+**Automatic filtering:** If your logged data has incomplete logprobs, CJE will:
+- Automatically filter to only samples with complete logprobs
+- Warn you about coverage (what % of samples were usable)
+- Proceed with the filtered subset
 
-**Decision rules (4-rule system):**
-1. **fresh_draws present + coverage ≥50%** → DR mode (doubly robust - best accuracy)
-2. **fresh_draws absent + coverage ≥50%** → IPS mode (importance sampling - counterfactual)
-3. **fresh_draws present + coverage <50%** → Direct mode (on-policy comparison)
-4. **Otherwise (no fresh draws + coverage <50%)** → Error (insufficient data)
+A sample has "complete logprobs" if:
+- `base_policy_logprob` is not None
+- `target_policy_logprobs[policy]` exists for ALL target policies (not None)
 
 Example: If you have 1000 logged samples but only 400 have complete logprobs:
 ```python
-logprob_coverage = 400/1000 = 40%  # Below 50% threshold
-# With fresh draws → Direct mode (rule 3)
-# Without fresh draws → Error (rule 4)
+# CJE filters to 400 valid samples, warns about 40% coverage
+# With fresh draws → DR mode using 400 samples
+# Without fresh draws → IPS mode using 400 samples (with low coverage warning)
 ```
 
 **Mode selection metadata:** Results include `result.metadata["mode_selection"]` with:
@@ -87,7 +87,7 @@ results = analyze_dataset(
     estimator="calibrated-ips"  # Explicitly choose IPS instead of auto DR
 )
 
-# Force Direct mode even with >50% logprob coverage
+# Force Direct mode instead of auto-selected DR
 results = analyze_dataset(
     logged_data_path="logs.jsonl",
     fresh_draws_dir="responses/",
@@ -253,10 +253,10 @@ with open("logs.jsonl") as f:
     print(sample.get("judge_score"))  # Should not be None
 ```
 
-### "Insufficient data" or low logprob coverage
-**Error**: "only 25.0% of samples have logprobs" or "Insufficient data for any analysis mode"
+### "Insufficient data" or no logprob coverage
+**Error**: "No samples have complete logprobs and no fresh draws provided"
 
-**Cause**: Not enough samples have complete logprobs (need both `base_policy_logprob` and all `target_policy_logprobs`)
+**Cause**: None of your samples have complete logprobs (both `base_policy_logprob` and all `target_policy_logprobs`)
 
 **Check your coverage:**
 ```python
@@ -281,9 +281,8 @@ print(f"Logprob coverage: {n_valid}/{len(samples)} = {n_valid/len(samples):.1%}"
 **Solutions:**
 1. **Compute missing logprobs** using `cje/teacher_forcing/` (see README section on "Generating Log Probabilities")
 2. **Provide fresh draws** to use Direct mode (no logprobs needed)
-3. **Accept lower coverage** by using Direct mode explicitly: `estimator="direct"` with `fresh_draws_dir`
 
-**Why 50% threshold?** IPS/DR modes need reliable importance weights. With <50% coverage, most samples are unusable for reweighting, making estimates unreliable.
+**Low coverage warning:** If you see "⚠️ Low coverage", CJE will automatically filter to valid samples and proceed, but results may be less reliable with very few samples.
 
 ## API Reference
 

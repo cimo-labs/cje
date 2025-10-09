@@ -4,8 +4,12 @@ This guide gets you from zero to your first unbiased LLM evaluation in 5 minutes
 
 ## Prerequisites
 
+**Minimal (Direct mode):**
 ✅ Python 3.9+ installed
-✅ 1000+ examples with judge scores
+✅ Responses from policies you want to compare
+✅ Judge scores for each response
+
+**Advanced (IPS/DR modes):**
 ✅ Log probabilities from your models
 ✅ 5-10% samples with oracle labels (for AutoCal-R calibration)
 
@@ -15,40 +19,59 @@ This guide gets you from zero to your first unbiased LLM evaluation in 5 minutes
 pip install cje-eval
 ```
 
-## Step 2: Understand Your Data (1 minute)
+## Step 2: Prepare Your Data (1 minute)
 
-CJE needs data in JSONL format with these fields:
+**Simplest: Direct mode (no logprobs needed)**
+
+Create JSONL files in a `responses/` directory:
+
+```json
+{"prompt_id": "eval_0", "policy": "model_a", "judge_score": 0.85}
+{"prompt_id": "eval_0", "policy": "model_b", "judge_score": 0.72}
+{"prompt_id": "eval_1", "policy": "model_a", "judge_score": 0.91}
+{"prompt_id": "eval_1", "policy": "model_b", "judge_score": 0.88}
+```
+
+Save as `responses/model_a_responses.jsonl`, `responses/model_b_responses.jsonl`, etc.
+
+**Advanced: IPS/DR modes (with logprobs)**
+
+For counterfactual inference, you need log probabilities:
 
 ```json
 {
-  "prompt": "What is machine learning?",
-  "response": "Machine learning is...",
-  "base_policy_logprob": -45.2,      // Log P(response|prompt) for current model
-  "target_policy_logprobs": {         // Same for models you want to evaluate
-    "gpt4": -42.1,
-    "claude": -44.3
-  },
-  "metadata": {
-    "judge_score": 0.82,              // Your LLM judge's score
-    "oracle_label": 0.90              // Ground truth (only need 5-10% labeled)
-  }
+  "prompt": "What is 2+2?",
+  "response": "4",
+  "base_policy_logprob": -45.2,
+  "target_policy_logprobs": {"model_a": -42.1, "model_b": -44.3},
+  "judge_score": 0.82,
+  "oracle_label": 0.90  // Optional: ground truth (5-10% coverage)
 }
 ```
 
-Don't have this format? See the data preparation section below.
-
 ## Step 3: Run Your First Analysis (30 seconds)
+
+**Direct mode (simplest):**
 
 ```python
 from cje import analyze_dataset
 
-# Simplest possible usage
-result = analyze_dataset("your_data.jsonl", estimator="calibrated-ips")
+# Compare policies on eval set
+result = analyze_dataset(fresh_draws_dir="responses/")
 
-# View results
-print(f"GPT-4 estimated value: {result.estimates[0]:.3f}")
-print(f"95% CI: [{result.robust_confidence_intervals[0][0]:.3f}, "
-      f"{result.robust_confidence_intervals[0][1]:.3f}]")
+# View results with confidence intervals
+for i, policy in enumerate(result.metadata["target_policies"]):
+    est = result.estimates[i]
+    se = result.standard_errors[i]
+    print(f"{policy}: {est:.3f} ± {1.96*se:.3f}")
+```
+
+**IPS mode (with logprobs):**
+
+```python
+# Estimate counterfactual deployment value
+result = analyze_dataset(logged_data_path="logs.jsonl")
+print(f"Model A estimated value: {result.estimates[0]:.3f}")
 ```
 
 ## Step 4: Understand the Output (2 minutes)
@@ -213,17 +236,17 @@ for i, policy in enumerate(result.metadata["target_policies"]):
 
 ## FAQ
 
+**Q: Can I use CJE without log probabilities?**
+A: Yes! Use Direct mode - just provide responses from each policy with judge scores. No logprobs needed.
+
 **Q: How much ground truth do I need?**
 A: 5-10% of samples with oracle labels is usually sufficient for AutoCal-R to learn accurate calibration.
 
-**Q: Can I use this without log probabilities?**
-A: No, log probs are essential for importance weighting.
-
 **Q: How do I get log probabilities?**
-A: Most APIs provide them: OpenAI (`logprobs=True`), Anthropic (`log_probs=true`), etc.
+A: CJE has built-in Fireworks API integration. See [Teacher Forcing](cje/teacher_forcing/README.md) for details.
 
-**Q: What if I don't have fresh samples?**
-A: Use `calibrated-ips` - it's robust without fresh samples. DR methods need them.
+**Q: When should I use IPS vs DR vs Direct mode?**
+A: Direct = simplest (compare policies). IPS = counterfactual (logged data only). DR = most accurate (both logged + fresh).
 
 ---
 

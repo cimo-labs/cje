@@ -32,42 +32,34 @@ def detect_analysis_mode(
     NOTE: This is only called when logged_data_path is provided.
     Direct-only mode (fresh_draws_dir without logged_data) is handled separately.
 
-    Mode detection is based on **logprob coverage**:
-        logprob_coverage = (samples with complete logprobs) / total_samples
+    Mode detection uses a simple 3-rule system based on available data:
+        1. fresh_draws present → DR mode (doubly robust)
+        2. fresh_draws absent → IPS mode (importance sampling)
+        3. no logged data at all → Error (handled by caller)
 
-    A sample has "complete logprobs" if:
-        - base_policy_logprob is not None
-        - target_policy_logprobs[policy] is not None for ALL target policies
-
-    Decision rules (simplified 4-rule system):
-        1. fresh_draws present + coverage ≥50% → DR mode (doubly robust)
-        2. fresh_draws absent + coverage ≥50% → IPS mode (importance sampling)
-        3. fresh_draws present + coverage <50% → Direct mode (on-policy evaluation)
-        4. Otherwise (no fresh draws + coverage <50%) → Error (insufficient data)
+    Logprob coverage is still computed and returned for diagnostics, but it does NOT
+    affect mode selection. Low coverage will be flagged in warnings but won't prevent
+    using IPS/DR modes.
 
     Returns:
         Tuple of (mode_name, explanation, logprob_coverage)
 
         Mode names returned:
-        - "ips": Importance sampling mode (logged data with logprobs, no fresh draws)
-        - "dr": Doubly robust mode (logged data with logprobs AND fresh draws)
-        - "direct": Direct evaluation mode (fresh draws available, insufficient logprobs for IPS/DR)
+        - "ips": Importance sampling mode (logged data, no fresh draws)
+        - "dr": Doubly robust mode (logged data AND fresh draws)
 
-        The logprob_coverage value is returned for populating mode_selection metadata.
+        The logprob_coverage value is returned for populating mode_selection metadata
+        and diagnostic warnings.
 
     Examples:
-        >>> # Case 1: 100% logprob coverage, no fresh draws → IPS mode
-        >>> dataset = load_dataset("logs.jsonl")  # All samples have logprobs
+        >>> # Case 1: Logged data, no fresh draws → IPS mode
+        >>> dataset = load_dataset("logs.jsonl")
         >>> mode, msg = detect_analysis_mode(dataset, None)
-        >>> # Returns: ("ips", "IPS mode: 100.0% of samples have valid logprobs...")
+        >>> # Returns: ("ips", "IPS mode: Reweighting logged samples...")
 
-        >>> # Case 2: 80% logprob coverage + fresh draws → DR mode
+        >>> # Case 2: Logged data + fresh draws → DR mode
         >>> mode, msg = detect_analysis_mode(dataset, "responses/")
-        >>> # Returns: ("dr", "DR mode: 80.0% of samples have valid logprobs...")
-
-        >>> # Case 3: 20% logprob coverage + fresh draws → Direct mode
-        >>> mode, msg = detect_analysis_mode(dataset, "responses/")
-        >>> # Returns: ("direct", "Direct mode: Only 20.0% of samples have logprobs...")
+        >>> # Returns: ("dr", "DR mode: Combining importance weighting...")
     """
     # Count samples with valid logprobs
     n_total = len(dataset.samples)
@@ -94,55 +86,58 @@ def detect_analysis_mode(
     logprob_coverage = n_valid_logprobs / n_total if n_total > 0 else 0.0
     has_fresh_draws = fresh_draws_dir is not None and Path(fresh_draws_dir).exists()
 
-    # Decision logic: Choose between IPS, DR, or Direct (with calibration)
+    # Error if no valid logprobs and no fresh draws
+    if logprob_coverage == 0 and not has_fresh_draws:
+        raise ValueError(
+            f"Insufficient data: No samples have complete logprobs "
+            f"and no fresh draws provided. Cannot proceed with any analysis mode.\n\n"
+            f"To fix, choose one:\n"
+            f"  1. Ensure samples have base_policy_logprob and target_policy_logprobs → enables IPS/DR mode\n"
+            f"     (see cje/teacher_forcing/ for teacher-forced logprob computation)\n"
+            f"  2. Provide fresh draws (--fresh-draws-dir) → enables Direct mode\n"
+            f"     (on-policy evaluation without counterfactual inference)\n"
+        )
 
-    if has_fresh_draws and logprob_coverage >= 0.5:
-        # Has both fresh draws and logprobs: use DR mode
+    # Simplified mode routing based on data availability
+    if has_fresh_draws:
+        # Has fresh draws: use DR mode
         mode = "dr"
-        explanation = (
-            f"DR mode: {logprob_coverage:.1%} of samples have valid logprobs "
-            f"and fresh draws are available. This combines importance weighting with "
-            f"outcome models for best accuracy."
-        )
-
-    elif logprob_coverage >= 0.5:
-        # Rule 2: Has logprobs but no fresh draws: use IPS mode
-        mode = "ips"
-        explanation = (
-            f"IPS mode: {logprob_coverage:.1%} of samples have valid logprobs. "
-            f"Reweighting logged samples to estimate target policies via importance sampling. "
-            f"Tip: Provide --fresh-draws-dir for more accurate DR estimates."
-        )
-
-    elif has_fresh_draws:
-        # Rule 3: Has fresh draws but insufficient logprobs (<50%): use Direct mode
-        mode = "direct"
-        if logprob_coverage == 0:
+        if logprob_coverage > 0:
+            coverage_note = (
+                f"{logprob_coverage:.1%} of logged samples have valid logprobs. "
+            )
+            if logprob_coverage < 0.5:
+                coverage_note += f"⚠️ Low coverage - only {n_valid_logprobs}/{n_total} samples will be used for importance weighting. "
             explanation = (
-                "Direct mode: No logprobs detected. Using fresh draws for on-policy evaluation. "
-                f"Note: This estimates on-policy value, not counterfactual deployment value. "
-                f"Tip: Compute logprobs for ≥50% of samples to enable DR mode."
+                f"DR mode: {coverage_note}"
+                f"Combining importance weighting with outcome models from fresh draws for best accuracy."
+            )
+        else:
+            # Has fresh draws but no logprobs - essentially Direct mode via DR estimator
+            logger.warning(
+                "No valid logprobs found in logged data. DR mode will rely entirely on outcome model."
+            )
+            explanation = (
+                "DR mode: No valid logprobs in logged data. "
+                "Using fresh draws for outcome modeling. "
+                "Note: Without logprobs, this is equivalent to Direct mode."
+            )
+    else:
+        # No fresh draws: use IPS mode
+        mode = "ips"
+        if logprob_coverage < 0.5:
+            explanation = (
+                f"IPS mode: {logprob_coverage:.1%} of samples have valid logprobs "
+                f"({n_valid_logprobs}/{n_total}). "
+                f"⚠️ Low coverage - results may be less reliable. "
+                f"Tip: Provide --fresh-draws-dir for more robust DR estimates."
             )
         else:
             explanation = (
-                f"Direct mode: Only {logprob_coverage:.1%} of samples have logprobs "
-                f"(need ≥50% for IPS/DR). Using fresh draws for on-policy evaluation. "
-                f"Note: This estimates on-policy value, not counterfactual deployment value. "
-                f"Tip: Compute logprobs for ≥50% of samples to enable DR mode."
+                f"IPS mode: {logprob_coverage:.1%} of samples have valid logprobs. "
+                f"Reweighting logged samples to estimate target policies via importance sampling. "
+                f"Tip: Provide --fresh-draws-dir for more accurate DR estimates."
             )
-
-    else:
-        # Rule 4: No fresh draws and insufficient logprobs (<50%): error
-        raise ValueError(
-            f"Insufficient data: only {logprob_coverage:.1%} of samples have logprobs "
-            f"and no fresh draws provided. Cannot proceed with any analysis mode.\n\n"
-            f"To fix, choose one:\n"
-            f"  1. Compute logprobs for ≥50% of samples → enables IPS/DR mode\n"
-            f"     (see cje/teacher_forcing/ for teacher-forced logprob computation)\n"
-            f"  2. Provide fresh draws (--fresh-draws-dir) → enables Direct mode\n"
-            f"     (on-policy evaluation on target policies)\n\n"
-            f"Current coverage: {logprob_coverage:.1%} (need ≥50% for IPS/DR)"
-        )
 
     return mode, explanation, logprob_coverage
 
