@@ -1,8 +1,8 @@
 [tool.poetry]
 name = "cje-eval"
-version = "0.2.0"
+version = "0.2.1"
 description = "Causal Judge Evaluation - Unbiased LLM evaluation framework"
-authors = ["Eddie Landesberg <eddie@fondutech.com>"]
+authors = ["Eddie Landesberg <eddie@cimolabs.com>"]
 license = "MIT"
 packages = [{ include = "cje" }]
 readme = "README.md"
@@ -18,7 +18,7 @@ classifiers = [
 [tool.poetry.dependencies]
 python = ">=3.9,<3.13"
 # Core dependencies
-numpy = "^1.26"
+numpy = ">=1.26,<3.0"
 pandas = "^2.2"
 scipy = "^1.11.0"
 scikit-learn = "^1.4"
