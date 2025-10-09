@@ -115,15 +115,15 @@ This section is a step-by-step guide for practitioners. It covers the full evalu
 \paragraph{Step 4: Compute and stabilize weights.}
 \begin{itemize}
 \item Raw weights: $W_i = \exp(\log \pi'(A_i \mid X_i) - \log \pi_0(A_i \mid X_i))$.
-\item Apply \simcal{} (5-fold, variance cap $\rho = 0.95$) to get $W_i^{\text{stab}}$.
-\item Check ESS: $({\textstyle\sum} W^{\text{stab}})^2 / ({\textstyle\sum} (W^{\text{stab}})^2)$. Aim for $\ge 10\%$.
+\item Apply \simcal{} (5-fold, variance cap $\rho = 0.95$) to get stabilized, mean-one weights $\tilde{w}_i$.
+\item Check ESS: $({\textstyle\sum} \tilde{w}_i)^2 / ({\textstyle\sum} \tilde{w}_i^2)$. Aim for $\ge 30\%$ (PASS), acceptable down to 10\%.
 \item Check Hill index $\alpha \ge 2$.
 \end{itemize}
 
 \paragraph{Step 5: Compute estimates and CIs.}
 \begin{itemize}
 \item Calibrate rewards: $R_i = f(S_i)$.
-\item Compute $\est{V}_{\ips}(\pi') = \frac{1}{n} \sum_i W_i^{\text{stab}} \cdot R_i$.
+\item Compute $\est{V}_{\ips}(\pi') = \frac{1}{n} \sum_i \tilde{w}_i \cdot R_i$, where $\tilde{w}_i$ are the stabilized, mean-one weights.
 \item Compute SE via influence functions, add \oua, form 95\% CI.
 \end{itemize}
 
@@ -154,8 +154,8 @@ This section is a step-by-step guide for practitioners. It covers the full evalu
 
 \paragraph{Step 7: Compute DR estimate.}
 \begin{itemize}
-\item $\est{V}_{\dr}(\pi') = \frac{1}{n} \sum_i \left[ W_i^{\text{stab}} \cdot (R_i - \hat{g}(X_i)) + \hat{g}(X_i) \right]$.
-\item Compute orthogonality score: $\frac{1}{n} \sum_i (W_i^{\text{stab}} - 1) \cdot (R_i - \hat{g}(X_i))$ with CI.
+\item $\est{V}_{\dr}(\pi') = \frac{1}{n} \sum_i \left[ \tilde{w}_i \cdot (R_i - \hat{g}(X_i)) + \hat{g}(X_i) \right]$, where $\tilde{w}_i$ are the stabilized, mean-one weights after \simcal.
+\item Compute orthogonality score: $\frac{1}{n} \sum_i \tilde{w}_i \cdot (R_i - \hat{g}(X_i))$ with CI (see §4.7).
 \item If CI excludes zero, improve the critic or weights.
 \end{itemize}
 

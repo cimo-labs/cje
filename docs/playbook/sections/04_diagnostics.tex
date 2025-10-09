@@ -75,9 +75,9 @@ Each diagnostic produces a compact artifact (a number, a CI, or a plot) and a tr
 
 \paragraph{What it measures.} The number of ``effective'' independent samples after importance weighting:
 \begin{equation}
-\text{ESS} = \frac{\left( \sum_i W_i \right)^2}{\sum_i W_i^2}.
+\text{ESS} = \frac{\big(\sum_{i=1}^n \tilde{w}_i\big)^2}{\sum_{i=1}^n \tilde{w}_i^2},
 \end{equation}
-ESS ranges from 1 (one weight dominates) to $n$ (all weights equal).
+where $\tilde{w}_i$ are the stabilized, mean-one weights after \simcal. ESS ranges from 1 (one weight dominates) to $n$ (all weights equal).
 
 \paragraph{Why it matters.} Low ESS means a few samples dominate the estimate, leading to high variance and unreliable CIs. ESS is the primary diagnostic for off-policy viability.
 
@@ -99,7 +99,7 @@ ESS ranges from 1 (one weight dominates) to $n$ (all weights equal).
 \paragraph{Fixes:}
 \begin{itemize}
 \item Use \simcal{} with aggressive variance cap $\rho$ (e.g., 0.90).
-\item Restrict to a high-overlap cohort (e.g., prompts where $|\log W_i| < 2$).
+\item Restrict to a high-overlap cohort (e.g., prompts where $|\log \tilde{w}_i| < 2$).
 \item Switch from \ips{} to \dr{} with a strong outcome model.
 \item If ESS $< 1\%$, regenerate fresh outputs for the candidate policy and use \dm{} instead.
 \end{itemize}
@@ -112,7 +112,7 @@ ESS ranges from 1 (one weight dominates) to $n$ (all weights equal).
 
 \paragraph{Artifacts to inspect:}
 \begin{itemize}
-\item \textbf{Hill index $\alpha$:} estimated from the upper tail of $W$.
+\item \textbf{Hill index $\alpha$:} estimated from the upper tail of $\tilde{w}$ (post-\simcal{} weights).
 \item \textbf{QQ-plot:} compare weight quantiles to Pareto($\alpha$) reference.
 \item \textbf{Max/median ratio:} if $> 100$, likely heavy-tailed.
 \end{itemize}
@@ -137,16 +137,16 @@ ESS ranges from 1 (one weight dominates) to $n$ (all weights equal).
 
 \paragraph{What it measures.} The empirical moment
 \begin{equation}
-\text{OrthoScore} = \frac{1}{n} \sum_{i=1}^n W_i \cdot (R_i - \hat{g}(S_i)),
+\text{OrthoScore} = \frac{1}{n} \sum_{i=1}^n \tilde{w}_i \cdot (R_i - \hat{g}(S_i)),
 \end{equation}
-with a 95\% CI. Under ideal conditions (mean-one weights and well-specified outcome model), this should be near zero.
+with a 95\% CI, where $\tilde{w}_i$ are the stabilized, mean-one weights after \simcal. Under ideal conditions (mean-one weights and well-specified outcome model), this should be near zero.
 
 \paragraph{Why it matters.} Orthogonality is the key to doubly robust inference. If the orthogonality score is far from zero, either the weights or the outcome model (or both) are poor, and \dr{} loses its efficiency and robustness guarantees.
 
 \paragraph{Artifacts to inspect:}
 \begin{itemize}
 \item \textbf{Orthogonality score with CI:} point estimate $\pm 1.96 \cdot \SE$.
-\item \textbf{Residual plot:} $(R_i - \hat{g}(S_i))$ vs.\ $W_i$ to spot patterns.
+\item \textbf{Residual plot:} $(R_i - \hat{g}(S_i))$ vs.\ $\tilde{w}_i$ to spot patterns.
 \item \textbf{Outcome model performance:} OOF $R^2$ or MAE on fresh draws.
 \end{itemize}
 
@@ -254,7 +254,7 @@ For full audit trails, CJE produces:
 \item \textbf{Calibration curve:} $f(S)$ vs.\ $Y$ with OOF fit and mean-preservation line.
 \item \textbf{Coverage histogram:} oracle $S$ vs.\ evaluation $S$ distributions.
 \item \textbf{Weight distribution:} before/after \simcal, with ESS and Hill index annotations.
-\item \textbf{Orthogonality residual plot:} $(R - \hat{g}(S))$ vs.\ $W$ with CI band.
+\item \textbf{Orthogonality residual plot:} $(R - \hat{g}(S))$ vs.\ $\tilde{w}$ with CI band.
 \item \textbf{OUA variance decomposition:} stacked bar showing $\Var_{\text{main}}$ vs.\ $\Var_{\oua}$.
 \end{itemize}
 
