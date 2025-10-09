@@ -55,13 +55,29 @@ where $W_i = \pi'(A_i \mid X_i) / \pi_0(A_i \mid X_i)$ and $R_i = f(S_i)$.
 
 \subsection{Calibrated DR: add an outcome model for robustness}
 
-Doubly robust (DR) combines \ips{} with an outcome model to gain efficiency and robustness. The estimator is:
-\begin{equation}
-\est{V}_{\text{DR}}(\pi') = \frac{1}{n} \sum_{i=1}^n \left[ W_i \cdot (R_i - \hat{g}(S_i)) + \hat{g}(S_i) \right],
-\end{equation}
-where $\hat{g}(S_i)$ is a cross-fitted prediction of $R$ given score $S$ (trained on fresh draws from $\pi'$). In practice, $\hat{g}$ is typically a monotone function of $S$ (isotonic regression).
+Doubly robust (DR) combines \ips{} with an outcome model to gain efficiency and robustness. CJE supports two DR implementations, both valid under different modeling assumptions.
 
-\paragraph{Double robustness:} The estimator is consistent if \emph{either} the stabilized weights $\tilde{w}(\pi')$ converge to the true density ratios (up to mean-one normalization) \emph{or} the outcome model ($\hat{g}$) is correctly specified; if both are good, DR attains the semiparametric efficiency bound.
+\paragraph{Two DR implementations.}
+
+\emph{(A) Score-only AIPW (lightweight, default).} Fit $\hat{g}(S) \approx \E[R \mid S]$ on fresh draws from $\pi'$ using the judge score $S$ only. Then:
+\begin{equation}
+\est{V}_{\text{DR-S}}(\pi') = \frac{1}{n} \sum_{i=1}^n \left[ \tilde{w}_i \cdot (R_i - \hat{g}(S_i)) + \hat{g}(S_i) \right],
+\end{equation}
+where $\tilde{w}_i$ are the stabilized, mean-one weights after \simcal, and $\hat{g}$ is typically a monotone function of $S$ (isotonic regression). This is the default in CJE: low cost, works well when $S$ is a strong predictor.
+
+\emph{(B) Action-conditioned DR (canonical, research).} Fit $\hat{q}(X,A) \approx \E[R \mid X, A]$ using prompt features $X$ and response $A$, then compute $\hat{g}_{\pi'}(X) = \E_{A \sim \pi'(\ \cdot \mid X)} \hat{q}(X, A)$ via Monte Carlo rollouts or analytic evaluation. Then:
+\begin{equation}
+\est{V}_{\text{DR}}(\pi') = \frac{1}{n} \sum_{i=1}^n \left[ \hat{g}_{\pi'}(X_i) + \tilde{w}_i \cdot (R_i - \hat{q}(X_i, A_{0i})) \right].
+\end{equation}
+This is the canonical DR estimator from the semiparametric literature; use it when you have rich features or need maximum robustness (e.g., when $S$ alone is insufficient).
+
+\textbf{When to use which:}
+\begin{itemize}
+\item \textbf{DR-S (score-only):} When judge scores are informative and you want low implementation cost. Default for most LLM evaluations.
+\item \textbf{DR (action-conditioned):} When you have structured prompt features (length, domain, difficulty), or when $S$ is a weak predictor and you need the full robustness guarantee.
+\end{itemize}
+
+\paragraph{Double robustness guarantee:} Both estimators are consistent if \emph{either} the stabilized weights $\tilde{w}(\pi')$ converge to the true density ratios (up to mean-one normalization) \emph{or} the outcome model ($\hat{g}$ or $\hat{q}$) is correctly specified; if both are good, DR attains the semiparametric efficiency bound.
 
 \subsection{Inputs \& setup (off-policy)}
 
@@ -80,10 +96,10 @@ Without fresh draws, you cannot build a valid outcome model, and \ips{} is your 
 
 \subsection{Estimator and inference}
 
-With calibrated rewards $R_i = f(S_i)$ and stabilized weights $W_i$ (via \simcal), compute:
+With calibrated rewards $R_i = f(S_i)$ and stabilized, mean-one weights $\tilde{w}_i$ (via \simcal), compute:
 \begin{align}
-\est{V}_{\text{IPS}}(\pi') &= \frac{1}{n} \sum_{i=1}^n W_i \cdot R_i, \\
-\est{V}_{\text{DR}}(\pi') &= \frac{1}{n} \sum_{i=1}^n \left[ W_i \cdot (R_i - \hat{g}(S_i)) + \hat{g}(S_i) \right].
+\est{V}_{\text{IPS}}(\pi') &= \frac{1}{n} \sum_{i=1}^n \tilde{w}_i \cdot R_i, \\
+\est{V}_{\text{DR-S}}(\pi') &= \frac{1}{n} \sum_{i=1}^n \left[ \tilde{w}_i \cdot (R_i - \hat{g}(S_i)) + \hat{g}(S_i) \right].
 \end{align}
 
 Standard errors are computed via influence functions (per-sample contributions), which account for calibration, cross-fitting, and oracle uncertainty (via \oua). CIs are formed using the normal approximation.

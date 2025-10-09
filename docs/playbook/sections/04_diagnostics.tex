@@ -90,10 +90,10 @@ where $\tilde{w}_i$ are the stabilized, mean-one weights after \simcal. ESS rang
 
 \paragraph{Thresholds:}
 \begin{itemize}
-\item \textbf{Pass:} ESS $\ge 50\%$ of $n$ (excellent overlap).
-\item \textbf{Warn:} ESS $\in [10\%, 50\%)$ (moderate overlap; \dr{} recommended).
+\item \textbf{Pass:} ESS $\ge 30\%$ of $n$ (excellent overlap).
+\item \textbf{Warn:} ESS $\in [10\%, 30\%)$ (moderate overlap; \dr{} recommended).
 \item \textbf{Fail:} ESS $< 10\%$ (poor overlap; estimates unreliable unless \dr{} with strong outcome model).
-\item \textbf{Critical:} ESS $< 1\%$ (catastrophic; do not trust any estimate).
+\item \textbf{Refuse:} ESS $< 1\%$ (catastrophic; do not trust any estimate).
 \end{itemize}
 
 \paragraph{Fixes:}
@@ -225,7 +225,32 @@ with a 95\% CI, where $\tilde{w}_i$ are the stabilized, mean-one weights after \
 
 CJE estimators can optionally enforce \textbf{refusal gates}: if a diagnostic crosses a critical threshold, the estimator returns \texttt{NaN} instead of a potentially misleading number.
 
-\paragraph{Default gates:}
+\paragraph{Unified diagnostic thresholds.}
+
+Table~\ref{tab:thresholds} summarizes all diagnostic thresholds in one place. Use this as the single source of truth for interpreting diagnostic outputs.
+
+\begin{table}[h]
+\centering
+\caption{Unified diagnostic thresholds for CJE}
+\label{tab:thresholds}
+\begin{tabular}{lccc|c}
+\toprule
+\textbf{Diagnostic} & \textbf{PASS} & \textbf{WARN} & \textbf{FAIL} & \textbf{REFUSE} \\
+\midrule
+ESS / $n$ (post-\simcal) & $\ge 30\%$ & $[10\%, 30\%)$ & $< 10\%$ & $< 1\%$ \\
+Hill index $\alpha$ & $\ge 3$ & $[2, 3)$ & $< 2$ & $< 1$ \\
+Score coverage & $\ge 95\%$ & $[85\%, 95\%)$ & $< 85\%$ & — \\
+Calibration OOF MAE & $< 0.05$ & $[0.05, 0.10]$ & $> 0.10$ & — \\
+Mean preservation & $< 0.02$ & $[0.02, 0.05]$ & $> 0.05$ & — \\
+DR orthogonality $|$score$|$ & $< 0.05$ & $[0.05, 0.10]$ & $> 0.10$ & — \\
+\quad (CI must contain 0) & \checkmark & \checkmark & $\times$ & — \\
+OUA share & $< 20\%$ & $[20\%, 50\%]$ & $> 50\%$ & — \\
+Judge stability $\tau$ & $\ge 0.90$ & $[0.75, 0.90)$ & $< 0.75$ & — \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Default refusal gates:}
 \begin{itemize}
 \item ESS $< 1\%$ $\to$ refuse to estimate (off-policy only).
 \item Hill index $\alpha < 2$ $\to$ refuse (off-policy only).
@@ -239,7 +264,7 @@ Operators can adjust these gates or disable them for exploratory analysis, but t
 \begin{enumerate}
 \item \textbf{Check score coverage.} If $< 85\%$, add labels or narrow scope. If pass, continue.
 \item \textbf{Check calibration reliability.} If regional error is high, enable two-stage \autocal{} or add labels. If pass, continue.
-\item \textbf{(Off-policy only) Check ESS.} If $< 10\%$, use \simcal{} or switch to \dr. If $< 1\%$, regenerate. If pass, continue.
+\item \textbf{(Off-policy only) Check ESS.} If $< 30\%$ (WARN), review diagnostics and consider \dr. If $< 10\%$ (FAIL), use \simcal{} or switch to \dr. If $< 1\%$ (REFUSE), regenerate. If pass, continue.
 \item \textbf{(Off-policy only) Check tail index.} If $\alpha < 2$, apply stricter \simcal{} or cohort restriction. If pass, continue.
 \item \textbf{(DR only) Check orthogonality.} If CI excludes zero, improve outcome model or weights. If pass, trust the estimate.
 \item \textbf{Check OUA share.} If $> 50\%$, add labels. If pass, you're done.
