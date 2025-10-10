@@ -95,6 +95,25 @@ result = analyze_dataset(
 
 **⚠️ Important:** For DR mode, policy names in `target_policy_logprobs` keys MUST match fresh draw filenames exactly. Example: if logged data has `"gpt-4": -14.7`, you need `gpt-4_responses.jsonl` (not `gpt4_responses.jsonl`).
 
+**Cluster-robust inference (when data has dependencies):**
+
+If your evaluation data has structure (multiple prompts per user/session, time batches, conversation threads), use cluster-robust standard errors for honest confidence intervals:
+
+```python
+# Enable cluster-robust SEs (e.g., multiple prompts per user)
+result = analyze_dataset(
+    fresh_draws_dir="responses/",
+    cluster_id_field="user_id"  # Field name for cluster IDs
+)
+
+# CJE automatically combines two variance sources:
+# 1. Cluster-robust variance (eval-side dependence)
+# 2. OUA variance (oracle uncertainty)
+oua_share = result.metadata["oua_share"]  # Which component dominates?
+```
+
+**Impact:** Ignoring clustering can cause severe CI undercoverage (86.9% instead of 95%). Always use `cluster_id_field` when prompts have dependencies.
+
 See [Data Requirements](#data-requirements) for IPS/DR data format and [Teacher Forcing](#generating-log-probabilities) for computing logprobs.
 
 ## Three Analysis Modes

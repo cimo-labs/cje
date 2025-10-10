@@ -323,6 +323,157 @@ inf_funcs = results.influence_functions["policy_a"]  # shape: [n_samples]
 # These sum to zero and have variance equal to SE²
 ```
 
+### Cluster-Robust Inference
+
+CJE's uncertainty quantification properly accounts for **two independent sources of variance**:
+
+1. **Main sampling uncertainty** (eval log/prompts) → cluster-robust SEs
+2. **Calibrator uncertainty** (oracle slice) → OUA jackknife
+
+These components are **additive**: `Var_total = Var_CR + Var_OUA`
+
+#### Enabling Cluster-Robust SEs
+
+```python
+# Analyze with cluster-robust inference (e.g., multiple prompts per user)
+results = analyze_dataset(
+    fresh_draws_dir="responses/",
+    cluster_id_field="user_id"  # Enable cluster-robust SEs
+)
+
+# Access variance decomposition
+var_cr = results.metadata["cluster_robust_variance"]     # Eval-side clustering
+var_oua = results.metadata["oua_variance"]               # Oracle uncertainty
+var_total = var_cr + var_oua
+
+oua_share = var_oua / var_total  # What fraction is oracle uncertainty?
+
+# Confidence intervals automatically use SE_total = √(Var_CR + Var_OUA)
+for policy, est in results.estimates.items():
+    se = results.standard_errors[policy]  # SE_total
+    ci_lower, ci_upper = est - 1.96*se, est + 1.96*se
+    print(f"{policy}: {est:.3f} [{ci_lower:.3f}, {ci_upper:.3f}]")
+```
+
+#### What to Cluster On
+
+Specify `cluster_id_field` when your evaluation data has dependence structure:
+
+- **User/session clustering**: Multiple prompts from same user (`cluster_id_field="user_id"`)
+- **Time blocks**: Prompts in temporal batches (`cluster_id_field="batch_id"`)
+- **Conversation threads**: Multi-turn dialogues (`cluster_id_field="conversation_id"`)
+- **Paired designs**: DM contrasts using same prompts for multiple policies
+
+**Required:** Your data must have the specified field. CJE will group by this field and compute cluster-robust variance.
+
+#### Data Format with Clustering
+
+**For fresh draws:**
+```json
+{
+  "prompt_id": "eval_0",
+  "judge_score": 0.85,
+  "user_id": "user_123",        // Cluster identifier
+  "session_id": "sess_456"      // Alternative cluster identifier
+}
+```
+
+**For logged data:**
+```json
+{
+  "prompt": "What is 2+2?",
+  "response": "4",
+  "base_policy_logprob": -14.7,
+  "target_policy_logprobs": {"policy_a": -13.2},
+  "metadata": {
+    "judge_score": 0.85,
+    "user_id": "user_123"       // Cluster identifier
+  }
+}
+```
+
+#### When to Use Cluster-Robust SEs
+
+**✅ Always use when:**
+- Multiple prompts per user/session (user_id, session_id)
+- Temporal batches (batch_id, day, hour)
+- Paired DM contrasts (same prompt evaluated by multiple policies)
+- Conversation threads (conversation_id, thread_id)
+
+**❌ Not needed when:**
+- Each prompt is from a different user (i.i.d. sampling)
+- Data is truly independent draws
+
+**Impact:** Ignoring clustering can cause severe undercoverage (e.g., 86.9% instead of 95% observed empirically).
+
+#### Interpreting Results
+
+```python
+results = analyze_dataset(
+    fresh_draws_dir="responses/",
+    cluster_id_field="user_id"
+)
+
+# Cluster structure
+n_clusters = results.metadata["n_clusters"]        # Number of clusters (G)
+cluster_sizes = results.metadata["cluster_sizes"]  # Distribution
+
+# Variance decomposition
+se_iid = results.metadata["se_iid"]               # Naive (ignoring clustering)
+se_cr = results.metadata["se_cluster_robust"]     # Cluster-robust
+inflation = (se_cr / se_iid - 1) * 100            # Percent inflation
+
+print(f"Clusters: {n_clusters} (mean size: {cluster_sizes['mean']:.1f})")
+print(f"SE inflation from clustering: {inflation:.1f}%")
+
+# OUA share diagnostic
+oua_share = results.metadata["oua_share"]
+if oua_share > 0.5:
+    print("⚠️ Labels are the bottleneck - add more oracle labels")
+else:
+    print("✓ Prompts dominate uncertainty - sufficient oracle labels")
+```
+
+#### API Parameters
+
+```python
+analyze_dataset(
+    # Data sources
+    logged_data_path: str = None,
+    fresh_draws_dir: str = None,
+
+    # Cluster-robust inference
+    cluster_id_field: str = None,          # Field name for cluster IDs
+                                           # Set to enable cluster-robust SEs
+
+    # Oracle uncertainty (always enabled by default)
+    n_oracle_folds: int = 5,               # OUA jackknife folds
+
+    # Other parameters...
+    estimator: str = "auto",
+    verbose: bool = False
+)
+```
+
+#### Advanced: Satterthwaite Degrees of Freedom
+
+With few clusters or small oracle slices, CJE automatically uses Satterthwaite effective degrees of freedom instead of normal approximation:
+
+```
+df_eff = (Var_CR + Var_OUA)² / (Var_CR²/(G-1) + Var_OUA²/(K-1))
+```
+
+Then uses t-distribution critical value for CIs. This is automatic - no configuration needed.
+
+```python
+# Check which critical value was used
+df_eff = results.metadata.get("df_effective", None)
+if df_eff is not None and df_eff < 30:
+    print(f"Using t({df_eff:.1f}) critical value (small sample)")
+else:
+    print("Using normal (z) critical value (large sample)")
+```
+
 ### Fresh Draws Format
 
 **File structure:** One JSONL file per policy with pattern `{policy}_responses.jsonl`

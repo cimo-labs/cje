@@ -338,6 +338,253 @@ if drift_result["tau"] < 0.5:
     print("Drift detected!")
 ```
 
+## Uncertainty Quantification: Two-Component Structure
+
+CJE's uncertainty quantification properly accounts for **two independent sources of variance**:
+
+1. **Main sampling uncertainty** (from the eval log/prompts) → cluster-robust SEs
+2. **Calibrator uncertainty** (from the oracle slice) → OUA jackknife
+
+Under the standard product-sample setup (oracle and eval datasets are independent), these components are **additive**:
+
+```
+Var_total = Var_CR + Var_OUA
+```
+
+This two-component structure is critical for honest inference. Ignoring clustering on the eval side can cause severe undercoverage (e.g., 86.9% instead of 95%), while ignoring calibrator uncertainty understates risk when oracle slices are small.
+
+### Component 1: Cluster-Robust Variance (Eval-Side Dependence)
+
+**What to cluster:** Any structure that creates dependence between rows in your evaluation data:
+- **User/session clustering**: Multiple prompts from the same user or session
+- **Time blocks**: Prompts collected in temporal batches
+- **Conversation threads**: Multi-turn dialogues
+- **Paired designs**: DM contrasts where the same prompt is used for multiple policies
+
+**Why it matters:** Standard i.i.d. SEs assume independent samples. When prompts cluster (e.g., 5 prompts per user), the **effective** sample size is closer to the number of clusters (users), not the number of rows (prompts). Ignoring this inflates precision artificially.
+
+**Computing cluster-robust variance:**
+
+All CJE estimators are means of **per-row influence contributions**:
+- **DM level** for policy π: `ψ_i = f(S_i^π) - V_hat`
+- **DM paired contrast** (π vs π'): `ψ_i = [f(S_i^π) - f(S_i^π')] - Delta_hat`
+- **IPS**: `ψ_i = w_tilde_i * R_i - V_hat`
+- **DR**: `ψ_i = g_π(X_i) + w_tilde_i * (R_i - q_hat(X_i, A_i)) - V_hat`
+
+Aggregate to cluster sums:
+```
+Ψ_g = Σ_{i: c(i)=g} ψ_i
+```
+
+Small-sample corrected cluster-robust variance:
+```
+Var_CR = (G/(G-1)) * (1/n²) * Σ_{g=1}^G Ψ_g²
+```
+
+where G is the number of clusters and n is the total number of rows.
+
+**Edge cases:**
+- **Few clusters (G < 15)**: Prefer wild-cluster bootstrap over asymptotic CR1
+- **Two-way dependence** (e.g., user × day): Use two-way clustering formula (sum one-way variances, subtract intersection)
+- **Time series**: Use moving-block bootstrap with block length ≈ n^(1/3)
+
+### Component 2: Oracle Uncertainty Aware (OUA) Jackknife
+
+**What it captures:** Uncertainty from learning the calibration function f(S) on a finite oracle slice.
+
+**Why it matters:** When oracle size is small (common: 5-10% coverage), treating the calibrator as fixed drastically understates total uncertainty. OUA properly accounts for this.
+
+**Computing OUA variance:**
+
+1. Split oracle labels into K folds (same folds used for cross-fitting)
+2. For each fold k:
+   - Refit calibrator f^(-k) on oracle \ fold_k (let auto mode selection re-decide mono vs two-stage)
+   - Recompute calibrated rewards R^(-k) = f^(-k)(S)
+   - **For IPS/DR**: Re-select SIMCal weights (selection depends on R)
+   - **For DR**: Refit outcome model (depends on R)
+   - Compute point estimate θ_hat^(-k)
+
+3. Jackknife variance:
+```
+Var_OUA = ((K-1)/K) * Σ_{k=1}^K (θ_hat^(-k) - θ_bar)²
+```
+where `θ_bar = (1/K) Σ_k θ_hat^(-k)`
+
+**Key principle:** OUA captures **oracle-only** uncertainty. It holds the eval log fixed and only refits components that depend on calibrator outputs. This maintains independence with Var_CR.
+
+### Combining the Components
+
+Because oracle and eval are independent samples, the cross-term vanishes asymptotically:
+
+```
+Var_total = Var_CR + Var_OUA
+SE_total = √Var_total
+```
+
+**Critical value selection:**
+
+- **Large samples** (G ≥ 30, K ≥ 5): Use normal quantile (1.96 for 95% CI)
+- **Small clusters or oracle**: Use Satterthwaite effective degrees of freedom:
+
+```
+df_eff = (Var_CR + Var_OUA)² / (Var_CR²/df_CR + Var_OUA²/df_OUA)
+
+where df_CR = G - 1, df_OUA = K - 1
+```
+
+Then use t_{1-α/2, df_eff} critical value (e.g., qt(0.975, df_eff) in R).
+
+### What to Report
+
+For complete transparency, always report:
+
+1. **Point estimate** with 95% CI using SE_total
+2. **OUA share**: `Var_OUA / Var_total` (shows which component dominates)
+3. **Cluster structure**: Number of clusters G, cluster size distribution
+4. **Comparison**: i.i.d. SE vs cluster-robust SE (shows dependence penalty)
+
+Example output:
+```
+Policy: gpt-4-mini
+Estimate: 0.756 [0.712, 0.800]  (95% CI, df=42)
+
+Variance decomposition:
+  Cluster-robust (eval): 0.0012  (72%)
+  OUA (oracle):          0.0005  (28%)
+  Total:                 0.0017
+
+Cluster structure: G=45 clusters (mean size=22, range [5, 67])
+Standard errors: i.i.d.=0.032, cluster-robust=0.041 (28% inflation)
+```
+
+### Implementation Pattern (Pseudocode)
+
+```python
+# Component 1: Cluster-robust variance on eval log
+def compute_cluster_robust_variance(psi, cluster_ids):
+    """
+    psi: per-row influence contributions (n,)
+    cluster_ids: cluster identifier for each row (n,)
+    Returns: Var_CR
+    """
+    clusters = pd.DataFrame({"psi": psi, "cluster": cluster_ids})
+    cluster_sums = clusters.groupby("cluster")["psi"].sum()  # Ψ_g
+
+    G = len(cluster_sums)
+    n = len(psi)
+
+    Var_CR = (G / (G - 1)) * (cluster_sums ** 2).sum() / (n ** 2)
+    return Var_CR, G
+
+# Component 2: OUA jackknife (oracle-only refits)
+def compute_oua_variance(dataset, oracle_folds, estimator_config):
+    """
+    Refit calibrator K times, holding eval log fixed
+    Returns: Var_OUA, K
+    """
+    K = len(oracle_folds)
+    estimates = []
+
+    for k in range(K):
+        # Refit calibrator on oracle \ fold_k
+        f_minus_k = fit_autocal(oracle_minus_fold=k)  # auto mode selection
+
+        # Recompute calibrated rewards
+        R_minus_k = f_minus_k(dataset.judge_scores)
+
+        # For IPS/DR: re-select SIMCal (depends on R)
+        if mode in ["ips", "dr"]:
+            w_tilde = simcal_select(raw_weights, index=S, rewards=R_minus_k)
+
+        # For DR: refit outcome model (depends on R)
+        if mode == "dr":
+            g_hat = crossfit_critic(X, A, R_minus_k)
+
+        # Compute point estimate with refit components
+        theta_k = compute_estimate(R_minus_k, w_tilde, g_hat)
+        estimates.append(theta_k)
+
+    theta_bar = np.mean(estimates)
+    Var_OUA = ((K - 1) / K) * np.sum((estimates - theta_bar) ** 2)
+
+    return Var_OUA, K
+
+# Combine and construct CI
+def construct_ci(estimate, Var_CR, Var_OUA, df_CR, df_OUA, alpha=0.05):
+    """
+    estimate: point estimate
+    Var_CR, df_CR: cluster-robust component
+    Var_OUA, df_OUA: oracle uncertainty component
+    Returns: (lower, upper, df_eff)
+    """
+    Var_total = Var_CR + Var_OUA
+    SE_total = np.sqrt(Var_total)
+
+    # Satterthwaite effective df
+    if Var_CR > 0 and Var_OUA > 0:
+        df_eff = (Var_total ** 2) / (
+            (Var_CR ** 2 / df_CR) + (Var_OUA ** 2 / df_OUA)
+        )
+    elif Var_CR > 0:
+        df_eff = df_CR
+    else:
+        df_eff = df_OUA
+
+    # Critical value
+    if df_eff >= 30:
+        crit = 1.96  # normal approximation
+    else:
+        from scipy.stats import t
+        crit = t.ppf(1 - alpha/2, df_eff)
+
+    lower = estimate - crit * SE_total
+    upper = estimate + crit * SE_total
+
+    return lower, upper, df_eff
+```
+
+### Usage Example
+
+```python
+from cje import analyze_dataset
+
+# Analyze with cluster-robust inference
+result = analyze_dataset(
+    fresh_draws_dir="responses/",
+    cluster_id_field="user_id",  # Enable cluster-robust SEs
+    n_oracle_folds=5              # OUA jackknife folds (default)
+)
+
+# Access two-component variance decomposition
+print(f"Cluster-robust variance: {result.var_cluster_robust:.4f}")
+print(f"OUA variance: {result.var_oua:.4f}")
+print(f"OUA share: {result.oua_share:.1%}")
+
+# Confidence intervals use SE_total = √(Var_CR + Var_OUA)
+for policy, est in result.estimates.items():
+    se = result.standard_errors[policy]  # SE_total
+    ci_lower, ci_upper = est - 1.96*se, est + 1.96*se
+    print(f"{policy}: {est:.3f} [{ci_lower:.3f}, {ci_upper:.3f}]")
+```
+
+### Common Pitfalls
+
+**❌ Using i.i.d. SEs with clustered data**
+- Result: Severe undercoverage (86.9% instead of 95% observed empirically)
+- Fix: Always specify `cluster_id_field` when rows have dependence
+
+**❌ Ignoring OUA with small oracle slices**
+- Result: CIs too narrow, overconfidence in precision
+- Fix: CJE computes OUA by default; check OUA share in reports
+
+**❌ Not reporting which component dominates**
+- Result: Unclear whether to add more prompts or more labels
+- Fix: Always report OUA share—if >50%, labels are the bottleneck
+
+**❌ Mixing cluster levels (e.g., clustering by session but pairing by user)**
+- Result: Incorrect variance, wrong CIs
+- Fix: Match cluster definition to the dependence structure; for nested clusters, use the coarsest level
+
 ## References
 
 - **ESS**: Effective Sample Size in Importance Sampling (Kong, 1992)

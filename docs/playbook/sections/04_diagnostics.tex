@@ -350,6 +350,97 @@ Overall: PASS (with ESS warning)
 Recommendation: Estimate is reliable. Consider adding fresh draws or cohort restriction for tighter CIs.
 \end{lstlisting}
 
+\subsection{Uncertainty quantification: cluster-robust + OUA}
+
+\paragraph{Two-component variance structure.} CJE's confidence intervals properly account for \emph{two independent sources of uncertainty}:
+\begin{enumerate}
+\item \textbf{Main sampling uncertainty} (from the eval log/prompts) $\to$ \textbf{cluster-robust SEs}.
+\item \textbf{Calibrator uncertainty} (from the oracle slice) $\to$ \textbf{\oua{} jackknife}.
+\end{enumerate}
+
+Under the product-sample setup (oracle and eval are independent draws), these components are \textbf{additive}:
+\begin{equation}
+\widehat{\Var}_{\text{total}} = \widehat{\Var}_{\text{CR}} + \widehat{\Var}_{\oua}.
+\end{equation}
+
+\paragraph{Why it matters.} Ignoring clustering on the eval side can cause severe undercoverage (e.g., 86.9\% instead of 95\% observed empirically), while ignoring calibrator uncertainty understates risk when oracle slices are small. Both components are essential for honest inference.
+
+\paragraph{Component 1: Cluster-robust variance (eval-side dependence).}
+
+Standard i.i.d.\ SEs assume independent samples. When evaluation rows cluster---e.g., multiple prompts per user/session, time blocks, conversation threads, or paired DM contrasts---the \emph{effective} sample size is closer to the number of clusters $G$, not the number of rows $n$.
+
+\textbf{What to cluster:} any dependence structure in your eval data (user, session, time block, paired design).
+
+All CJE estimators are means of per-row \textbf{influence contributions} $\psi_i$:
+\begin{align*}
+\text{DM level:} \quad &\psi_i = f(S_i^\pi) - \hat{V}, \\
+\text{DM paired contrast:} \quad &\psi_i = \bigl[f(S_i^\pi) - f(S_i^{\pi'})\bigr] - \widehat{\Delta}, \\
+\text{IPS:} \quad &\psi_i = \tilde{w}_i R_i - \hat{V}, \\
+\text{DR:} \quad &\psi_i = \hat{g}_\pi(X_i) + \tilde{w}_i\bigl(R_i - \hat{q}(X_i, A_i^0)\bigr) - \hat{V}.
+\end{align*}
+
+Aggregate to cluster sums $\Psi_g = \sum_{i:\, c(i)=g} \psi_i$, then compute the small-sample--corrected cluster-robust variance:
+\begin{equation}
+\widehat{\Var}_{\text{CR}} = \frac{G}{G-1} \cdot \frac{1}{n^2} \sum_{g=1}^G \Psi_g^2.
+\end{equation}
+
+\textbf{Edge cases:}
+\begin{itemize}
+\item \textbf{Few clusters ($G < 15$):} prefer wild-cluster bootstrap over CR1.
+\item \textbf{Two-way dependence (e.g., user $\times$ day):} use two-way clustering formula.
+\item \textbf{Time series:} use moving-block bootstrap with block length $\approx n^{1/3}$.
+\end{itemize}
+
+\paragraph{Component 2: Oracle-uncertainty aware (OUA) jackknife.}
+
+When the oracle slice is small (5--10\% coverage is common), treating the calibrator $f$ as fixed drastically understates total uncertainty. \oua{} properly accounts for this:
+
+\begin{enumerate}
+\item Split oracle labels into $K$ folds (same folds used for cross-fitting).
+\item For each fold $k$:
+\begin{itemize}
+\item Refit calibrator $f^{(-k)}$ on oracle $\setminus$ fold $k$ (let auto mode selection re-decide mono vs.\ two-stage).
+\item Recompute calibrated rewards $R^{(-k)} = f^{(-k)}(S)$.
+\item \textbf{For IPS/DR:} re-select \simcal{} weights (selection depends on $R$).
+\item \textbf{For DR:} refit outcome model (depends on $R$).
+\item Compute point estimate $\hat{\theta}^{(-k)}$.
+\end{itemize}
+\item Jackknife variance:
+\begin{equation}
+\widehat{\Var}_{\oua} = \frac{K-1}{K} \sum_{k=1}^K \bigl(\hat{\theta}^{(-k)} - \bar{\theta}\bigr)^2, \quad \bar{\theta} = \frac{1}{K}\sum_k \hat{\theta}^{(-k)}.
+\end{equation}
+\end{enumerate}
+
+\textbf{Key principle:} \oua{} captures \emph{oracle-only} uncertainty. It holds the eval log fixed and only refits components that depend on calibrator outputs. This maintains independence with $\widehat{\Var}_{\text{CR}}$.
+
+\paragraph{Combining the components and critical values.}
+
+Because oracle and eval are independent, the cross-term vanishes asymptotically:
+\begin{equation}
+\SE_{\text{total}} = \sqrt{\widehat{\Var}_{\text{CR}} + \widehat{\Var}_{\oua}}.
+\end{equation}
+
+\textbf{Critical value:}
+\begin{itemize}
+\item \textbf{Large samples ($G \ge 30$, $K \ge 5$):} use normal quantile (1.96 for 95\% CI).
+\item \textbf{Small clusters or oracle:} use Satterthwaite effective degrees of freedom:
+\begin{equation}
+\text{df}_{\text{eff}} = \frac{\bigl(\widehat{\Var}_{\text{CR}} + \widehat{\Var}_{\oua}\bigr)^2}
+{\widehat{\Var}_{\text{CR}}^2/\text{df}_{\text{CR}} + \widehat{\Var}_{\oua}^2/\text{df}_{\oua}}
+\end{equation}
+where $\text{df}_{\text{CR}} = G-1$ and $\text{df}_{\oua} = K-1$. Then use $t_{1-\alpha/2, \text{df}_{\text{eff}}}$.
+\end{itemize}
+
+\paragraph{What to report.} For complete transparency, always include:
+\begin{itemize}
+\item Point estimate with 95\% CI using $\SE_{\text{total}}$.
+\item \textbf{\oua{} share}: $\widehat{\Var}_{\oua}/\widehat{\Var}_{\text{total}}$ (shows which component dominates).
+\item Cluster structure: number of clusters $G$, cluster size distribution.
+\item Comparison: i.i.d.\ SE vs.\ cluster-robust SE (shows dependence penalty).
+\end{itemize}
+
+\paragraph{Quick diagnostic.} If \oua{} share $> 50\%$, labels are the bottleneck---add more oracle labels. If cluster-robust SE is much larger than i.i.d.\ SE (e.g., 30\%+ inflation), dependence is substantial---ensure you've identified the right cluster definition. If you're using paired DM contrasts, \emph{always} use cluster-robust SEs; pairing reduces variance but often induces strong within-prompt correlation.
+
 \subsection{Summary}
 
 The six diagnostics are organized into two groups:
