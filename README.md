@@ -139,16 +139,16 @@ See [Engineering Guide](README_ENGINEERING.md) for IPS/DR data formats and log p
 ## Development
 
 ```bash
-git clone https://github.com/fondutech/causal-judge-evaluation.git
-cd causal-judge-evaluation
+git clone https://github.com/cimo-labs/cje.git
+cd cje
 poetry install
 make test
 ```
 
 ## Support
 
-- 🐛 [Issues](https://github.com/fondutech/causal-judge-evaluation/issues)
-- 💬 [Discussions](https://github.com/fondutech/causal-judge-evaluation/discussions)
+- 🐛 [Issues](https://github.com/cimo-labs/cje/issues)
+- 💬 [Discussions](https://github.com/cimo-labs/cje/discussions)
 
 ## License
 
