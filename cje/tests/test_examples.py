@@ -257,3 +257,55 @@ class TestAutoModeSelection:
         assert mode == "dr"
         assert coverage > 0  # Arena sample has logprobs
         assert "DR mode" in explanation
+
+
+@pytest.mark.slow
+class TestNotebookExecution:
+    """Test that the actual notebook executes without errors."""
+
+    def test_notebook_executes_end_to_end(self) -> None:
+        """Execute the Colab notebook to catch runtime errors like missing .get() calls.
+
+        This test catches issues that the API tests miss, such as:
+        - KeyError from direct dict access without .get()
+        - Missing imports in cells
+        - Broken cell execution order
+        - Invalid markdown or formatting
+
+        Uses nbconvert to execute all cells in order, simulating Colab execution.
+        """
+        pytest.importorskip("nbformat")
+        pytest.importorskip("nbconvert")
+
+        import nbformat
+        from nbconvert.preprocessors import ExecutePreprocessor
+        from pathlib import Path
+
+        # Find the notebook
+        notebook_path = (
+            Path(__file__).parent.parent.parent / "examples" / "cje_arena_demo.ipynb"
+        )
+        assert notebook_path.exists(), f"Notebook not found at {notebook_path}"
+
+        # Read the notebook
+        with open(notebook_path) as f:
+            nb = nbformat.read(f, as_version=4)
+
+        # Execute all cells
+        # Note: This will download data, install packages, etc. - mark as slow test
+        ep = ExecutePreprocessor(
+            timeout=600,  # 10 minutes max
+            kernel_name="python3",
+            allow_errors=False,  # Fail on any cell error
+        )
+
+        try:
+            # Execute in a temporary directory to avoid polluting the repo
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                ep.preprocess(nb, {"metadata": {"path": tmpdir}})
+        except Exception as e:
+            pytest.fail(f"Notebook execution failed: {e}")
+
+        print("✓ Notebook executed successfully end-to-end")
