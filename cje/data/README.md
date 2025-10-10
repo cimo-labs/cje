@@ -142,6 +142,63 @@ Every sample must have:
 
 See `examples/arena_sample/` for a complete working example with logged data and fresh draws.
 
+### Fresh Draws for Direct Mode
+
+Direct Mode (on-policy evaluation) requires **one JSONL file per policy** in `fresh_draws_dir`:
+
+**Directory structure:**
+```
+responses/
+├── model_a_responses.jsonl
+├── model_b_responses.jsonl
+└── model_c_responses.jsonl
+```
+
+**File naming patterns** (searched in order):
+1. `{policy}_responses.jsonl` (preferred)
+2. `responses/{policy}_responses.jsonl`
+3. `{policy}_fresh.jsonl`
+4. `fresh_draws/{policy}.jsonl`
+
+**Each file contains records (policy inferred from filename):**
+```json
+{"prompt_id": "eval_0", "judge_score": 0.85}
+{"prompt_id": "eval_1", "judge_score": 0.72, "oracle_label": 0.70}
+```
+
+**Fields:**
+- `prompt_id`: Required - identifies the prompt
+- `judge_score`: Required - judge evaluation in [0, 1]
+- `oracle_label`: Optional - ground truth for AutoCal-R calibration
+- `draw_idx`: Optional - defaults to 0 (for multiple draws per prompt)
+- `response`: Optional - the actual generated text
+
+**Note:** The `target_policy` field is **NOT needed** - it's inferred from the filename!
+
+### Policy Name Matching (IPS/DR Modes)
+
+When using DR mode (combining logged data + fresh draws), policy names must match exactly:
+
+**Policy discovery process:**
+1. **From logged data**: Extracts policy names from `target_policy_logprobs` dict keys
+2. **From fresh draws**: Extracts policy names from filenames (`{policy}_responses.jsonl`)
+3. **Matching**: For each policy in logged data, loads `{policy}_responses.jsonl`
+
+**Example:**
+```python
+# Logged data defines policies
+{"target_policy_logprobs": {"clone": -14.7, "premium": -18.3}}
+# Discovers: ["clone", "premium"]
+
+# CJE then searches for:
+# - responses/clone_responses.jsonl
+# - responses/premium_responses.jsonl
+
+# If filenames don't match → FileNotFoundError
+```
+
+**Common pitfall:** Names with special characters (e.g., `"gpt-4"` vs `"gpt4"`, `"model_v2"` vs `"model-v2"`). Use identical names everywhere!
+
 ## Key Design Decisions
 
 ### 1. **Pydantic for Type Safety**

@@ -61,10 +61,17 @@ for i, policy in enumerate(result.metadata["target_policies"]):
     print(f"{policy}: {est:.3f} ± {1.96*se:.3f}")
 ```
 
-Your `responses/` directory just needs JSONL files like:
+Your `responses/` directory needs **one JSONL file per policy**:
+```
+responses/
+├── model_a_responses.jsonl
+└── model_b_responses.jsonl
+```
+
+Each file contains records (policy inferred from filename):
 ```json
-{"prompt_id": "eval_0", "policy": "model_a", "judge_score": 0.85}
-{"prompt_id": "eval_0", "policy": "model_b", "judge_score": 0.72}
+{"prompt_id": "eval_0", "judge_score": 0.85}
+{"prompt_id": "eval_1", "judge_score": 0.72}
 ```
 
 That's it! CJE handles the rest - auto-discovers policies, applies calibration if oracle labels are present, and returns reliable estimates.
@@ -83,6 +90,8 @@ result = analyze_dataset(
     fresh_draws_dir="responses/"
 )
 ```
+
+**⚠️ Important:** For DR mode, policy names in `target_policy_logprobs` keys MUST match fresh draw filenames exactly. Example: if logged data has `"gpt-4": -14.7`, you need `gpt-4_responses.jsonl` (not `gpt4_responses.jsonl`).
 
 See [Data Requirements](#data-requirements) for IPS/DR data format and [Teacher Forcing](#generating-log-probabilities) for computing logprobs.
 

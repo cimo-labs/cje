@@ -105,7 +105,47 @@ results = analyze_dataset(
 ### What are fresh draws?
 Fresh draws are new responses from your target policies evaluated by the judge. For Direct mode, these are your only data source. For DR mode, they supplement logged data for better accuracy.
 
-Format: JSONL files per policy in a directory (e.g., `responses/clone_responses.jsonl`)
+**Format:** One JSONL file per policy in `fresh_draws_dir`. Policy name is inferred from filename.
+
+**Example:** `responses/clone_responses.jsonl` → policy name is `"clone"`
+
+### ⚠️ Policy Name Matching (IPS/DR Modes)
+
+**CRITICAL:** Policy names must match EXACTLY between logged data and fresh draw filenames.
+
+**How policies are detected:**
+1. **From logged data:** Policy names = keys in `target_policy_logprobs` dict
+2. **From fresh draws:** Policy names = extracted from `{policy}_responses.jsonl` filenames
+
+**Example - Correct matching:**
+```json
+// logs.jsonl (defines policies via keys)
+{
+  "target_policy_logprobs": {
+    "clone": -14.7,
+    "premium": -18.3,
+    "unhelpful": -42.1
+  }
+}
+```
+
+```
+responses/  (filenames must match keys exactly)
+├── clone_responses.jsonl      ✅ matches "clone"
+├── premium_responses.jsonl    ✅ matches "premium"
+└── unhelpful_responses.jsonl  ✅ matches "unhelpful"
+```
+
+**Common mistake - Name mismatch:**
+```json
+// Logged data has "gpt-4"
+{"target_policy_logprobs": {"gpt-4": -14.7}}
+
+// But file is named "gpt4_responses.jsonl"
+❌ Error: No fresh draw file found for policy 'gpt-4'
+```
+
+**Fix:** Use identical names everywhere. If logged data has `"gpt-4"`, file must be `gpt-4_responses.jsonl`.
 
 ## Common Workflows
 
@@ -189,17 +229,29 @@ python -m cje validate logs.jsonl --verbose
 ## Data Format
 
 ### Direct Mode (fresh draws only):
+
+**File naming:** One file per policy with pattern `{policy}_responses.jsonl`
+
+**Example structure:**
+```
+responses/
+├── clone_responses.jsonl
+├── premium_responses.jsonl
+└── unhelpful_responses.jsonl
+```
+
+**Record format** (inside each file):
 ```json
 {
   "prompt_id": "arena_0",
-  "prompt": "User question",
-  "response": "Model response",
-  "policy": "clone",          // Optional if using separate files per policy
-  "judge_score": 0.85,        // Required
-  "oracle_label": 0.86        // Optional (enables AutoCal-R calibration)
+  "judge_score": 0.85,        // Required: judge evaluation
+  "oracle_label": 0.86,       // Optional: ground truth for AutoCal-R
+  "prompt": "User question",  // Optional: for reference
+  "response": "Model response" // Optional: for reference
 }
 ```
-Store as: `responses/clone_responses.jsonl`, `responses/parallel_universe_prompt_responses.jsonl`, etc.
+
+**Note:** Policy name is inferred from filename (e.g., `clone_responses.jsonl` → policy `"clone"`). Do NOT include a `"policy"` field in the records.
 
 **AutoCal-R in Direct mode**: If any fresh draws have `oracle_label`, Direct mode automatically applies AutoCal-R to learn judge→oracle calibration and uses calibrated rewards. Otherwise, uses raw judge scores. More oracle labels = better calibration (5-10% is often sufficient).
 

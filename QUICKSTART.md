@@ -23,16 +23,21 @@ pip install cje-eval
 
 **Simplest: Direct mode (no logprobs needed)**
 
-Create JSONL files in a `responses/` directory:
+Create **one JSONL file per policy** in a `responses/` directory:
 
+**`responses/model_a_responses.jsonl`:**
 ```json
-{"prompt_id": "eval_0", "policy": "model_a", "judge_score": 0.85}
-{"prompt_id": "eval_0", "policy": "model_b", "judge_score": 0.72}
-{"prompt_id": "eval_1", "policy": "model_a", "judge_score": 0.91}
-{"prompt_id": "eval_1", "policy": "model_b", "judge_score": 0.88}
+{"prompt_id": "eval_0", "judge_score": 0.85}
+{"prompt_id": "eval_1", "judge_score": 0.91}
 ```
 
-Save as `responses/model_a_responses.jsonl`, `responses/model_b_responses.jsonl`, etc.
+**`responses/model_b_responses.jsonl`:**
+```json
+{"prompt_id": "eval_0", "judge_score": 0.72}
+{"prompt_id": "eval_1", "judge_score": 0.88}
+```
+
+The policy name is inferred from the filename (no `policy` field needed).
 
 **Advanced: IPS/DR modes (with logprobs)**
 
