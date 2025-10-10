@@ -13,24 +13,24 @@
 
 CJE calibrates judge scores using a small oracle slice (5-10% coverage), then delivers statistically rigorous estimates. As simple as comparing responses, as powerful as A/B testing.
 
-## How It Works (Direct Mode)
+## How It Works
 
 ```
-Judge scores + oracle labels → AutoCal-R (isotonic calibration)
-                             → Unbiased estimates in oracle space
-                             → Valid CIs (cluster-robust SE + OUA jackknife)
+Judge scores + small oracle slice (5-10%) → Calibrate to oracle scale
+                                          → Unbiased policy estimates
+                                          → Valid 95% confidence intervals
 ```
 
-**AutoCal-R** learns the judge→oracle mapping using isotonic regression:
-- **Enforces monotonicity**: "higher judge score → no worse outcome"
-- **Mean-preserving**: Oracle KPI stays on the right scale
-- **Efficient with small labels**: 5-10% oracle coverage often sufficient
+**What you get:**
+- **Unbiased estimates**: Judge scores mapped to oracle outcome scale (preserves mean, enforces "higher score → no worse outcome")
+- **Valid CIs**: Account for both sampling uncertainty and calibration uncertainty
+- **Small label budget**: 5-10% oracle coverage often sufficient
 
-**Valid uncertainty quantification** accounts for two independent sources:
-- **Cluster-robust SE**: Handles eval-side dependence (users, sessions, paired designs)
-- **OUA jackknife**: Captures oracle slice uncertainty
+**Automatic handling:**
+- Paired comparisons: Clusters by prompt when comparing policies on same eval set
+- Oracle uncertainty: Jackknife procedure captures calibration risk
 
-See [`cje/calibration/README.md`](cje/calibration/README.md#why-isotonic-regression-for-reward-calibration) for mathematical details.
+See [`cje/calibration/README.md`](cje/calibration/README.md#why-isotonic-regression-for-reward-calibration) for technical details.
 
 ## Installation
 
@@ -85,21 +85,23 @@ responses/
 CJE automatically:
 - Discovers policies from filenames (`model_a_responses.jsonl` → policy `"model_a"`)
 - Applies AutoCal-R when oracle labels are present
-- Computes cluster-robust SEs if you provide `cluster_id_field`
+- Uses cluster-robust SEs for paired comparisons (when same prompts across policies)
 - Returns unbiased estimates with valid 95% CIs
 
-### Cluster-Robust Inference
+### Paired Comparisons
 
-If your eval data has dependencies (multiple prompts per user/session, time batches, paired designs):
+When comparing policies on the **same prompts** (paired design), CJE automatically uses cluster-robust standard errors:
 
 ```python
-result = analyze_dataset(
-    fresh_draws_dir="responses/",
-    cluster_id_field="user_id"  # Enable cluster-robust SEs
-)
+# Both files must have matching prompt_ids for pairing
+result = analyze_dataset(fresh_draws_dir="responses/")
+
+# CJE automatically clusters by prompt for valid inference
+if result.metadata.get("prompts_aligned"):
+    print("✓ Paired comparison - using cluster-robust SEs")
 ```
 
-**Why it matters:** Ignoring clustering causes severe undercoverage (86.9% instead of 95% empirically). See [Engineering Guide](README_ENGINEERING.md#cluster-robust-inference) for details.
+**Why it matters:** Paired designs have correlated outcomes across policies (same prompt evaluated by multiple models). Standard SEs would understate uncertainty. CJE automatically accounts for this by clustering by `prompt_id`.
 
 ## Beyond Direct Mode
 
@@ -126,9 +128,9 @@ See [Engineering Guide](README_ENGINEERING.md) for IPS/DR data formats and log p
 - [Examples](examples/) - Working code samples
 
 🔧 **For Engineers**
-- [Engineering Guide](README_ENGINEERING.md) - Complete API reference, data formats, cluster-robust inference
+- [Engineering Guide](README_ENGINEERING.md) - Complete API reference, data formats, uncertainty quantification
 - [Calibration Methods](cje/calibration/README.md) - AutoCal-R, isotonic regression, two-stage fallback
-- [Diagnostics System](cje/diagnostics/README.md) - Uncertainty quantification, OUA, cluster-robust SEs
+- [Diagnostics System](cje/diagnostics/README.md) - Uncertainty quantification, OUA, paired inference
 - [Estimators](cje/estimators/README.md) - Direct, IPS, DR implementations
 
 📖 **Theory**
