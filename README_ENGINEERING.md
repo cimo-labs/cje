@@ -38,7 +38,31 @@ class EstimationResult:
 
 ## Input Data Format
 
-### Required JSONL Structure
+### For Direct Mode (fresh draws only)
+
+**File structure:** One JSONL file per policy in `fresh_draws_dir`
+```
+responses/
+├── policy_a_responses.jsonl
+├── policy_b_responses.jsonl
+```
+
+**Record format:**
+```json
+{
+  "prompt_id": "eval_0",              // Required: Prompt identifier
+  "judge_score": 0.85,                // Required: Judge evaluation in [0,1]
+  "oracle_label": 0.86,               // Optional: Ground truth for AutoCal-R
+  "prompt": "What is 2+2?",           // Optional: For reference
+  "response": "4"                     // Optional: For reference
+}
+```
+
+**Note:** Policy name inferred from filename. Do NOT include `"policy"` field in records.
+
+### For IPS/DR Modes (logged data)
+
+**Required JSONL Structure:**
 ```json
 {
   "prompt": "string",                    // Required: Input text
@@ -298,15 +322,32 @@ inf_funcs = results.influence_functions["policy_a"]  # shape: [n_samples]
 ```
 
 ### Fresh Draws Format
-Same as input data but represents new responses from target policy:
+
+**File structure:** One JSONL file per policy with pattern `{policy}_responses.jsonl`
+
+**Example:**
+```
+responses/
+├── clone_responses.jsonl
+├── premium_responses.jsonl
+└── unhelpful_responses.jsonl
+```
+
+**Record format** (inside each file):
 ```json
 {
-  "prompt_id": "p123",           // Must match original prompt
-  "response": "New answer...",   // Fresh sample from target
-  "judge_score": 0.83,          // Judge evaluation of new response
-  "draw_idx": 0                  // Index if multiple draws per prompt
+  "prompt_id": "p123",           // Required: Must match logged data prompts (for DR)
+  "judge_score": 0.83,          // Required: Judge evaluation
+  "oracle_label": 0.86,         // Optional: Ground truth for AutoCal-R
+  "response": "New answer...",   // Optional: Fresh sample from target
+  "draw_idx": 0                  // Optional: Index if multiple draws per prompt
 }
 ```
+
+**CRITICAL:**
+- Policy name inferred from filename (e.g., `clone_responses.jsonl` → policy `"clone"`)
+- Do NOT include `"policy"` field in records
+- For DR mode: Policy names must match exactly with `target_policy_logprobs` keys in logged data
 
 ## Common Patterns
 

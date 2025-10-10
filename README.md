@@ -114,34 +114,32 @@ CJE automatically selects the best mode based on your data:
 
 **IPS/DR modes** enable counterfactual inference: "What would happen if we deployed this policy?" This requires log probabilities from your models. See [Generating Log Probabilities](#generating-log-probabilities) below for Fireworks API integration.
 
-## When to Use CJE
-
-✅ **Use CJE when you need:**
-- Statistical rigor (confidence intervals, p-values)
-- Debiased judge scores (automatic calibration)
-- Policy comparisons or counterfactual estimates
-- To reuse logged data for new evaluations
-
-❌ **Don't use CJE for:**
-- Online learning (CJE is offline/batch)
-- Real-time scoring (use raw judge for that)
-- Very small samples (<100 examples)
-
 ## Data Requirements
 
 Requirements depend on which mode you're using:
 
 ### For Direct Mode (fresh draws only):
+
+**File structure:** One JSONL file per policy in `fresh_draws_dir`
+```
+responses/
+├── clone_responses.jsonl
+├── premium_responses.jsonl
+└── unhelpful_responses.jsonl
+```
+
+**Record format** (inside each file):
 ```json
 {
   "prompt_id": "arena_0",
-  "prompt": "What is 2+2?",
-  "response": "4",
-  "policy": "clone",
   "judge_score": 0.85,                       // Required: judge evaluation
-  "oracle_label": 0.86                       // Optional: ground truth (enables AutoCal-R)
+  "oracle_label": 0.86,                      // Optional: ground truth (enables AutoCal-R)
+  "prompt": "What is 2+2?",                  // Optional: for reference
+  "response": "4"                            // Optional: for reference
 }
 ```
+
+**Note:** Policy name inferred from filename (e.g., `clone_responses.jsonl` → policy `"clone"`). Do NOT include a `"policy"` field.
 
 **AutoCal-R**: If any fresh draws have `oracle_label`, Direct mode automatically applies AutoCal-R to learn judge→oracle calibration and uses calibrated rewards. More oracle labels = better calibration (5-10% is often sufficient).
 
