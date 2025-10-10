@@ -1,5 +1,4 @@
 include LICENSE
 include README.md
-include QUICKSTART.md
 recursive-include cje *.py
 recursive-include cje py.typed

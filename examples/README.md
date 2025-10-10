@@ -58,6 +58,6 @@ The Colab notebook (`cje_arena_demo.ipynb`) provides an interactive walkthrough 
 
 ## Next Steps
 
-- **Quick tutorial:** See [QUICKSTART.md](../QUICKSTART.md) for step-by-step guide
+- **Main README:** [README.md](../README.md) for Quick Start and overview
 - **Full documentation:** [README_ENGINEERING.md](../README_ENGINEERING.md) for detailed API
 - **Production example:** [cje/experiments/arena_10k_simplified/](../cje/experiments/arena_10k_simplified/) for complete pipeline

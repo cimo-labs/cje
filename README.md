@@ -123,7 +123,6 @@ See [Engineering Guide](README_ENGINEERING.md) for IPS/DR data formats and log p
 ## Documentation
 
 📚 **Getting Started**
-- [5-Minute Quickstart](QUICKSTART.md) - First analysis step-by-step
 - [Interactive Demo](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_arena_demo.ipynb) - Try in your browser
 - [Examples](examples/) - Working code samples
 
@@ -153,6 +152,3 @@ make test
 ## License
 
 MIT - See [LICENSE](LICENSE) for details.
-
----
-**Ready to start?** → [5-Minute Quickstart](QUICKSTART.md)
