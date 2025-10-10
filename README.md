@@ -118,7 +118,7 @@ result = analyze_dataset(
 )
 ```
 
-See [Engineering Guide](README_ENGINEERING.md) for IPS/DR data formats and log probability computation.
+**For IPS/DR data formats and API details:** Run `help(analyze_dataset)` or see [`cje/interface/`](cje/interface/) module docs.
 
 ## Documentation
 
@@ -127,10 +127,10 @@ See [Engineering Guide](README_ENGINEERING.md) for IPS/DR data formats and log p
 - [Examples](examples/) - Working code samples
 
 🔧 **For Engineers**
-- [Engineering Guide](README_ENGINEERING.md) - Complete API reference, data formats, uncertainty quantification
 - [Calibration Methods](cje/calibration/README.md) - AutoCal-R, isotonic regression, two-stage fallback
 - [Diagnostics System](cje/diagnostics/README.md) - Uncertainty quantification, OUA, paired inference
 - [Estimators](cje/estimators/README.md) - Direct, IPS, DR implementations
+- [Interface/API](cje/interface/README.md) - `analyze_dataset` implementation and mode selection
 
 📖 **Theory**
 - [Playbook](docs/playbook/) - Mathematical foundations, assumptions, diagnostics
