@@ -221,17 +221,74 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             if_values = pdata.calibrated_rewards - estimate
             influence_functions[policy] = if_values
 
-            # Standard error from influence function (base SE)
-            # Oracle uncertainty will be added by _apply_oua_jackknife() later
+            # Determine SE method based on pairing structure
             n = len(pdata.calibrated_rewards)
-            se = float(np.std(if_values, ddof=1) / np.sqrt(n))
+            se_method = "standard"
+            n_clusters = n
+
+            # Check if this is paired comparison with aligned prompts
+            if self.paired_comparison and len(self._policy_data) > 1:
+                # Check alignment across all policies
+                prompt_sets = [set(pd.prompt_ids) for pd in self._policy_data.values()]
+                prompts_aligned = all(ps == prompt_sets[0] for ps in prompt_sets)
+
+                if prompts_aligned:
+                    # Paired comparison: use cluster-robust SE by prompt
+                    from ..diagnostics.robust_inference import cluster_robust_se
+
+                    # Map prompt_ids to cluster indices
+                    unique_prompts = sorted(set(pdata.prompt_ids))
+                    prompt_to_cluster = {pid: i for i, pid in enumerate(unique_prompts)}
+                    cluster_ids = np.array(
+                        [prompt_to_cluster[pid] for pid in pdata.prompt_ids]
+                    )
+
+                    try:
+                        res = cluster_robust_se(
+                            data=if_values,
+                            cluster_ids=cluster_ids,
+                            statistic_fn=lambda x: np.mean(x),
+                            influence_fn=lambda x: x,
+                            alpha=0.05,
+                        )
+                        se = res["se"]
+                        se_method = "cluster_robust"
+                        n_clusters = res["n_clusters"]
+
+                        logger.debug(
+                            f"Using cluster-robust SE for {policy}: "
+                            f"naive={np.std(if_values, ddof=1) / np.sqrt(n):.6f}, "
+                            f"robust={se:.6f}, n_clusters={n_clusters}"
+                        )
+                    except Exception as e:
+                        # Fallback to standard SE if cluster-robust fails
+                        logger.debug(
+                            f"Cluster-robust SE failed for {policy}: {e}, using standard SE"
+                        )
+                        se = float(np.std(if_values, ddof=1) / np.sqrt(n))
+                        se_method = "standard_fallback"
+                else:
+                    # Prompts not fully aligned: use standard SE
+                    se = float(np.std(if_values, ddof=1) / np.sqrt(n))
+                    se_method = "standard_unpaired"
+            else:
+                # Single policy or unpaired mode: use standard SE
+                se = float(np.std(if_values, ddof=1) / np.sqrt(n))
+
+            # Store SE method for this policy (used in metadata later)
+            if not hasattr(self, "_se_methods"):
+                self._se_methods = {}
+                self._n_clusters = {}
+            self._se_methods[policy] = se_method
+            self._n_clusters[policy] = n_clusters
 
             estimates.append(estimate)
             standard_errors.append(se)
             n_samples_used[policy] = n
 
             logger.info(
-                f"Direct estimate for '{policy}': {estimate:.4f} ± {se:.4f} " f"(n={n})"
+                f"Direct estimate for '{policy}': {estimate:.4f} ± {se:.4f} "
+                f"(n={n}, method={se_method})"
             )
 
         # Build diagnostics
@@ -250,6 +307,8 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
                 "includes_oracle_uncertainty": False,  # Will be set to True by _apply_oua_jackknife()
                 "includes_mc_variance": False,
             },
+            "se_methods": getattr(self, "_se_methods", {}),
+            "n_clusters": getattr(self, "_n_clusters", {}),
         }
 
         # Check if prompts are aligned across policies
