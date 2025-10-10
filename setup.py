@@ -28,7 +28,7 @@ setup(
         "typing-extensions>=4.0",
     ],
     extras_require={
-        # Documentation now hosted on cimo-labs.com
+        # Documentation now hosted on cimolabs.com
     },
     classifiers=[
         "Development Status :: 4 - Beta",

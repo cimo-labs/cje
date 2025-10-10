@@ -4,7 +4,7 @@
 
 # CJE - Causal Judge Evaluation
 
-[![Docs](https://img.shields.io/badge/docs-cimo--labs.com-blue)](https://cimo-labs.com/cje)
+[![Docs](https://img.shields.io/badge/docs-cimo--labs.com-blue)](https://cimolabs.com/cje)
 [![Python](https://img.shields.io/badge/python-3.9%E2%80%933.12-blue)](https://www.python.org/downloads/)
 [![Tests](https://img.shields.io/badge/tests-passing-green)](https://github.com/cimo-labs/cje/actions)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -196,7 +196,7 @@ See [`cje/estimators/README.md`](cje/estimators/README.md) for technical details
 📚 **Getting Started**
 - [5-Minute Quickstart](QUICKSTART.md) - First analysis step-by-step
 - [Examples](examples/) - Working code samples
-- Full documentation coming soon on cimo-labs.com
+- Full documentation coming soon on cimolabs.com
 
 🔧 **For Engineers**
 - [Engineering Guide](README_ENGINEERING.md) - Interface specs and patterns

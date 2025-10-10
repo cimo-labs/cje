@@ -2,7 +2,7 @@
 
 .PHONY: test lint format help
 
-# Documentation now hosted on cimo-labs.com
+# Documentation now hosted on cimolabs.com
 
 # Development commands
 test:  ## Run tests

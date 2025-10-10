@@ -176,6 +176,30 @@ estimator.add_fresh_draws('policy', FreshDrawDataset(samples=[...]))
 - **Monte Carlo (MC) variance**: For DR estimators with finite fresh draws
 - **Oracle variance**: When calibration uses partial oracle labels (oracle_coverage < 100%)
 
+### Direct Mode Standard Errors
+Direct Mode automatically adapts its standard error calculation based on the data structure:
+
+```python
+# Single policy or unpaired: Standard SE
+standard_errors = np.sqrt(variance/n)
+
+# Paired comparisons (same prompts across policies): Cluster-robust SE
+# Clusters by prompt_id to account for within-prompt correlation
+standard_errors = cluster_robust_se(influence_functions, cluster_ids=prompt_ids)
+
+# Check which method was used
+result.metadata["se_methods"]  # e.g., {"policy_a": "cluster_robust", ...}
+result.metadata["n_clusters"]  # e.g., {"policy_a": 1000, ...}
+```
+
+**When cluster-robust SEs are used:**
+- Evaluating multiple policies on the **same prompts** (paired comparison)
+- Example: 3 policies × 1000 prompts = 3000 samples, but only 1000 independent clusters
+- Clusters by `prompt_id` to account for correlation across policies
+- Provides honest uncertainty for policy comparisons
+
+**Philosophy:** Cluster by the source of dependence. Direct Mode clusters by prompts when paired, IPS/DR cluster by cross-validation folds.
+
 ### IPS Standard Errors
 ```python
 # Complete SE includes IF variance + oracle uncertainty
