@@ -382,8 +382,34 @@ def load_fresh_draws_auto(
                 # Load the file
                 fresh_samples = []
                 with open(file_path, "r") as f:
-                    for line in f:
+                    for idx, line in enumerate(f):
                         data = json.loads(line)
+
+                        # Get prompt_id - check top-level first, then metadata, then auto-generate
+                        prompt_id = data.get("prompt_id") or data.get(
+                            "metadata", {}
+                        ).get("prompt_id")
+                        if prompt_id is None:
+                            # Auto-generate from prompt hash for consistency with logged data
+                            # This ensures fresh draws will map to the same prompt_id
+                            prompt = data.get("prompt", "")
+                            if prompt:
+                                import hashlib
+
+                                # Use first 12 chars of SHA256 for readable but unique ID
+                                prompt_hash = hashlib.sha256(
+                                    prompt.encode()
+                                ).hexdigest()[:12]
+                                prompt_id = f"prompt_{prompt_hash}"
+                            else:
+                                # Fallback to index if no prompt either
+                                prompt_id = f"fresh_{policy}_{idx:06d}"
+                                logger.warning(
+                                    f"Fresh draw record {idx} for policy '{policy}' missing both "
+                                    f"'prompt_id' and 'prompt'. Using index-based ID '{prompt_id}'. "
+                                    f"This will NOT align with logged data for DR mode. "
+                                    f"Add explicit prompt_id or prompt text for stability."
+                                )
 
                         # Handle different formats
                         # Check for judge_score properly - don't use 'or' for numeric fields
@@ -398,7 +424,7 @@ def load_fresh_draws_auto(
                         else:
                             # Never fabricate missing data - fail clearly
                             raise ValueError(
-                                f"Missing judge_score for prompt_id={data.get('prompt_id')} "
+                                f"Missing judge_score for prompt_id={prompt_id} "
                                 f"in {file_path}. Fresh draws require judge scores."
                             )
 
@@ -414,7 +440,7 @@ def load_fresh_draws_auto(
                             oracle_label = data["metadata"]["oracle_label"]
 
                         fresh_sample = FreshDrawSample(
-                            prompt_id=str(data.get("prompt_id")),
+                            prompt_id=str(prompt_id),
                             target_policy=policy,
                             response=data.get("response", ""),
                             judge_score=judge_score,

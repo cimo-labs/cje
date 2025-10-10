@@ -151,6 +151,11 @@ class DatasetLoader:
             else:
                 # Fallback to index if no prompt either
                 prompt_id = f"sample_{idx:06d}"
+                logger.warning(
+                    f"Record {idx} missing both 'prompt_id' and 'prompt'. "
+                    f"Using index-based ID '{prompt_id}'. This is fragile - "
+                    f"consider adding explicit prompt_id or prompt text for stability."
+                )
 
         # Extract reward if present (handle nested format)
         reward = None

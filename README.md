@@ -139,7 +139,9 @@ responses/
 }
 ```
 
-**Note:** Policy name inferred from filename (e.g., `clone_responses.jsonl` → policy `"clone"`). Do NOT include a `"policy"` field.
+**Notes:**
+- Policy name inferred from filename (e.g., `clone_responses.jsonl` → policy `"clone"`). Do NOT include a `"policy"` field.
+- `prompt_id` is optional - auto-generated from `prompt` text if missing
 
 **AutoCal-R**: If any fresh draws have `oracle_label`, Direct mode automatically applies AutoCal-R to learn judge→oracle calibration and uses calibrated rewards. More oracle labels = better calibration (5-10% is often sufficient).
 

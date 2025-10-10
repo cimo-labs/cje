@@ -111,11 +111,18 @@ if not is_valid:
 ### Required Fields
 
 Every sample must have:
-- `prompt_id`: Unique identifier (checked in top-level, then metadata, auto-generated from prompt hash if missing)
+- `prompt_id`: Unique identifier (optional - auto-generated from prompt hash if missing)
 - `prompt`: Input text/context
 - `response`: Generated output
 - `base_policy_logprob`: Log probability under logging policy
 - `target_policy_logprobs`: Dict of log probs for target policies
+
+**prompt_id auto-generation:** If `prompt_id` is missing, CJE automatically generates one:
+1. Checks top-level field, then `metadata.prompt_id`
+2. If still missing, generates `prompt_{hash}` from SHA256 hash of prompt text
+3. If no prompt text either, uses record index: `sample_{idx:06d}` (logged) or `fresh_{policy}_{idx:06d}` (fresh draws)
+
+⚠️ **Warning:** Index-based IDs (fallback #3) are fragile and will trigger a warning. They break with reordering and won't align across datasets for DR mode. Always provide either `prompt_id` or `prompt` for stable, reproducible IDs.
 
 ### Optional Fields
 - `reward`: Calibrated reward in [0, 1] (required for PrecomputedSampler)
@@ -167,10 +174,11 @@ responses/
 ```
 
 **Fields:**
-- `prompt_id`: Required - identifies the prompt
+- `prompt_id`: Identifies the prompt (optional - auto-generated from `prompt` field if missing)
 - `judge_score`: Required - judge evaluation in [0, 1]
 - `oracle_label`: Optional - ground truth for AutoCal-R calibration
 - `draw_idx`: Optional - defaults to 0 (for multiple draws per prompt)
+- `prompt`: Optional - used to auto-generate `prompt_id` if not provided
 - `response`: Optional - the actual generated text
 
 **Note:** The `target_policy` field is **NOT needed** - it's inferred from the filename!

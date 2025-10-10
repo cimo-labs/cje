@@ -58,7 +58,9 @@ responses/
 }
 ```
 
-**Note:** Policy name inferred from filename. Do NOT include `"policy"` field in records.
+**Notes:**
+- Policy name inferred from filename. Do NOT include `"policy"` field in records.
+- `prompt_id` is optional - auto-generated from `prompt` text hash if missing
 
 ### For IPS/DR Modes (logged data)
 
