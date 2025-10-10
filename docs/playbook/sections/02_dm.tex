@@ -35,6 +35,8 @@ Direct Modeling answers: ``What KPI would we see on this prompt set if we shippe
 
 \autocal{} learns a mean-preserving mapping $f: \mathbb{R} \to [0,1]$ from score $S$ to calibrated reward $R = f(S)$. By default it fits a monotone mapping; when needed, it auto-switches to a light two-stage index (e.g., spline index $\to$ isotonic) if regional miscalibration is detected.
 
+\paragraph{Why monotone (isotonic) by default?} Isotonic regression enforces the single structural belief you want: \emph{higher judge score $\Rightarrow$ no worse expected outcome}. Unlike parametric links (sigmoid, beta) that impose a rigid shape and risk misspecification, isotonic adapts to the data while preserving ranking sanity. It is mean-preserving by construction (via projection onto the monotone cone), so your KPI stays on the right scale without post-hoc adjustments. With small oracle slices (5-10\% coverage is often sufficient), this shape constraint buys strong stability---no spurious wiggles, no overfitting. The step-function output also makes edge fragility immediately visible, enabling targeted label collection. When monotonicity fails (e.g., length bias at fixed $S$), the two-stage variant learns a smooth transformation first.
+
 \paragraph{Operator artifacts to check:}
 \begin{itemize}
 \item \textbf{Reliability:} out-of-fold calibration curve and regional error (low/mid/high $S$).

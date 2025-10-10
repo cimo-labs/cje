@@ -83,6 +83,8 @@ This is the canonical DR estimator from the semiparametric literature; use it wh
 
 \paragraph{Double robustness guarantee:} Both estimators are consistent if \emph{either} the stabilized weights $\tilde{w}(\pi')$ converge to the true density ratios (up to mean-one normalization) \emph{or} the outcome model ($\hat{g}$ or $\hat{q}$) is correctly specified; if both are good, DR attains the semiparametric efficiency bound.
 
+\paragraph{Why isotonic regression for $\hat{g}(S)$?} The default outcome model uses isotonic regression because it enforces exactly the right structural prior: \emph{higher judge score $\Rightarrow$ no worse expected reward}. This minimal monotonicity assumption avoids misspecification risk from rigid parametric forms (sigmoid, beta), provides mean preservation by construction (critical for unbiased DR), and achieves strong stability with few fresh draws (5-10\% coverage often sufficient). Isotonic's step-function output also makes edge fragility visible in diagnostics, enabling targeted label collection. When monotonicity fails (e.g., systematic length bias at fixed $S$), \autocal{}'s two-stage variant learns a smooth transformation first.
+
 \subsection{Inputs \& setup (off-policy)}
 
 \begin{description}

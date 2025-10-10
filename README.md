@@ -18,6 +18,8 @@ CJE turns your LLM-judge evaluations into reliable estimates with confidence int
 🎯 **Problem**: LLM-judge scores are noisy and biased
 ✅ **Solution**: Automatic calibration (AutoCal-R) learns judge→oracle mapping to debias scores and provide reliable estimates with confidence intervals
 
+**Why isotonic regression?** AutoCal-R uses isotonic regression because it enforces exactly the right assumption: "higher judge score → no worse outcome." This minimal, ranking-preserving prior is optimal for small oracle label budgets (5-10% coverage), provides mean preservation by construction, and enables clean uncertainty quantification. See [`cje/calibration/README.md`](cje/calibration/README.md#why-isotonic-regression-for-reward-calibration) for the full mathematical justification.
+
 **Three modes, one interface:**
 - **Direct mode**: Compare policies on an eval set (simplest - no logprobs needed)
 - **IPS mode**: Estimate counterfactual value from logged data (reuse existing logs)

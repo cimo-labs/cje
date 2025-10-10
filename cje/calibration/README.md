@@ -64,6 +64,48 @@ When we calibrate judge scores using only a subset of oracle labels (e.g., 10% c
 
 **Oracle Slice Augmentation**: An optional point-estimate **bias correction** term `(L/π_L)m̂(S)(Y-f̂(S))` used **only** in TR-CPO under MAR with fitted π_L(S), or optionally as an MCAR engineering fallback (off by default).
 
+## Why Isotonic Regression for Reward Calibration?
+
+Isotonic regression is the default choice for learning f̂(S) = E[Y|S] because it imposes exactly the right inductive bias while making minimal assumptions:
+
+### The Right Structural Prior
+**Monotonicity is all you want to assume**: If a judge says S₂ > S₁, the oracle label shouldn't go down in expectation. Isotonic regression enforces exactly this constraint—and nothing else. Unlike parametric approaches (sigmoid/beta), it doesn't impose a rigid functional form that could misspecify the true relationship.
+
+### Mean Preservation by Construction
+Least-squares isotonic regression is the orthogonal projection onto the monotone cone, which contains constants. By KKT conditions, this guarantees:
+```
+(1/n)Σf̂(Sᵢ) = (1/n)ΣYᵢ
+```
+Your oracle KPI level stays on the right scale automatically—critical for unbiased estimation without post-hoc adjustments.
+
+### Small-Label Efficiency
+With few oracle labels (5-10% coverage is often sufficient), shape constraints buy stability:
+- **No overfitting**: Can't create spurious non-monotone regions
+- **Adaptive complexity**: Naturally produces piecewise-constant regions when data supports them
+- **Edge robustness**: Flattens at boundaries (explains why edge-slope diagnostics are so informative)
+- **Fast iteration**: O(n log n) via PAVA algorithm
+
+### Ranking-Sane and Interpretable
+- **Never inverts judge order**: No "perverse" regions where higher S predicts lower Y
+- **Human-readable**: Step blocks give actionable thresholds ("above 7.8, pass rate ≈ 0.81")
+- **Operator trust**: Matches how humans think about judge reliability
+
+### Diagnostic-Friendly
+The 1-D monotone structure makes diagnostics tractable:
+- **Reliability by region**: Easy to compute and visualize
+- **S-coverage & edge slopes**: Fragility is visible; fix with targeted labels
+- **OUA jackknife**: Delete-one-fold refits propagate calibrator noise cleanly
+
+### Consistency Guarantees
+When the true E[Y|S] is monotone, f̂ is L²-consistent. When it's not, the two-stage variant (g(S)→isotonic) provides a safety net by learning a smooth transformation first.
+
+### When to Consider Alternatives
+- **Parametric calibration (Platt/Beta)**: Lower variance if you're confident about the link shape
+- **Two-stage flexible**: When S has systematic bias (length effects, prompt families)
+- **Unconstrained methods**: Only if monotonicity fails and you have abundant oracle labels
+
+**Bottom line**: Isotonic hits the sweet spot of correct inductive bias, minimal assumptions, strong stability with few labels, and clean uncertainty accounting—which is why it's the default in AutoCal-R.
+
 ## Module Descriptions
 
 ### `dataset.py` - Dataset Calibration Workflows (AutoCal-R API)
