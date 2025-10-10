@@ -4,7 +4,7 @@
 
 # CJE - Causal Judge Evaluation
 
-[![Docs](https://img.shields.io/badge/docs-cimo--labs.com-blue)](https://cimolabs.com/cje)
+[![Docs](https://img.shields.io/badge/docs-cimolabs.com-blue)](https://cimolabs.com/cje)
 [![Python](https://img.shields.io/badge/python-3.9%E2%80%933.12-blue)](https://www.python.org/downloads/)
 [![Tests](https://img.shields.io/badge/tests-passing-green)](https://github.com/cimo-labs/cje/actions)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
