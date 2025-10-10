@@ -106,6 +106,56 @@ When the true E[Y|S] is monotone, f̂ is L²-consistent. When it's not, the two-
 
 **Bottom line**: Isotonic hits the sweet spot of correct inductive bias, minimal assumptions, strong stability with few labels, and clean uncertainty accounting—which is why it's the default in AutoCal-R.
 
+## Why Two-Stage (Index → Rank → Isotonic) When Needed?
+
+**Two-stage makes sense because it keeps the only belief we really trust—monotonicity—while fixing the two places plain isotonic on raw S can stumble: (i) regional miscalibration and slice heterogeneity, and (ii) density/scale weirdness along S.** It does this with almost no extra assumption and tiny label budgets.
+
+### What the Two Stages Do
+
+1. **Learn a low-capacity "risk index"** T = g(S)
+   - Currently uses a spline of S alone (could be extended to include coarse covariates Z like prompt family/length)
+   - Goal: cheaply improve the *ordering* of examples by expected outcome, not to nail absolute levels
+
+2. **Uniformize & enforce shape**: U = ECDF(T) ∈ [0,1] then fit **isotonic** h(U)
+   - Rank/ECDF makes the axis scale-free and density-balanced
+   - Isotonic imposes exactly "higher risk index ⇒ no worse KPI"
+
+3. **Mean-preserve & cross-fit**
+   - We recentre so the oracle mean matches
+   - We cross-fit so selection noise and kinks are handled
+   - OUA jackknife then measures calibrator variance honestly
+
+### Why This Is Better Than "Plain Isotonic on S"
+
+**Captures slice heterogeneity with one degree of freedom.** If Y depends on both S and a coarse slice Z (e.g., long answers at the same S do worse), a single index g(S,Z) lets you *re-order* cases correctly, then isotonic maps that order to the KPI scale. You avoid brittle 2D isotonic or exploding bins.
+
+**Stable at small n.** Shape constraint + 1D axis keeps variance down; ECDF removes density distortions (big flat regions where labels are dense vs. sparse).
+
+**Consistent under a mild "single-index monotone" truth.** If E[Y|S,Z] = μ*(g*(S,Z)) with μ* nondecreasing, and g approximates g*, then isotonic on U=rank(g(S,Z)) recovers μ*∘g* in L². That's exactly the failure mode you see in reliability plots with "S-shaped" regional bias.
+
+**Scale & transport friendly.** Because we learn on U (quantiles), the mapping is invariant to monotone rescalings of the index and more robust to density shifts; your **S-coverage/edge-slope** diagnostic still applies (now on U near 0/1).
+
+**Interpretability preserved.** Output is still a monotone f(S,Z) ∈ [0,1] with mean preserved; panels (reliability by region, coverage, OUA share) remain readable.
+
+### When to Auto-Switch to Two-Stage
+
+- Reliability plot shows **persistent regional bias** after plain isotonic (low/mid/high S)
+- Clear **slice effects at fixed S** (length, family) in residuals
+- Edge fragility (flat boundary slopes) that a smarter ordering could stabilize
+
+### Why Not Fancier Stuff?
+
+- Full 2D monotone fits or unconstrained models need lots more labels and can invert judge order locally
+- Parametric links (sigmoid/beta) impose shape you don't actually believe
+- Two-stage keeps it nonparametric and monotone
+
+### One-Line Mental Model
+
+> **First get the order right (cheap index), then calibrate that order to the KPI scale (isotonic).**
+> Minimal bias, low variance, and diagnostics stay meaningful.
+
+That's why the two-stage AutoCal-R fallback is a great default: it fixes exactly the observed failure modes, assumes very little extra, and slots cleanly into OUA + your report panels.
+
 ## Module Descriptions
 
 ### `dataset.py` - Dataset Calibration Workflows (AutoCal-R API)
