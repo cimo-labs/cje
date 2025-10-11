@@ -176,6 +176,20 @@ estimator.add_fresh_draws('policy', FreshDrawDataset(samples=[...]))
 - **Monte Carlo (MC) variance**: For DR estimators with finite fresh draws
 - **Oracle variance**: When calibration uses partial oracle labels (oracle_coverage < 100%)
 
+### Confidence Intervals with t-Distribution
+
+**All estimators use t-critical values by default** (not z-critical) to account for finite degrees of freedom from:
+- Cluster-robust standard errors (e.g., clustering by prompt_id in Direct Mode, by CV folds in IPS/DR)
+- Oracle uncertainty adjustment with K oracle folds (df = K - 1)
+
+The degrees of freedom is determined by the limiting factor (minimum across sources). This ensures proper 95% coverage even with small numbers of clusters or oracle folds.
+
+**How it works:**
+- Estimators store DF information in `result.metadata["degrees_of_freedom"]`
+- `EstimationResult.confidence_interval()` automatically uses t-critical values when DF info is available
+- Falls back to z-critical for large-sample approximation when DF info is missing
+- This is completely automatic - no user configuration needed
+
 ### Direct Mode Standard Errors
 Direct Mode automatically adapts its standard error calculation based on the data structure:
 
@@ -221,9 +235,16 @@ result.metadata["se_components"]["includes_oracle_uncertainty"]  # True if OUA a
 ### Convenience Method
 ```python
 # Get confidence intervals as list of (lower, upper) tuples
+# Uses t-critical values automatically (accounts for finite degrees of freedom)
 cis = result.ci(alpha=0.05)  # 95% CIs by default
 for i, (lower, upper) in enumerate(cis):
     print(f"Policy {i}: [{lower:.3f}, {upper:.3f}]")
+
+# Check degrees of freedom used (optional)
+if "degrees_of_freedom" in result.metadata:
+    df_info = result.metadata["degrees_of_freedom"]
+    for policy, info in df_info.items():
+        print(f"{policy}: df={info['df']}, t_crit={info['t_critical']:.3f}")
 ```
 
 ### Automatic MC Variance Handling

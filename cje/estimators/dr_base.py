@@ -426,6 +426,7 @@ class DREstimator(BaseCJEEstimator):
         n_samples_used = {}
         # Calibration-floor metrics per policy
         calibration_floor_meta: Dict[str, Dict[str, float]] = {}
+        df_info = {}  # Track degrees of freedom per policy
 
         for policy in self.sampler.target_policies:
             # Check fresh draws are available
@@ -648,22 +649,43 @@ class DREstimator(BaseCJEEstimator):
                     alpha=0.05,
                 )
                 se_if = res_if["se"]
+
+                # Store degrees of freedom for this policy
+                df_cluster = res_if.get("df", len(if_contributions) - 1)
+
+                # If OUA was applied, get oracle DF and take minimum
+                df_final = df_cluster
+                if self.oua_jackknife and self.reward_calibrator is not None:
+                    try:
+                        if hasattr(self.reward_calibrator, "get_fold_models_for_oua"):
+                            fold_models = (
+                                self.reward_calibrator.get_fold_models_for_oua()
+                            )
+                            if fold_models:
+                                K = len(fold_models)
+                                df_oracle = K - 1
+                                df_final = min(df_cluster, df_oracle)
+                    except Exception as e:
+                        logger.debug(f"Could not get oracle DF for {policy}: {e}")
+
+                # Ensure DF is at least 1
+                df_final = max(df_final, 1)
+
+                # Store DF info
+                from scipy import stats
+
+                t_crit = stats.t.ppf(1 - 0.05 / 2, df_final)
+                df_info[policy] = {
+                    "df": int(df_final),
+                    "t_critical": float(t_crit),
+                    "n_clusters": int(res_if.get("n_clusters", len(if_contributions))),
+                }
+
                 logger.debug(
                     f"Using cluster-robust SE for {policy}: "
                     f"naive={np.std(if_contributions, ddof=1) / np.sqrt(len(if_contributions)):.6f}, "
-                    f"robust={se_if:.6f}, n_clusters={res_if['n_clusters']}, df={res_if['df']}"
+                    f"robust={se_if:.6f}, n_clusters={res_if['n_clusters']}, df={df_final}"
                 )
-                # Record SE diagnostics for downstream CI construction (t-critical)
-                try:
-                    det = {
-                        "G_outer": int(res_if.get("n_clusters", 0)),
-                        "G_inner": None,
-                        "df": int(res_if.get("df", 0)),
-                    }
-                    self._se_diagnostics.setdefault(policy, {})
-                    self._se_diagnostics[policy]["cluster_robust_detail"] = det
-                except Exception:
-                    pass
             except Exception as e:
                 logger.debug(f"cluster_robust_se failed for {policy}: {e}")
 
@@ -1023,6 +1045,10 @@ class DREstimator(BaseCJEEstimator):
         # Add sample indices for IF alignment in stacking
         if hasattr(self, "_if_sample_indices"):
             metadata["if_sample_indices"] = self._if_sample_indices
+
+        # Add degrees of freedom info
+        if df_info:
+            metadata["degrees_of_freedom"] = df_info
 
         base_result = EstimationResult(
             estimates=np.array(estimates),

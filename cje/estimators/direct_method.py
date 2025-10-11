@@ -225,6 +225,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             n = len(pdata.calibrated_rewards)
             se_method = "standard"
             n_clusters = n
+            df_cluster = n - 1  # Degrees of freedom for cluster-robust SE
 
             # Check if this is paired comparison with aligned prompts
             if self.paired_comparison and len(self._policy_data) > 1:
@@ -254,11 +255,14 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
                         se = res["se"]
                         se_method = "cluster_robust"
                         n_clusters = res["n_clusters"]
+                        df_cluster = res.get(
+                            "df", n_clusters - 1
+                        )  # Get DF from cluster-robust SE
 
                         logger.debug(
                             f"Using cluster-robust SE for {policy}: "
                             f"naive={np.std(if_values, ddof=1) / np.sqrt(n):.6f}, "
-                            f"robust={se:.6f}, n_clusters={n_clusters}"
+                            f"robust={se:.6f}, n_clusters={n_clusters}, df={df_cluster}"
                         )
                     except Exception as e:
                         # Fallback to standard SE if cluster-robust fails
@@ -267,20 +271,25 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
                         )
                         se = float(np.std(if_values, ddof=1) / np.sqrt(n))
                         se_method = "standard_fallback"
+                        df_cluster = n - 1
                 else:
                     # Prompts not fully aligned: use standard SE
                     se = float(np.std(if_values, ddof=1) / np.sqrt(n))
                     se_method = "standard_unpaired"
+                    df_cluster = n - 1
             else:
                 # Single policy or unpaired mode: use standard SE
                 se = float(np.std(if_values, ddof=1) / np.sqrt(n))
+                df_cluster = n - 1
 
-            # Store SE method for this policy (used in metadata later)
+            # Store SE method and DF for this policy (used in metadata and CI computation later)
             if not hasattr(self, "_se_methods"):
                 self._se_methods = {}
                 self._n_clusters = {}
+                self._df_cluster = {}
             self._se_methods[policy] = se_method
             self._n_clusters[policy] = n_clusters
+            self._df_cluster[policy] = df_cluster
 
             estimates.append(estimate)
             standard_errors.append(se)
@@ -340,6 +349,9 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
 
         # Apply OUA jackknife using base class method
         self._apply_oua_jackknife(result)
+
+        # Store DF info for t-based CIs (computed automatically by EstimationResult.confidence_interval())
+        self._store_df_info(result)
 
         return result
 
@@ -484,3 +496,77 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         except Exception as e:
             logger.error(f"Failed to compute oracle jackknife for {policy}: {e}")
             return None
+
+    def _store_df_info(self, result: EstimationResult) -> None:
+        """Store degrees of freedom information for t-based CI computation.
+
+        This method stores DF information that EstimationResult.confidence_interval()
+        will use to automatically compute t-based CIs.
+
+        The degrees of freedom is determined by the limiting factor:
+        - If cluster-robust SE was used: df from clustering (typically n_clusters - 1)
+        - If OUA jackknife was applied: min(df_cluster, K - 1) where K is number of oracle folds
+
+        Args:
+            result: EstimationResult with estimates and standard_errors already populated
+                   (including OUA adjustment if applicable)
+
+        Side effects:
+            - Stores DF info in result.metadata["degrees_of_freedom"]
+        """
+        from scipy import stats
+
+        if not hasattr(self, "_df_cluster"):
+            # No DF tracking (shouldn't happen but be defensive)
+            logger.debug("No DF tracking available, skipping DF storage")
+            return
+
+        df_info = {}
+
+        for i, policy in enumerate(self.target_policies):
+            if np.isnan(result.estimates[i]) or np.isnan(result.standard_errors[i]):
+                continue
+
+            # Get cluster DF
+            df_cluster = self._df_cluster.get(policy, len(result.estimates) - 1)
+
+            # If OUA was applied, get oracle DF and take minimum
+            df_final = df_cluster
+            if self.oua_jackknife and self.reward_calibrator is not None:
+                try:
+                    # Get number of oracle folds from calibrator
+                    if hasattr(self.reward_calibrator, "get_fold_models_for_oua"):
+                        fold_models = self.reward_calibrator.get_fold_models_for_oua()
+                        if fold_models:
+                            K = len(fold_models)
+                            df_oracle = K - 1
+                            df_final = min(df_cluster, df_oracle)
+                            logger.debug(
+                                f"Policy {policy}: df_cluster={df_cluster}, "
+                                f"df_oracle={df_oracle}, df_final={df_final}"
+                            )
+                except Exception as e:
+                    logger.debug(f"Could not get oracle DF for {policy}: {e}")
+
+            # Ensure DF is at least 1
+            df_final = max(df_final, 1)
+
+            # Compute t-critical value for logging
+            t_crit = stats.t.ppf(1 - 0.05 / 2, df_final)
+
+            df_info[policy] = {
+                "df": int(df_final),
+                "t_critical": float(t_crit),
+                "se_method": self._se_methods.get(policy, "standard"),
+                "n_clusters": self._n_clusters.get(policy, len(result.estimates)),
+            }
+
+            logger.debug(
+                f"Stored DF info for {policy}: df={df_final}, t_crit={t_crit:.3f}, "
+                f"method={self._se_methods.get(policy, 'standard')}"
+            )
+
+        # Store in metadata
+        if not isinstance(result.metadata, dict):
+            result.metadata = {}
+        result.metadata["degrees_of_freedom"] = df_info

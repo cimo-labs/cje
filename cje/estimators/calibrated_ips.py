@@ -532,6 +532,7 @@ class CalibratedIPS(BaseCJEEstimator):
         standard_errors = []
         n_samples_used = {}
         influence_functions = {}
+        df_info = {}  # Track degrees of freedom per policy
 
         # Compute estimates for each policy
         for policy in self.sampler.target_policies:
@@ -800,23 +801,44 @@ class CalibratedIPS(BaseCJEEstimator):
                     )
                     se = res["se"]
 
-                    # Cache policy-level robust CI for later use
-                    if not hasattr(self, "_robust_ci"):
-                        self._robust_ci = {}
-                    # Compute CI directly using t-critical value and SE
+                    # Store degrees of freedom for this policy
+                    df_cluster = res.get("df", n - 1)
+
+                    # If OUA was applied, get oracle DF and take minimum
+                    df_final = df_cluster
+                    if self.oua_jackknife and self.reward_calibrator is not None:
+                        try:
+                            if hasattr(
+                                self.reward_calibrator, "get_fold_models_for_oua"
+                            ):
+                                fold_models = (
+                                    self.reward_calibrator.get_fold_models_for_oua()
+                                )
+                                if fold_models:
+                                    K = len(fold_models)
+                                    df_oracle = K - 1
+                                    df_final = min(df_cluster, df_oracle)
+                        except Exception as e:
+                            logger.debug(f"Could not get oracle DF for {policy}: {e}")
+
+                    # Ensure DF is at least 1
+                    df_final = max(df_final, 1)
+
+                    # Store DF info
                     from scipy import stats
 
-                    t_crit = stats.t.ppf(1 - 0.05 / 2, max(res.get("df", 1), 1))
-                    self._robust_ci[policy] = (
-                        float(estimate - t_crit * se),
-                        float(estimate + t_crit * se),
-                    )
+                    t_crit = stats.t.ppf(1 - 0.05 / 2, df_final)
+                    df_info[policy] = {
+                        "df": int(df_final),
+                        "t_critical": float(t_crit),
+                        "n_clusters": int(res.get("n_clusters", n)),
+                    }
 
                     logger.debug(
                         f"Using cluster-robust SE for {policy}: "
                         f"naive={np.std(influence, ddof=1) / np.sqrt(n):.6f}, "
                         f"robust={se:.6f}, "
-                        f"n_clusters={res['n_clusters']}, df={res['df']}"
+                        f"n_clusters={res['n_clusters']}, df={df_final}"
                     )
             except Exception as e:
                 logger.debug(f"Cluster-robust SE failed for {policy}: {e}")
@@ -845,6 +867,9 @@ class CalibratedIPS(BaseCJEEstimator):
                 "ess_floor": self.ess_floor,
                 "var_cap": self.var_cap,
                 "calibration_info": self._calibration_info,  # TODO: Move to diagnostics
+                "degrees_of_freedom": (
+                    df_info if df_info else None
+                ),  # Store DF per policy
             },
         )
 

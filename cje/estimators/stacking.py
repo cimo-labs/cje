@@ -188,6 +188,9 @@ class StackedDREstimator(BaseCJEEstimator):
         # Apply stacked-level oracle jackknife by linear combination of component jackknifes
         self._apply_stacked_oua(result)
 
+        # Store DF info for t-based CIs (after OUA to account for oracle uncertainty)
+        self._store_df_info(result)
+
         return result
 
     def _apply_stacked_oua(self, result: EstimationResult) -> None:
@@ -310,6 +313,100 @@ class StackedDREstimator(BaseCJEEstimator):
                 }
             )
 
+    def _store_df_info(self, result: EstimationResult) -> None:
+        """Store degrees of freedom information for t-based CI computation.
+
+        This method stores DF information that EstimationResult.confidence_interval()
+        will use to automatically compute t-based CIs.
+
+        The degrees of freedom is determined by the limiting factor:
+        - df_cluster from cluster-robust SE (typically n_folds - 1)
+        - If OUA was applied: min(df_cluster, K - 1) where K is number of oracle folds
+
+        Args:
+            result: EstimationResult with estimates and standard_errors already populated
+                   (including OUA adjustment if applicable)
+
+        Side effects:
+            - Stores DF info in result.metadata["degrees_of_freedom"]
+        """
+        from scipy import stats
+
+        if not hasattr(self, "_df_info"):
+            # No DF tracking (shouldn't happen but be defensive)
+            logger.debug("No DF tracking available, skipping DF storage")
+            return
+
+        try:
+            policies = list(self.sampler.target_policies)
+        except Exception:
+            policies = (
+                list(result.influence_functions.keys())
+                if result.influence_functions
+                else []
+            )
+
+        if not policies:
+            return
+
+        df_info = {}
+
+        for i, policy in enumerate(policies):
+            if np.isnan(result.estimates[i]) or np.isnan(result.standard_errors[i]):
+                continue
+
+            # Get cluster DF
+            base_df_info = self._df_info.get(policy)
+            if not base_df_info:
+                continue
+
+            df_cluster = base_df_info.get("df", self.n_folds - 1)
+
+            # If OUA was applied, get oracle DF and take minimum
+            df_final = df_cluster
+            oua_applied = False
+            if (
+                result.metadata
+                and "se_components" in result.metadata
+                and result.metadata["se_components"].get("includes_oracle_uncertainty")
+            ):
+                # Check if this policy had oracle jackknife contribution
+                jackknife_counts = result.metadata.get("oua", {}).get(
+                    "jackknife_counts", {}
+                )
+                K = jackknife_counts.get(policy, 0)
+                if K >= 2:
+                    df_oracle = K - 1
+                    df_final = min(df_cluster, df_oracle)
+                    oua_applied = True
+                    logger.debug(
+                        f"Policy {policy}: df_cluster={df_cluster}, "
+                        f"df_oracle={df_oracle}, df_final={df_final}"
+                    )
+
+            # Ensure DF is at least 1
+            df_final = max(df_final, 1)
+
+            # Compute t-critical value for logging
+            t_crit = stats.t.ppf(1 - 0.05 / 2, df_final)
+
+            df_info[policy] = {
+                "df": int(df_final),
+                "t_critical": float(t_crit),
+                "n_clusters": base_df_info.get("n_clusters", self.n_folds),
+                "oua_applied": oua_applied,
+            }
+
+            logger.debug(
+                f"Stored DF info for {policy}: df={df_final}, t_crit={t_crit:.3f}"
+            )
+
+        # Store in metadata
+        if not isinstance(result.metadata, dict):
+            result.metadata = {}
+        result.metadata["degrees_of_freedom"] = df_info
+        result.metadata["target_policies"] = policies
+
     def _stack_policy(
         self, policy: str, policy_idx: int, valid_estimators: List[str]
     ) -> Optional[Tuple[float, float, np.ndarray]]:
@@ -391,19 +488,19 @@ class StackedDREstimator(BaseCJEEstimator):
         )
         se_if = float(res_if["se"])
 
-        # Record SE diagnostics for downstream CI construction (t-critical)
-        try:
-            if not hasattr(self, "_se_diagnostics"):
-                self._se_diagnostics: Dict[str, Dict[str, Any]] = {}
-            det = {
-                "G_outer": int(res_if.get("n_clusters", 0)),
-                "G_inner": None,
-                "df": int(res_if.get("df", 0)),
-            }
-            self._se_diagnostics.setdefault(policy, {})
-            self._se_diagnostics[policy]["cluster_robust_detail"] = det
-        except Exception:
-            pass
+        # Store DF info for t-based CIs
+        if not hasattr(self, "_df_info"):
+            self._df_info: Dict[str, Dict[str, Any]] = {}
+
+        df_cluster = res_if.get("df", res_if.get("n_clusters", len(stacked_if)) - 1)
+        from scipy import stats
+
+        t_crit = stats.t.ppf(1 - 0.05 / 2, df_cluster)
+        self._df_info[policy] = {
+            "df": int(df_cluster),
+            "t_critical": float(t_crit),
+            "n_clusters": int(res_if.get("n_clusters", len(stacked_if))),
+        }
 
         # Add MC variance if present
         mc_var = self._aggregate_mc_variance(policy, used_names, weights)
@@ -932,10 +1029,6 @@ class StackedDREstimator(BaseCJEEstimator):
             "n_folds": self.n_folds,
             "covariance_regularization": self.covariance_regularization,
         }
-
-        # Attach SE diagnostics if available (for t-based CI in ablations)
-        if hasattr(self, "_se_diagnostics") and isinstance(self._se_diagnostics, dict):
-            metadata["_se_diagnostics"] = self._se_diagnostics
 
         # Add sample indices if available
         if_sample_indices: Dict[str, Any] = {}
