@@ -22,13 +22,10 @@ Judge scores + small oracle slice (5-10%) → Calibrate to oracle scale
 ```
 
 **What you get:**
-- **Unbiased estimates**: Judge scores mapped to oracle outcome scale (preserves mean, enforces "higher score → no worse outcome")
-- **Valid CIs**: Account for both sampling uncertainty and calibration uncertainty
+- **Unbiased estimates**: Judge scores mapped to oracle outcome scale via isotonic regression (unbiased, de-noising)
 - **Small label budget**: 5-10% oracle coverage often sufficient
+- **Valid CIs**: Account for both sampling uncertainty and calibration uncertainty (when oracle coverage is <100%)
 
-**Automatic handling:**
-- Paired comparisons: Clusters by prompt when comparing policies on same eval set
-- Oracle uncertainty: Jackknife procedure captures calibration risk
 
 See [`cje/calibration/README.md`](cje/calibration/README.md#why-isotonic-regression-for-reward-calibration) for technical details.
 
