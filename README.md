@@ -11,7 +11,7 @@
 
 **Turn noisy LLM-judge scores into unbiased policy estimates with valid confidence intervals.**
 
-CJE calibrates judge scores using a small oracle slice (5-10% coverage), then delivers statistically rigorous estimates. As simple as comparing responses, as powerful as A/B testing.
+CJE calibrates judge scores using a small oracle slice (5-10% coverage), then delivers statistically rigorous estimates.
 
 ## How It Works
 
