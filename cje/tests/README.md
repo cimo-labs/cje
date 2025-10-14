@@ -2,7 +2,7 @@
 
 ## Overview
 
-The CJE test suite has been radically simplified to focus on end-to-end testing with real data. We've reduced from 28 test files (238 tests) to 7 core test files (~80 tests) while maintaining comprehensive coverage of critical functionality.
+The CJE test suite focuses on end-to-end testing with real data. The suite consists of 8 core test files (~87 tests) providing comprehensive coverage of critical functionality.
 
 ## File Structure
 
@@ -11,7 +11,7 @@ tests/
 ├── conftest.py                    # Shared fixtures and arena data loaders
 ├── run_all_tests.py              # Test runner script
 │
-├── E2E Tests                    
+├── E2E Tests
 │   ├── test_e2e_estimators.py    # Complete pipelines for all estimators
 │   ├── test_e2e_features.py      # SIMCal, cross-fitting
 │   └── test_interface_integration.py # High-level API testing
@@ -19,7 +19,8 @@ tests/
 ├── Core Tests
 │   ├── test_infrastructure.py    # Critical infrastructure and edge cases
 │   ├── test_unified_folds.py     # Comprehensive fold management
-│   └── test_mc_variance.py       # Monte Carlo variance testing
+│   ├── test_mc_variance.py       # Monte Carlo variance testing
+│   └── test_reproducibility.py   # Determinism and seed propagation
 │
 └── data/                          # Test datasets
     ├── arena_sample/              # Real Arena 10K subset (100 samples)
@@ -115,27 +116,20 @@ def test_new_feature_workflow(arena_sample):
 
 ## Key Design Decisions
 
-### 1. **Simplified Test Suite**
-Reduced from 238 tests to ~80 focused tests:
-- 73% reduction in test count
-- Comprehensive coverage maintained
-- Faster execution and easier maintenance
-- Focus on integration over unit testing
-
-### 2. **Real Data Testing**
+### 1. **Real Data Testing**
 Arena sample data provides ground truth validation:
 - Catches regressions in production scenarios
 - Tests all estimators with same data
 - Reveals integration issues unit tests miss
 
-### 3. **E2E Testing Priority**
+### 2. **E2E Testing Priority**
 Complete workflows over isolated functions:
 - Test what users actually do
 - Catch integration bugs
 - Validate full pipelines
 - Ensure components work together
 
-### 4. **Unified Fold System**
+### 3. **Unified Fold System**
 Consistent cross-validation across all components:
 - Hash-based fold assignment from prompt_id
 - Prevents data leakage
@@ -180,4 +174,4 @@ Test execution tips:
 
 ## Summary
 
-The CJE test suite has been transformed from 238 scattered unit tests to ~80 focused tests that test real workflows with real data. This simplified approach catches more integration issues, runs faster, and is easier to maintain while providing comprehensive coverage of all estimators, calibration methods, and diagnostic tools.
+The CJE test suite contains ~87 focused tests that validate real workflows with real data. This approach catches integration issues, runs fast, and provides comprehensive coverage of all estimators, calibration methods, diagnostic tools, and reproducibility guarantees.
