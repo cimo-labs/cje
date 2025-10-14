@@ -29,6 +29,38 @@ Judge scores + small oracle slice (5-10%) → Calibrate to oracle scale
 
 See [`cje/calibration/README.md`](cje/calibration/README.md#why-isotonic-regression-for-reward-calibration) for technical details.
 
+## Calibration Methods
+
+CJE provides two calibration modes for mapping judge scores to oracle outcomes:
+
+### Monotone (Default)
+Standard isotonic regression enforces: *higher judge score → no worse expected outcome*. Simple, stable, works well when the judge-oracle relationship is already monotone.
+
+### Two-Stage (Flexible)
+Learns smooth transformation g(S) → rank → isotonic. Handles non-monotone patterns (e.g., length bias, regional miscalibration) while maintaining final monotonicity guarantee.
+
+<div align="center">
+  <img src="two_stage_comparison.png" alt="Calibration Comparison" width="100%">
+</div>
+
+**When to use two-stage:**
+- Regional miscalibration (monotone works well at low/high but poorly at mid-range)
+- Length bias (judge gives same score to different-quality responses based on length)
+- Non-monotone empirical E[Oracle|Judge] relationship
+
+**Auto mode:** CJE automatically selects the better method via cross-validation (1-SE rule).
+
+```python
+# Let CJE choose automatically (default)
+result = analyze_dataset(fresh_draws_dir="responses/")
+
+# Or force a specific mode
+result = analyze_dataset(
+    fresh_draws_dir="responses/",
+    calibration_mode="two_stage"  # or "monotone"
+)
+```
+
 ## Installation
 
 ```bash
