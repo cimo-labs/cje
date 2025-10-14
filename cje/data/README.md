@@ -91,6 +91,45 @@ policies = sampler.target_policies
 oracle_coverage = sampler.oracle_coverage  # Float in [0, 1]: fraction with oracle labels
 ```
 
+### Working with EstimationResult
+```python
+from cje import analyze_dataset
+
+# Get results
+result = analyze_dataset(fresh_draws_dir="responses/")
+
+# Access core data
+estimates = result.estimates  # numpy array
+standard_errors = result.standard_errors  # numpy array
+policies = result.metadata["target_policies"]  # list of policy names
+
+# Get confidence intervals
+ci_lower, ci_upper = result.confidence_interval(alpha=0.05)
+# Or as list of tuples
+cis = result.ci()  # [(lower, upper), ...]
+
+# Compare policies
+comparison = result.compare_policies(idx1=0, idx2=1)
+print(f"Difference: {comparison['difference']:.3f} (p={comparison['p_value']:.3f})")
+
+# Export
+result_dict = result.to_dict()  # Full export with CIs, diagnostics
+```
+
+**New visualization features:**
+```python
+# Quick plotting (convenience method)
+result.plot_estimates(
+    base_policy_stats={"mean": 0.72, "se": 0.01},
+    save_path="estimates.png"
+)
+
+# Jupyter notebook display
+result  # Auto-displays as formatted HTML table
+```
+
+See [`visualization/README.md`](../visualization/README.md) for all visualization options.
+
 ### Data Validation
 ```python
 from cje.data import validate_cje_data

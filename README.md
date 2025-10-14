@@ -117,6 +117,38 @@ result = analyze_dataset(
 
 **For IPS/DR data formats and API details:** Run `help(analyze_dataset)` or see [`cje/interface/`](cje/interface/) module docs.
 
+## Visualization
+
+CJE provides diagnostic plots for understanding and validating results:
+
+```python
+from cje import analyze_dataset, plot_policy_estimates
+
+# Run analysis
+result = analyze_dataset(fresh_draws_dir="responses/")
+
+# Quick plot with convenience method
+result.plot_estimates(save_path="estimates.png")
+
+# Or use visualization functions directly for more control
+plot_policy_estimates(
+    estimates={"policy_a": 0.75, "policy_b": 0.68},
+    standard_errors={"policy_a": 0.02, "policy_b": 0.03},
+    oracle_values={"policy_a": 0.74, "policy_b": 0.69}  # Optional
+)
+```
+
+**Available visualizations:**
+- `plot_policy_estimates` - Forest plots with confidence intervals
+- `plot_calibration_comparison` - Judge→oracle calibration curves
+- `plot_weight_dashboard_summary` - Weight diagnostics for IPS/DR
+- `plot_weight_dashboard_detailed` - Per-policy weight analysis
+- `plot_dr_dashboard` - Doubly robust diagnostics
+
+**Jupyter notebooks:** Results automatically display as formatted tables when evaluated in a cell.
+
+See [`cje/visualization/README.md`](cje/visualization/README.md) for complete guide.
+
 ## Documentation
 
 📚 **Getting Started**

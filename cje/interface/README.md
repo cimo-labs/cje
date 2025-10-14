@@ -207,6 +207,31 @@ with open("results.json", "w") as f:
     }, f)
 ```
 
+### Visualize Results
+```python
+from cje import analyze_dataset, plot_policy_estimates
+
+# Run analysis
+results = analyze_dataset(fresh_draws_dir="responses/")
+
+# Option 1: Quick plot with convenience method
+results.plot_estimates(
+    base_policy_stats={"mean": 0.72, "se": 0.01},
+    save_path="estimates.png"
+)
+
+# Option 2: Direct import for more control
+plot_policy_estimates(
+    estimates={"policy_a": 0.75, "policy_b": 0.68},
+    standard_errors={"policy_a": 0.02, "policy_b": 0.03},
+    oracle_values={"policy_a": 0.74, "policy_b": 0.69}  # Optional
+)
+```
+
+**Jupyter notebooks:** Results auto-display as formatted HTML tables when evaluated in a cell.
+
+See [`cje/visualization/README.md`](../visualization/README.md) for all available visualizations.
+
 ## Command Line Interface
 
 ```bash
