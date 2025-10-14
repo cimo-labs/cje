@@ -61,6 +61,7 @@ class JudgeCalibrator:
         random_seed: int = 42,
         balance_oracle_folds: bool = True,
         calibration_mode: Optional[Literal["monotone", "two_stage", "auto"]] = "auto",
+        covariate_names: Optional[List[str]] = None,
     ):
         """Initialize judge calibrator.
 
@@ -72,6 +73,8 @@ class JudgeCalibrator:
                 - 'monotone': Force standard isotonic regression
                 - 'two_stage': Force flexible two-stage calibration
                 - None: Use monotone (for backward compatibility)
+            covariate_names: Optional list of covariate names to extract from Sample.metadata
+                for use in two-stage calibration (e.g., ["response_length", "domain"])
         """
         self.random_seed = random_seed
         self.balance_oracle_folds = (
@@ -81,6 +84,7 @@ class JudgeCalibrator:
         self.calibration_mode = (
             calibration_mode if calibration_mode is not None else "monotone"
         )
+        self.covariate_names = covariate_names or []
         # Store selected mode (for auto, this gets updated after selection)
         self.selected_mode: Optional[str] = (
             None if calibration_mode == "auto" else calibration_mode
@@ -101,6 +105,7 @@ class JudgeCalibrator:
         judge_scores: np.ndarray,
         oracle_labels: Optional[np.ndarray] = None,
         oracle_mask: Optional[np.ndarray] = None,
+        covariates: Optional[np.ndarray] = None,
     ) -> CalibrationResult:
         """Calibrate judge scores using oracle labels.
 
@@ -108,6 +113,7 @@ class JudgeCalibrator:
             judge_scores: Raw judge scores for all data
             oracle_labels: True labels for oracle subset (if oracle_mask provided)
             oracle_mask: Boolean mask indicating which samples have oracle labels
+            covariates: Optional covariate matrix (n_samples, n_covariates) for two-stage mode
 
         Returns:
             CalibrationResult with calibrated scores and diagnostics
@@ -186,17 +192,30 @@ class JudgeCalibrator:
         # Initialize calibrated scores
         calibrated_scores = np.copy(judge_scores)
 
+        # Extract oracle covariates if provided
+        oracle_covariates = None
+        if covariates is not None:
+            if len(covariates) != n_total:
+                raise ValueError(
+                    f"Covariates length ({len(covariates)}) must match judge_scores length ({n_total})"
+                )
+            oracle_covariates = covariates[oracle_mask]
+
         # Use appropriate calibration based on mode
         if self.calibration_mode != "monotone":
             # Use flexible calibrator for auto/two_stage modes
             from .flexible_calibrator import FlexibleCalibrator
 
             self._flexible_calibrator = FlexibleCalibrator(
-                mode=self.calibration_mode, random_seed=self.random_seed
+                mode=self.calibration_mode,
+                random_seed=self.random_seed,
+                covariate_names=self.covariate_names,
             )
             # Create simple fold split for flexible calibrator
             oracle_folds = np.arange(len(oracle_y)) % 5
-            self._flexible_calibrator.fit(oracle_scores, oracle_y, oracle_folds)
+            self._flexible_calibrator.fit(
+                oracle_scores, oracle_y, oracle_folds, oracle_covariates
+            )
 
             # Log selected mode if auto was used
             if self.calibration_mode == "auto":
@@ -206,7 +225,9 @@ class JudgeCalibrator:
 
             # Transform all scores
             calibrated_scores = np.clip(
-                self._flexible_calibrator.predict(judge_scores), 0.0, 1.0
+                self._flexible_calibrator.predict(judge_scores, covariates=covariates),
+                0.0,
+                1.0,
             )
 
             # Store isotonic for compatibility (if available)
@@ -243,11 +264,14 @@ class JudgeCalibrator:
             fold_ids=self._fold_ids,
         )
 
-    def predict(self, judge_scores: np.ndarray) -> np.ndarray:
+    def predict(
+        self, judge_scores: np.ndarray, covariates: Optional[np.ndarray] = None
+    ) -> np.ndarray:
         """Apply calibration to new judge scores.
 
         Args:
             judge_scores: Judge scores to calibrate
+            covariates: Optional covariate matrix (n_samples, n_covariates)
 
         Returns:
             Calibrated scores
@@ -255,11 +279,20 @@ class JudgeCalibrator:
         if self._flexible_calibrator is not None:
             # Use flexible calibrator for predictions
             return np.clip(
-                self._flexible_calibrator.predict(judge_scores, folds=None), 0.0, 1.0
+                self._flexible_calibrator.predict(
+                    judge_scores, folds=None, covariates=covariates
+                ),
+                0.0,
+                1.0,
             )
 
         if self._final_calibrator is None:
             raise RuntimeError("Calibrator must be fitted before prediction")
+
+        if covariates is not None:
+            raise ValueError(
+                "Covariates provided but calibrator was fitted in monotone mode without covariate support"
+            )
 
         # Predict and clip to [0,1] to ensure rewards stay in valid range
         result = self._final_calibrator.predict(np.asarray(judge_scores))
@@ -272,6 +305,7 @@ class JudgeCalibrator:
         oracle_mask: Optional[np.ndarray] = None,
         n_folds: int = 5,
         prompt_ids: Optional[List[str]] = None,
+        covariates: Optional[np.ndarray] = None,
     ) -> CalibrationResult:
         """Fit both global and cross-fitted calibration models.
 
@@ -285,6 +319,8 @@ class JudgeCalibrator:
             oracle_labels: True labels for oracle subset
             oracle_mask: Boolean mask indicating which samples have oracle labels
             n_folds: Number of CV folds
+            prompt_ids: Optional prompt IDs for fold assignment
+            covariates: Optional covariate matrix (n_samples, n_covariates)
 
         Returns:
             CalibrationResult with both global and CV calibration
@@ -382,6 +418,15 @@ class JudgeCalibrator:
         # Extract oracle fold IDs for use in flexible calibrator
         oracle_fold_ids = self._fold_ids[oracle_mask]
 
+        # Extract oracle covariates if provided
+        oracle_covariates = None
+        if covariates is not None:
+            if len(covariates) != n_total:
+                raise ValueError(
+                    f"Covariates length ({len(covariates)}) must match judge_scores length ({n_total})"
+                )
+            oracle_covariates = covariates[oracle_mask]
+
         # Step 2: Fit global model
         if self.calibration_mode != "monotone":
             logger.info(f"Calibration mode: {self.calibration_mode}")
@@ -392,9 +437,13 @@ class JudgeCalibrator:
             # Fit flexible calibrator
             logger.info(f"Fitting FlexibleCalibrator with {n_oracle} oracle samples")
             self._flexible_calibrator = FlexibleCalibrator(
-                mode=self.calibration_mode, random_seed=self.random_seed
+                mode=self.calibration_mode,
+                random_seed=self.random_seed,
+                covariate_names=self.covariate_names,
             )
-            self._flexible_calibrator.fit(oracle_scores, oracle_y, oracle_fold_ids)
+            self._flexible_calibrator.fit(
+                oracle_scores, oracle_y, oracle_fold_ids, oracle_covariates
+            )
 
             # Log selected mode if auto was used
             if self.calibration_mode == "auto":
@@ -412,7 +461,11 @@ class JudgeCalibrator:
 
             # Get calibrated scores using the full model (no folds for inference)
             calibrated_scores = np.clip(
-                self._flexible_calibrator.predict(judge_scores, folds=None), 0.0, 1.0
+                self._flexible_calibrator.predict(
+                    judge_scores, folds=None, covariates=covariates
+                ),
+                0.0,
+                1.0,
             )
         else:
             logger.info("Calibration mode: monotone (standard isotonic regression)")
@@ -458,7 +511,9 @@ class JudgeCalibrator:
             # Get OOF predictions from flexible calibrator
             oracle_fold_ids = self._fold_ids[oracle_mask]
             oracle_oof = np.clip(
-                self._flexible_calibrator.predict(oracle_scores, oracle_fold_ids),
+                self._flexible_calibrator.predict(
+                    oracle_scores, oracle_fold_ids, oracle_covariates
+                ),
                 0.0,
                 1.0,
             )
@@ -514,7 +569,10 @@ class JudgeCalibrator:
         return self.predict(judge_scores)
 
     def index(
-        self, judge_scores: np.ndarray, folds: Optional[np.ndarray] = None
+        self,
+        judge_scores: np.ndarray,
+        folds: Optional[np.ndarray] = None,
+        covariates: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Get the index used for isotonic regression.
 
@@ -525,14 +583,17 @@ class JudgeCalibrator:
         Args:
             judge_scores: Judge scores to transform
             folds: Optional fold assignments for OOF transformation
+            covariates: Optional covariate matrix (n_samples, n_covariates)
 
         Returns:
             Index values suitable for isotonic regression
         """
         if self._flexible_calibrator is not None:
-            return self._flexible_calibrator.index(judge_scores, folds)
+            return self._flexible_calibrator.index(judge_scores, folds, covariates)
         else:
             # Standard monotone calibration uses judge scores directly
+            if covariates is not None:
+                raise ValueError("Covariates not supported in monotone mode")
             return judge_scores
 
     def has_fold_models(self) -> bool:
@@ -571,12 +632,18 @@ class JudgeCalibrator:
         # Standard isotonic calibration
         return self._fold_models if self._fold_models is not None else {}
 
-    def predict_oof(self, judge_scores: np.ndarray, fold_ids: np.ndarray) -> np.ndarray:
+    def predict_oof(
+        self,
+        judge_scores: np.ndarray,
+        fold_ids: np.ndarray,
+        covariates: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         """Out-of-fold predictions using cross-fitted models.
 
         Args:
             judge_scores: Judge scores to calibrate
             fold_ids: Fold assignment for each score
+            covariates: Optional covariate matrix (n_samples, n_covariates)
 
         Returns:
             Cross-fitted calibrated scores
@@ -584,11 +651,18 @@ class JudgeCalibrator:
         if self._flexible_calibrator is not None:
             # Use flexible calibrator for OOF predictions
             return np.clip(
-                self._flexible_calibrator.predict(judge_scores, fold_ids), 0.0, 1.0
+                self._flexible_calibrator.predict(judge_scores, fold_ids, covariates),
+                0.0,
+                1.0,
             )
 
         if not self._fold_models:
             raise RuntimeError("Must call fit_cv before predict_oof")
+
+        if covariates is not None:
+            raise ValueError(
+                "Covariates provided but calibrator was fitted in monotone mode without covariate support"
+            )
 
         judge_scores = np.asarray(judge_scores)
         fold_ids = np.asarray(fold_ids)

@@ -355,6 +355,16 @@ class DREstimator(BaseCJEEstimator):
         judge_scores = []
         valid_fold_assignments = []
 
+        # Check if reward_calibrator has covariate names
+        covariate_names: List[str] = []
+        if self.reward_calibrator is not None and hasattr(
+            self.reward_calibrator, "covariate_names"
+        ):
+            covariate_names = self.reward_calibrator.covariate_names or []
+
+        # Collect covariates if specified
+        covariate_values: Optional[List[List[float]]] = [] if covariate_names else None
+
         for idx in valid_indices_list:
             sample = self.sampler.dataset.samples[idx]
             prompts.append(sample.prompt)
@@ -371,6 +381,29 @@ class DREstimator(BaseCJEEstimator):
                 raise ValueError("All samples must have judge scores for DR")
             judge_scores.append(sample.judge_score)
 
+            # Extract covariates if specified
+            if covariate_values is not None:
+                sample_covariates = []
+                for cov_name in covariate_names:
+                    if cov_name not in sample.metadata:
+                        raise ValueError(
+                            f"Covariate '{cov_name}' not found in metadata for sample {idx} "
+                            f"(prompt_id={sample.prompt_id})"
+                        )
+                    cov_value = sample.metadata[cov_name]
+                    if cov_value is None:
+                        raise ValueError(
+                            f"Covariate '{cov_name}' is None for sample {idx}. "
+                            "All covariate values must be present."
+                        )
+                    try:
+                        sample_covariates.append(float(cov_value))
+                    except (TypeError, ValueError) as e:
+                        raise ValueError(
+                            f"Covariate '{cov_name}' has non-numeric value for sample {idx}: {e}"
+                        )
+                covariate_values.append(sample_covariates)
+
             # Get fold assignment using unified system
             # Note: We compute fold from prompt_id to handle filtered data correctly
             from ..data.folds import get_fold
@@ -384,17 +417,24 @@ class DREstimator(BaseCJEEstimator):
             np.array(valid_fold_assignments) if valid_fold_assignments else None
         )
 
-        # Pass fold assignments to outcome model
+        # Convert covariates to array if extracted
+        covariates_array = np.array(covariate_values) if covariate_values else None
+
+        # Pass fold assignments and covariates to outcome model
         self.outcome_model.fit(
             prompts,
             responses,
             rewards_array,
             judge_scores_array,
             fold_assignments_array,
+            covariates=covariates_array,
         )
 
         # Store the valid indices for later use
         self._outcome_valid_indices = valid_indices_list
+
+        # Store covariate names for use in estimate()
+        self._covariate_names = covariate_names
 
         # Precompute prompt_id to fold mapping for O(1) lookup in estimate()
         self._promptid_to_fold = {}
@@ -406,7 +446,12 @@ class DREstimator(BaseCJEEstimator):
 
         self._outcome_fitted = True
 
-        logger.info(f"Fitted outcome model on {len(prompts)} logged samples")
+        if covariate_names:
+            logger.info(
+                f"Fitted outcome model on {len(prompts)} logged samples with {len(covariate_names)} covariates"
+            )
+        else:
+            logger.info(f"Fitted outcome model on {len(prompts)} logged samples")
 
     def estimate(self) -> EstimationResult:
         """Compute DR estimates for all target policies.
@@ -478,6 +523,27 @@ class DREstimator(BaseCJEEstimator):
                     )
                 logged_prompt_ids.append(str(d["prompt_id"]))
 
+            # Extract covariates if specified
+            logged_covariates = None
+            if hasattr(self, "_covariate_names") and self._covariate_names:
+                covariate_values = []
+                for d in data:
+                    sample_covariates = []
+                    for cov_name in self._covariate_names:
+                        cov_value = d.get(cov_name)  # Use get() instead of in check
+                        if cov_value is None:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' not found or is None in data for policy '{policy}'"
+                            )
+                        try:
+                            sample_covariates.append(float(cov_value))  # type: ignore[arg-type]
+                        except (TypeError, ValueError) as e:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' has non-numeric value: {e}"
+                            )
+                    covariate_values.append(sample_covariates)
+                logged_covariates = np.array(covariate_values)
+
             # Get fold assignments using precomputed mapping (O(1) lookups)
             # Strict mode: error if any prompt_id is missing fold assignment
             valid_fold_ids_list = []
@@ -505,9 +571,13 @@ class DREstimator(BaseCJEEstimator):
             # Get outcome model predictions for logged data (using cross-fitted models)
             # Both IsotonicOutcomeModel and BaseOutcomeModel-derived classes need fold_ids
             if hasattr(self.outcome_model, "predict"):
-                # Our outcome models accept fold_ids for cross-fitting
+                # Our outcome models accept fold_ids and covariates for cross-fitting
                 g_logged = self.outcome_model.predict(
-                    logged_prompts, logged_responses, logged_scores, valid_fold_ids
+                    logged_prompts,
+                    logged_responses,
+                    logged_scores,
+                    valid_fold_ids,
+                    covariates=logged_covariates,
                 )
             else:
                 # Fallback for other models
@@ -549,12 +619,24 @@ class DREstimator(BaseCJEEstimator):
                             f"logged fold={valid_fold_ids[i]}, fresh fold={fresh_sample.fold_id}"
                         )
 
+                # Get covariate values for this prompt (same for all fresh draws)
+                fresh_covariates = None
+                if logged_covariates is not None:
+                    # Repeat the covariate values for each fresh draw from this prompt
+                    fresh_covariates = np.tile(
+                        logged_covariates[i], (len(fresh_scores), 1)
+                    )
+
                 # Get predictions for fresh draws
                 # Note: Our models need fold_ids for cross-fitting
                 # They all use the same fold for each prompt's fresh draws
                 if hasattr(self.outcome_model, "predict"):
                     g_fresh_prompt = self.outcome_model.predict(
-                        fresh_prompts, fresh_responses, fresh_scores, fresh_fold_ids
+                        fresh_prompts,
+                        fresh_responses,
+                        fresh_scores,
+                        fresh_fold_ids,
+                        covariates=fresh_covariates,
                     )
                 else:
                     # Fallback for other models

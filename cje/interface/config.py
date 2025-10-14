@@ -4,7 +4,7 @@ These models provide a stable, validated contract between CLI/Hydra and
 the analysis service while preserving backward-compatible function APIs.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -40,6 +40,18 @@ class AnalysisConfig(BaseModel):
     )
     judge_field: str = Field("judge_score")
     oracle_field: str = Field("oracle_label")
+    calibration_covariates: Optional[List[str]] = Field(
+        None,
+        description="List of metadata field names to use as covariates in two-stage calibration. "
+        "E.g., ['response_length', 'domain'] to handle length bias or domain-specific miscalibration. "
+        "Only works with calibration_mode='two_stage' or 'auto'.",
+    )
+    include_response_length: bool = Field(
+        False,
+        description="Automatically include response length (word count) as a covariate. "
+        "Computed as len(response.split()). Requires all samples to have 'response' field. "
+        "If True, 'response_length' is prepended to calibration_covariates.",
+    )
     estimator_config: Dict[str, Any] = Field(default_factory=dict)
     verbose: bool = Field(False)
 

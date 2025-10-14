@@ -152,6 +152,8 @@ estimator = CalibratedIPS(sampler, refuse_unreliable=True)
 - **CalibratorBackedOutcomeModel**: Uses same calibrator as rewards for consistency
 - **WeightedIsotonicOutcomeModel**: Policy-specific models for MRDR with omega weights ("w", "w2", or "snips")
 
+**Covariate Support**: All outcome models accept optional `covariates` array during `fit()` and `predict()`. Covariates are automatically extracted from sample metadata (e.g., response_length, domain) when specified in calibration configuration. When using two-stage calibration, covariates are incorporated via the calibrator's index transformation g(S, X_cov), maintaining the same cross-fitted structure.
+
 ## Fresh Draws
 
 DR estimators auto-load fresh draws from:

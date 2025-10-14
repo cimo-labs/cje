@@ -6,11 +6,21 @@ analysis. AutoCal-R automatically selects between monotone and flexible
 calibration based on the relationship structure.
 """
 
-from typing import Dict, List, Any, Optional, Tuple, Literal, cast
+from typing import Dict, List, Any, Optional, Tuple, Literal, cast, Callable
 from copy import deepcopy
 import numpy as np
 from ..data.models import Dataset, Sample
 from .judge import JudgeCalibrator, CalibrationResult
+
+
+# Auto-computable covariates registry
+# Maps covariate name to (computation_function, required_field)
+AUTO_COMPUTABLE_COVARIATES: Dict[str, Tuple[Callable[[Sample], float], str]] = {
+    "response_length": (
+        lambda sample: float(len(sample.response.split())),
+        "response",
+    ),
+}
 
 
 def calibrate_dataset(
@@ -20,6 +30,7 @@ def calibrate_dataset(
     enable_cross_fit: bool = False,
     n_folds: int = 5,
     calibration_mode: Optional[str] = None,
+    covariate_names: Optional[List[str]] = None,
     random_seed: int = 42,
 ) -> Tuple[Dataset, CalibrationResult]:
     """Calibrate judge scores in a dataset to match oracle labels (AutoCal-R).
@@ -37,6 +48,9 @@ def calibrate_dataset(
         n_folds: Number of CV folds (only used if enable_cross_fit=True)
         calibration_mode: Calibration mode ('auto', 'monotone', 'two_stage').
                          If None, defaults to 'auto' for cross-fit, 'monotone' otherwise.
+        covariate_names: Optional list of metadata field names to use as covariates
+                        in two-stage calibration (e.g., ["response_length", "domain"]).
+        random_seed: Random seed for reproducibility
 
     Returns:
         Tuple of (calibrated_dataset, calibration_result)
@@ -64,6 +78,35 @@ def calibrate_dataset(
             "judge_field='reward' is not allowed to avoid confusion between "
             "raw and calibrated values. Use a different field name in metadata."
         )
+
+    # Auto-compute covariates if needed
+    if covariate_names:
+        for cov_name in covariate_names:
+            if cov_name in AUTO_COMPUTABLE_COVARIATES:
+                compute_fn, required_field = AUTO_COMPUTABLE_COVARIATES[cov_name]
+
+                # Check that all samples have the required field
+                for i, sample in enumerate(dataset.samples):
+                    if (
+                        not hasattr(sample, required_field)
+                        or getattr(sample, required_field) is None
+                    ):
+                        raise ValueError(
+                            f"Auto-computable covariate '{cov_name}' requires field '{required_field}' "
+                            f"to be present in all samples. Sample {i} (prompt_id={sample.prompt_id}) "
+                            f"is missing this field or it is None."
+                        )
+
+                # Compute and store in metadata if not already present
+                for sample in dataset.samples:
+                    if cov_name not in sample.metadata:
+                        try:
+                            sample.metadata[cov_name] = compute_fn(sample)
+                        except Exception as e:
+                            raise ValueError(
+                                f"Failed to compute covariate '{cov_name}' for sample "
+                                f"(prompt_id={sample.prompt_id}): {e}"
+                            )
 
     for i, sample in enumerate(dataset.samples):
         # Get judge score - must be top-level field for standard "judge_score"
@@ -111,6 +154,48 @@ def calibrate_dataset(
     if len(oracle_labels_array) == 0:
         raise ValueError(f"No oracle labels found in field '{oracle_field}'")
 
+    # Extract covariate matrix if covariate_names provided
+    covariates_array: Optional[np.ndarray] = None
+    if covariate_names:
+        covariate_values = []
+        for i, sample in enumerate(dataset.samples):
+            sample_covariates = []
+            for cov_name in covariate_names:
+                if cov_name not in sample.metadata:
+                    # Build helpful error message
+                    available_fields = sorted(sample.metadata.keys())
+                    auto_computable = sorted(AUTO_COMPUTABLE_COVARIATES.keys())
+                    error_msg = (
+                        f"Covariate '{cov_name}' not found in metadata for sample {i} "
+                        f"(prompt_id={sample.prompt_id}).\n"
+                        f"Available metadata fields: {available_fields}\n"
+                        f"Auto-computable covariates: {auto_computable}"
+                    )
+                    raise ValueError(error_msg)
+                cov_value = sample.metadata[cov_name]
+                if cov_value is None:
+                    raise ValueError(
+                        f"Covariate '{cov_name}' is None for sample {i} "
+                        f"(prompt_id={sample.prompt_id}). "
+                        "All covariate values must be present (no missing data)."
+                    )
+                # Convert to float
+                try:
+                    sample_covariates.append(float(cov_value))
+                except (TypeError, ValueError) as e:
+                    raise ValueError(
+                        f"Covariate '{cov_name}' has non-numeric value '{cov_value}' "
+                        f"for sample {i} (prompt_id={sample.prompt_id}): {e}"
+                    )
+            covariate_values.append(sample_covariates)
+
+        covariates_array = np.array(covariate_values)
+        if covariates_array.shape[0] != len(judge_scores_array):
+            raise ValueError(
+                f"Covariate matrix has {covariates_array.shape[0]} rows but "
+                f"expected {len(judge_scores_array)}"
+            )
+
     # Check if we have 100% oracle coverage
     oracle_coverage = len(oracle_labels_array) / len(dataset.samples)
     has_full_coverage = oracle_coverage >= 1.0
@@ -125,6 +210,7 @@ def calibrate_dataset(
         calibration_mode=cast(
             Literal["monotone", "two_stage", "auto"], calibration_mode
         ),
+        covariate_names=covariate_names,
         random_seed=random_seed,
     )
     if enable_cross_fit:
@@ -136,11 +222,15 @@ def calibrate_dataset(
             oracle_mask_array,
             n_folds,
             prompt_ids=prompt_ids,
+            covariates=covariates_array,
         )
     else:
         # Use standard calibration (backward compatible)
         result = calibrator.fit_transform(
-            judge_scores_array, oracle_labels_array, oracle_mask_array
+            judge_scores_array,
+            oracle_labels_array,
+            oracle_mask_array,
+            covariates=covariates_array,
         )
 
     # Create new samples with calibrated rewards

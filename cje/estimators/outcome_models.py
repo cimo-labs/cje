@@ -44,6 +44,7 @@ class BaseOutcomeModel(ABC):
         responses: List[str],
         rewards: np.ndarray,
         judge_scores: np.ndarray,
+        covariates: Optional[np.ndarray] = None,
     ) -> Any:
         """Fit a single model on training data.
 
@@ -52,6 +53,7 @@ class BaseOutcomeModel(ABC):
             responses: Training responses
             rewards: Training rewards (calibrated)
             judge_scores: Training judge scores
+            covariates: Optional covariate matrix (n_samples, n_covariates)
 
         Returns:
             A fitted model object
@@ -65,6 +67,7 @@ class BaseOutcomeModel(ABC):
         prompts: List[str],
         responses: List[str],
         judge_scores: np.ndarray,
+        covariates: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Make predictions using a fitted model.
 
@@ -73,6 +76,7 @@ class BaseOutcomeModel(ABC):
             prompts: Prompts to predict on
             responses: Responses to predict on
             judge_scores: Judge scores to predict on
+            covariates: Optional covariate matrix (n_samples, n_covariates)
 
         Returns:
             Predicted rewards
@@ -86,6 +90,7 @@ class BaseOutcomeModel(ABC):
         rewards: np.ndarray,
         judge_scores: Optional[np.ndarray] = None,
         fold_ids: Optional[np.ndarray] = None,
+        covariates: Optional[np.ndarray] = None,
     ) -> None:
         """Fit cross-fitted models on logged data."""
         if fold_ids is None:
@@ -105,6 +110,12 @@ class BaseOutcomeModel(ABC):
             raise ValueError(
                 f"Input length mismatch: prompts={len(prompts)}, responses={len(responses)}, "
                 f"rewards={len(rewards)}, judge_scores={len(judge_scores)}, fold_ids={len(fold_ids)}"
+            )
+
+        # Validate covariates if provided
+        if covariates is not None and len(covariates) != n:
+            raise ValueError(
+                f"Covariates length mismatch: expected {n}, got {len(covariates)}"
             )
 
         # Remap fold IDs to be sequential 0..K-1 for the subset
@@ -140,6 +151,11 @@ class BaseOutcomeModel(ABC):
             train_rewards = rewards[train_mask]
             train_scores = judge_scores[train_mask]
 
+            # Extract fold-specific covariates if provided
+            train_covariates = None
+            if covariates is not None:
+                train_covariates = covariates[train_mask]
+
             # Allow subclasses to provide fold-specific kwargs (e.g., sample weights)
             extra_kwargs = {}
             if hasattr(self, "_get_fold_fit_kwargs"):
@@ -150,6 +166,7 @@ class BaseOutcomeModel(ABC):
                 train_responses,
                 train_rewards,
                 train_scores,
+                covariates=train_covariates,
                 **extra_kwargs,
             )
             self.fold_models[fold] = model
@@ -169,6 +186,7 @@ class BaseOutcomeModel(ABC):
         responses: List[str],
         judge_scores: Optional[np.ndarray] = None,
         fold_ids: Optional[np.ndarray] = None,
+        covariates: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Predict using cross-fitted models."""
         if not self._fitted:
@@ -194,6 +212,12 @@ class BaseOutcomeModel(ABC):
             raise ValueError(
                 f"Input length mismatch: prompts={len(prompts)}, responses={len(responses)}, "
                 f"judge_scores={len(judge_scores)}, fold_ids={len(fold_ids)}"
+            )
+
+        # Validate covariates if provided
+        if covariates is not None and len(covariates) != n:
+            raise ValueError(
+                f"Covariates length mismatch: expected {n}, got {len(covariates)}"
             )
 
         fold_ids = fold_ids.astype(int)
@@ -235,11 +259,17 @@ class BaseOutcomeModel(ABC):
             fold_responses = [r for i, r in enumerate(responses) if fold_mask[i]]
             fold_scores = judge_scores[fold_mask]
 
+            # Extract fold-specific covariates if provided
+            fold_covariates = None
+            if covariates is not None:
+                fold_covariates = covariates[fold_mask]
+
             fold_predictions = self._predict_single_model(
                 self.fold_models[fold],
                 fold_prompts,
                 fold_responses,
                 fold_scores,
+                covariates=fold_covariates,
             )
 
             # Validate prediction shape
@@ -282,6 +312,7 @@ class IsotonicOutcomeModel(BaseOutcomeModel):
         rewards: np.ndarray,
         judge_scores: Optional[np.ndarray] = None,
         fold_ids: Optional[np.ndarray] = None,
+        covariates: Optional[np.ndarray] = None,
     ) -> None:
         """Fit cross-fitted models with proper index transformation."""
         if fold_ids is None:
@@ -292,8 +323,10 @@ class IsotonicOutcomeModel(BaseOutcomeModel):
 
         # Pre-compute transformed indices if calibrator is available
         if self.calibrator is not None and hasattr(self.calibrator, "index"):
-            # Get OOF indices for all data at once
-            transformed_scores = self.calibrator.index(judge_scores, fold_ids)
+            # Get OOF indices for all data at once, passing covariates if available
+            transformed_scores = self.calibrator.index(
+                judge_scores, fold_ids, covariates=covariates
+            )
         else:
             transformed_scores = judge_scores
 
@@ -301,8 +334,10 @@ class IsotonicOutcomeModel(BaseOutcomeModel):
         self._original_judge_scores = judge_scores
         judge_scores_to_use = transformed_scores
 
-        # Call parent fit with transformed scores
-        super().fit(prompts, responses, rewards, judge_scores_to_use, fold_ids)
+        # Call parent fit with transformed scores (covariates not needed after transformation)
+        super().fit(
+            prompts, responses, rewards, judge_scores_to_use, fold_ids, covariates=None
+        )
 
     def _fit_single_model(
         self,
@@ -310,11 +345,13 @@ class IsotonicOutcomeModel(BaseOutcomeModel):
         responses: List[str],
         rewards: np.ndarray,
         judge_scores: np.ndarray,  # These are already transformed indices
+        covariates: Optional[np.ndarray] = None,
     ) -> Any:
         """Fit an isotonic regression model on training data."""
         from sklearn.isotonic import IsotonicRegression
 
         # judge_scores are already transformed by fit() method
+        # covariates are already incorporated in the transformation
         model = IsotonicRegression(out_of_bounds="clip")
         model.fit(judge_scores, rewards)
         return model
@@ -325,6 +362,7 @@ class IsotonicOutcomeModel(BaseOutcomeModel):
         responses: List[str],
         judge_scores: Optional[np.ndarray] = None,
         fold_ids: Optional[np.ndarray] = None,
+        covariates: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Predict using cross-fitted models with proper index transformation."""
         if judge_scores is None:
@@ -332,13 +370,17 @@ class IsotonicOutcomeModel(BaseOutcomeModel):
 
         # Transform judge scores if calibrator is available
         if self.calibrator is not None and hasattr(self.calibrator, "index"):
-            # For prediction, use the ensemble index (folds=None)
-            transformed_scores = self.calibrator.index(judge_scores, folds=None)
+            # For prediction, use the ensemble index (folds=None), passing covariates if available
+            transformed_scores = self.calibrator.index(
+                judge_scores, folds=None, covariates=covariates
+            )
         else:
             transformed_scores = judge_scores
 
-        # Call parent predict with transformed scores
-        return super().predict(prompts, responses, transformed_scores, fold_ids)
+        # Call parent predict with transformed scores (covariates not needed after transformation)
+        return super().predict(
+            prompts, responses, transformed_scores, fold_ids, covariates=None
+        )
 
     def _predict_single_model(
         self,
@@ -346,9 +388,11 @@ class IsotonicOutcomeModel(BaseOutcomeModel):
         prompts: List[str],
         responses: List[str],
         judge_scores: np.ndarray,  # These are already transformed indices
+        covariates: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Predict using the fitted isotonic model."""
         # judge_scores are already transformed by predict() method
+        # covariates are already incorporated in the transformation
         predictions: np.ndarray = model.predict(judge_scores)
         return predictions
 
@@ -376,11 +420,12 @@ class LinearOutcomeModel(BaseOutcomeModel):
         responses: List[str],
         rewards: np.ndarray,
         judge_scores: np.ndarray,
+        covariates: Optional[np.ndarray] = None,
     ) -> Any:
         """Fit a Ridge regression model on features."""
         from sklearn.linear_model import Ridge
 
-        features = self._extract_features(prompts, responses, judge_scores)
+        features = self._extract_features(prompts, responses, judge_scores, covariates)
         # Use fit_intercept=False since we add bias column manually
         model = Ridge(alpha=self.alpha, fit_intercept=False)
         model.fit(features, rewards)
@@ -392,9 +437,10 @@ class LinearOutcomeModel(BaseOutcomeModel):
         prompts: List[str],
         responses: List[str],
         judge_scores: np.ndarray,
+        covariates: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Predict using the fitted Ridge model."""
-        features = self._extract_features(prompts, responses, judge_scores)
+        features = self._extract_features(prompts, responses, judge_scores, covariates)
         predictions = model.predict(features)
         clipped: np.ndarray = np.clip(predictions, 0, 1)
         return clipped
@@ -404,6 +450,7 @@ class LinearOutcomeModel(BaseOutcomeModel):
         prompts: List[str],
         responses: List[str],
         judge_scores: np.ndarray,
+        covariates: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Extract simple features from inputs."""
         # Length features
@@ -413,8 +460,14 @@ class LinearOutcomeModel(BaseOutcomeModel):
         # Judge scores
         scores = judge_scores.reshape(-1, 1)
 
-        # Combine features
+        # Start with basic features
         feature_matrix = np.hstack([prompt_lengths, response_lengths, scores])
+
+        # Add user-provided covariates if available
+        if covariates is not None:
+            if covariates.ndim == 1:
+                covariates = covariates.reshape(-1, 1)
+            feature_matrix = np.hstack([feature_matrix, covariates])
 
         # Add bias term
         bias = np.ones((len(prompts), 1))
@@ -468,6 +521,7 @@ class CalibratorBackedOutcomeModel(BaseOutcomeModel):
         responses: List[str],
         rewards: np.ndarray,
         judge_scores: np.ndarray,
+        covariates: Optional[np.ndarray] = None,
     ) -> Any:
         """No training needed - reuse calibrator's models."""
         # Just return a reference to the calibrator
@@ -479,6 +533,7 @@ class CalibratorBackedOutcomeModel(BaseOutcomeModel):
         prompts: List[str],
         responses: List[str],
         judge_scores: np.ndarray,
+        covariates: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Predict using the calibrator's cross-fitted models.
 
@@ -495,6 +550,7 @@ class CalibratorBackedOutcomeModel(BaseOutcomeModel):
         rewards: np.ndarray,
         judge_scores: Optional[np.ndarray] = None,
         fold_ids: Optional[np.ndarray] = None,
+        covariates: Optional[np.ndarray] = None,
     ) -> None:
         """Fit by storing fold assignments (no model training needed).
 
@@ -504,8 +560,12 @@ class CalibratorBackedOutcomeModel(BaseOutcomeModel):
             rewards: Training rewards (not used)
             judge_scores: Training judge scores
             fold_ids: Pre-assigned fold IDs from calibration
+            covariates: Covariates (stored for later use)
         """
         n_samples = len(prompts)
+
+        # Store covariates for later use in predictions
+        self._covariates = covariates
 
         if fold_ids is not None:
             # Use provided fold assignments
@@ -547,6 +607,7 @@ class CalibratorBackedOutcomeModel(BaseOutcomeModel):
         responses: List[str],
         judge_scores: Optional[np.ndarray] = None,
         fold_ids: Optional[np.ndarray] = None,
+        covariates: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Predict using cross-fitted calibration models.
 
@@ -555,6 +616,7 @@ class CalibratorBackedOutcomeModel(BaseOutcomeModel):
             responses: Responses to predict on
             judge_scores: Judge scores to calibrate
             fold_ids: Fold assignments for each sample
+            covariates: Covariates for prediction
 
         Returns:
             Cross-fitted predictions using f^(-k)
@@ -579,7 +641,9 @@ class CalibratorBackedOutcomeModel(BaseOutcomeModel):
         if judge_scores is None:
             raise ValueError("judge_scores required for prediction")
 
-        # Use calibrator's out-of-fold predictions
-        predictions = self.calibrator.predict_oof(judge_scores, fold_ids)
+        # Use calibrator's out-of-fold predictions, passing covariates if available
+        predictions = self.calibrator.predict_oof(
+            judge_scores, fold_ids, covariates=covariates
+        )
 
         return predictions

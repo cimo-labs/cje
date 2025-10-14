@@ -112,9 +112,10 @@ When the true E[Y|S] is monotone, f̂ is L²-consistent. When it's not, the two-
 
 ### What the Two Stages Do
 
-1. **Learn a low-capacity "risk index"** T = g(S)
-   - Currently uses a spline of S alone (could be extended to include coarse covariates Z like prompt family/length)
+1. **Learn a low-capacity "risk index"** T = g(S, X_cov)
+   - Uses a spline of S and optional covariates X_cov (e.g., response_length, domain)
    - Goal: cheaply improve the *ordering* of examples by expected outcome, not to nail absolute levels
+   - **Covariate support**: Handles judge bias where judge scores at fixed S have different oracle outcomes based on observable features
 
 2. **Uniformize & enforce shape**: U = ECDF(T) ∈ [0,1] then fit **isotonic** h(U)
    - Rank/ECDF makes the axis scale-free and density-balanced

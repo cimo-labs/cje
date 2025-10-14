@@ -7,7 +7,7 @@ the complete CJE workflow automatically.
 
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, Union, List
 import numpy as np
 
 from ..data.models import Dataset, EstimationResult
@@ -27,6 +27,8 @@ def analyze_dataset(
     estimator: str = "auto",
     judge_field: str = "judge_score",
     oracle_field: str = "oracle_label",
+    calibration_covariates: Optional[List[str]] = None,
+    include_response_length: bool = False,
     estimator_config: Optional[Dict[str, Any]] = None,
     verbose: bool = False,
 ) -> EstimationResult:
@@ -70,6 +72,15 @@ def analyze_dataset(
             - "direct": On-policy evaluation (requires fresh_draws_dir)
         judge_field: Metadata field containing judge scores (default "judge_score")
         oracle_field: Metadata field containing oracle labels (default "oracle_label")
+        calibration_covariates: Optional list of metadata field names to use as covariates
+            in two-stage reward calibration (e.g., ["response_length", "domain"]).
+            Helps handle confounding where judge scores at fixed S have different oracle
+            outcomes based on observable features like response length or domain.
+            Only works with two_stage or auto calibration mode.
+        include_response_length: Automatically include response length (word count) as a covariate.
+            Computed as len(response.split()). Requires all samples (logged data, fresh draws,
+            and calibration data) to have a 'response' field. If True, 'response_length' is
+            automatically prepended to calibration_covariates. Convenient for handling length bias.
         estimator_config: Optional configuration dict for the estimator
         verbose: Whether to print progress messages
 
@@ -153,6 +164,8 @@ def analyze_dataset(
         estimator=estimator,
         judge_field=judge_field,
         oracle_field=oracle_field,
+        calibration_covariates=calibration_covariates,
+        include_response_length=include_response_length,
         estimator_config=estimator_config or {},
         verbose=verbose,
     )

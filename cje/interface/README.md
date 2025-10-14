@@ -376,6 +376,8 @@ def analyze_dataset(
     estimator: str = "auto",
     judge_field: str = "judge_score",
     oracle_field: str = "oracle_label",
+    calibration_covariates: Optional[List[str]] = None,
+    include_response_length: bool = False,
     estimator_config: Optional[Dict[str, Any]] = None,
     verbose: bool = False,
 ) -> EstimationResult:
@@ -393,6 +395,8 @@ def analyze_dataset(
   - Manual: `direct`, `calibrated-ips`, `stacked-dr`, `dr-cpo`, `tmle`, `mrdr`, etc.
 - `judge_field`: Metadata field with judge scores (default: "judge_score")
 - `oracle_field`: Metadata field with oracle labels (default: "oracle_label")
+- `calibration_covariates`: Optional list of metadata field names to use as covariates in two-stage calibration (e.g., `["response_length", "domain"]`). Helps handle judge bias where judge scores at fixed S have different oracle outcomes based on observable features like response length or domain. Only works with two-stage or auto calibration mode.
+- `include_response_length`: Automatically include response length (word count) as a covariate. Computed as `len(response.split())`. Requires all samples (logged data, fresh draws, and calibration data) to have a `"response"` field. If True, `"response_length"` is automatically prepended to `calibration_covariates`. Convenient for handling length bias.
 - `verbose`: Print detailed progress
 
 **Returns:**
@@ -518,6 +522,55 @@ if drift["drift_detection"]["has_drift"]:
 - Evolving task distributions
 
 **Note**: Uses existing `diagnostics.compute_stability_diagnostics()` - see `cje/diagnostics/stability.py` for details.
+
+### Covariate Support
+
+Handle judge bias using observable features as covariates in two-stage calibration:
+
+```python
+# Example 1: Use response length covariate (auto-computed)
+results = analyze_dataset(
+    logged_data_path="logs.jsonl",
+    include_response_length=True,  # Automatically computes len(response.split())
+    estimator="calibrated-ips"
+)
+
+# Example 2: Use custom metadata covariates
+# Assumes your data has "domain" and "difficulty" in metadata
+results = analyze_dataset(
+    logged_data_path="logs.jsonl",
+    calibration_covariates=["domain", "difficulty"],
+    estimator="stacked-dr",
+    fresh_draws_dir="responses/"
+)
+
+# Example 3: Combine auto-computed and custom covariates
+results = analyze_dataset(
+    logged_data_path="logs.jsonl",
+    include_response_length=True,        # Auto-computed first
+    calibration_covariates=["domain"],   # Then custom covariates
+    estimator="calibrated-ips"
+)
+# Effective covariates: ["response_length", "domain"]
+```
+
+**When to use covariates:**
+- **Length bias**: Judge scores vary by response length at fixed oracle quality
+- **Domain effects**: Judge miscalibration differs across domains (e.g., math vs. creative writing)
+- **Task heterogeneity**: Observable features predict judge-oracle disagreement
+
+**How it works:**
+1. Two-stage calibration learns g(S, X_cov) → rank → isotonic
+2. Covariates help handle non-monotone patterns in judge scores
+3. DR estimators automatically use covariates in outcome models
+4. All modes (Direct, IPS, DR) support covariate-adjusted calibration
+
+**Requirements:**
+- Covariate fields must exist in `sample.metadata` for all samples
+- When using `include_response_length=True`, all samples must have a `"response"` field
+- Covariates work with two-stage or auto calibration mode (not monotone-only)
+
+**See also:** `cje/calibration/README.md` for details on two-stage calibration with covariates.
 
 ### Custom Configuration
 ```python

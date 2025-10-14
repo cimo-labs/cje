@@ -5,7 +5,7 @@ through flexible shape fitting while maintaining cross-fitting support.
 """
 
 import numpy as np
-from typing import Optional, Tuple, Dict, Any, Literal, Callable
+from typing import Optional, Tuple, Dict, Any, Literal, Callable, List
 from sklearn.isotonic import IsotonicRegression
 from sklearn.preprocessing import SplineTransformer
 from sklearn.linear_model import RidgeCV
@@ -50,6 +50,7 @@ class FlexibleCalibrator:
         mode: Literal["monotone", "two_stage", "auto"] = "monotone",
         n_splines: int = 8,
         random_seed: int = 42,
+        covariate_names: Optional[List[str]] = None,
     ):
         """Initialize flexible calibrator.
 
@@ -57,13 +58,26 @@ class FlexibleCalibrator:
             mode: Calibration mode
             n_splines: Number of splines for two_stage mode
             random_seed: Random seed for reproducibility
+            covariate_names: Optional list of covariate names to use in two_stage mode
+                (e.g., ["response_length", "domain"]). Covariates help model confounding
+                where judge scores at fixed S have different oracle outcomes based on
+                observable features.
         """
         self.mode = mode
         self.n_splines = n_splines
         self.random_seed = random_seed
+        self.covariate_names = covariate_names or []
         self.selected_mode: Optional[Literal["monotone", "two_stage"]] = (
             None  # For auto mode
         )
+
+        # Validate: covariates only work with two_stage
+        if self.covariate_names and mode == "monotone":
+            raise ValueError(
+                "Covariates are only supported in 'two_stage' or 'auto' mode. "
+                "Monotone isotonic regression is univariate and cannot incorporate covariates. "
+                f"Got mode='{mode}' with covariates={covariate_names}"
+            )
 
         # Storage for fitted models
         self._monotone_models: Dict[int, Any] = {}
@@ -78,14 +92,21 @@ class FlexibleCalibrator:
         self._full_ecdf: Optional[Callable] = None
 
     def fit(
-        self, S: np.ndarray, Y: np.ndarray, folds: np.ndarray
+        self,
+        S: np.ndarray,
+        Y: np.ndarray,
+        folds: np.ndarray,
+        covariates: Optional[np.ndarray] = None,
     ) -> "FlexibleCalibrator":
         """Fit the calibrator with cross-fitting.
 
         Args:
-            S: Judge scores
-            Y: Oracle labels
-            folds: Fold assignments for cross-fitting
+            S: Judge scores (n_samples,)
+            Y: Oracle labels (n_samples,)
+            folds: Fold assignments for cross-fitting (n_samples,)
+            covariates: Optional covariate matrix (n_samples, n_covariates)
+                Only used in two_stage mode. Each column corresponds to a covariate
+                specified in covariate_names.
 
         Returns:
             Self for chaining
@@ -93,54 +114,88 @@ class FlexibleCalibrator:
         unique_folds = np.unique(folds)
         n_samples = len(S)
 
+        # Validate covariates if provided
+        if covariates is not None:
+            if len(covariates) != n_samples:
+                raise ValueError(
+                    f"Covariate matrix length {len(covariates)} doesn't match samples {n_samples}"
+                )
+            if self.covariate_names and covariates.shape[1] != len(
+                self.covariate_names
+            ):
+                raise ValueError(
+                    f"Covariate matrix has {covariates.shape[1]} columns but "
+                    f"{len(self.covariate_names)} covariate names were specified"
+                )
+            if not self.covariate_names:
+                logger.warning(
+                    "Covariates provided but no covariate_names specified. "
+                    "Covariates will be used but not labeled."
+                )
+
         logger.debug(
-            f"FlexibleCalibrator.fit: {n_samples} samples, {len(unique_folds)} folds, mode={self.mode}"
+            f"FlexibleCalibrator.fit: {n_samples} samples, {len(unique_folds)} folds, "
+            f"mode={self.mode}, covariates={covariates.shape if covariates is not None else None}"
         )
 
         if self.mode == "auto":
-            logger.debug("Auto mode: evaluating monotone fit first")
-            # Always fit monotone (it's fast)
-            self._fit_monotone(S, Y, folds)
+            # If covariates provided, force two_stage
+            if covariates is not None:
+                logger.info(
+                    "Auto mode with covariates: forcing two_stage mode "
+                    "(covariates not supported in monotone)"
+                )
+                self._fit_two_stage(S, Y, folds, covariates)
+                self.selected_mode = "two_stage"
+            else:
+                logger.debug("Auto mode: evaluating monotone fit first")
+                # Always fit monotone (it's fast)
+                self._fit_monotone(S, Y, folds)
 
-            # Quick check: if monotone fit is very good, skip two-stage
-            pred_mono = self._predict_monotone(S, folds)
-            rmse_mono = np.sqrt(np.mean((Y - pred_mono) ** 2))
+                # Quick check: if monotone fit is very good, skip two-stage
+                pred_mono = self._predict_monotone(S, folds)
+                rmse_mono = np.sqrt(np.mean((Y - pred_mono) ** 2))
 
-            # Check for clear non-monotonicity via regional performance
-            sort_idx = np.argsort(S)
-            n_third = len(S) // 3
-            low_mask = sort_idx[:n_third]
-            mid_mask = sort_idx[n_third : 2 * n_third]
-            high_mask = sort_idx[2 * n_third :]
+                # Check for clear non-monotonicity via regional performance
+                sort_idx = np.argsort(S)
+                n_third = len(S) // 3
+                low_mask = sort_idx[:n_third]
+                mid_mask = sort_idx[n_third : 2 * n_third]
+                high_mask = sort_idx[2 * n_third :]
 
-            rmse_low = np.sqrt(np.mean((Y[low_mask] - pred_mono[low_mask]) ** 2))
-            rmse_mid = np.sqrt(np.mean((Y[mid_mask] - pred_mono[mid_mask]) ** 2))
-            rmse_high = np.sqrt(np.mean((Y[high_mask] - pred_mono[high_mask]) ** 2))
+                rmse_low = np.sqrt(np.mean((Y[low_mask] - pred_mono[low_mask]) ** 2))
+                rmse_mid = np.sqrt(np.mean((Y[mid_mask] - pred_mono[mid_mask]) ** 2))
+                rmse_high = np.sqrt(np.mean((Y[high_mask] - pred_mono[high_mask]) ** 2))
 
-            # Always fit two-stage and use _select_best_mode for auto mode
-            # (ensures consistent application of 1-SE rule)
-            max_regional_diff = max(rmse_low, rmse_mid, rmse_high) - min(
-                rmse_low, rmse_mid, rmse_high
-            )
-            logger.debug(
-                f"Regional RMSE differences: {max_regional_diff:.3f}, fitting two-stage for comparison"
-            )
-            self._fit_two_stage(S, Y, folds)
-            self.selected_mode = self._select_best_mode(S, Y, folds)
+                # Always fit two-stage and use _select_best_mode for auto mode
+                # (ensures consistent application of 1-SE rule)
+                max_regional_diff = max(rmse_low, rmse_mid, rmse_high) - min(
+                    rmse_low, rmse_mid, rmse_high
+                )
+                logger.debug(
+                    f"Regional RMSE differences: {max_regional_diff:.3f}, fitting two-stage for comparison"
+                )
+                self._fit_two_stage(S, Y, folds, covariates)
+                self.selected_mode = self._select_best_mode(S, Y, folds, covariates)
         elif self.mode == "monotone":
+            if covariates is not None:
+                raise ValueError(
+                    "Covariates provided but mode='monotone'. "
+                    "Use mode='two_stage' or 'auto' for covariate support."
+                )
             logger.debug("Fitting monotone calibration only")
             self._fit_monotone(S, Y, folds)
             self.selected_mode = "monotone"
         elif self.mode == "two_stage":
             logger.debug("Fitting two-stage calibration only")
-            self._fit_two_stage(S, Y, folds)
+            self._fit_two_stage(S, Y, folds, covariates)
             self.selected_mode = "two_stage"
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
 
         # Also fit full models for inference (no folds)
         logger.debug("Fitting full models for inference")
-        self._fit_full_models(S, Y)
+        self._fit_full_models(S, Y, covariates)
 
         return self
 
@@ -152,11 +207,24 @@ class FlexibleCalibrator:
             iso.fit(S[train_mask], Y[train_mask])
             self._monotone_models[k] = iso
 
-    def _fit_two_stage(self, S: np.ndarray, Y: np.ndarray, folds: np.ndarray) -> None:
-        """Fit two-stage calibrator: g(S) -> isotonic."""
+    def _fit_two_stage(
+        self,
+        S: np.ndarray,
+        Y: np.ndarray,
+        folds: np.ndarray,
+        covariates: Optional[np.ndarray] = None,
+    ) -> None:
+        """Fit two-stage calibrator: g(S, X_cov) -> isotonic.
+
+        Args:
+            S: Judge scores
+            Y: Oracle labels
+            folds: Fold assignments
+            covariates: Optional covariate matrix (n_samples, n_covariates)
+        """
         unique_folds = np.unique(folds)
 
-        # Step 1: Fit smooth g(S) and ECDF for each fold
+        # Step 1: Fit smooth g(S, X_cov) and ECDF for each fold
         for k in unique_folds:
             train_mask = folds != k
             S_train = S[train_mask]
@@ -174,18 +242,24 @@ class FlexibleCalibrator:
                 )  # Still fit ECDF for consistency
                 continue
 
+            # Build feature matrix: [S, covariates]
+            if covariates is not None:
+                X_train = np.column_stack([S_train, covariates[train_mask]])
+            else:
+                X_train = S_train.reshape(-1, 1)
+
             # Fit spline + ridge for smooth transformation
             n_knots = min(max(5, self.n_splines), len(S_train) // 4)  # Minimum 5 knots
             spline = SplineTransformer(n_knots=n_knots, degree=3, include_bias=False)
             ridge = RidgeCV(alphas=np.logspace(-3, 3, 13), store_cv_results=False)
             g_model = make_pipeline(spline, ridge)
 
-            # Fit g(S) to predict Y
-            g_model.fit(S_train.reshape(-1, 1), Y_train)
+            # Fit g(S, X_cov) to predict Y
+            g_model.fit(X_train, Y_train)
             self._g_models[k] = g_model
 
-            # Fit ECDF on g(S) predictions for this fold's training data
-            g_train = g_model.predict(S_train.reshape(-1, 1))
+            # Fit ECDF on g(S, X_cov) predictions for this fold's training data
+            g_train = g_model.predict(X_train)
             self._ecdf_models[k] = _fit_ecdf(g_train)
 
         # Step 2: Fit isotonic on rank-transformed space for each fold
@@ -193,8 +267,14 @@ class FlexibleCalibrator:
             train_mask = folds != k
 
             if self._g_models.get(k) is not None:
+                # Build feature matrix for this fold
+                if covariates is not None:
+                    X_train = np.column_stack([S[train_mask], covariates[train_mask]])
+                else:
+                    X_train = S[train_mask].reshape(-1, 1)
+
                 # Transform training data through g and ECDF
-                g_train = self._g_models[k].predict(S[train_mask].reshape(-1, 1))
+                g_train = self._g_models[k].predict(X_train)
                 T_ranked_train = self._ecdf_models[k](g_train)
             else:
                 # Fallback: use ECDF on original scores
@@ -205,8 +285,16 @@ class FlexibleCalibrator:
             iso.fit(T_ranked_train, Y[train_mask])
             self._iso_models[k] = iso
 
-    def _fit_full_models(self, S: np.ndarray, Y: np.ndarray) -> None:
-        """Fit full models on all data for inference."""
+    def _fit_full_models(
+        self, S: np.ndarray, Y: np.ndarray, covariates: Optional[np.ndarray] = None
+    ) -> None:
+        """Fit full models on all data for inference.
+
+        Args:
+            S: Judge scores
+            Y: Oracle labels
+            covariates: Optional covariate matrix (n_samples, n_covariates)
+        """
         if self.selected_mode == "monotone" or self.mode == "monotone":
             # Fit full monotone model
             self._full_monotone_model = IsotonicRegression(
@@ -221,17 +309,23 @@ class FlexibleCalibrator:
         ):
             # Fit full two-stage model
             if len(S) >= 20:
-                # Fit g(S)
+                # Build feature matrix: [S, covariates]
+                if covariates is not None:
+                    X_full = np.column_stack([S, covariates])
+                else:
+                    X_full = S.reshape(-1, 1)
+
+                # Fit g(S, X_cov)
                 n_knots = min(max(5, self.n_splines), len(S) // 4)
                 spline = SplineTransformer(
                     n_knots=n_knots, degree=3, include_bias=False
                 )
                 ridge = RidgeCV(alphas=np.logspace(-3, 3, 13), store_cv_results=False)
                 self._full_g_model = make_pipeline(spline, ridge)
-                self._full_g_model.fit(S.reshape(-1, 1), Y)
+                self._full_g_model.fit(X_full, Y)
 
-                # Fit ECDF on g(S)
-                g_full = self._full_g_model.predict(S.reshape(-1, 1))
+                # Fit ECDF on g(S, X_cov)
+                g_full = self._full_g_model.predict(X_full)
                 self._full_ecdf = _fit_ecdf(g_full)
 
                 # Fit isotonic on ranked space
@@ -247,12 +341,18 @@ class FlexibleCalibrator:
                 )
                 self._full_monotone_model.fit(S, Y)
 
-    def predict(self, S: np.ndarray, folds: Optional[np.ndarray] = None) -> np.ndarray:
+    def predict(
+        self,
+        S: np.ndarray,
+        folds: Optional[np.ndarray] = None,
+        covariates: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         """Predict calibrated values.
 
         Args:
             S: Judge scores to calibrate
             folds: Optional fold assignments for OOF prediction
+            covariates: Optional covariate matrix (n_samples, n_covariates)
 
         Returns:
             Calibrated predictions
@@ -260,9 +360,11 @@ class FlexibleCalibrator:
         mode = self.selected_mode or self.mode
 
         if mode == "monotone":
+            if covariates is not None:
+                raise ValueError("Covariates not supported in monotone mode")
             return self._predict_monotone(S, folds)
         elif mode == "two_stage":
-            return self._predict_two_stage(S, folds)
+            return self._predict_two_stage(S, folds, covariates)
         else:
             raise ValueError(f"No fitted models for mode: {mode}")
 
@@ -300,9 +402,21 @@ class FlexibleCalibrator:
             return Y_hat
 
     def _predict_two_stage(
-        self, S: np.ndarray, folds: Optional[np.ndarray] = None
+        self,
+        S: np.ndarray,
+        folds: Optional[np.ndarray] = None,
+        covariates: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        """Predict using two-stage models."""
+        """Predict using two-stage models.
+
+        Args:
+            S: Judge scores
+            folds: Optional fold assignments for OOF prediction
+            covariates: Optional covariate matrix (n_samples, n_covariates)
+
+        Returns:
+            Calibrated predictions
+        """
         if folds is None:
             # Use full model for inference
             if (
@@ -310,7 +424,13 @@ class FlexibleCalibrator:
                 and self._full_iso_model is not None
                 and self._full_ecdf is not None
             ):
-                g_pred = self._full_g_model.predict(S.reshape(-1, 1))
+                # Build feature matrix: [S, covariates]
+                if covariates is not None:
+                    X = np.column_stack([S, covariates])
+                else:
+                    X = S.reshape(-1, 1)
+
+                g_pred = self._full_g_model.predict(X)
                 T_ranked = self._full_ecdf(g_pred)
                 return np.asarray(self._full_iso_model.predict(T_ranked))
             elif self._full_monotone_model is not None:
@@ -324,7 +444,12 @@ class FlexibleCalibrator:
                         g_model = self._g_models[k]
                         iso_model = self._iso_models[k]
                         if g_model is not None:
-                            g_pred = g_model.predict(S.reshape(-1, 1))
+                            # Build feature matrix for ensemble
+                            if covariates is not None:
+                                X = np.column_stack([S, covariates])
+                            else:
+                                X = S.reshape(-1, 1)
+                            g_pred = g_model.predict(X)
                             T_ranked = self._ecdf_models[k](g_pred)
                         else:
                             T_ranked = self._ecdf_models[k](S)
@@ -345,7 +470,12 @@ class FlexibleCalibrator:
                     and k in self._ecdf_models
                 ):
                     if self._g_models[k] is not None:
-                        g_pred = self._g_models[k].predict(S[mask].reshape(-1, 1))
+                        # Build feature matrix for this fold
+                        if covariates is not None:
+                            X_fold = np.column_stack([S[mask], covariates[mask]])
+                        else:
+                            X_fold = S[mask].reshape(-1, 1)
+                        g_pred = self._g_models[k].predict(X_fold)
                         T_ranked = self._ecdf_models[k](g_pred)
                     else:
                         T_ranked = self._ecdf_models[k](S[mask])
@@ -357,7 +487,12 @@ class FlexibleCalibrator:
                         and self._full_iso_model is not None
                         and self._full_ecdf is not None
                     ):
-                        g_pred = self._full_g_model.predict(S[mask].reshape(-1, 1))
+                        # Build feature matrix for fallback
+                        if covariates is not None:
+                            X_fallback = np.column_stack([S[mask], covariates[mask]])
+                        else:
+                            X_fallback = S[mask].reshape(-1, 1)
+                        g_pred = self._full_g_model.predict(X_fallback)
                         T_ranked = self._full_ecdf(g_pred)
                         Y_hat[mask] = self._full_iso_model.predict(T_ranked)
                     elif self._full_monotone_model is not None:
@@ -368,12 +503,26 @@ class FlexibleCalibrator:
             return Y_hat
 
     def _select_best_mode(
-        self, S: np.ndarray, Y: np.ndarray, folds: np.ndarray
+        self,
+        S: np.ndarray,
+        Y: np.ndarray,
+        folds: np.ndarray,
+        covariates: Optional[np.ndarray] = None,
     ) -> Literal["monotone", "two_stage"]:
-        """Select best mode based on OOF RMSE."""
+        """Select best mode based on OOF RMSE.
+
+        Args:
+            S: Judge scores
+            Y: Oracle labels
+            folds: Fold assignments
+            covariates: Optional covariate matrix (n_samples, n_covariates)
+
+        Returns:
+            Selected mode ('monotone' or 'two_stage')
+        """
         # Get OOF predictions for each mode
         pred_mono = self._predict_monotone(S, folds)
-        pred_two_stage = self._predict_two_stage(S, folds)
+        pred_two_stage = self._predict_two_stage(S, folds, covariates)
 
         # Calculate RMSEs
         rmse_mono = np.sqrt(np.mean((Y - pred_mono) ** 2))
@@ -439,15 +588,21 @@ class FlexibleCalibrator:
             logger.info(f"  → Selected: monotone (simpler model preferred)")
             return "monotone"
 
-    def index(self, S: np.ndarray, folds: Optional[np.ndarray] = None) -> np.ndarray:
+    def index(
+        self,
+        S: np.ndarray,
+        folds: Optional[np.ndarray] = None,
+        covariates: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         """Return the index used for isotonic regression.
 
         For monotone mode: Returns S (or normalized S)
-        For two-stage mode: Returns rank_transform(g(S))
+        For two-stage mode: Returns rank_transform(g(S, X_cov))
 
         Args:
             S: Judge scores
             folds: Optional fold assignments for OOF transformation
+            covariates: Optional covariate matrix (n_samples, n_covariates)
 
         Returns:
             Index values for isotonic regression
@@ -455,6 +610,8 @@ class FlexibleCalibrator:
         mode = self.selected_mode or self.mode
 
         if mode == "monotone":
+            if covariates is not None:
+                raise ValueError("Covariates not supported in monotone mode")
             # In monotone mode, the index is just S
             return S
 
@@ -462,7 +619,13 @@ class FlexibleCalibrator:
             if folds is None:
                 # Use full model for inference
                 if self._full_g_model is not None:
-                    g_pred = self._full_g_model.predict(S.reshape(-1, 1))
+                    # Build feature matrix
+                    if covariates is not None:
+                        X = np.column_stack([S, covariates])
+                    else:
+                        X = S.reshape(-1, 1)
+
+                    g_pred = self._full_g_model.predict(X)
                     if self._full_ecdf is not None:
                         return np.asarray(self._full_ecdf(g_pred))
                     else:
@@ -474,7 +637,12 @@ class FlexibleCalibrator:
                     count = 0
                     for g_model in self._g_models.values():
                         if g_model is not None:
-                            g_ensemble += g_model.predict(S.reshape(-1, 1))
+                            # Build feature matrix
+                            if covariates is not None:
+                                X = np.column_stack([S, covariates])
+                            else:
+                                X = S.reshape(-1, 1)
+                            g_ensemble += g_model.predict(X)
                             count += 1
                     if count > 0:
                         g_ensemble /= count
@@ -488,7 +656,12 @@ class FlexibleCalibrator:
                     mask = folds == k
                     if k in self._g_models and k in self._ecdf_models:
                         if self._g_models[k] is not None:
-                            g_pred = self._g_models[k].predict(S[mask].reshape(-1, 1))
+                            # Build feature matrix for this fold
+                            if covariates is not None:
+                                X_fold = np.column_stack([S[mask], covariates[mask]])
+                            else:
+                                X_fold = S[mask].reshape(-1, 1)
+                            g_pred = self._g_models[k].predict(X_fold)
                             T[mask] = self._ecdf_models[k](g_pred)
                         else:
                             # Fallback to ECDF on raw scores

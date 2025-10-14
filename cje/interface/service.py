@@ -24,6 +24,39 @@ class AnalysisService:
     def __init__(self) -> None:
         pass
 
+    def _build_covariate_list(
+        self, config: AnalysisConfig, dataset: Optional[Dataset] = None
+    ) -> Optional[List[str]]:
+        """
+        Build the final covariate list, prepending auto-computable covariates if needed.
+
+        Args:
+            config: Analysis configuration
+            dataset: Optional dataset to validate against (checks for response field)
+
+        Returns:
+            List of covariate names to use, or None if no covariates specified
+        """
+        # Start with user-specified covariates
+        covariates = list(config.calibration_covariates or [])
+
+        # Prepend response_length if flag is set
+        if config.include_response_length:
+            # Validate that dataset has response field
+            if dataset is not None:
+                for i, sample in enumerate(dataset.samples):
+                    if not hasattr(sample, "response") or sample.response is None:
+                        raise ValueError(
+                            f"include_response_length=True requires all samples to have a 'response' field. "
+                            f"Sample {i} (prompt_id={sample.prompt_id}) is missing this field or it is None."
+                        )
+
+            # Add response_length to the front of the list if not already there
+            if "response_length" not in covariates:
+                covariates.insert(0, "response_length")
+
+        return covariates if covariates else None
+
     def run(self, config: AnalysisConfig) -> EstimationResult:
         # Determine estimator choice early
         chosen_estimator = config.estimator.lower() if config.estimator else "auto"
@@ -148,6 +181,11 @@ class AnalysisService:
                     "combine_enabled": False,
                 }
 
+            # Build covariate list (with validation for include_response_length)
+            covariate_names = self._build_covariate_list(
+                config, calibration_dataset_for_rewards
+            )
+
             # Learn calibration from combined/calibration-only dataset
             _, calibration_result = calibrate_dataset(
                 calibration_dataset_for_rewards,
@@ -155,6 +193,7 @@ class AnalysisService:
                 oracle_field=config.oracle_field,
                 enable_cross_fit=True,
                 n_folds=5,
+                covariate_names=covariate_names,
             )
 
         else:
@@ -195,6 +234,9 @@ class AnalysisService:
                     samples=calibration_samples, target_policies=target_policies
                 )
 
+                # Build covariate list (with validation for include_response_length)
+                covariate_names = self._build_covariate_list(config, fresh_dataset)
+
                 # Learn calibration from fresh draws
                 _, calibration_result = calibrate_dataset(
                     fresh_dataset,
@@ -202,6 +244,7 @@ class AnalysisService:
                     oracle_field=config.oracle_field,
                     enable_cross_fit=True,
                     n_folds=5,
+                    covariate_names=covariate_names,
                 )
 
         from ..estimators.direct_method import CalibratedDirectEstimator
@@ -443,10 +486,16 @@ class AnalysisService:
                 if oracle_sources_metadata:
                     oracle_sources_metadata["temporal_staleness"] = staleness_check
 
+        # Build covariate list
+        covariate_names = self._build_covariate_list(
+            config, calibration_dataset_for_rewards
+        )
+
         calibrated_dataset, calibration_result = self._prepare_rewards(
             calibration_dataset_for_rewards,
             config.judge_field,
             config.oracle_field,
+            covariate_names,
             config.verbose,
         )
 
@@ -1110,7 +1159,12 @@ class AnalysisService:
         return drift_result
 
     def _prepare_rewards(
-        self, dataset: Dataset, judge_field: str, oracle_field: str, verbose: bool
+        self,
+        dataset: Dataset,
+        judge_field: str,
+        oracle_field: str,
+        covariate_names: Optional[List[str]],
+        verbose: bool,
     ) -> tuple[Dataset, Optional[Any]]:
         n_total = len(dataset.samples)
         rewards_exist = sum(1 for s in dataset.samples if s.reward is not None)
@@ -1127,6 +1181,8 @@ class AnalysisService:
 
         if verbose:
             logger.info("Calibrating judge scores with oracle labels")
+            if covariate_names:
+                logger.info(f"Using covariates: {covariate_names}")
 
         calibrated_dataset, cal_result = calibrate_dataset(
             dataset,
@@ -1134,5 +1190,6 @@ class AnalysisService:
             oracle_field=oracle_field,
             enable_cross_fit=True,
             n_folds=5,
+            covariate_names=covariate_names,
         )
         return calibrated_dataset, cal_result

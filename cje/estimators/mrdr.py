@@ -50,10 +50,13 @@ class WeightedIsotonicOutcomeModel(BaseOutcomeModel):
         responses: List[str],
         rewards: np.ndarray,
         judge_scores: np.ndarray,  # These will be pre-transformed by fit() if calibrator exists
+        covariates: Optional[np.ndarray] = None,
         sample_weight: Optional[np.ndarray] = None,
     ) -> Any:
         """Fit a weighted isotonic regression model on training data."""
         model = IsotonicRegression(out_of_bounds="clip")
+
+        # covariates are already incorporated in transformation by fit() method
 
         # Use provided sample weights (already subset by _get_fold_fit_kwargs)
         if sample_weight is not None:
@@ -68,8 +71,10 @@ class WeightedIsotonicOutcomeModel(BaseOutcomeModel):
         prompts: List[str],
         responses: List[str],
         judge_scores: np.ndarray,  # These will be pre-transformed by predict() if calibrator exists
+        covariates: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Predict using the fitted isotonic model."""
+        # covariates are already incorporated in transformation by predict() method
         predictions: np.ndarray = model.predict(judge_scores)
         return predictions
 
@@ -105,19 +110,23 @@ class WeightedIsotonicOutcomeModel(BaseOutcomeModel):
         responses: List[str],
         judge_scores: Optional[np.ndarray] = None,
         fold_ids: Optional[np.ndarray] = None,
+        covariates: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Predict using cross-fitted models with proper index transformation."""
         if judge_scores is None:
             raise ValueError("judge_scores required for prediction")
 
         # Transform judge scores if calibrator is available
+        # Note: covariates are included in the transformation when using two-stage calibration
         if self.calibrator is not None and hasattr(self.calibrator, "index"):
             # For prediction, use the ensemble index (folds=None)
-            transformed_scores = self.calibrator.index(judge_scores, folds=None)
+            transformed_scores = self.calibrator.index(
+                judge_scores, folds=None, covariates=covariates
+            )
         else:
             transformed_scores = judge_scores
 
-        # Call parent predict with transformed scores
+        # Call parent predict with transformed scores (covariates already incorporated)
         return super().predict(prompts, responses, transformed_scores, fold_ids)
 
 
