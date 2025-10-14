@@ -25,3 +25,5 @@ build/
 *.swo
 *~
 .DS_Store
+# Add generated concatenated playbook to gitignore
+FULL_PLAYBOOK_CONCAT.tex

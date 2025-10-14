@@ -34,7 +34,7 @@ Each diagnostic produces a compact artifact (a number, a CI, or a plot) and a tr
 \paragraph{Artifacts to inspect:}
 \begin{itemize}
 \item \textbf{Coverage fraction:} $\#\{i : S_{\min}^{\text{oracle}} \le S_i \le S_{\max}^{\text{oracle}}\} / n$.
-\item \textbf{Boundary slopes:} slope of $f$ near $S_{\min}$ and $S_{\max}$.
+\item \textbf{Boundary slopes:} slope of $f$ near $S_{\min}$ and $S_{\max}$. Steep slopes indicate sensitive extrapolation (small $S$ changes yield large $R$ changes); flat slopes suggest poor discrimination at edges.
 \item \textbf{Histogram overlay:} oracle $S$ distribution vs.\ evaluation $S$ distribution.
 \end{itemize}
 
