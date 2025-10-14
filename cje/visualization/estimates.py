@@ -10,7 +10,7 @@ def plot_policy_estimates(
     estimates: Dict[str, float],
     standard_errors: Dict[str, float],
     oracle_values: Optional[Dict[str, float]] = None,
-    base_policy: str = "base",
+    base_policy: Optional[str] = "base",
     figsize: tuple = (10, 6),
     save_path: Optional[Path] = None,
 ) -> plt.Figure:
@@ -22,7 +22,7 @@ def plot_policy_estimates(
         estimates: Dict mapping policy names to estimates
         standard_errors: Dict mapping policy names to standard errors
         oracle_values: Optional dict of oracle ground truth values
-        base_policy: Name of base policy (for reference line)
+        base_policy: Name of base policy (for reference line), or None for no base
         figsize: Figure size (width, height)
         save_path: Optional path to save figure
 
