@@ -23,6 +23,15 @@ from .data import Dataset, Sample, EstimationResult
 # Simple data loading
 from .data import load_dataset_from_jsonl
 
+# Visualization functions
+from .visualization import (
+    plot_policy_estimates,
+    plot_calibration_comparison,
+    plot_weight_dashboard_summary,
+    plot_weight_dashboard_detailed,
+    plot_dr_dashboard,
+)
+
 __all__ = [
     # Simple API
     "analyze_dataset",
@@ -32,4 +41,10 @@ __all__ = [
     "EstimationResult",
     # Data loading
     "load_dataset_from_jsonl",
+    # Visualization
+    "plot_policy_estimates",
+    "plot_calibration_comparison",
+    "plot_weight_dashboard_summary",
+    "plot_weight_dashboard_detailed",
+    "plot_dr_dashboard",
 ]

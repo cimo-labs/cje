@@ -183,6 +183,10 @@ class EstimationResult(BaseModel):
     def confidence_interval(self, alpha: float = 0.05) -> Tuple[np.ndarray, np.ndarray]:
         """Compute confidence intervals (returns lower and upper arrays).
 
+        Uses t-based CIs by default when degrees of freedom information is available
+        in metadata (from cluster-robust SE or oracle uncertainty). Falls back to
+        z-based CIs for large-sample approximation.
+
         Args:
             alpha: Significance level (default 0.05 for 95% CI)
 
@@ -191,6 +195,45 @@ class EstimationResult(BaseModel):
         """
         from scipy import stats
 
+        # Check if we have degrees of freedom information
+        if (
+            isinstance(self.metadata, dict)
+            and "degrees_of_freedom" in self.metadata
+            and "target_policies" in self.metadata
+        ):
+            df_info = self.metadata["degrees_of_freedom"]
+            policies = self.metadata["target_policies"]
+
+            lower = []
+            upper = []
+            for i, policy in enumerate(policies):
+                if policy in df_info and df_info[policy] is not None:
+                    # Use t-critical value with finite DF
+                    df = df_info[policy].get("df", None)
+                    if df is not None and df > 0:
+                        t_crit = stats.t.ppf(1 - alpha / 2, df)
+                        estimate = self.estimates[i]
+                        se = self.standard_errors[i]
+                        lower.append(float(estimate - t_crit * se))
+                        upper.append(float(estimate + t_crit * se))
+                    else:
+                        # Fallback to z-critical for this policy
+                        z = stats.norm.ppf(1 - alpha / 2)
+                        lower.append(
+                            float(self.estimates[i] - z * self.standard_errors[i])
+                        )
+                        upper.append(
+                            float(self.estimates[i] + z * self.standard_errors[i])
+                        )
+                else:
+                    # Fallback to z-critical for this policy
+                    z = stats.norm.ppf(1 - alpha / 2)
+                    lower.append(float(self.estimates[i] - z * self.standard_errors[i]))
+                    upper.append(float(self.estimates[i] + z * self.standard_errors[i]))
+
+            return np.array(lower), np.array(upper)
+
+        # Fallback: Use z-based CIs (asymptotically valid for large n)
         z = stats.norm.ppf(1 - alpha / 2)
         lower = self.estimates - z * self.standard_errors
         upper = self.estimates + z * self.standard_errors
@@ -279,6 +322,123 @@ class EstimationResult(BaseModel):
                 self.standard_errors[idx1] ** 2 + self.standard_errors[idx2] ** 2
             ),
         }
+
+    def _repr_html_(self) -> str:
+        """Rich HTML display for Jupyter notebooks."""
+        if not self.metadata.get("target_policies"):
+            return "<pre>EstimationResult (no policies available)</pre>"
+
+        policies = self.metadata["target_policies"]
+        ci_lower, ci_upper = self.confidence_interval()
+
+        # Build HTML table rows
+        rows = []
+        rows.append(
+            "<tr><th>Policy</th><th>Estimate</th><th>Std Error</th><th>95% CI</th></tr>"
+        )
+
+        for i, policy in enumerate(policies):
+            est = self.estimates[i]
+            se = self.standard_errors[i]
+            ci_str = f"[{ci_lower[i]:.3f}, {ci_upper[i]:.3f}]"
+            rows.append(
+                f"<tr><td>{policy}</td><td>{est:.3f}</td><td>{se:.3f}</td><td>{ci_str}</td></tr>"
+            )
+
+        # Build full HTML
+        html_parts = [
+            '<div style="font-family: monospace;">',
+            "<h4>CJE Estimation Results</h4>",
+            f"<p><b>Method:</b> {self.method} | <b>Policies:</b> {len(policies)}</p>",
+            '<table style="border-collapse: collapse; margin-top: 10px; border: 1px solid #ddd;">',
+            '<thead style="background-color: #f0f0f0;">',
+        ]
+        html_parts.extend(rows[:1])  # Header row
+        html_parts.append("</thead>")
+        html_parts.append("<tbody>")
+        html_parts.extend(rows[1:])  # Data rows
+        html_parts.append("</tbody>")
+        html_parts.append("</table>")
+
+        # Add diagnostic summary if available
+        if self.diagnostics:
+            html_parts.append(
+                f'<p style="margin-top: 10px;"><b>Status:</b> {self.diagnostics.overall_status.value}'
+            )
+            if hasattr(self.diagnostics, "weight_ess"):
+                html_parts.append(
+                    f" | <b>Weight ESS:</b> {self.diagnostics.weight_ess:.1%}"
+                )
+            html_parts.append("</p>")
+
+        html_parts.append("</div>")
+        return "".join(html_parts)
+
+    def plot_estimates(
+        self,
+        base_policy_stats: Optional[Dict[str, float]] = None,
+        oracle_values: Optional[Dict[str, float]] = None,
+        save_path: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Plot policy estimates with confidence intervals.
+
+        Convenience wrapper around plot_policy_estimates() that extracts
+        data from this result object.
+
+        Args:
+            base_policy_stats: Optional dict with "mean" and "se" for base policy.
+                Example: {"mean": 0.72, "se": 0.01}
+            oracle_values: Optional dict of oracle values for comparison.
+                Example: {"policy_a": 0.75, "policy_b": 0.68}
+            save_path: Optional path to save plot (e.g., "results/estimates.png")
+            **kwargs: Additional arguments passed to plot_policy_estimates()
+                (e.g., figsize=(10, 6), title="My Results")
+
+        Returns:
+            Matplotlib figure object
+
+        Example:
+            >>> result = analyze_dataset("data.jsonl")
+            >>> result.plot_estimates(
+            ...     base_policy_stats={"mean": 0.72, "se": 0.01},
+            ...     save_path="estimates.png"
+            ... )
+        """
+        from ..visualization import plot_policy_estimates
+
+        # Extract policies
+        policies = self.metadata.get("target_policies", [])
+        if not policies:
+            raise ValueError("No target_policies found in metadata")
+
+        # Build estimates and standard_errors dicts
+        estimates = {}
+        standard_errors = {}
+
+        # Add base policy if provided
+        if base_policy_stats:
+            if "mean" not in base_policy_stats:
+                raise ValueError("base_policy_stats must contain 'mean' key")
+            estimates["base"] = base_policy_stats["mean"]
+            standard_errors["base"] = base_policy_stats.get("se", 0.0)
+
+        # Add target policies
+        for i, policy in enumerate(policies):
+            estimates[policy] = float(self.estimates[i])
+            standard_errors[policy] = float(self.standard_errors[i])
+
+        # Call visualization function
+        from pathlib import Path
+
+        return plot_policy_estimates(
+            estimates=estimates,
+            standard_errors=standard_errors,
+            oracle_values=oracle_values,
+            base_policy="base" if base_policy_stats else None,
+            save_path=Path(save_path) if save_path else None,
+            **kwargs,
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
