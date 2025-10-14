@@ -35,6 +35,7 @@ class SimcalConfig:
         ridge_lambda: Ridge regularization for covariance matrix (default 1e-8)
         n_folds: Number of folds for OOF if fold_ids not provided (default 5)
         baseline_shrink: Shrinkage toward baseline for stability (default 0.05)
+        random_seed: Random seed for KFold when fold_ids not provided (default 42)
     """
 
     ess_floor: Optional[float] = 0.2
@@ -44,6 +45,7 @@ class SimcalConfig:
     ridge_lambda: float = 1e-8
     n_folds: int = 5
     baseline_shrink: float = 0.0
+    random_seed: int = 42
 
     def __post_init__(self) -> None:
         if self.ess_floor is not None and not (0 < self.ess_floor <= 1):
@@ -405,7 +407,11 @@ class SIMCalibrator:
         if fold_ids is None:
             from sklearn.model_selection import KFold
 
-            kf = KFold(n_splits=self.cfg.n_folds, shuffle=True, random_state=42)
+            kf = KFold(
+                n_splits=self.cfg.n_folds,
+                shuffle=True,
+                random_state=self.cfg.random_seed,
+            )
             fold_ids = np.zeros(n, dtype=int)
             for fold_idx, (_, test_idx) in enumerate(kf.split(np.arange(n))):
                 fold_ids[test_idx] = fold_idx

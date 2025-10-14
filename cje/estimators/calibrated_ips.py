@@ -252,6 +252,7 @@ class CalibratedIPS(BaseCJEEstimator):
                 var_cap=self.var_cap,
                 include_baseline=self.include_baseline,
                 baseline_shrink=self.baseline_shrink,
+                random_seed=self.outer_cv_seed,  # Use outer_cv_seed for consistency
             )
 
             if self.use_outer_cv:
