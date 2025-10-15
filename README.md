@@ -16,15 +16,31 @@ CJE calibrates judge scores using a small oracle slice (5-10% coverage), then de
 ## How It Works
 
 ```
-Judge scores + small oracle slice (5-10%) → Calibrate to oracle scale
-                                          → Unbiased policy estimates
-                                          → Valid 95% confidence intervals
+┌─────────────────────────────────────────────────────────────────────┐
+│  YOUR DATA                                                          │
+│  • LLM-judge scores for all samples    (cheap, noisy)              │
+│  • Oracle labels for 5-10% of samples  (expensive, ground truth)   │
+└─────────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│  AUTOCAL-R (Automatic Calibration)                                  │
+│  Learn monotone mapping:  judge score → oracle outcome scale       │
+│  • Isotonic regression on labeled slice                            │
+│  • Automatically applies to all samples                            │
+└─────────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│  RESULTS                                                            │
+│  ✓ Unbiased policy estimates                                       │
+│  ✓ Valid 95% confidence intervals                                  │
+│  ✓ Accounts for calibration + sampling uncertainty                 │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-**What you get:**
-- **Unbiased estimates**: Judge scores mapped to oracle outcome scale via isotonic regression (unbiased, de-noising)
-- **Small label budget**: 5-10% oracle coverage often sufficient
-- **Valid CIs**: Account for both sampling uncertainty and calibration uncertainty (when oracle coverage is <100%)
+**Key benefits:**
+- **Small label budget**: 5-10% oracle coverage often sufficient for accurate calibration
+- **Unbiased estimates**: Judge scores mapped to oracle scale via isotonic regression
+- **Rigorous inference**: CIs account for both sampling and calibration uncertainty
 
 
 See [`cje/calibration/README.md`](cje/calibration/README.md#why-isotonic-regression-for-reward-calibration) for technical details.
