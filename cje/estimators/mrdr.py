@@ -354,7 +354,7 @@ class MRDREstimator(DREstimator):
 
             # Extract covariates if available
             covariates_array = None
-            if self._covariate_names:
+            if hasattr(self, "_covariate_names") and self._covariate_names:
                 covariates_list = []
                 for d in data:
                     sample_covariates = []
