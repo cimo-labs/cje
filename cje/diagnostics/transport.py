@@ -418,4 +418,4 @@ def _detect_regional_pattern(residuals: List[float]) -> bool:
         residuals[i] >= residuals[i + 1] - 0.02 for i in range(len(residuals) - 1)
     )
 
-    return u_shaped or monotone_increasing or monotone_decreasing
+    return bool(u_shaped or monotone_increasing or monotone_decreasing)
