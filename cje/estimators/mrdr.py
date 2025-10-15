@@ -85,6 +85,7 @@ class WeightedIsotonicOutcomeModel(BaseOutcomeModel):
         rewards: np.ndarray,
         judge_scores: Optional[np.ndarray] = None,
         fold_ids: Optional[np.ndarray] = None,
+        covariates: Optional[np.ndarray] = None,
         prompt_ids: Optional[List[str]] = None,
     ) -> None:
         """Fit with optional prompt_id tracking for cross-fitting."""
@@ -96,13 +97,17 @@ class WeightedIsotonicOutcomeModel(BaseOutcomeModel):
 
         # Pre-compute transformed indices if calibrator is available
         if self.calibrator is not None and hasattr(self.calibrator, "index"):
-            # Get OOF indices for all data at once
-            transformed_scores = self.calibrator.index(judge_scores, fold_ids)
+            # Get OOF indices for all data at once, passing covariates
+            transformed_scores = self.calibrator.index(
+                judge_scores, fold_ids, covariates=covariates
+            )
         else:
             transformed_scores = judge_scores
 
-        # Call base class fit with transformed scores
-        super().fit(prompts, responses, rewards, transformed_scores, fold_ids)
+        # Call base class fit with transformed scores (covariates not needed after transformation)
+        super().fit(
+            prompts, responses, rewards, transformed_scores, fold_ids, covariates=None
+        )
 
     def predict(
         self,
@@ -346,6 +351,22 @@ class MRDREstimator(DREstimator):
             )
             model.set_weights(omega)
 
+            # Extract covariates if available
+            covariates_array = None
+            if self._covariate_names:
+                covariates_list = []
+                for d in data:
+                    sample_covariates = []
+                    for cov_name in self._covariate_names:
+                        cov_value = d.get(cov_name)
+                        if cov_value is None:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' not found for policy '{policy}'"
+                            )
+                        sample_covariates.append(float(cov_value))  # type: ignore[arg-type]
+                    covariates_list.append(sample_covariates)
+                covariates_array = np.array(covariates_list, dtype=float)
+
             # Use cv_map if available (from calibration), otherwise create new folds
             if cv_map:
                 # Reuse folds from calibration for consistency
@@ -353,7 +374,13 @@ class MRDREstimator(DREstimator):
                     [cv_map.get(pid, 0) for pid in prompt_ids], dtype=int
                 )
                 model.fit(
-                    prompts, responses, rewards, judge_scores, fold_ids, prompt_ids
+                    prompts,
+                    responses,
+                    rewards,
+                    judge_scores,
+                    fold_ids,
+                    covariates_array,
+                    prompt_ids,
                 )
             else:
                 # Create fold assignments if not provided
@@ -364,7 +391,13 @@ class MRDREstimator(DREstimator):
                 for fold_idx, (_, test_idx) in enumerate(kf.split(prompts)):
                     fold_ids[test_idx] = fold_idx
                 model.fit(
-                    prompts, responses, rewards, judge_scores, fold_ids, prompt_ids
+                    prompts,
+                    responses,
+                    rewards,
+                    judge_scores,
+                    fold_ids,
+                    covariates_array,
+                    prompt_ids,
                 )
 
             self._policy_models[policy] = model
