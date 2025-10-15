@@ -219,8 +219,50 @@ responses/
 - `draw_idx`: Optional - defaults to 0 (for multiple draws per prompt)
 - `prompt`: Optional - used to auto-generate `prompt_id` if not provided
 - `response`: Optional - the actual generated text
+- `metadata`: Optional - dict for storing per-response covariates (auto-populated)
 
 **Note:** The `target_policy` field is **NOT needed** - it's inferred from the filename!
+
+**Response-level covariates:**
+
+Fresh draws can include response-level covariates for calibration and outcome modeling:
+
+```python
+from cje import analyze_dataset
+
+# Auto-compute response_length covariate
+result = analyze_dataset(
+    fresh_draws_dir="responses/",
+    include_response_length=True,  # Computes word count from response field
+    estimator="direct"
+)
+
+# Or specify manual covariates from metadata
+result = analyze_dataset(
+    fresh_draws_dir="responses/",
+    calibration_covariates=["custom_feature"],  # Must exist in metadata
+    estimator="direct"
+)
+```
+
+The `compute_response_covariates()` utility automatically computes specified covariates and stores them in `FreshDrawSample.metadata`:
+
+```python
+from cje.data.fresh_draws import compute_response_covariates, load_fresh_draws_auto
+
+# Load fresh draws
+fresh_draws = load_fresh_draws_auto(fresh_draws_dir, policy="model_a")
+
+# Compute covariates (modifies FreshDrawSample.metadata in-place)
+fresh_draws = compute_response_covariates(
+    fresh_draws,
+    covariate_names=["response_length"]
+)
+
+# Now fresh_draws[0].metadata["response_length"] contains word count
+```
+
+**Important:** `response_length` is response-specific (varies per response), unlike prompt-level covariates which can be tiled across fresh draws. Fresh draw metadata is the authoritative source for response-level features.
 
 ### Policy Name Matching (IPS/DR Modes)
 
