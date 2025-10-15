@@ -378,7 +378,31 @@ class TRCPOEstimator(DREstimator):
             # Outcome model predictions (OOF) on logged data
             prompts = [d["prompt"] for d in data]
             responses = [d["response"] for d in data]
-            q_oof = self.outcome_model.predict(prompts, responses, S, fold_ids)
+
+            # Extract covariates if specified (for two-stage calibration)
+            logged_covariates = None
+            if hasattr(self, "_covariate_names") and self._covariate_names:
+                covariate_values = []
+                for d in data:
+                    sample_covariates = []
+                    for cov_name in self._covariate_names:
+                        cov_value = d.get(cov_name)
+                        if cov_value is None:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' not found or is None in data for policy '{policy}'"
+                            )
+                        try:
+                            sample_covariates.append(float(cov_value))  # type: ignore[arg-type]
+                        except (TypeError, ValueError) as e:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' has non-numeric value: {e}"
+                            )
+                    covariate_values.append(sample_covariates)
+                logged_covariates = np.array(covariate_values)
+
+            q_oof = self.outcome_model.predict(
+                prompts, responses, S, fold_ids, covariates=logged_covariates
+            )
 
             # Fresh-draw DM term g_fresh_i per prompt (average over draws)
             if policy not in self._fresh_draws:
@@ -399,11 +423,31 @@ class TRCPOEstimator(DREstimator):
                     logger.warning(f"TR: No fresh draws for prompt {pid} - using 0")
                     continue
                 fold_vec = np.full(len(scores_i), fold_ids[i], dtype=int)
+
+                # Extract covariates for fresh draws if specified
+                fresh_covariates = None
+                if hasattr(self, "_covariate_names") and self._covariate_names:
+                    # Get fresh samples to extract covariates from metadata
+                    fresh_samples = fresh.get_samples_for_prompt_id(pid)
+                    fresh_cov_values = []
+                    for fresh_sample in fresh_samples:
+                        sample_covariates = []
+                        for cov_name in self._covariate_names:
+                            if cov_name not in fresh_sample.metadata:
+                                raise ValueError(
+                                    f"Covariate '{cov_name}' not found in fresh draw metadata "
+                                    f"for prompt_id '{pid}'. Available metadata: {list(fresh_sample.metadata.keys())}"
+                                )
+                            sample_covariates.append(fresh_sample.metadata[cov_name])
+                        fresh_cov_values.append(sample_covariates)
+                    fresh_covariates = np.array(fresh_cov_values)
+
                 preds_i = self.outcome_model.predict(
                     [prompts[i]] * len(scores_i),
                     [""] * len(scores_i),
                     np.asarray(scores_i, dtype=float),
                     fold_vec,
+                    covariates=fresh_covariates,
                 )
                 g_fresh_vals.append(float(np.mean(preds_i)))
                 fresh_var_list.append(
@@ -855,7 +899,31 @@ class TRCPOEstimator(DREstimator):
             # Outcome model OOF on logged data
             prompts = [d["prompt"] for d in data]
             responses = [d["response"] for d in data]
-            q_oof = self.outcome_model.predict(prompts, responses, S, fold_ids)
+
+            # Extract covariates if specified (for two-stage calibration)
+            logged_covariates = None
+            if hasattr(self, "_covariate_names") and self._covariate_names:
+                covariate_values = []
+                for d in data:
+                    sample_covariates = []
+                    for cov_name in self._covariate_names:
+                        cov_value = d.get(cov_name)
+                        if cov_value is None:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' not found or is None in data for policy '{policy}'"
+                            )
+                        try:
+                            sample_covariates.append(float(cov_value))  # type: ignore[arg-type]
+                        except (TypeError, ValueError) as e:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' has non-numeric value: {e}"
+                            )
+                    covariate_values.append(sample_covariates)
+                logged_covariates = np.array(covariate_values)
+
+            q_oof = self.outcome_model.predict(
+                prompts, responses, S, fold_ids, covariates=logged_covariates
+            )
 
             # Fresh draws DM per prompt, per fold model (we average per prompt, using the same fold for the prompt)
             fresh = self._fresh_draws.get(policy)
