@@ -33,6 +33,10 @@ class FreshDrawSample(BaseModel):
     fold_id: Optional[int] = Field(
         None, description="CV fold assignment (should match logged data)"
     )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional metadata (e.g., computed covariates)",
+    )
 
     @field_validator("judge_score")
     def validate_judge_score(cls, v: float) -> float:
@@ -559,3 +563,79 @@ def discover_policies_from_fresh_draws(fresh_draws_dir: Path) -> List[str]:
 
     logger.info(f"Discovered {len(policies)} policies from fresh draws: {policies}")
     return sorted(policies)
+
+
+def compute_response_covariates(
+    fresh_draws: FreshDrawDataset,
+    covariate_names: Optional[List[str]] = None,
+) -> FreshDrawDataset:
+    """Compute covariates for fresh draws based on response text.
+
+    This function computes response-level covariates (like response_length)
+    and stores them in each sample's metadata field. This is needed for
+    DR estimators and Direct Method to use covariates properly.
+
+    Args:
+        fresh_draws: FreshDrawDataset to augment with covariates
+        covariate_names: List of covariate names to compute. Currently supported:
+            - "response_length": log10(1 + len(response)) - matches calibration
+
+    Returns:
+        New FreshDrawDataset with covariates computed and stored in metadata
+
+    Example:
+        >>> fresh_draws = load_fresh_draws_auto(data_dir, "policy_a")
+        >>> fresh_draws_with_covs = compute_response_covariates(
+        ...     fresh_draws, covariate_names=["response_length"]
+        ... )
+        >>> # Now fresh_draws_with_covs.samples[i].metadata["response_length"] exists
+    """
+    if covariate_names is None:
+        covariate_names = []
+
+    if not covariate_names:
+        logger.debug("No covariate names specified, returning unchanged")
+        return fresh_draws
+
+    # Compute covariates for each sample
+    updated_samples = []
+    for sample in fresh_draws.samples:
+        # Create a copy of the sample's metadata
+        new_metadata = dict(sample.metadata) if sample.metadata else {}
+
+        for cov_name in covariate_names:
+            if cov_name == "response_length":
+                # Compute response_length matching the formula in calibration
+                # Uses log10(1 + len(response)) for numerical stability
+                if sample.response is not None:
+                    response_len = len(sample.response)
+                    # Match the exact formula used in calibration/judge.py
+                    new_metadata["response_length"] = np.log10(1 + response_len)
+                else:
+                    raise ValueError(
+                        f"Cannot compute response_length for sample {sample.prompt_id} "
+                        f"draw {sample.draw_idx}: response is None"
+                    )
+            else:
+                raise ValueError(
+                    f"Unsupported covariate: {cov_name}. "
+                    f"Currently supported: ['response_length']"
+                )
+
+        # Create new sample with updated metadata
+        updated_sample = sample.model_copy(update={"metadata": new_metadata})
+        updated_samples.append(updated_sample)
+
+    # Create new dataset with updated samples
+    updated_dataset = FreshDrawDataset(
+        target_policy=fresh_draws.target_policy,
+        draws_per_prompt=fresh_draws.draws_per_prompt,
+        samples=updated_samples,
+    )
+
+    logger.info(
+        f"Computed {len(covariate_names)} covariates for {len(updated_samples)} "
+        f"fresh draw samples (policy={fresh_draws.target_policy})"
+    )
+
+    return updated_dataset

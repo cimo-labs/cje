@@ -287,27 +287,35 @@ class PrecomputedSampler:
             if target_policy in record["target_policy_logprobs"]:
                 # Get the corresponding sample for metadata
                 sample = self.dataset.samples[self._get_sample_index(i)]
-                policy_data.append(
-                    {
-                        "reward": record["reward"],
-                        "base_policy_logprob": record["base_policy_logprob"],
-                        "policy_logprob": record["target_policy_logprobs"][
-                            target_policy
-                        ],
-                        "prompt": record["context"],
-                        "response": record["response"],
-                        "prompt_id": sample.prompt_id,
-                        "judge_score": sample.judge_score,
-                        "oracle_label": sample.oracle_label,
-                        # Compute cv_fold on-demand from prompt_id
-                        # Use metadata if available, else defaults
-                        "cv_fold": get_fold(
-                            sample.prompt_id,
-                            self.dataset.metadata.get("n_folds", 5),
-                            self.dataset.metadata.get("fold_seed", 42),
-                        ),
-                    }
-                )
+
+                # Build policy data dict with core fields
+                data_dict = {
+                    "reward": record["reward"],
+                    "base_policy_logprob": record["base_policy_logprob"],
+                    "policy_logprob": record["target_policy_logprobs"][target_policy],
+                    "prompt": record["context"],
+                    "response": record["response"],
+                    "prompt_id": sample.prompt_id,
+                    "judge_score": sample.judge_score,
+                    "oracle_label": sample.oracle_label,
+                    # Compute cv_fold on-demand from prompt_id
+                    # Use metadata if available, else defaults
+                    "cv_fold": get_fold(
+                        sample.prompt_id,
+                        self.dataset.metadata.get("n_folds", 5),
+                        self.dataset.metadata.get("fold_seed", 42),
+                    ),
+                }
+
+                # Flatten response-level covariates from metadata (e.g., response_length)
+                if sample.metadata:
+                    # Add response_length if present (used for covariate-based calibration)
+                    if "response_length" in sample.metadata:
+                        data_dict["response_length"] = sample.metadata[
+                            "response_length"
+                        ]
+
+                policy_data.append(data_dict)
 
         return cast(List[PolicyDataDict], policy_data) if policy_data else None
 

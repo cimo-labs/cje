@@ -149,6 +149,16 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             judge_scores = []
             rewards = []
             prompt_ids = []
+            covariates_list = []
+
+            # Check if calibrator expects covariates
+            needs_covariates = False
+            covariate_names: List[str] = []
+            if self.reward_calibrator is not None and hasattr(
+                self.reward_calibrator, "covariate_names"
+            ):
+                covariate_names = self.reward_calibrator.covariate_names or []
+                needs_covariates = len(covariate_names) > 0
 
             for sample in fresh_draws.samples:
                 # FreshDrawSample has judge_score as a direct field
@@ -156,15 +166,47 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
                 judge_scores.append(judge_score)
                 prompt_ids.append(sample.prompt_id)
 
+                # Extract covariates from metadata if needed
+                if needs_covariates:
+                    sample_covariates = []
+                    for cov_name in covariate_names:
+                        if cov_name not in sample.metadata:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' not found in fresh draw metadata "
+                                f"for policy '{policy}', sample {sample.prompt_id}. "
+                                f"Available metadata: {list(sample.metadata.keys())}"
+                            )
+                        sample_covariates.append(sample.metadata[cov_name])
+                    covariates_list.append(sample_covariates)
+
                 # Calibrate judge score to reward if calibrator available
                 if self.reward_calibrator is not None:
-                    reward = float(
-                        np.clip(
-                            self.reward_calibrator.predict(np.array([judge_score]))[0],
-                            0.0,
-                            1.0,
+                    # Prepare covariates if needed
+                    if needs_covariates:
+                        # Use the covariates we just extracted
+                        cov_array = np.array(
+                            covariates_list[-1:]
+                        )  # Last element as 2D array
+                        reward = float(
+                            np.clip(
+                                self.reward_calibrator.predict(
+                                    np.array([judge_score]), covariates=cov_array
+                                )[0],
+                                0.0,
+                                1.0,
+                            )
                         )
-                    )
+                    else:
+                        # No covariates needed
+                        reward = float(
+                            np.clip(
+                                self.reward_calibrator.predict(np.array([judge_score]))[
+                                    0
+                                ],
+                                0.0,
+                                1.0,
+                            )
+                        )
                 else:
                     # No calibrator - use judge score directly
                     reward = float(judge_score)
@@ -462,6 +504,30 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             n_folds = len(fold_models)
             jackknife_estimates = []
 
+            # Check if we need covariates
+            needs_covariates = False
+            covariate_names: List[str] = []
+            covariates_array: Optional[np.ndarray] = None
+            if hasattr(self.reward_calibrator, "covariate_names"):
+                covariate_names = self.reward_calibrator.covariate_names or []
+                needs_covariates = len(covariate_names) > 0
+
+            # Extract covariates from fresh draws if needed
+            if needs_covariates:
+                fresh_draws = self._fresh_draws[policy]
+                covariates_list = []
+                for sample in fresh_draws.samples:
+                    sample_covariates = []
+                    for cov_name in covariate_names:
+                        if cov_name not in sample.metadata:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' not found in fresh draw metadata "
+                                f"for policy '{policy}' during OUA jackknife"
+                            )
+                        sample_covariates.append(sample.metadata[cov_name])
+                    covariates_list.append(sample_covariates)
+                covariates_array = np.array(covariates_list)
+
             # For each fold, recompute estimate with leave-one-out calibrator
             for fold_id in range(n_folds):
                 fold_model = fold_models.get(fold_id)
@@ -470,7 +536,24 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
                     continue
 
                 # Recalibrate rewards with LOO model
-                rewards_loo = np.clip(fold_model.predict(pdata.judge_scores), 0.0, 1.0)
+                # Note: fold_models are raw sklearn objects, not JudgeCalibrator wrappers
+                # If covariates are needed, we need to use the FlexibleCalibrator's predict
+                if needs_covariates:
+                    # Use the calibrator's predict_oof method with fold_ids to get LOO predictions
+                    # Create fold_ids array marking all samples as this fold (for LOO)
+                    fold_ids = np.full(len(pdata.judge_scores), fold_id, dtype=int)
+                    rewards_loo = np.clip(
+                        self.reward_calibrator.predict_oof(
+                            pdata.judge_scores, fold_ids, covariates_array
+                        ),
+                        0.0,
+                        1.0,
+                    )
+                else:
+                    # No covariates - use fold model directly
+                    rewards_loo = np.clip(
+                        fold_model.predict(pdata.judge_scores), 0.0, 1.0
+                    )
 
                 # Compute LOO estimate
                 estimate_loo = float(np.mean(rewards_loo))

@@ -619,13 +619,22 @@ class DREstimator(BaseCJEEstimator):
                             f"logged fold={valid_fold_ids[i]}, fresh fold={fresh_sample.fold_id}"
                         )
 
-                # Get covariate values for this prompt (same for all fresh draws)
+                # Get covariate values for fresh draws
                 fresh_covariates = None
-                if logged_covariates is not None:
-                    # Repeat the covariate values for each fresh draw from this prompt
-                    fresh_covariates = np.tile(
-                        logged_covariates[i], (len(fresh_scores), 1)
-                    )
+                if hasattr(self, "_covariate_names") and self._covariate_names:
+                    # Extract covariates from fresh draw metadata (response-level covariates)
+                    fresh_cov_values = []
+                    for fresh_sample in fresh_samples:
+                        sample_covariates = []
+                        for cov_name in self._covariate_names:
+                            if cov_name not in fresh_sample.metadata:
+                                raise ValueError(
+                                    f"Covariate '{cov_name}' not found in fresh draw metadata "
+                                    f"for prompt_id '{prompt_id}'. Available metadata: {list(fresh_sample.metadata.keys())}"
+                                )
+                            sample_covariates.append(fresh_sample.metadata[cov_name])
+                        fresh_cov_values.append(sample_covariates)
+                    fresh_covariates = np.array(fresh_cov_values)
 
                 # Get predictions for fresh draws
                 # Note: Our models need fold_ids for cross-fitting
@@ -1450,10 +1459,48 @@ class DREstimator(BaseCJEEstimator):
                     logger.warning(f"No judge scores found in data for fold {fold_id}")
                     continue
 
-                # Recalibrate logged rewards with leave-one-out model
-                logged_rewards_loo = np.clip(
-                    fold_model.predict(judge_scores_logged), 0.0, 1.0
+                # Check if we need covariates
+                needs_covariates = (
+                    hasattr(self, "_covariate_names") and self._covariate_names
                 )
+
+                # Recalibrate logged rewards with leave-one-out model
+                if needs_covariates:
+                    # Use reward_calibrator's predict_oof with fold_ids for covariate support
+                    logged_covariates = []
+                    for d in data:
+                        sample_covariates = []
+                        for cov_name in self._covariate_names:
+                            cov_value = d.get(cov_name)
+                            if cov_value is None:
+                                raise ValueError(
+                                    f"Covariate '{cov_name}' not found or is None in data"
+                                )
+                            try:
+                                sample_covariates.append(float(cov_value))  # type: ignore[arg-type]
+                            except (TypeError, ValueError) as e:
+                                raise ValueError(
+                                    f"Covariate '{cov_name}' has non-numeric value: {e}"
+                                )
+                        logged_covariates.append(sample_covariates)
+                    logged_covariates_array = np.array(logged_covariates)
+                    fold_ids_logged = np.full(
+                        len(judge_scores_logged), fold_id, dtype=int
+                    )
+                    logged_rewards_loo = np.clip(
+                        self.reward_calibrator.predict_oof(
+                            judge_scores_logged,
+                            fold_ids_logged,
+                            logged_covariates_array,
+                        ),
+                        0.0,
+                        1.0,
+                    )
+                else:
+                    # No covariates - use fold model directly
+                    logged_rewards_loo = np.clip(
+                        fold_model.predict(judge_scores_logged), 0.0, 1.0
+                    )
 
                 # Compute per-prompt fresh draw means (like main estimate() does)
                 g_fresh_means = []
@@ -1462,8 +1509,34 @@ class DREstimator(BaseCJEEstimator):
                         prompt_id
                     )
                     if len(prompt_fresh_scores) > 0:
-                        # Predict and average for this prompt
-                        prompt_preds = fold_model.predict(np.array(prompt_fresh_scores))
+                        if needs_covariates:
+                            # Extract covariates from fresh draw metadata
+                            prompt_fresh_samples = (
+                                fresh_draw_data.get_samples_for_prompt_id(prompt_id)
+                            )
+                            fresh_cov_values = []
+                            for fresh_sample in prompt_fresh_samples:
+                                sample_covariates = []
+                                for cov_name in self._covariate_names:
+                                    sample_covariates.append(
+                                        fresh_sample.metadata[cov_name]
+                                    )
+                                fresh_cov_values.append(sample_covariates)
+                            fresh_covariates_array = np.array(fresh_cov_values)
+                            fresh_fold_ids = np.full(
+                                len(prompt_fresh_scores), fold_id, dtype=int
+                            )
+                            # Predict with covariates using reward_calibrator
+                            prompt_preds = self.reward_calibrator.predict_oof(
+                                np.array(prompt_fresh_scores),
+                                fresh_fold_ids,
+                                fresh_covariates_array,
+                            )
+                        else:
+                            # No covariates - use fold model directly
+                            prompt_preds = fold_model.predict(
+                                np.array(prompt_fresh_scores)
+                            )
                         prompt_preds = np.clip(prompt_preds, 0.0, 1.0)
                         g_fresh_means.append(prompt_preds.mean())
 

@@ -261,8 +261,17 @@ class AnalysisService:
 
         # Load fresh draws for each policy
         fresh_draws_path = Path(config.fresh_draws_dir)  # Already checked above
+
+        # Compute covariates for fresh draws if needed
+        from ..data.fresh_draws import compute_response_covariates
+
         for policy in target_policies:
             fd = load_fresh_draws_auto(fresh_draws_path, policy, verbose=config.verbose)
+
+            # Compute covariates if calibrator expects them
+            if covariate_names:
+                fd = compute_response_covariates(fd, covariate_names=covariate_names)
+
             estimator_obj.add_fresh_draws(policy, fd)
 
         results = estimator_obj.fit_and_estimate()
@@ -347,10 +356,22 @@ class AnalysisService:
             **config.estimator_config,
         )
 
+        # Build covariate list (need to compute for fresh draws if present)
+        covariate_names = self._build_covariate_list(config, dataset=None)
+
         # Load fresh draws for each policy
         fresh_draws_path = Path(config.fresh_draws_dir)  # Already checked above
+
+        # Compute covariates for fresh draws if needed
+        from ..data.fresh_draws import compute_response_covariates
+
         for policy in target_policies:
             fd = load_fresh_draws_auto(fresh_draws_path, policy, verbose=config.verbose)
+
+            # Compute covariates if needed
+            if covariate_names:
+                fd = compute_response_covariates(fd, covariate_names=covariate_names)
+
             estimator_obj.add_fresh_draws(policy, fd)
 
         results = estimator_obj.fit_and_estimate()
@@ -591,7 +612,10 @@ class AnalysisService:
 
         # DR estimators require fresh draws
         if chosen_estimator in dr_estimators:
-            from ..data.fresh_draws import load_fresh_draws_auto
+            from ..data.fresh_draws import (
+                load_fresh_draws_auto,
+                compute_response_covariates,
+            )
 
             if not config.fresh_draws_dir:
                 raise ValueError(
@@ -602,6 +626,13 @@ class AnalysisService:
                 fd = load_fresh_draws_auto(
                     Path(config.fresh_draws_dir), policy, verbose=config.verbose
                 )
+
+                # Compute covariates if needed
+                if covariate_names:
+                    fd = compute_response_covariates(
+                        fd, covariate_names=covariate_names
+                    )
+
                 estimator_obj.add_fresh_draws(policy, fd)
 
         results: EstimationResult = estimator_obj.fit_and_estimate()
