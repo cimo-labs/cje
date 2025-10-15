@@ -62,6 +62,8 @@ def test_service_auto_selects_calibrated_ips_without_fresh_draws() -> None:
         combine_oracle_sources=True,
         timestamp_field=None,
         check_drift=False,
+        calibration_covariates=None,
+        include_response_length=False,
         estimator_config={},
         verbose=False,
     )
@@ -87,6 +89,8 @@ def test_service_auto_selects_stacked_dr_with_fresh_draws() -> None:
         combine_oracle_sources=True,
         timestamp_field=None,
         check_drift=False,
+        calibration_covariates=None,
+        include_response_length=False,
         # Disable parallelism in tests to avoid resource contention
         estimator_config={"parallel": False},
         verbose=False,

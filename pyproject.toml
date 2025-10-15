@@ -66,7 +66,7 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 check_untyped_defs = true
 ignore_missing_imports = true
-exclude = ["docs/", "cje/experiments/", "cje/tests/", "examples/", "concat_for_chat.py"]
+exclude = ["docs/", "cje/experiments/", "examples/", "concat_for_chat.py"]
 
 [tool.pytest.ini_options]
 # Pytest configuration

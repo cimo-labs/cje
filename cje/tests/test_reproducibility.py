@@ -196,6 +196,8 @@ class TestEndToEndReproducibility:
 
         # With prompt_ids, different seeds should produce different fold assignments
         # This is the key test - ensures seed propagates to fold creation
+        assert result1.fold_ids is not None, "Result 1 should have fold_ids"
+        assert result2.fold_ids is not None, "Result 2 should have fold_ids"
         assert not np.array_equal(
             result1.fold_ids, result2.fold_ids
         ), "Different seeds should produce different fold assignments"

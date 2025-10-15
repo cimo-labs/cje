@@ -86,6 +86,7 @@ class WeightedIsotonicOutcomeModel(BaseOutcomeModel):
         judge_scores: Optional[np.ndarray] = None,
         fold_ids: Optional[np.ndarray] = None,
         covariates: Optional[np.ndarray] = None,
+        *,
         prompt_ids: Optional[List[str]] = None,
     ) -> None:
         """Fit with optional prompt_id tracking for cross-fitting."""
@@ -380,7 +381,7 @@ class MRDREstimator(DREstimator):
                     judge_scores,
                     fold_ids,
                     covariates_array,
-                    prompt_ids,
+                    prompt_ids=prompt_ids,
                 )
             else:
                 # Create fold assignments if not provided
@@ -397,7 +398,7 @@ class MRDREstimator(DREstimator):
                     judge_scores,
                     fold_ids,
                     covariates_array,
-                    prompt_ids,
+                    prompt_ids=prompt_ids,
                 )
 
             self._policy_models[policy] = model
