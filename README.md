@@ -189,7 +189,7 @@ See [`cje/visualization/README.md`](cje/visualization/README.md) for complete gu
 
 🔧 **For Engineers**
 - [Calibration Methods](cje/calibration/README.md) - AutoCal-R, isotonic regression, two-stage fallback
-- [Diagnostics System](cje/diagnostics/README.md) - Uncertainty quantification, OUA, paired inference
+- [Diagnostics System](cje/diagnostics/README.md) - Uncertainty quantification, OUA, transportability tests
 - [Estimators](cje/estimators/README.md) - Direct, IPS, DR implementations
 - [Interface/API](cje/interface/README.md) - `analyze_dataset` implementation and mode selection
 

@@ -11,6 +11,7 @@ poetry run python examples/02_minimal.py
 poetry run python examples/03_with_fresh_draws.py
 poetry run python examples/04_comparing_policies.py
 poetry run python examples/05_checking_reliability.py
+poetry run python examples/06_testing_transport.py
 ```
 
 ## What Each Example Shows
@@ -39,6 +40,11 @@ Find the best policy and compare against a baseline using proper statistical inf
 Use diagnostics to assess whether your estimates are trustworthy.
 
 **Key concept:** Effective Sample Size (ESS) and reliability assessment for IPS mode.
+
+### 6. Testing Transport (`06_testing_transport.py`)
+Test if a calibrator can safely transport across policies or time periods.
+
+**Key concept:** Transportability diagnostics using the probe protocol to detect miscalibration.
 
 ## Data
 
