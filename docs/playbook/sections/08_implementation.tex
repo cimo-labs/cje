@@ -38,10 +38,15 @@ CJE expects data in JSONL format (one JSON object per line). Each record represe
     "judge_score": 8.5,
     "oracle_label": 1,  # optional
     "timestamp": "2025-10-01T12:00:00Z",
-    "prompt_family": "code_generation"
+    "prompt_family": "code_generation",
+    "response_length": 123,     # auto-computed if enabled
+    "domain": "math",           # user-provided
+    "difficulty": "hard"
   }
 }
 \end{lstlisting}
+
+\paragraph{Schema note: covariates.} Place covariates in \texttt{metadata}. CJE can auto-compute \texttt{response\_length} from the \texttt{response} field if \texttt{include\_response\_length=True}. Other covariates (e.g., domain, difficulty) must be provided manually. Covariates are used in two-stage \autocal{} for regional adaptation (\S\ref{sec:two-stage-autocal}) and in DR outcome models for better predictions.
 
 \paragraph{Fresh draws (for DR):}
 \begin{lstlisting}[language=Python,caption=Fresh Draw Schema]
@@ -112,6 +117,17 @@ if "drift_diagnostics" in results.metadata:
     drift = results.metadata["drift_diagnostics"]
     if drift["drift_detection"]["has_drift"]:
         print("Warning: Judge drift detected")
+\end{lstlisting}
+
+\paragraph{Enabling two-stage with covariates (code).}
+\begin{lstlisting}[language=Python]
+results = analyze_dataset(
+    logged_data_path="logs.jsonl",
+    fresh_draws_dir="responses/",       # optional (DR)
+    calibration_mode="auto",            # or "two_stage"
+    include_response_length=True,       # derives from response text
+    calibration_covariates=["domain","difficulty"]  # must exist in metadata
+)
 \end{lstlisting}
 
 \subsection{Computational complexity}

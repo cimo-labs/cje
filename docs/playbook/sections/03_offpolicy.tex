@@ -108,7 +108,7 @@ With calibrated rewards $R_i = f(S_i)$ and stabilized, mean-one weights $\tilde{
 \est{V}_{\text{DR-S}}(\pi') &= \frac{1}{n} \sum_{i=1}^n \left[ \tilde{w}_i \cdot (R_i - \hat{g}(S_i)) + \hat{g}(S_i) \right].
 \end{align}
 
-Standard errors are computed via influence functions (per-sample contributions), which account for calibration, cross-fitting, and oracle uncertainty (via \oua). CIs are formed using the normal approximation.
+Standard errors are computed via influence functions (per-sample contributions), which account for calibration, cross-fitting, and oracle uncertainty (via \oua). Calibrated IPS uses \emph{outer cross-validation} for \simcal{} selection by default, so weight-learning uncertainty is reflected in the SEs. CIs are formed using the normal approximation for large samples or t-critical with Satterthwaite df when clusters/oracle folds are small (see \S\ref{sec:uncertainty}).
 
 \subsection{Diagnostics (highest leverage) \& quick fixes}
 

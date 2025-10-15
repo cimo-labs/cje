@@ -523,6 +523,79 @@ if drift["drift_detection"]["has_drift"]:
 
 **Note**: Uses existing `diagnostics.compute_stability_diagnostics()` - see `cje/diagnostics/stability.py` for details.
 
+### Transportability Auditing
+
+Test if a calibrator fitted on one policy/era can safely transport to another using a cheap probe protocol (40-60 oracle labels):
+
+```python
+from cje.calibration import calibrate_dataset
+from cje.diagnostics import audit_transportability
+from cje.visualization import plot_transport_audit
+from cje.data import load_samples
+
+# Fit calibrator on source policy
+source_dataset = load_samples("source_policy_logs.jsonl")
+calibrated, cal_result = calibrate_dataset(
+    source_dataset,
+    judge_field="judge_score",
+    oracle_field="oracle_label"
+)
+calibrator = cal_result.calibrator
+
+# Test transport to new policy with 50-sample probe
+probe = load_samples("target_policy_probe.jsonl")  # 50 samples with oracle labels
+diag = audit_transportability(
+    calibrator,
+    probe,
+    group_label="policy:gpt-4-mini"
+)
+
+# Check result
+print(diag.summary())
+# Transport Diagnostic: PASS | Group: policy:gpt-4-mini | N=50 |
+# Mean shift: +0.012 (95% CI: [-0.008, +0.032]) | Coverage: 96.0% |
+# Action: none | Worst decile residual: 0.043
+
+# Visualize
+plot_transport_audit(diag, save_path="transport_audit.png")
+
+# Handle failures
+if diag.status == "FAIL":
+    if diag.recommended_action == "mean_anchor":
+        # Pure mean shift - apply simple correction
+        corrected_calibrator = calibrator.with_group_anchor(probe, group_label="gpt-4-mini")
+    elif diag.recommended_action == "refit_two_stage":
+        # Regional miscalibration - need full refit
+        print("⚠️ Calibrator does not transport. Collect more oracle labels and refit.")
+    elif "boundary" in diag.recommended_action:
+        # Poor coverage - calibrator extrapolating
+        print("⚠️ Add oracle labels at distribution boundaries")
+```
+
+**When to audit transport:**
+- Applying calibrator to different policy than training data
+- Reusing calibrator across time periods (e.g., Q1 → Q2)
+- After judge model updates or prompt changes
+- When distribution shift is suspected
+
+**Traffic-light interpretation:**
+- **PASS** (green): Safe to reuse calibrator
+- **WARN** (orange): Marginal issues, monitor or consider mean anchoring
+- **FAIL** (red): Must refit or apply corrections
+
+**How it works:**
+1. Computes global mean residual δ̂ = E[Y - f(S)] and 95% CI
+2. Checks regional residuals by risk-index deciles
+3. Verifies coverage of probe within calibrator's training range
+4. Returns actionable recommendations based on failure mode
+
+**Probe protocol:**
+- 40-60 oracle labels recommended (cheap validation)
+- Stratify by risk index for better coverage
+- Can pool across multiple target policies for efficiency
+
+**See also:** `cje/diagnostics/README.md` for details on transportability diagnostics and playbook §4 Diagnostic 5 for theory.
+
 ### Covariate Support
 
 Handle judge bias using observable features as covariates in two-stage calibration:

@@ -338,6 +338,56 @@ if drift_result["tau"] < 0.5:
     print("Drift detected!")
 ```
 
+### Transportability Audit
+Tests whether a calibrator fitted on one policy/era can safely transport to another (Diagnostic 5 from playbook §4):
+
+```python
+from cje.diagnostics.transport import audit_transportability
+from cje.visualization.transport import plot_transport_audit
+
+# Fit calibrator on source policy
+calibrator = fit_judge_calibrator(source_samples, mode="auto")
+
+# Test transport to new policy with 40-60 sample probe
+probe_samples = load_samples("probes/gpt4_mini_probe.jsonl")
+diag = audit_transportability(
+    calibrator,
+    probe_samples,
+    group_label="policy:gpt-4-mini"
+)
+
+# Check status
+print(diag.summary())  # PASS/WARN/FAIL + recommended action
+plot_transport_audit(diag, save_path="transport_audit.png")
+
+# Take action based on result
+if diag.status == "PASS":
+    # Safe to reuse calibrator
+    pass
+elif diag.status == "WARN" and "anchor" in diag.recommended_action:
+    # Apply mean anchoring (uniform shift detected)
+    calibrator_adjusted = calibrator.with_group_anchor(
+        group="policy:gpt-4-mini",
+        delta=diag.delta_hat
+    )
+elif diag.status == "FAIL":
+    # Refit calibrator on union of old + probe labels
+    combined_samples = source_samples + probe_samples
+    calibrator = fit_judge_calibrator(combined_samples, mode="auto")
+```
+
+**Traffic-light thresholds:**
+- **PASS**: Global mean shift CI contains 0, all decile residuals ≤ 0.05, coverage ≥ 95%
+- **WARN**: |δ̂| ∈ [0.02, 0.05] OR 1-2 bins > 0.05 OR coverage ∈ [85%, 95%)
+- **FAIL**: 0 ∉ CI(δ̂) OR 3+ bins > 0.05 OR coverage < 85%
+
+**Recommended actions:**
+- `none` - Safe to reuse calibrator
+- `mean_anchor` - Apply per-group intercept adjustment
+- `refit_two_stage` - Regional miscalibration, use two-stage AutoCal-R
+- `add_labels_boundary` - Poor coverage, collect labels at score boundaries
+- `collect_more_in_deciles_X,Y,Z` - Sparse deciles, target specific bins
+
 ## Uncertainty Quantification: Two-Component Structure
 
 CJE's uncertainty quantification properly accounts for **two independent sources of variance**:

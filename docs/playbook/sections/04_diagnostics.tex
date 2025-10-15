@@ -1,8 +1,8 @@
-\section{Diagnostics: The Six High-Leverage Checks}
+\section{Diagnostics: The Eight High-Leverage Checks}
 
 \subsection{Overview}
 
-CJE's diagnostic dashboard is designed to catch the most important failure modes with minimal operator overhead. Each diagnostic points directly to a concrete fix. This section details the six checks, their interpretation, thresholds, and remediations.
+CJE's diagnostic dashboard is designed to catch the most important failure modes with minimal operator overhead. Each diagnostic points directly to a concrete fix. This section details the eight checks, their interpretation, thresholds, and remediations.
 
 \subsection{The diagnostic checklist}
 
@@ -12,6 +12,7 @@ CJE's diagnostic dashboard is designed to catch the most important failure modes
 \item \textbf{Calibration reliability}: Is $f(S)$ accurate across the $S$ spectrum?
 \item \textbf{Judge stability}: Is the judge's scoring consistent over time or across batches?
 \item \textbf{Oracle uncertainty share}: Is label scarcity the bottleneck for precision?
+\item \textbf{Transportability audit}: Does the calibrator transport to target policies/time windows?
 \end{enumerate}
 
 \paragraph{Off-policy diagnostics (for \ips/\dr{} only):}
@@ -19,11 +20,11 @@ CJE's diagnostic dashboard is designed to catch the most important failure modes
 \item \textbf{Effective sample size (ESS)}: Do we have enough effective samples after reweighting?
 \item \textbf{Tail heaviness}: Are importance weights catastrophically heavy-tailed?
 \item \textbf{DR orthogonality} (for \dr{} only): Is the critic good enough for doubly robust guarantees?
-\end{enumerate}
+\end{enumerate>
 
 Each diagnostic produces a compact artifact (a number, a CI, or a plot) and a traffic-light signal (pass / warn / fail).
 
-\textbf{If you're using Direct Mode only:} Focus on diagnostics 1--4. Skip diagnostics 5--7 unless you later need counterfactual inference.
+\textbf{If you're using Direct Mode only:} Focus on diagnostics 1--5. Skip diagnostics 6--8 unless you later need counterfactual inference.
 
 \subsection{Diagnostic 1: Score coverage}
 
@@ -80,6 +81,29 @@ Each diagnostic produces a compact artifact (a number, a CI, or a plot) and a tr
 \item Check if judge drift occurred (see §4.3).
 \end{itemize}
 
+\subsection{Diagnostic 2b: Covariate-aware reliability (two-stage)}
+
+\paragraph{What it measures.} Whether the two-stage index $T=g(S,X_{\mathrm{cov}})$ resolves regional miscalibration when plain J2-M fails.
+
+\paragraph{Why it matters.} When slice effects (e.g., length or domain bias at fixed $S$) cause regional miscalibration, two-stage \autocal{} with covariates can capture heterogeneity while preserving monotonicity. This diagnostic validates that the covariate-augmented mapping improves accuracy.
+
+\paragraph{Artifacts to inspect:}
+\begin{itemize}
+\item \textbf{Reliability by $T$-quantiles (OOF):} calibration curve using the risk index $T$ instead of raw $S$.
+\item \textbf{Residual MAE by slices of key covariates:} e.g., short vs.\ long responses, or domain groups.
+\item \textbf{Before/after regional MAE:} compare plain isotonic on $S$ vs.\ two-stage with covariates.
+\end{itemize}
+
+\paragraph{Thresholds:}
+Same as Diagnostic 2 (OOF MAE $< 0.05$ pass, $< 0.10$ warn, $> 0.10$ fail), applied on $T$-quantiles. Additionally flag if any covariate slice has $> 2\times$ the global MAE.
+
+\paragraph{Fixes:}
+\begin{itemize}
+\item Add/modify covariates (e.g., include response length if not already used).
+\item Increase labels in failing slices (e.g., long responses if they show high residual error).
+\item Tune first-stage capacity: more knots for splines or shallow trees (avoid overfitting with small oracle slices).
+\end{itemize}
+
 \subsection{Diagnostic 3: Judge stability}
 
 \paragraph{What it measures.} Rank stability of judge scores on a small anchor set (20--50 fixed prompts) over time or across batches, measured via Kendall $\tau$ or Spearman $\rho$.
@@ -110,6 +134,8 @@ Each diagnostic produces a compact artifact (a number, a CI, or a plot) and a tr
 
 \paragraph{Automated detection.} When evaluation data includes timestamps, CJE can automatically detect drift over time using \texttt{timestamp\_field} and \texttt{check\_drift=True}. This sorts samples by timestamp, computes sequential Kendall $\tau$ correlations across time batches, and flags drift points. This automates the anchor-set workflow for datasets with temporal metadata.
 
+\noindent\emph{Transport trigger:} If anchor $\tau < 0.90$ or the Transportability Audit (Diagnostic 5) fails, treat the mapping as \emph{non-transportable}: gather a fresh calibration slice and refit; do not rely on old $f$ without adjustment.
+
 \subsection{Diagnostic 4: Oracle uncertainty (OUA) share}
 
 \paragraph{What it measures.} The fraction of total variance attributable to oracle uncertainty (calibrator noise):
@@ -138,11 +164,46 @@ Each diagnostic produces a compact artifact (a number, a CI, or a plot) and a tr
 \item For high OUA share, adding prompts yields diminishing returns; focus labeling budget on coverage and regional balance.
 \end{itemize}
 
+\subsection{Diagnostic 5: Transportability Audit (policy / time)}
+\label{diag:transport}
+
+\paragraph{Goal.} Test whether the source calibrator $f$ transports to a target policy or time window.
+
+\paragraph{Probe protocol (cheap).} For each target stratum $G$:
+collect a small \emph{probe} of $n_{\text{probe}}=40\text{--}60$ oracle labels,
+compute residuals $e_i = Y_i - f(S_i,X_{i,\mathrm{cov}})$, and evaluate:
+
+\begin{enumerate}
+\item \textbf{Global residual mean:}
+$\hat\delta_G = \frac{1}{n_{\text{probe}}}\sum e_i$ with
+$\mathrm{SE}(\hat\delta_G) = \hat\sigma_e/\sqrt{n_{\text{probe}}}$;
+95\% CI should contain $0$.
+\item \textbf{Regional residuals:}
+bin by deciles of the two-stage index $T=g(S,X_{\mathrm{cov}})$ (or $S$ if single-stage), compute mean $e$ per bin; require all bins within $\pm 0.05$ and no monotone pattern.
+\item \textbf{Score/Index coverage:}
+coverage of target $(S$ or $U=\mathrm{ECDF}(T))$ within the oracle training range $\ge 95\%$; inspect boundary slopes.
+\end{enumerate}
+
+\paragraph{Traffic-light thresholds.}
+\begin{itemize}
+\item \textbf{PASS:} $0 \in \text{CI}(\hat\delta_G)$ and all decile residual means $\in [-0.05,0.05]$ and coverage $\ge 95\%$.
+\item \textbf{WARN:} $|\hat\delta_G| \in [0.02,0.05]$ or one/two bins exceed 0.05 in magnitude, or coverage $\in [85\%,95\%)$.
+\item \textbf{FAIL:} $0 \notin \text{CI}(\hat\delta_G)$ or 3+ bins exceed 0.05, or coverage $<85\%$.
+\end{itemize}
+
+\paragraph{Fixes by failure mode.}
+\begin{itemize}
+\item \textbf{Uniform mean shift:} apply a per-group intercept (``mean anchoring'') $\tilde f_G(S,X)=\mathrm{clip}(f(S,X)+\hat\delta_G)$; re-check regional residuals.
+\item \textbf{Regional pattern:} enable two-stage \autocal{} with covariates that explain the divergence (e.g., response length, domain); collect +20--40 labels concentrated in failing deciles; refit.
+\item \textbf{Coverage failure:} add targeted labels in uncovered $S$/$U$ bins or narrow scope to the intended deployment slice.
+\item \textbf{Judge drift (over time):} treat as a new era; gather a fresh calibration slice and refit (see \S\ref{sec:calib-refresh}).
+\end{itemize}
+
 \subsection*{Off-Policy Diagnostics (IPS/DR Only)}
 
-The following diagnostics only apply when reusing logged data. \textbf{If you're using Direct Mode, you can skip to §4.8.}
+The following diagnostics only apply when reusing logged data. \textbf{If you're using Direct Mode, you can skip to §4.9.}
 
-\subsection{Diagnostic 5: Effective sample size (ESS)}
+\subsection{Diagnostic 6: Effective sample size (ESS)}
 
 \paragraph{What it measures.} The number of ``effective'' independent samples after importance weighting:
 \begin{equation}
@@ -175,7 +236,7 @@ where $\tilde{w}_i$ are the stabilized, mean-one weights after \simcal. ESS rang
 \item If ESS $< 1\%$, regenerate fresh outputs for the candidate policy and use \dm{} instead.
 \end{itemize}
 
-\subsection{Diagnostic 6: Tail heaviness (Hill index)}
+\subsection{Diagnostic 7: Tail heaviness (Hill index)}
 
 \paragraph{What it measures.} The tail index $\alpha$ of the weight distribution, estimated via the Hill estimator. If $\alpha < 2$, the weights have infinite variance; if $\alpha < 1$, infinite mean.
 
@@ -204,7 +265,7 @@ where $\tilde{w}_i$ are the stabilized, mean-one weights after \simcal. ESS rang
 \item If $\alpha < 2$ persists, switch to \dr{} or regenerate.
 \end{itemize}
 
-\subsection{Diagnostic 7: DR orthogonality score}
+\subsection{Diagnostic 8: DR orthogonality score}
 
 \paragraph{What it measures.} The empirical moment
 \begin{equation}

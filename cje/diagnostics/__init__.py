@@ -46,6 +46,12 @@ from .stability import (
     compute_stability_diagnostics,
 )
 
+# Transport diagnostics
+from .transport import (
+    TransportDiagnostics,
+    audit_transportability,
+)
+
 # Display utilities
 from .display import (
     create_weight_summary_table,
@@ -91,6 +97,9 @@ __all__ = [
     "reliability_diagram",
     "eif_qq_plot_data",
     "compute_stability_diagnostics",
+    # Transport
+    "TransportDiagnostics",
+    "audit_transportability",
     # Display
     "create_weight_summary_table",
     "format_dr_diagnostic_summary",

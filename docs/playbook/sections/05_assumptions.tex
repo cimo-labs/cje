@@ -76,11 +76,27 @@ There exist monotone functions $h_Y$ and $h_W$ such that:
 \item For $h_W$: Bin logged data by $S$ and check that mean $W$ is monotone. Scatter plot of $W$ vs.\ $S$ should show a trend.
 \end{itemize}
 
-\paragraph{What happens if it fails.} 
+\paragraph{What happens if it fails.}
 \begin{itemize}
 \item If $\E[Y \mid S]$ is not monotone, \autocal{} can be badly miscalibrated. Use two-stage \autocal{} (spline index $\to$ isotonic) or add a coarse index (prompt family).
 \item If $\E[W \mid S]$ is not monotone, \simcal{} may not help (or may hurt). Check the diagnostic; if monotonicity fails, consider model-based weight calibration or switch to \dr.
 \end{itemize}
+
+\begin{assumption}[Single-Index Monotone Sufficiency (J2-MX)]
+\label{assump:j2mx}
+There exists a one-dimensional index $T=g(S,X_{\mathrm{cov}})$ and a nondecreasing $\mu$ such that
+$\E[Y\mid S,X_{\mathrm{cov}}]=\mu(T)$.
+For off-policy weight calibration analogously assume
+$\E[W\mid S,X_{\mathrm{cov}}]=\nu(T)$ with nondecreasing $\nu$.
+\end{assumption}
+
+\paragraph{Plain English.} When judge monotonicity fails at fixed $S$ due to slice effects (e.g., length or domain bias), we assume there's still a one-dimensional summary $T$ of $(S, X_{\mathrm{cov}})$ where monotonicity holds. This is weaker than J2-M but still preserves the core structural belief in rank-ordering.
+
+\paragraph{When it matters.} All modes when using two-stage \autocal{} with covariates (\S\ref{sec:two-stage-autocal}). If plain J2-M holds, this is not needed.
+
+\paragraph{How to check.} Bin the oracle slice by quantiles of $\widehat T$ and verify monotone $\bar Y$ across bins; for IPS/DR, verify monotone $\bar W$ across $\widehat T$ bins. Compare regional error before/after adding covariates.
+
+\paragraph{What happens if it fails.} Add/adjust $X_{\mathrm{cov}}$ (e.g., response length, family), increase oracle labels in problematic regions, or fall back to plain monotone on $S$ with caveats.
 
 \begin{assumption}[Judge Stability]
 \label{assum:stability}
@@ -94,6 +110,28 @@ The judge's scoring function does not drift between the time the log is collecte
 \paragraph{How to check.} Anchor set with Kendall $\tau$: score a fixed set of 20--50 prompts at $t_0$ and $t_1$, compute rank correlation. $\tau \ge 0.90$ is good; $\tau < 0.75$ is a red flag.
 
 \paragraph{What happens if it fails.} Calibration breaks because the meaning of $S$ has changed. Oracle labels from $t_0$ don't predict outcomes at $t_1$. Fix: refresh the oracle slice with new labels from $t_1$ and re-fit \autocal. Or freeze the judge version/config during the evaluation window.
+
+\begin{assumption}[Calibration Transportability]
+\label{assum:transport}
+Let $f$ be the judge$\to$oracle map learned on a source stratum $\mathcal{S}$ (e.g., a policy or time window).
+We say $f$ is \emph{transportable} to a target stratum $\mathcal{T}$ if, for all $(S, X_{\mathrm{cov}})$ in the target support,
+\[
+\E\!\left[\,Y \,\middle|\, S, X_{\mathrm{cov}}, G=\mathcal{T}\right]
+\;=\;
+\E\!\left[\,Y \,\middle|\, S, X_{\mathrm{cov}}, G=\mathcal{S}\right]
+\;=\; f^\star(S, X_{\mathrm{cov}})
+\]
+i.e., $Y \,\perp\, G \mid (S, X_{\mathrm{cov}})$, where $G$ is a group indicator (policy or time ``era'').
+\end{assumption}
+
+\paragraph{Interpretation.} Conditional on the score and any included covariates, the group (policy/time) carries no extra information about the outcome. Equivalently, $f$ is \emph{policy-invariant} and \emph{time-invariant} once you condition on $(S, X_{\mathrm{cov}})$.
+
+\paragraph{Weaker variants.}
+(i) \textbf{Mean-shift only:} $\E[Y\!\mid\!S,X_{\mathrm{cov}},G] = f^\star(S,X_{\mathrm{cov}}) + c_G$
+(a constant vertical offset per group).
+(ii) \textbf{Regional shift:} small bounded deviations within quantiles of the two-stage index $T=g(S,X_{\mathrm{cov}})$.
+
+\paragraph{When it can fail.} If a new policy changes outcome at fixed score (judge bias w.r.t.\ that policy), or if the judge's semantics drift over time (model/rubric changes), $f$ is not transportable without adjustment.
 
 \subsection{Structural assumptions}
 

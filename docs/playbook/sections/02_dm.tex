@@ -33,7 +33,7 @@ Direct Modeling answers: ``What KPI would we see on this prompt set if we shippe
 
 \subsection{AutoCal-R: map judge score to outcome}
 
-\autocal{} learns a mean-preserving mapping $f: \mathbb{R} \to [0,1]$ from score $S$ to calibrated reward $R = f(S)$. By default it fits a monotone mapping; when needed, it auto-switches to a light two-stage index (e.g., spline index $\to$ isotonic) if regional miscalibration is detected.
+\autocal{} learns a mean-preserving mapping $f: \mathbb{R} \to [0,1]$ from score $S$ to calibrated reward $R = f(S)$. By default it fits a monotone mapping; when needed, it auto-switches to a light two-stage index (e.g., spline index $\to$ isotonic) if regional miscalibration is detected. When applying $f$ to other policies, verify Assumption~\ref{assum:transport} with the Transportability Audit (Diagnostic 5, \S\ref{diag:transport}).
 
 \paragraph{Why monotone (isotonic) by default?} Isotonic regression enforces the single structural belief you want: \emph{higher judge score $\Rightarrow$ no worse expected outcome}. Unlike parametric links (sigmoid, beta) that impose a rigid shape and risk misspecification, isotonic adapts to the data while preserving ranking sanity. It is mean-preserving by construction (via projection onto the monotone cone), so your KPI stays on the right scale without post-hoc adjustments. With small oracle slices (5-10\% coverage is often sufficient), this shape constraint buys strong stability---no spurious wiggles, no overfitting. The step-function output also makes edge fragility immediately visible, enabling targeted label collection. When monotonicity fails (e.g., length bias at fixed $S$), the two-stage variant learns a smooth transformation first.
 
@@ -43,6 +43,41 @@ Direct Modeling answers: ``What KPI would we see on this prompt set if we shippe
 \item \textbf{Mean preservation:} oracle mean of $f(S)$ matches mean of $Y$.
 \item \textbf{Score coverage:} fraction of evaluated $S$ that lies inside the oracle $S$-range; inspect boundary slopes.
 \end{itemize}
+
+\subsubsection{Two-Stage \autocal{} (with covariates)}
+\label{sec:two-stage-autocal}
+
+When $\E[Y\mid S]$ is only approximately monotone or exhibits slice effects (e.g., length or domain bias at fixed $S$), we use a light two-stage procedure that preserves the single structural belief we trust---\emph{monotonicity in a one-dimensional risk index}---while allowing covariate adjustment.
+
+\paragraph{Construction (cross-fitted).} Let $X_{\mathrm{cov}}$ denote optional, low-cardinality covariates (e.g., response length, prompt family). For each oracle fold $k$:
+\begin{enumerate}
+\item \textbf{Risk index (OOF):} fit a low-capacity $g_{\setminus k}$ on folds $\neq k$ to predict $Y$ from $(S, X_{\mathrm{cov}})$ and compute $T_i = g_{\setminus k}(S_i, X_{i,\mathrm{cov}})$ for $i \in k$.
+\item \textbf{Uniformize:} $U_i = \widehat{\mathrm{ECDF}}_{\setminus k}(T_i) \in [0,1]$ using the training folds only.
+\item \textbf{Shape-enforce (isotonic):} fit $h_{\setminus k} = \arg\min_{h \in \mathcal{M}} \sum_{j \notin k} (Y_j - h(U_j))^2$ with $\mathcal{M}$ the nondecreasing functions; set
+\[
+f_{\setminus k}(S_i, X_{i,\mathrm{cov}})=h_{\setminus k}(U_i).
+\]
+\item \textbf{Mean-preserve:} recenter so $\frac{1}{|{\text{train}}|}\sum_{j\notin k} h_{\setminus k}(U_j)=\frac{1}{|{\text{train}}|}\sum_{j\notin k} Y_j$.
+\end{enumerate}
+At inference time we use the OOF $f_{\setminus k}$ for oracle points and the pooled fit for evaluation points.
+
+\paragraph{Assumption (single-index monotone).} There exists $g^\star(S,X_{\mathrm{cov}})$ and nondecreasing $\mu^\star$ such that $\E[Y\mid S,X_{\mathrm{cov}}]=\mu^\star(g^\star(S,X_{\mathrm{cov}}))$. Then $f$ is $L^2$-consistent; see \S\ref{assump:j2mx}.
+
+\paragraph{Why it helps.} (i) Captures slice heterogeneity with one d.o.f.; (ii) rank--uniformization makes the mapping scale-free and density-stable; (iii) preserves interpretability and mean; (iv) plays well with \oua{} and regional diagnostics.
+
+\paragraph{When to enable.} Persistent regional error in reliability plots, slice effects at fixed $S$, or edge fragility (flat/steep boundary slopes).
+
+\paragraph{API (code parity).}
+\begin{lstlisting}[language=Python]
+from cje import analyze_dataset
+
+results = analyze_dataset(
+    fresh_draws_dir="responses/",
+    calibration_mode="auto",                 # "two_stage" to force
+    calibration_covariates=["response_length","domain"],
+    include_response_length=True             # auto-compute from response text
+)
+\end{lstlisting}
 
 \subsection{Estimator and paired contrasts}
 
@@ -60,7 +95,7 @@ Treating $f$ as fixed understates uncertainty when the oracle slice is small. \t
 \begin{equation}
 \SE^2_{\text{total}} = \Var_{\text{main}} + \Var_{\oua},
 \end{equation}
-and reports 95\% CIs via the usual normal quantile. Always show the \oua{} share $\Var_{\oua}/\SE^2_{\text{total}}$.
+and forms 95\% CIs using a \textbf{t}-critical value with Satterthwaite df when clusters/oracle folds are small; normal quantile otherwise (see \S\ref{sec:uncertainty}). Always show the \oua{} share $\Var_{\oua}/\SE^2_{\text{total}}$.
 
 \subsection{Diagnostics (highest leverage) \& quick fixes}
 

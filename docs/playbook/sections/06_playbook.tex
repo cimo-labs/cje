@@ -221,6 +221,32 @@ If any box is unchecked, do not ship the estimate.
 \item \textbf{Fixes:} (1) Add labels, prioritizing sparse $S$ regions or high-variance prompt families. (2) Adding more prompts yields diminishing returns; focus labeling budget on coverage and balance.
 \end{itemize}
 
+\subsection{Transporting Calibration Across Policies and Time}
+\label{sec:calib-refresh}
+
+\paragraph{When to probe.}
+\begin{itemize}
+\item \textbf{New policy candidate} evaluated with an existing calibrator.
+\item \textbf{New time window / model update} of the judge (even minor rubric/version bumps).
+\item \textbf{Large score-distribution shift:} KS distance on $U$ (risk quantiles) $> 0.1$ or coverage drops $<95\%$.
+\end{itemize}
+
+\paragraph{How many probe labels?}
+$n_{\text{probe}}=40\text{--}60$ per target stratum usually detects $\ge\!3$--$5$pp mean drift and obvious regional issues.
+If WARN/FAIL, collect an additional $50\text{--}150$ labels, \emph{stratified by failing deciles} (and at boundaries).
+
+\paragraph{What to do with old labels?}
+\begin{enumerate}
+\item \textbf{PASS:} keep the source calibrator $f$; no action.
+\item \textbf{Uniform shift:} apply mean anchoring per group; keep $f$ shape, document $\hat\delta_G$.
+\item \textbf{Structural change (regional):} refit \autocal{} on the \emph{union} of old + new labels with two-stage index and cross-fitting. If the judge changed meaning materially (low anchor $\tau$, Diagnostic 3), train a \emph{new} calibrator version and deprecate the old one.
+\end{enumerate}
+
+\paragraph{Label budgeting for refresh.}
+Use \oua{} share as a guide: increase $n_{\text{oracle}}$ until $\text{OUA share} < 20\%$.
+A practical rule is $n_{\text{oracle}} \approx 5\sqrt{m}$ for $m$ prompts (see Sample size planning below).
+Prioritize labels in uncovered $U$ bins and bins with largest residuals.
+
 \subsection{Sample size planning}
 
 \paragraph{Goal:} Achieve a target CI half-width $\delta$ (e.g., $\delta = 0.02$ for $\pm 2\%$ precision).
