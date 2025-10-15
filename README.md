@@ -9,7 +9,7 @@
 [![Tests](https://img.shields.io/badge/tests-passing-green)](https://github.com/cimo-labs/cje/actions)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**Turn noisy LLM-judge scores into precise estimates of the quantities you care about with valid confidence intervals - the kind you'd expect from an A|B test.**
+**Turn noisy LLM-judge scores into precise, unbiased estimates of the outcomes you care about with valid CIs.**
 
 CJE calibrates judge scores using a small oracle slice (5-10% coverage), then delivers statistically rigorous estimates.
 
