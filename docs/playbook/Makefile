@@ -40,8 +40,16 @@ html: $(VERSION_FILE)
 		-o $(BUILD_DIR)/cje_playbook_v$$VERSION.html || echo "pandoc not installed, skipping HTML build"
 	@echo "Built: $(BUILD_DIR)/cje_playbook_v$$($(PYTHON) -c 'import sys; sys.path.insert(0, \"$(CJE_ROOT)\"); from cje import __version__; print(__version__)').html"
 
+# Build web-friendly HTML sections (requires pandoc)
+web:
+	@echo "Building web version..."
+	@./build_web.sh
+
 # Build both PDF and HTML
 all: pdf html
+
+# Build everything including web
+all-web: pdf html web
 
 # Clean build artifacts
 clean:
@@ -59,4 +67,4 @@ test-version:
 	@echo "Testing version extraction..."
 	@$(PYTHON) -c "import sys; sys.path.insert(0, '$(CJE_ROOT)'); from cje import __version__; print('CJE version:', __version__)"
 
-.PHONY: get_version pdf html all clean rebuild test-version
+.PHONY: get_version pdf html web all all-web clean rebuild test-version

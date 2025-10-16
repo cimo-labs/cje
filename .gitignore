@@ -74,6 +74,15 @@ docs/.cache/
 api/generated/
 _generated/
 
+# Playbook web HTML (pre-rendered by CI, committed for easy sync)
+!docs/playbook/build/
+!docs/playbook/build/web/
+!docs/playbook/build/web/*.html
+!docs/playbook/build/web/*.json
+!docs/playbook/build/web/*.png
+!docs/playbook/build/web/*.jpg
+!docs/playbook/build/web/figs/
+
 # PyBuilder
 .pybuilder/
 target/
