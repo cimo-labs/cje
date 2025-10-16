@@ -4,19 +4,9 @@
 
 CJE estimates answer causal questions: ``What would happen if we deployed $\pi'$?'' To interpret estimates causally, we need assumptions. This section states them in plain English, explains when they matter, how to check them, and what happens when they fail.
 
-\subsection{Assumption hierarchy}
-
-Not all assumptions are created equal. We group them into three tiers:
-
-\begin{description}
-\item[Tier 1 (Critical):] Required for unbiased estimation; violations cause systematic errors. These are \textbf{non-negotiable}.
-\item[Tier 2 (Important):] Required for valid inference (CIs); violations lead to underestimated uncertainty or bias. Checkable via diagnostics.
-\item[Tier 3 (Efficiency):] Required for optimal variance; violations cost power but do not bias point estimates.
-\end{description}
-
 \subsection{Data assumptions}
 
-\begin{assumption}[SUTVA: Stable Unit Treatment Value \textbf{(Tier 1: Critical)}]
+\begin{assumption}[SUTVA: Stable Unit Treatment Value]
 \label{assum:sutva}
 The outcome for prompt $X_i$ under policy $\pi$ does not depend on what policy was applied to other prompts. Formally: no interference and no hidden versions of treatment.
 \end{assumption}
@@ -29,7 +19,7 @@ The outcome for prompt $X_i$ under policy $\pi$ does not depend on what policy w
 
 \paragraph{What happens if it fails.} Estimates are biased in unknown directions. The only fix is to redefine the estimand to account for interference (beyond this playbook's scope).
 
-\begin{assumption}[Overlap (Positivity) \textbf{(Tier 2: Important)}]
+\begin{assumption}[Overlap (Positivity)]
 \label{assum:overlap}
 For all prompts $X$ and responses $A$ such that $\pi'(A \mid X) > 0$, we have $\pi_0(A \mid X) > 0$. Informally: the logging policy could have generated any response the target policy might generate.
 \end{assumption}
@@ -44,7 +34,7 @@ For all prompts $X$ and responses $A$ such that $\pi'(A \mid X) > 0$, we have $\
 
 \subsection{Judge and calibration assumptions}
 
-\begin{assumption}[Oracle Slice: Simple Random Subsample \textbf{(Tier 1: Critical)}]
+\begin{assumption}[Oracle Slice: Simple Random Subsample]
 \label{assum:oracle}
 The labeled oracle slice is a simple random sample from the evaluation distribution, and labels $Y$ are unbiased measurements of the true outcome.
 \end{assumption}
@@ -57,7 +47,7 @@ The labeled oracle slice is a simple random sample from the evaluation distribut
 
 \paragraph{What happens if it fails.} \autocal{} learns the wrong mapping, leading to biased $R = f(S)$. CIs are too narrow because they don't account for the selection bias. Fix: stratify labeling by prompt family or $S$ bins; use inverse-propensity weighting if the labeling mechanism is known.
 
-\begin{assumption}[Judge Monotone Sufficiency (J2-M) \textbf{(Tier 1: Critical)}]
+\begin{assumption}[Judge Monotone Sufficiency (J2-M)]
 \label{assum:j2m}
 There exist monotone functions $h_Y$ and $h_W$ such that:
 \begin{itemize}
@@ -82,7 +72,7 @@ There exist monotone functions $h_Y$ and $h_W$ such that:
 \item If $\E[W \mid S]$ is not monotone, \simcal{} may not help (or may hurt). Check the diagnostic; if monotonicity fails, consider model-based weight calibration or switch to \dr.
 \end{itemize}
 
-\begin{assumption}[Single-Index Monotone Sufficiency (J2-MX) \textbf{(Tier 2: Important)}]
+\begin{assumption}[Single-Index Monotone Sufficiency (J2-MX)]
 \label{assump:j2mx}
 There exists a one-dimensional index $T=g(S,X_{\mathrm{cov}})$ and a nondecreasing $\mu$ such that
 $\E[Y\mid S,X_{\mathrm{cov}}]=\mu(T)$.
@@ -98,7 +88,7 @@ $\E[W\mid S,X_{\mathrm{cov}}]=\nu(T)$ with nondecreasing $\nu$.
 
 \paragraph{What happens if it fails.} Add/adjust $X_{\mathrm{cov}}$ (e.g., response length, family), increase oracle labels in problematic regions, or fall back to plain monotone on $S$ with caveats.
 
-\begin{assumption}[Judge Stability \textbf{(Tier 2: Important)}]
+\begin{assumption}[Judge Stability]
 \label{assum:stability}
 The judge's scoring function does not drift between the time the log is collected and the time fresh draws are evaluated. Formally: $s_t(X, A) = s_{t'}(X, A)$ for all $t, t'$ in the evaluation window.
 \end{assumption}
@@ -111,7 +101,7 @@ The judge's scoring function does not drift between the time the log is collecte
 
 \paragraph{What happens if it fails.} Calibration breaks because the meaning of $S$ has changed. Oracle labels from $t_0$ don't predict outcomes at $t_1$. Fix: refresh the oracle slice with new labels from $t_1$ and re-fit \autocal. Or freeze the judge version/config during the evaluation window.
 
-\begin{assumption}[Calibration Transportability \textbf{(Tier 1: Critical)}]
+\begin{assumption}[Calibration Transportability]
 \label{assum:transport}
 Let $f$ be the judge$\to$oracle map learned on a source stratum $\mathcal{S}$ (e.g., a policy or time window).
 We say $f$ is \emph{transportable} to a target stratum $\mathcal{T}$ if, for all $(S, X_{\mathrm{cov}})$ in the target support,
@@ -135,7 +125,7 @@ i.e., $Y \,\perp\, G \mid (S, X_{\mathrm{cov}})$, where $G$ is a group indicator
 
 \subsection{Structural assumptions}
 
-\begin{assumption}[Bounded Outcomes \textbf{(Tier 2: Important)}]
+\begin{assumption}[Bounded Outcomes]
 \label{assum:bounded}
 Outcomes $Y \in [0, 1]$ are bounded. Judge scores $S$ may be unbounded, but calibrated rewards $R = f(S) \in [0, 1]$.
 \end{assumption}
@@ -150,7 +140,7 @@ Outcomes $Y \in [0, 1]$ are bounded. Judge scores $S$ may be unbounded, but cali
 
 \subsection{Rate assumptions (for DR)}
 
-\begin{assumption}[Critic and Weight Convergence Rates (R3) \textbf{(Tier 3: Efficiency)}]
+\begin{assumption}[Critic and Weight Convergence Rates (R3)]
 \label{assum:rates}
 For doubly robust inference, either:
 \begin{itemize}
