@@ -1,0 +1,529 @@
+<section id="operator-playbook-start-to-finish" class="level1">
+<h1>Operator Playbook: Start to Finish</h1>
+<section id="overview" class="level2">
+<h2>Overview</h2>
+<p>This section is a step-by-step guide for practitioners. It covers the
+full evaluation workflow from data collection to reporting, with
+decision trees, checklists, and troubleshooting tips.</p>
+</section>
+<section id="decision-tree-which-mode-to-use" class="level2">
+<h2>Decision tree: which mode to use?</h2>
+<ol>
+<li><p><strong>Can you generate fresh outputs for each candidate
+policy?</strong></p>
+<ul>
+<li><p><strong>Yes</strong> <span class="math inline">\(\to\)</span> Can
+you afford to label an oracle slice (50–200 examples)?</p>
+<ul>
+<li><p><strong>Yes</strong> <span class="math inline">\(\to\)</span> Use
+<strong>DM</strong> (on-policy, simplest). If you also have logged data
+with logprobs, consider <strong>DR</strong> for tighter CIs.</p></li>
+<li><p><strong>No</strong> <span class="math inline">\(\to\)</span> Use
+<strong>Direct mode without calibration</strong> (raw judge scores,
+rank-only). No KPI-scale estimates, but still useful for
+ranking.</p></li>
+</ul></li>
+<li><p><strong>No</strong> <span class="math inline">\(\to\)</span> Do
+you have a judged log with logprobs for <span
+class="math inline">\(\pi_0\)</span> and candidates <span
+class="math inline">\(\pi&#39;\)</span>?</p>
+<ul>
+<li><p><strong>Yes</strong> <span class="math inline">\(\to\)</span> Can
+you label an oracle slice?</p>
+<ul>
+<li><p><strong>Yes</strong> <span class="math inline">\(\to\)</span> Use
+<strong>IPS</strong> or <strong>DR</strong> (if you can generate a few
+fresh draws for a critic). Check ESS; if <span
+class="math inline">\(&lt; 10\%\)</span>, DR is strongly
+recommended.</p></li>
+<li><p><strong>No</strong> <span class="math inline">\(\to\)</span> Use
+<strong>IPS without calibration</strong> (relative comparisons only, no
+KPI scale).</p></li>
+</ul></li>
+<li><p><strong>No</strong> <span class="math inline">\(\to\)</span> You
+cannot perform causal off-policy evaluation. Regenerate or use
+DM.</p></li>
+</ul></li>
+</ul></li>
+</ol>
+</section>
+<section id="workflow-1-direct-modeling-dm" class="level2">
+<h2>Workflow 1: Direct Modeling (DM)</h2>
+<section id="step-1-design-the-evaluation-set." class="level4">
+<h4>Step 1: Design the evaluation set.</h4>
+<ul>
+<li><p>Choose <span class="math inline">\(m\)</span> prompts
+representative of deployment (e.g., 500–2000).</p></li>
+<li><p>Ensure diversity: cover prompt families, lengths, difficulty
+levels.</p></li>
+<li><p>Use stratified sampling if you have subgroups of
+interest.</p></li>
+</ul>
+</section>
+<section id="step-2-generate-outputs." class="level4">
+<h4>Step 2: Generate outputs.</h4>
+<ul>
+<li><p>For each policy <span class="math inline">\(\pi\)</span>,
+generate one output per prompt.</p></li>
+<li><p>Use the same random seed (or paired draws) across policies for
+variance reduction.</p></li>
+<li><p>Log all outputs, prompts, and metadata (model version,
+temperature, etc.).</p></li>
+</ul>
+</section>
+<section id="step-3-judge-all-outputs." class="level4">
+<h4>Step 3: Judge all outputs.</h4>
+<ul>
+<li><p>Apply the judge to all <span class="math inline">\((X_i, A_{\pi
+i})\)</span> pairs to get scores <span class="math inline">\(S_{\pi
+i}\)</span>.</p></li>
+<li><p>Use a fixed judge config (version, prompt, temperature).</p></li>
+<li><p>Log judge metadata (timestamps, version, config).</p></li>
+</ul>
+</section>
+<section id="step-4-label-an-oracle-slice." class="level4">
+<h4>Step 4: Label an oracle slice.</h4>
+<ul>
+<li><p>Sample 50–200 examples uniformly at random from the evaluation
+set.</p></li>
+<li><p>Obtain ground-truth labels <span class="math inline">\(Y\)</span>
+(human ratings, gold KPI, etc.).</p></li>
+<li><p>Ensure labels are unbiased and representative.</p></li>
+</ul>
+</section>
+<section id="step-4b-optional-use-a-dedicated-calibration-set."
+class="level4">
+<h4>Step 4b (Optional): Use a dedicated calibration set.</h4>
+<ul>
+<li><p>If you have pre-existing curated oracle labels (e.g., from prior
+evaluation work), load them via <code>calibration_data_path</code>
+instead of sampling from the evaluation set.</p></li>
+<li><p>CJE will auto-combine oracle labels from the calibration set with
+any labels in the evaluation data for maximum efficiency (priority:
+calibration <span class="math inline">\(&gt;\)</span> fresh <span
+class="math inline">\(&gt;\)</span> logged).</p></li>
+<li><p>Inspect <code>results.metadata["oracle_sources"]</code> for
+source breakdown and conflicts.</p></li>
+</ul>
+</section>
+<section id="step-5-fit-autocal-r." class="level4">
+<h4>Step 5: Fit AutoCal-R.</h4>
+<ul>
+<li><p>Use 5-fold cross-fitting to learn <span class="math inline">\(f:
+S \to [0, 1]\)</span>.</p></li>
+<li><p>Check diagnostics: coverage (aim for <span
+class="math inline">\(\ge 95\%\)</span>), reliability (OOF MAE <span
+class="math inline">\(&lt; 0.05\)</span>), mean preservation (<span
+class="math inline">\(|\bar{f(S)} - \bar{Y}| &lt;
+0.02\)</span>).</p></li>
+<li><p>If regional error is high, enable two-stage AutoCal-R or add a
+coarse index.</p></li>
+</ul>
+</section>
+<section id="step-6-compute-estimates-and-cis." class="level4">
+<h4>Step 6: Compute estimates and CIs.</h4>
+<ul>
+<li><p>Calibrate rewards: <span class="math inline">\(R_{\pi i} =
+f(S_{\pi i})\)</span>.</p></li>
+<li><p>Compute <span class="math inline">\(\est{V}_{DM}(\pi) =
+\frac{1}{m} \sum_i R_{\pi i}\)</span>.</p></li>
+<li><p>For pairwise contrasts, compute <span
+class="math inline">\(\est{\Delta}(\pi, \pi&#39;) = \frac{1}{m} \sum_i
+(R_{\pi i} - R_{\pi&#39; i})\)</span> (paired SE).</p></li>
+<li><p>Add OUA by refitting <span class="math inline">\(f\)</span>
+across oracle folds and computing <span
+class="math inline">\(\Var_{OUA}\)</span>.</p></li>
+<li><p>Report 95% CIs: <span class="math inline">\(\est{V} \pm 1.96
+\cdot \SE_{\text{total}}\)</span>.</p></li>
+</ul>
+</section>
+<section id="step-7-report." class="level4">
+<h4>Step 7: Report.</h4>
+<ul>
+<li><p>For each policy: <span class="math inline">\(\est{V}\)</span>
+with CI, OUA share, calibration diagnostics, coverage badge.</p></li>
+<li><p>For key contrasts: <span
+class="math inline">\(\est{\Delta}\)</span> with paired CI.</p></li>
+<li><p>Include diagnostic plots (calibration curve, coverage
+histogram).</p></li>
+</ul>
+</section>
+</section>
+<section id="workflow-2-off-policy-ips" class="level2">
+<h2>Workflow 2: Off-Policy IPS</h2>
+<section id="step-1-collect-a-judged-log." class="level4">
+<h4>Step 1: Collect a judged log.</h4>
+<ul>
+<li><p>Deploy <span class="math inline">\(\pi_0\)</span> and log <span
+class="math inline">\((X_i, A_i, S_i)\)</span> for <span
+class="math inline">\(n\)</span> prompts.</p></li>
+<li><p>Store logprobs: <span class="math inline">\(\log \pi_0(A_i \mid
+X_i)\)</span> and <span class="math inline">\(\log \pi&#39;(A_i \mid
+X_i)\)</span> for each candidate <span
+class="math inline">\(\pi&#39;\)</span>.</p></li>
+</ul>
+</section>
+<section id="step-2-label-an-oracle-slice." class="level4">
+<h4>Step 2: Label an oracle slice.</h4>
+<ul>
+<li><p>Sample 50–200 examples uniformly from the logged data.</p></li>
+<li><p>Obtain ground-truth <span
+class="math inline">\(Y\)</span>.</p></li>
+</ul>
+</section>
+<section id="step-2b-optional-use-a-dedicated-calibration-set."
+class="level4">
+<h4>Step 2b (Optional): Use a dedicated calibration set.</h4>
+<ul>
+<li><p>If you have pre-existing curated oracle labels, load them via
+<code>calibration_data_path</code>.</p></li>
+<li><p>CJE will auto-combine with logged data oracle labels (priority:
+calibration <span class="math inline">\(&gt;\)</span> fresh <span
+class="math inline">\(&gt;\)</span> logged).</p></li>
+<li><p>Check <code>results.metadata["oracle_sources"]</code> for
+distribution mismatch and temporal staleness warnings.</p></li>
+</ul>
+</section>
+<section id="step-3-fit-autocal-r." class="level4">
+<h4>Step 3: Fit AutoCal-R.</h4>
+<ul>
+<li><p>Same as DM: 5-fold cross-fitting, check diagnostics.</p></li>
+</ul>
+</section>
+<section id="step-4-compute-and-stabilize-weights." class="level4">
+<h4>Step 4: Compute and stabilize weights.</h4>
+<ul>
+<li><p>Raw weights: <span class="math inline">\(W_i = \exp(\log
+\pi&#39;(A_i \mid X_i) - \log \pi_0(A_i \mid X_i))\)</span>.</p></li>
+<li><p>Apply SIMCal (5-fold, variance cap <span
+class="math inline">\(\rho = 0.95\)</span>) to get stabilized, mean-one
+weights <span class="math inline">\(\tilde{w}_i\)</span>.</p></li>
+<li><p>Check ESS: <span class="math inline">\(({\textstyle\sum}
+\tilde{w}_i)^2 / ({\textstyle\sum} \tilde{w}_i^2)\)</span>. Aim for
+<span class="math inline">\(\ge 30\%\)</span> (PASS), acceptable down to
+10%.</p></li>
+<li><p>Check Hill index <span class="math inline">\(\alpha \ge
+2\)</span>.</p></li>
+</ul>
+</section>
+<section id="step-5-compute-estimates-and-cis." class="level4">
+<h4>Step 5: Compute estimates and CIs.</h4>
+<ul>
+<li><p>Calibrate rewards: <span class="math inline">\(R_i =
+f(S_i)\)</span>.</p></li>
+<li><p>Compute <span class="math inline">\(\est{V}_{IPS}(\pi&#39;) =
+\frac{1}{n} \sum_i \tilde{w}_i \cdot R_i\)</span>, where <span
+class="math inline">\(\tilde{w}_i\)</span> are the stabilized, mean-one
+weights.</p></li>
+<li><p>Compute SE via influence functions, add OUA, form 95%
+CI.</p></li>
+</ul>
+</section>
+<section id="step-6-report." class="level4">
+<h4>Step 6: Report.</h4>
+<ul>
+<li><p><span class="math inline">\(\est{V}\)</span> with CI, ESS
+(absolute and %), Hill index, weight summary (min, median, max, 95th
+pct).</p></li>
+<li><p>OUA share, calibration diagnostics, judge stability check (if
+available).</p></li>
+</ul>
+</section>
+</section>
+<section id="workflow-3-off-policy-dr" class="level2">
+<h2>Workflow 3: Off-Policy DR</h2>
+<section id="steps-14-same-as-ips." class="level4">
+<h4>Steps 1–4: Same as IPS.</h4>
+</section>
+<section id="step-5-generate-fresh-draws-for-the-critic."
+class="level4">
+<h4>Step 5: Generate fresh draws for the critic.</h4>
+<ul>
+<li><p>For each candidate <span class="math inline">\(\pi&#39;\)</span>,
+generate fresh outputs on the same prompts used in the log.</p></li>
+<li><p>Judge these fresh outputs to get <span
+class="math inline">\(S&#39;_{\pi i}\)</span> and calibrate to <span
+class="math inline">\(R&#39;_{\pi i} = f(S&#39;_{\pi
+i})\)</span>.</p></li>
+<li><p>This is your training set for the outcome model <span
+class="math inline">\(\hat{g}(X)\)</span>.</p></li>
+</ul>
+</section>
+<section id="step-6-train-the-critic-cross-fitted." class="level4">
+<h4>Step 6: Train the critic (cross-fitted).</h4>
+<ul>
+<li><p>Split fresh draws into 5 folds.</p></li>
+<li><p>For each fold <span class="math inline">\(k\)</span>, train <span
+class="math inline">\(\hat{g}_k(X)\)</span> on the other 4 folds to
+predict <span class="math inline">\(R&#39;_{\pi}\)</span>.</p></li>
+<li><p>Predict on fold <span class="math inline">\(k\)</span> to get
+<span class="math inline">\(\hat{g}(X_i)\)</span> for logged prompts
+<span class="math inline">\(X_i\)</span>.</p></li>
+<li><p>Use a flexible model (e.g., gradient-boosted trees, neural net)
+with regularization.</p></li>
+</ul>
+</section>
+<section id="step-7-compute-dr-estimate." class="level4">
+<h4>Step 7: Compute DR estimate.</h4>
+<ul>
+<li><p><span class="math inline">\(\est{V}_{DR}(\pi&#39;) = \frac{1}{n}
+\sum_i \left[ \tilde{w}_i \cdot (R_i - \hat{g}(X_i)) + \hat{g}(X_i)
+\right]\)</span>, where <span class="math inline">\(\tilde{w}_i\)</span>
+are the stabilized, mean-one weights after SIMCal.</p></li>
+<li><p>Compute orthogonality score: <span
+class="math inline">\(\frac{1}{n} \sum_i \tilde{w}_i \cdot (R_i -
+\hat{g}(X_i))\)</span> with CI (see §4.7).</p></li>
+<li><p>If CI excludes zero, improve the critic or weights.</p></li>
+</ul>
+</section>
+<section id="step-8-report." class="level4">
+<h4>Step 8: Report.</h4>
+<ul>
+<li><p><span class="math inline">\(\est{V}\)</span> with CI, ESS, Hill
+index, weight summary.</p></li>
+<li><p>Orthogonality score with CI, critic OOF <span
+class="math inline">\(R^2\)</span>.</p></li>
+<li><p>OUA share, calibration diagnostics.</p></li>
+</ul>
+</section>
+</section>
+<section id="checklist-before-you-ship-an-estimate" class="level2">
+<h2>Checklist: before you ship an estimate</h2>
+<ol>
+<li><p>Checked score coverage (<span class="math inline">\(\ge
+85\%\)</span>)?</p></li>
+<li><p>Checked calibration reliability (OOF MAE <span
+class="math inline">\(&lt; 0.10\)</span>, mean preservation
+OK)?</p></li>
+<li><p>Checked judge stability (<span class="math inline">\(\tau \ge
+0.90\)</span> or no temporal drift)?</p></li>
+<li><p>Checked OUA share (if <span class="math inline">\(&gt;
+50\%\)</span>, consider adding labels)?</p></li>
+<li><p>(Off-policy) Checked ESS (<span class="math inline">\(\ge
+10\%\)</span>) and Hill index (<span class="math inline">\(\alpha \ge
+2\)</span>)?</p></li>
+<li><p>(DR) Checked orthogonality (CI contains zero)?</p></li>
+<li><p>Reported CIs that include OUA?</p></li>
+<li><p>Included diagnostic plots and summary in the report?</p></li>
+<li><p>Documented judge config, prompt set, oracle sampling
+procedure?</p></li>
+<li><p>Ran sensitivity checks (cohort restriction, trimming, alternative
+calibrators)?</p></li>
+</ol>
+<p>If any box is unchecked, do not ship the estimate.</p>
+</section>
+<section id="troubleshooting-guide" class="level2">
+<h2>Troubleshooting guide</h2>
+<section id="problem-low-ess-10." class="level4">
+<h4>Problem: Low ESS (<span class="math inline">\(&lt;
+10\%\)</span>).</h4>
+<ul>
+<li><p><strong>Cause:</strong> Poor overlap; policies are too
+different.</p></li>
+<li><p><strong>Fixes:</strong> (1) Apply SIMCal with stricter <span
+class="math inline">\(\rho\)</span> (e.g., 0.90). (2) Restrict to
+high-overlap cohort (<span class="math inline">\(|\log W| &lt;
+2\)</span>). (3) Switch to DR with a strong critic. (4) If ESS <span
+class="math inline">\(&lt; 1\%\)</span>, regenerate and use DM.</p></li>
+</ul>
+</section>
+<section id="problem-heavy-tails-alpha-2." class="level4">
+<h4>Problem: Heavy tails (<span class="math inline">\(\alpha &lt;
+2\)</span>).</h4>
+<ul>
+<li><p><strong>Cause:</strong> Extreme weights due to rare events or
+provider drift.</p></li>
+<li><p><strong>Fixes:</strong> (1) Use SIMCal aggressively. (2) Cohort
+restriction. (3) Check for provider temperature/frequency-penalty
+changes. (4) Switch to DR or regenerate.</p></li>
+</ul>
+</section>
+<section id="problem-poor-calibration-oof-mae-0.10." class="level4">
+<h4>Problem: Poor calibration (OOF MAE <span class="math inline">\(&gt;
+0.10\)</span>).</h4>
+<ul>
+<li><p><strong>Cause:</strong> Judge scores are not monotone in outcome,
+or regional miscalibration.</p></li>
+<li><p><strong>Fixes:</strong> (1) Enable two-stage AutoCal-R. (2) Add a
+coarse index (prompt family, length). (3) Add 10–30 labels in
+problematic <span class="math inline">\(S\)</span> regions. (4) Check
+for judge drift.</p></li>
+</ul>
+</section>
+<section id="problem-thin-coverage-85." class="level4">
+<h4>Problem: Thin coverage (<span class="math inline">\(&lt;
+85\%\)</span>).</h4>
+<ul>
+<li><p><strong>Cause:</strong> Oracle slice does not span the evaluation
+<span class="math inline">\(S\)</span>-range.</p></li>
+<li><p><strong>Fixes:</strong> (1) Add 5–20 labels targeting uncovered
+<span class="math inline">\(S\)</span> bins. (2) Narrow the prompt set
+to the intended deployment slice. (3) If stress-testing edges, ensure
+oracle includes edge examples.</p></li>
+</ul>
+</section>
+<section id="problem-dr-orthogonality-ci-excludes-zero." class="level4">
+<h4>Problem: DR orthogonality CI excludes zero.</h4>
+<ul>
+<li><p><strong>Cause:</strong> Critic or weights are poor.</p></li>
+<li><p><strong>Fixes:</strong> (1) Improve critic: add regularization,
+use a more flexible model, increase fresh draw sample size. (2) Revisit
+SIMCal or overlap diagnostics. (3) Check cross-fitting folds. (4) Fall
+back to IPS if orthogonality fails persistently.</p></li>
+</ul>
+</section>
+<section id="problem-large-oua-share-50." class="level4">
+<h4>Problem: Large OUA share (<span class="math inline">\(&gt;
+50\%\)</span>).</h4>
+<ul>
+<li><p><strong>Cause:</strong> Label scarcity is the bottleneck, not
+prompt scarcity.</p></li>
+<li><p><strong>Fixes:</strong> (1) Add labels, prioritizing sparse <span
+class="math inline">\(S\)</span> regions or high-variance prompt
+families. (2) Adding more prompts yields diminishing returns; focus
+labeling budget on coverage and balance.</p></li>
+</ul>
+</section>
+</section>
+<section id="sec:calib-refresh" class="level2">
+<h2>Transporting Calibration Across Policies and Time</h2>
+<section id="when-to-probe." class="level4">
+<h4>When to probe.</h4>
+<ul>
+<li><p><strong>New policy candidate</strong> evaluated with an existing
+calibrator.</p></li>
+<li><p><strong>New time window / model update</strong> of the judge
+(even minor rubric/version bumps).</p></li>
+<li><p><strong>Large score-distribution shift:</strong> KS distance on
+<span class="math inline">\(U\)</span> (risk quantiles) <span
+class="math inline">\(&gt; 0.1\)</span> or coverage drops <span
+class="math inline">\(&lt;95\%\)</span>.</p></li>
+</ul>
+</section>
+<section id="how-many-probe-labels" class="level4">
+<h4>How many probe labels?</h4>
+<p><span class="math inline">\(n_{\text{probe}}=40\text{--}60\)</span>
+per target stratum usually detects <span
+class="math inline">\(\ge\!3\)</span>–<span
+class="math inline">\(5\)</span>pp mean drift and obvious regional
+issues. If WARN/FAIL, collect an additional <span
+class="math inline">\(50\text{--}150\)</span> labels, <em>stratified by
+failing deciles</em> (and at boundaries).</p>
+</section>
+<section id="what-to-do-with-old-labels" class="level4">
+<h4>What to do with old labels?</h4>
+<ol>
+<li><p><strong>PASS:</strong> keep the source calibrator <span
+class="math inline">\(f\)</span>; no action.</p></li>
+<li><p><strong>Uniform shift:</strong> apply mean anchoring per group;
+keep <span class="math inline">\(f\)</span> shape, document <span
+class="math inline">\(\hat\delta_G\)</span>.</p></li>
+<li><p><strong>Structural change (regional):</strong> refit AutoCal-R on
+the <em>union</em> of old + new labels with two-stage index and
+cross-fitting. If the judge changed meaning materially (low anchor <span
+class="math inline">\(\tau\)</span>, Diagnostic 3), train a <em>new</em>
+calibrator version and deprecate the old one.</p></li>
+</ol>
+</section>
+<section id="label-budgeting-for-refresh." class="level4">
+<h4>Label budgeting for refresh.</h4>
+<p>Use OUA share as a guide: increase <span
+class="math inline">\(n_{\text{oracle}}\)</span> until <span
+class="math inline">\(\text{OUA share} &lt; 20\%\)</span>. A practical
+rule is <span class="math inline">\(n_{\text{oracle}} \approx
+5\sqrt{m}\)</span> for <span class="math inline">\(m\)</span> prompts
+(see Sample size planning below). Prioritize labels in uncovered <span
+class="math inline">\(U\)</span> bins and bins with largest
+residuals.</p>
+</section>
+</section>
+<section id="sample-size-planning" class="level2">
+<h2>Sample size planning</h2>
+<section id="goal" class="level4">
+<h4>Goal:</h4>
+<p>Achieve a target CI half-width <span
+class="math inline">\(\delta\)</span> (e.g., <span
+class="math inline">\(\delta = 0.02\)</span> for <span
+class="math inline">\(\pm 2\%\)</span> precision).</p>
+</section>
+<section id="prompt-sample-size-for-dm-or-dr-with-good-critic"
+class="level4">
+<h4>Prompt sample size (for DM or DR with good critic):</h4>
+<p><span class="math display">\[m \approx \left( \frac{1.96 \cdot
+\sigma_R}{\delta} \right)^2,\]</span> where <span
+class="math inline">\(\sigma_R\)</span> is the SD of calibrated rewards
+<span class="math inline">\(R\)</span> (estimate from a pilot).</p>
+</section>
+<section id="label-sample-size-oracle" class="level4">
+<h4>Label sample size (oracle):</h4>
+<p>The OUA variance scales as <span class="math inline">\(1 /
+n_{\text{oracle}}\)</span>. For OUA share <span
+class="math inline">\(&lt; 20\%\)</span>, use: <span
+class="math display">\[n_{\text{oracle}} \approx 5 \cdot
+m^{1/2}.\]</span> For <span class="math inline">\(m = 1000\)</span>,
+this gives <span class="math inline">\(n_{\text{oracle}} \approx
+150\)</span>.</p>
+</section>
+<section id="fresh-draws-for-dr-critic" class="level4">
+<h4>Fresh draws for DR critic:</h4>
+<p>Use the same <span class="math inline">\(m\)</span> prompts as the
+logged data. More is better; diminishing returns after <span
+class="math inline">\(m \approx 500\)</span>.</p>
+</section>
+</section>
+<section id="reporting-template" class="level2">
+<h2>Reporting template</h2>
+<pre><code>=== CJE Evaluation Report ===
+Date: 2025-10-08
+Evaluator: Alice
+Mode: Calibrated DR
+Estimator: stacked-dr
+
+## Policies Evaluated
+- Baseline (pi_0): gpt-3.5-turbo (deployed 2025-09-01 to 2025-10-01)
+- Candidate (pi&#39;): gpt-4-mini (under consideration)
+
+## Data
+- Logged prompts: n = 1,000
+- Oracle slice: 150 (15% of total)
+- Fresh draws (for critic): 1,000 (same prompts)
+- Judge: GPT-4-as-judge with rubric v2.3 (frozen)
+- Outcome: Binary pass rate (Y in {0, 1})
+
+## Estimates
+pi_0 (baseline): 0.72 [0.69, 0.75] (95% CI)
+pi&#39; (gpt-4-mini): 0.81 [0.78, 0.84] (95% CI)
+Delta (pi&#39; - pi_0): +0.09 [0.05, 0.13] (95% CI, p &lt; 0.001)
+
+## Diagnostics
+[1] Score Coverage: 94% (PASS)
+[2] Calibration Reliability: OOF MAE = 0.04 (PASS)
+[3] ESS: 34% (WARN, acceptable for DR)
+[4] Hill Index: alpha = 2.8 (PASS)
+[5] DR Orthogonality: 0.03 [-0.02, 0.08] (PASS, CI contains 0)
+[6] OUA Share: 15% (PASS)
+
+## Interpretation
+Switching from gpt-3.5-turbo to gpt-4-mini is estimated to increase
+the pass rate by 9 percentage points (95% CI: [5%, 13%]). The estimate
+is reliable: all diagnostics pass, ESS is moderate (acceptable for DR),
+and orthogonality is good.
+
+## Recommendation
+Proceed with deployment of gpt-4-mini. Expected uplift is substantial
+and statistically significant.
+
+## Attachments
+- calibration_curve.pdf
+- weight_distribution.pdf
+- orthogonality_residuals.pdf
+- data_and_code.zip (for reproducibility)</code></pre>
+</section>
+<section id="summary" class="level2">
+<h2>Summary</h2>
+<p>The operator playbook provides decision trees, workflows, checklists,
+and troubleshooting for the full CJE pipeline. Always check diagnostics
+before shipping, document everything, and report CIs with OUA. When in
+doubt, run sensitivity checks.</p>
+</section>
+</section>
