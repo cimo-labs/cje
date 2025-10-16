@@ -1,236 +1,469 @@
-<h2>Implementation Notes</h2>
-<h3>Overview</h3>
-<p>
-This section covers practical implementation details: data formats, software requirements, computational considerations, and integration with existing evaluation pipelines.
-</p>
-<h3>Data format and schema</h3>
-<p>
-CJE expects data in JSONL format (one JSON object per line). Each record represents one sample (prompt-response-score triple).
-</p>
-<h5>Minimal schema (for DM):</h5>
-<pre><code>{
-  "prompt_id": "prompt_001",
-  "prompt": "Write a function to reverse a string",
-  "response": "def reverse(s): return s[::-1]",
-  "policy": "gpt-4",
-  "metadata": {
-    "judge_score": 8.5,
-    "oracle_label": 1  # optional, only for oracle slice
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>08_implementation</title>
+  <style>
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      background-color: #1a1a1a;
+      border: none;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+  </style>
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script src="/usr/share/javascript/mathjax/MathJax.js"
+  type="text/javascript"></script>
+</head>
+<body>
+<section id="implementation-notes" class="level1">
+<h1>Implementation Notes</h1>
+<section id="overview" class="level2">
+<h2>Overview</h2>
+<p>This section covers practical implementation details: data formats,
+software requirements, computational considerations, and integration
+with existing evaluation pipelines.</p>
+</section>
+<section id="data-format-and-schema" class="level2">
+<h2>Data format and schema</h2>
+<p>CJE expects data in JSONL format (one JSON object per line). Each
+record represents one sample (prompt-response-score triple).</p>
+<section id="minimal-schema-for-dm" class="level4">
+<h4>Minimal schema (for DM):</h4>
+<pre class="python" data-language="Python"
+data-caption="DM Data Schema"><code>{
+  &quot;prompt_id&quot;: &quot;prompt_001&quot;,
+  &quot;prompt&quot;: &quot;Write a function to reverse a string&quot;,
+  &quot;response&quot;: &quot;def reverse(s): return s[::-1]&quot;,
+  &quot;policy&quot;: &quot;gpt-4&quot;,
+  &quot;metadata&quot;: {
+    &quot;judge_score&quot;: 8.5,
+    &quot;oracle_label&quot;: 1  # optional, only for oracle slice
   }
-}
-</code></pre>
-<h5>Extended schema (for IPS/DR):</h5>
-<pre><code>{
-  "prompt_id": "prompt_001",
-  "prompt": "Write a function to reverse a string",
-  "response": "def reverse(s): return s[::-1]",
-  "base_policy": "gpt-3.5-turbo",
-  "base_policy_logprob": -12.34,
-  "target_policy_logprobs": {
-    "gpt-4": -10.56,
-    "claude-3": -11.23
+}</code></pre>
+</section>
+<section id="extended-schema-for-ipsdr" class="level4">
+<h4>Extended schema (for IPS/DR):</h4>
+<pre class="python" data-language="Python"
+data-caption="Off-Policy Data Schema"><code>{
+  &quot;prompt_id&quot;: &quot;prompt_001&quot;,
+  &quot;prompt&quot;: &quot;Write a function to reverse a string&quot;,
+  &quot;response&quot;: &quot;def reverse(s): return s[::-1]&quot;,
+  &quot;base_policy&quot;: &quot;gpt-3.5-turbo&quot;,
+  &quot;base_policy_logprob&quot;: -12.34,
+  &quot;target_policy_logprobs&quot;: {
+    &quot;gpt-4&quot;: -10.56,
+    &quot;claude-3&quot;: -11.23
   },
-  "metadata": {
-    "judge_score": 8.5,
-    "oracle_label": 1,  # optional
-    "timestamp": "2025-10-01T12:00:00Z",
-    "prompt_family": "code_generation",
-    "response_length": 123,     # auto-computed if enabled
-    "domain": "math",           # user-provided
-    "difficulty": "hard"
+  &quot;metadata&quot;: {
+    &quot;judge_score&quot;: 8.5,
+    &quot;oracle_label&quot;: 1,  # optional
+    &quot;timestamp&quot;: &quot;2025-10-01T12:00:00Z&quot;,
+    &quot;prompt_family&quot;: &quot;code_generation&quot;,
+    &quot;response_length&quot;: 123,     # auto-computed if enabled
+    &quot;domain&quot;: &quot;math&quot;,           # user-provided
+    &quot;difficulty&quot;: &quot;hard&quot;
   }
-}
-</code></pre>
-<h5>Schema note: covariates.</h5>
- Place covariates in <code>metadata</code>. CJE can auto-compute <code>response_length</code> from the <code>response</code> field if <code>include_response_length=True</code>. Other covariates (e.g., domain, difficulty) must be provided manually. Covariates are used in two-stage AutoCal-R{} for regional adaptation (§sec:two-stage-autocal) and in DR outcome models for better predictions.
-</p>
-<h5>Fresh draws (for DR):</h5>
-<pre><code>{
-  "prompt_id": "prompt_001",
-  "prompt": "Write a function to reverse a string",
-  "response": "def reverse(s): return s[::-1]",
-  "policy": "gpt-4",
-  "draw_type": "fresh",
-  "metadata": {
-    "judge_score": 9.0
+}</code></pre>
+</section>
+<section id="schema-note-covariates." class="level4">
+<h4>Schema note: covariates.</h4>
+<p>Place covariates in <code>metadata</code>. CJE can auto-compute
+<code>response_length</code> from the <code>response</code> field if
+<code>include_response_length=True</code>. Other covariates (e.g.,
+domain, difficulty) must be provided manually. Covariates are used in
+two-stage for regional adaptation (§<a href="#sec:two-stage-autocal"
+data-reference-type="ref"
+data-reference="sec:two-stage-autocal">[sec:two-stage-autocal]</a>) and
+in DR outcome models for better predictions.</p>
+</section>
+<section id="fresh-draws-for-dr" class="level4">
+<h4>Fresh draws (for DR):</h4>
+<pre class="python" data-language="Python"
+data-caption="Fresh Draw Schema"><code>{
+  &quot;prompt_id&quot;: &quot;prompt_001&quot;,
+  &quot;prompt&quot;: &quot;Write a function to reverse a string&quot;,
+  &quot;response&quot;: &quot;def reverse(s): return s[::-1]&quot;,
+  &quot;policy&quot;: &quot;gpt-4&quot;,
+  &quot;draw_type&quot;: &quot;fresh&quot;,
+  &quot;metadata&quot;: {
+    &quot;judge_score&quot;: 9.0
   }
-}
-</code></pre>
-<h3>Software requirements</h3>
-<p>
-CJE is implemented in Python and requires:
-</p>
+}</code></pre>
+</section>
+</section>
+<section id="software-requirements" class="level2">
+<h2>Software requirements</h2>
+<p>CJE is implemented in Python and requires:</p>
 <ul>
-</p>
-<p>
-<li>Python 3.9+
-<li>NumPy, SciPy (for numerical computation)
-<li>scikit-learn (for isotonic regression, cross-validation)
-<li>Pandas (for data manipulation)
-<li>Matplotlib, Seaborn (for visualization)
-<li>statsmodels (for influence functions and inference)
-</p>
-<p>
+<li><p>Python 3.9+</p></li>
+<li><p>NumPy, SciPy (for numerical computation)</p></li>
+<li><p>scikit-learn (for isotonic regression, cross-validation)</p></li>
+<li><p>Pandas (for data manipulation)</p></li>
+<li><p>Matplotlib, Seaborn (for visualization)</p></li>
+<li><p>statsmodels (for influence functions and inference)</p></li>
 </ul>
-<p>
-Optional:
-</p>
+<p>Optional:</p>
 <ul>
-</p>
-<p>
-<li>XGBoost or LightGBM (for DR critic training)
-<li>Jupyter (for interactive analysis)
-</p>
-<p>
+<li><p>XGBoost or LightGBM (for DR critic training)</p></li>
+<li><p>Jupyter (for interactive analysis)</p></li>
 </ul>
-<h3>Installation and quickstart</h3>
-<pre><code># Install from PyPI
+</section>
+<section id="installation-and-quickstart" class="level2">
+<h2>Installation and quickstart</h2>
+<pre class="bash" data-language="bash"
+data-caption="Installation"><code># Install from PyPI
 pip install cje-eval
-</p>
-<p>
+
 # Or install from source
 git clone https://github.com/cimo-labs/cje.git
 cd cje
-pip install -e .
-</code></pre>
-<pre><code>from cje import analyze_dataset
-</p>
-<p>
+pip install -e .</code></pre>
+<pre class="python" data-language="Python"
+data-caption="Quickstart Example"><code>from cje import analyze_dataset
+
 # Load your data (JSONL format)
 results = analyze_dataset(
-    logged_data_path="evaluation_data.jsonl",
-    fresh_draws_dir="responses/",         # Optional: for DR mode
-    calibration_data_path="oracle_labels.jsonl",  # Optional: dedicated calibration set
-    timestamp_field="timestamp",          # Optional: for drift detection
+    logged_data_path=&quot;evaluation_data.jsonl&quot;,
+    fresh_draws_dir=&quot;responses/&quot;,         # Optional: for DR mode
+    calibration_data_path=&quot;oracle_labels.jsonl&quot;,  # Optional: dedicated calibration set
+    timestamp_field=&quot;timestamp&quot;,          # Optional: for drift detection
     check_drift=True,                     # Optional: automated drift detection
-    estimator="auto",  # auto-selects DM, IPS, or DR
-    judge_field="judge_score",
-    oracle_field="oracle_label",
+    estimator=&quot;auto&quot;,  # auto-selects DM, IPS, or DR
+    judge_field=&quot;judge_score&quot;,
+    oracle_field=&quot;oracle_label&quot;,
     verbose=True
 )
-</p>
-<p>
+
 # Inspect results
 print(results.summary())
 results.plot_diagnostics()
-</p>
-<p>
-# Check for drift (if enabled)
-if "drift_diagnostics" in results.metadata:
-    drift = results.metadata["drift_diagnostics"]
-    if drift["drift_detection"]["has_drift"]:
-        print("Warning: Judge drift detected")
-</code></pre>
-<h5>Enabling two-stage with covariates (code).</h5>
-<pre><code>results = analyze_dataset(
-    logged_data_path="logs.jsonl",
-    fresh_draws_dir="responses/",       # optional (DR)
-    calibration_mode="auto",            # or "two_stage"
-    include_response_length=True,       # derives from response text
-    calibration_covariates=["domain","difficulty"]  # must exist in metadata
-)
-</code></pre>
-<h3>Computational complexity</h3>
-<h5>Calibration (AutoCal-R):</h5>
-<ul>
-</p>
-<p>
-<li>Isotonic regression: $O(n_{\text{oracle}} \log n_{\text{oracle}})$ per fold.
-<li>Cross-fitting (5 folds): $O(K \cdot n_{\text{oracle}} \log n_{\text{oracle}})$.
-<li>Typical: 150 oracle samples, 5 folds $\to$ $< 1$ second.
-</p>
-<p>
-</ul>
-<h5>Weight calibration (SIMCal):</h5>
-<ul>
-</p>
-<p>
-<li>Isotonic regression for $W$ vs.\ $S$: $O(n \log n)$ per candidate.
-<li>Stacking (3 candidates, 5 folds): $O(K \cdot n \log n)$.
-<li>Typical: 10,000 samples, 5 folds $\to$ $\approx 5$ seconds.
-</p>
-<p>
-</ul>
-<h5>DR critic training:</h5>
-<ul>
-</p>
-<p>
-<li>Depends on model choice. Gradient-boosted trees: $O(m \cdot d \cdot \text{n\_trees})$, where $m$ is fresh draw sample size, $d$ is feature dimension.
-<li>Typical: 2,000 fresh draws, 100 trees, 50 features $\to$ $\approx 30$ seconds.
-</p>
-<p>
-</ul>
-<h5>Influence functions and inference:</h5>
-<ul>
-</p>
-<p>
-<li>$O(n)$ for IPS; $O(n + m)$ for DR (logged + fresh).
-<li>Typical: 10,000 samples $\to$ $< 1$ second.
-</p>
-<p>
-</ul>
-<h5>Total runtime:</h5>
- For a typical off-policy DR analysis (10k logged, 2k fresh, 150 oracle), expect $< 1$ minute on a laptop.
-</p>
-<h3>Parallelization and scaling</h3>
-<ul>
-</p>
-<p>
-<li><strong>Cross-fitting:</strong> Folds are independent; parallelize across folds (5-10x speedup).
-<li><strong>Multiple policies:</strong> Evaluate policies in parallel (one per core).
-<li><strong>Large datasets:</strong> For $n > 100{,}000$, use mini-batch stacking or subsample for weight calibration (weights are i.i.d. after calibration, so subsampling is safe).
-<li><strong>Distributed:</strong> For $n > 1{,}000{,}000$, shard by prompt and aggregate influence functions.
-</p>
-<p>
-</ul>
-<h3>Integration with existing pipelines</h3>
-<h5>A/B testing platforms:</h5>
- CJE complements A/B tests. Use CJE for rapid offline iteration; validate winners with online A/B tests before full deployment.
-</p>
-<h5>LLM-as-judge frameworks:</h5>
- CJE is agnostic to the judge. Plug in any scoring function (OpenAI moderation API, custom rubric, ensemble of judges). Just ensure stability.
-</p>
-<h5>Labeling workflows:</h5>
- Integrate with labeling platforms (e.g., Scale AI, Labelbox). Export a stratified sample for labeling, re-import labels, and run CJE.
-</p>
-<h5>CI/CD:</h5>
- Embed CJE in CI pipelines. Run nightly evaluations on held-out test sets, flag regressions, and auto-generate diagnostic reports.
-</p>
-<h3>Advanced features</h3>
-<h5>Stratified evaluation:</h5>
- Evaluate subgroups (e.g., by prompt family, user segment) separately. CJE supports stratified analysis with per-stratum diagnostics.
-</p>
-<h5>Covariate adjustment:</h5>
- Add prompt-level covariates (length, topic, difficulty) to the critic for better predictions.
-</p>
-<h5>Multi-outcome evaluation:</h5>
- Evaluate multiple KPIs simultaneously (e.g., correctness, helpfulness, safety). Fit separate calibrators for each outcome.
-</p>
-<h5>Sequential testing:</h5>
- For online settings, CJE can be adapted for sequential A/B testing with always-valid CIs (requires additional assumptions; see advanced docs).
-</p>
-<h3>Debugging and diagnostics</h3>
-<h5>Common issues:</h5>
-<ul>
-</p>
-<p>
-<li><strong>"ESS too low" error:</strong> Check overlap; try cohort restriction or switch to DR.
-<li><strong>"Coverage < 50\
-<li><strong>NaN estimates:</strong> Likely a refusal gate triggered (ESS $< 1\%$ or $\alpha < 2$). Inspect <code>diagnostics.summary()</code>.
-<li><strong>Import errors:</strong> Ensure <code>pip install -e .</code> was run in the CJE root directory.
-</p>
-<p>
-</ul>
-<h5>Verbose mode:</h5>
-<pre><code>results = analyze_dataset(..., verbose=True)
-# Prints step-by-step progress and intermediate diagnostics
-</code></pre>
-<h5>Diagnostic export:</h5>
-<pre><code>results.export_diagnostics("diagnostics/")
-# Saves all plots, tables, and metadata for audit
-</code></pre>
-<h3>Summary</h3>
-<p>
-CJE is designed for ease of integration: JSONL data format, simple API, fast runtime ($< 1$ min for typical use cases), and rich diagnostics. Advanced users can extend with stratification, multi-outcome evaluation, and distributed scaling.
 
-</p>
+# Check for drift (if enabled)
+if &quot;drift_diagnostics&quot; in results.metadata:
+    drift = results.metadata[&quot;drift_diagnostics&quot;]
+    if drift[&quot;drift_detection&quot;][&quot;has_drift&quot;]:
+        print(&quot;Warning: Judge drift detected&quot;)</code></pre>
+<section id="enabling-two-stage-with-covariates-code." class="level4">
+<h4>Enabling two-stage with covariates (code).</h4>
+<pre class="python" data-language="Python"><code>results = analyze_dataset(
+    logged_data_path=&quot;logs.jsonl&quot;,
+    fresh_draws_dir=&quot;responses/&quot;,       # optional (DR)
+    calibration_mode=&quot;auto&quot;,            # or &quot;two_stage&quot;
+    include_response_length=True,       # derives from response text
+    calibration_covariates=[&quot;domain&quot;,&quot;difficulty&quot;]  # must exist in metadata
+)</code></pre>
+</section>
+</section>
+<section id="computational-complexity" class="level2">
+<h2>Computational complexity</h2>
+<section id="calibration-autocal-r" class="level4">
+<h4>Calibration (AutoCal-R):</h4>
+<ul>
+<li><p>Isotonic regression: <span
+class="math inline">\(O(n_{\text{oracle}} \log
+n_{\text{oracle}})\)</span> per fold.</p></li>
+<li><p>Cross-fitting (5 folds): <span class="math inline">\(O(K \cdot
+n_{\text{oracle}} \log n_{\text{oracle}})\)</span>.</p></li>
+<li><p>Typical: 150 oracle samples, 5 folds <span
+class="math inline">\(\to\)</span> <span class="math inline">\(&lt;
+1\)</span> second.</p></li>
+</ul>
+</section>
+<section id="weight-calibration-simcal" class="level4">
+<h4>Weight calibration (SIMCal):</h4>
+<ul>
+<li><p>Isotonic regression for <span class="math inline">\(W\)</span>
+vs. <span class="math inline">\(S\)</span>: <span
+class="math inline">\(O(n \log n)\)</span> per candidate.</p></li>
+<li><p>Stacking (3 candidates, 5 folds): <span class="math inline">\(O(K
+\cdot n \log n)\)</span>.</p></li>
+<li><p>Typical: 10,000 samples, 5 folds <span
+class="math inline">\(\to\)</span> <span class="math inline">\(\approx
+5\)</span> seconds.</p></li>
+</ul>
+</section>
+<section id="dr-critic-training" class="level4">
+<h4>DR critic training:</h4>
+<ul>
+<li><p>Depends on model choice. Gradient-boosted trees: <span
+class="math inline">\(O(m \cdot d \cdot \text{n\_trees})\)</span>, where
+<span class="math inline">\(m\)</span> is fresh draw sample size, <span
+class="math inline">\(d\)</span> is feature dimension.</p></li>
+<li><p>Typical: 2,000 fresh draws, 100 trees, 50 features <span
+class="math inline">\(\to\)</span> <span class="math inline">\(\approx
+30\)</span> seconds.</p></li>
+</ul>
+</section>
+<section id="influence-functions-and-inference" class="level4">
+<h4>Influence functions and inference:</h4>
+<ul>
+<li><p><span class="math inline">\(O(n)\)</span> for IPS; <span
+class="math inline">\(O(n + m)\)</span> for DR (logged +
+fresh).</p></li>
+<li><p>Typical: 10,000 samples <span class="math inline">\(\to\)</span>
+<span class="math inline">\(&lt; 1\)</span> second.</p></li>
+</ul>
+</section>
+<section id="total-runtime" class="level4">
+<h4>Total runtime:</h4>
+<p>For a typical off-policy DR analysis (10k logged, 2k fresh, 150
+oracle), expect <span class="math inline">\(&lt; 1\)</span> minute on a
+laptop.</p>
+</section>
+</section>
+<section id="parallelization-and-scaling" class="level2">
+<h2>Parallelization and scaling</h2>
+<ul>
+<li><p><strong>Cross-fitting:</strong> Folds are independent;
+parallelize across folds (5-10x speedup).</p></li>
+<li><p><strong>Multiple policies:</strong> Evaluate policies in parallel
+(one per core).</p></li>
+<li><p><strong>Large datasets:</strong> For <span
+class="math inline">\(n &gt; 100{,}000\)</span>, use mini-batch stacking
+or subsample for weight calibration (weights are i.i.d. after
+calibration, so subsampling is safe).</p></li>
+<li><p><strong>Distributed:</strong> For <span class="math inline">\(n
+&gt; 1{,}000{,}000\)</span>, shard by prompt and aggregate influence
+functions.</p></li>
+</ul>
+</section>
+<section id="integration-with-existing-pipelines" class="level2">
+<h2>Integration with existing pipelines</h2>
+<section id="ab-testing-platforms" class="level4">
+<h4>A/B testing platforms:</h4>
+<p>CJE complements A/B tests. Use CJE for rapid offline iteration;
+validate winners with online A/B tests before full deployment.</p>
+</section>
+<section id="llm-as-judge-frameworks" class="level4">
+<h4>LLM-as-judge frameworks:</h4>
+<p>CJE is agnostic to the judge. Plug in any scoring function (OpenAI
+moderation API, custom rubric, ensemble of judges). Just ensure
+stability.</p>
+</section>
+<section id="labeling-workflows" class="level4">
+<h4>Labeling workflows:</h4>
+<p>Integrate with labeling platforms (e.g., Scale AI, Labelbox). Export
+a stratified sample for labeling, re-import labels, and run CJE.</p>
+</section>
+<section id="cicd" class="level4">
+<h4>CI/CD:</h4>
+<p>Embed CJE in CI pipelines. Run nightly evaluations on held-out test
+sets, flag regressions, and auto-generate diagnostic reports.</p>
+</section>
+</section>
+<section id="advanced-features" class="level2">
+<h2>Advanced features</h2>
+<section id="stratified-evaluation" class="level4">
+<h4>Stratified evaluation:</h4>
+<p>Evaluate subgroups (e.g., by prompt family, user segment) separately.
+CJE supports stratified analysis with per-stratum diagnostics.</p>
+</section>
+<section id="covariate-adjustment" class="level4">
+<h4>Covariate adjustment:</h4>
+<p>Add prompt-level covariates (length, topic, difficulty) to the critic
+for better predictions.</p>
+</section>
+<section id="multi-outcome-evaluation" class="level4">
+<h4>Multi-outcome evaluation:</h4>
+<p>Evaluate multiple KPIs simultaneously (e.g., correctness,
+helpfulness, safety). Fit separate calibrators for each outcome.</p>
+</section>
+<section id="sequential-testing" class="level4">
+<h4>Sequential testing:</h4>
+<p>For online settings, CJE can be adapted for sequential A/B testing
+with always-valid CIs (requires additional assumptions; see advanced
+docs).</p>
+</section>
+</section>
+<section id="debugging-and-diagnostics" class="level2">
+<h2>Debugging and diagnostics</h2>
+<section id="common-issues" class="level4">
+<h4>Common issues:</h4>
+<ul>
+<li><p><strong>“ESS too low” error:</strong> Check overlap; try cohort
+restriction or switch to DR.</p></li>
+<li><p><strong>“Coverage &lt; 50%” warning:</strong> Add labels in
+uncovered <span class="math inline">\(S\)</span> bins or narrow prompt
+set.</p></li>
+<li><p><strong>NaN estimates:</strong> Likely a refusal gate triggered
+(ESS <span class="math inline">\(&lt; 1\%\)</span> or <span
+class="math inline">\(\alpha &lt; 2\)</span>). Inspect
+<code>diagnostics.summary()</code>.</p></li>
+<li><p><strong>Import errors:</strong> Ensure
+<code>pip install -e .</code> was run in the CJE root
+directory.</p></li>
+</ul>
+</section>
+<section id="verbose-mode" class="level4">
+<h4>Verbose mode:</h4>
+<pre class="python" data-language="Python"><code>results = analyze_dataset(..., verbose=True)
+# Prints step-by-step progress and intermediate diagnostics</code></pre>
+</section>
+<section id="diagnostic-export" class="level4">
+<h4>Diagnostic export:</h4>
+<pre class="python" data-language="Python"><code>results.export_diagnostics(&quot;diagnostics/&quot;)
+# Saves all plots, tables, and metadata for audit</code></pre>
+</section>
+</section>
+<section id="summary" class="level2">
+<h2>Summary</h2>
+<p>CJE is designed for ease of integration: JSONL data format, simple
+API, fast runtime (<span class="math inline">\(&lt; 1\)</span> min for
+typical use cases), and rich diagnostics. Advanced users can extend with
+stratification, multi-outcome evaluation, and distributed scaling.</p>
+</section>
+</section>
+</body>
+</html>

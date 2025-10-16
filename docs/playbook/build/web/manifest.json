@@ -1,56 +1,16 @@
 {
   "version": "0.2.1",
-  "generated": "2024-10-16T00:00:00Z",
+  "generated": "2025-10-16T17:50:10Z",
   "sections": [
-    {
-      "id": "01_introduction",
-      "title": "Introduction",
-      "slug": "introduction"
-    },
-    {
-      "id": "02_dm",
-      "title": "Direct Method (DM)",
-      "slug": "direct-method"
-    },
-    {
-      "id": "03_offpolicy",
-      "title": "Off-Policy Evaluation",
-      "slug": "off-policy"
-    },
-    {
-      "id": "04_diagnostics",
-      "title": "Diagnostics & Fixes",
-      "slug": "diagnostics"
-    },
-    {
-      "id": "05_assumptions",
-      "title": "Assumptions",
-      "slug": "assumptions"
-    },
-    {
-      "id": "06_playbook",
-      "title": "Operator Playbook",
-      "slug": "playbook"
-    },
-    {
-      "id": "07_cases",
-      "title": "Case Studies",
-      "slug": "case-studies"
-    },
-    {
-      "id": "08_implementation",
-      "title": "Implementation Guide",
-      "slug": "implementation"
-    },
-    {
-      "id": "09_limitations",
-      "title": "Limitations",
-      "slug": "limitations"
-    },
-    {
-      "id": "10_conclusion",
-      "title": "Conclusion",
-      "slug": "conclusion"
-    }
+    {"id": "01_introduction", "title": "Introduction", "slug": "introduction"},
+    {"id": "02_dm", "title": "Direct Method (DM)", "slug": "direct-method"},
+    {"id": "03_offpolicy", "title": "Off-Policy Evaluation", "slug": "off-policy"},
+    {"id": "04_diagnostics", "title": "Diagnostics & Fixes", "slug": "diagnostics"},
+    {"id": "05_assumptions", "title": "Assumptions", "slug": "assumptions"},
+    {"id": "06_playbook", "title": "Operator Playbook", "slug": "playbook"},
+    {"id": "07_cases", "title": "Case Studies", "slug": "case-studies"},
+    {"id": "08_implementation", "title": "Implementation Guide", "slug": "implementation"},
+    {"id": "09_limitations", "title": "Limitations", "slug": "limitations"},
+    {"id": "10_conclusion", "title": "Conclusion", "slug": "conclusion"}
   ]
 }

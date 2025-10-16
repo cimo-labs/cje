@@ -1,175 +1,509 @@
-<h2>Introduction</h2>
-<p>
-Large language models (LLMs) are increasingly used as judges: a model (or rubricized prompt) assigns a scalar score $S = s(X, A)$ to an answer $A$ given a prompt $X$. This setup is attractive: it is fast, cheap, and often strongly correlated with human preferences. As a result, many teams now compare policies by averaging raw judge scores and declaring a winner.
-</p>
-<h3>What practitioners really want</h3>
-<p>
-In day-to-day evaluation work there are two goals: (i) rank candidate policies on a shared prompt set; and (ii) when stakes justify it, estimate levels for a KPI that matters (e.g., pass rate), with a confidence interval. Both questions are causal: <em>what would happen if we shipped policy $\pi$?</em> Formally, the target is
-$$
-V(\pi) = \E[Y(\pi)],
-$$
-where $Y \in [0, 1]$ is the outcome of interest under the policy we would deploy.
-</p>
-<h3>Why the heuristic fails</h3>
-<p>
-Naively averaging judge scores is a heuristic that breaks in predictable ways:
-</p>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>01_introduction</title>
+  <style>
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      background-color: #1a1a1a;
+      border: none;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+  </style>
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script src="/usr/share/javascript/mathjax/MathJax.js"
+  type="text/javascript"></script>
+</head>
+<body>
+<section id="introduction" class="level1">
+<h1>Introduction</h1>
+<p>Large language models (LLMs) are increasingly used as judges: a model
+(or rubricized prompt) assigns a scalar score <span
+class="math inline">\(S = s(X, A)\)</span> to an answer <span
+class="math inline">\(A\)</span> given a prompt <span
+class="math inline">\(X\)</span>. This setup is attractive: it is fast,
+cheap, and often strongly correlated with human preferences. As a
+result, many teams now compare policies by averaging raw judge scores
+and declaring a winner.</p>
+<section id="what-practitioners-really-want" class="level2">
+<h2>What practitioners really want</h2>
+<p>In day-to-day evaluation work there are two goals: (i) rank candidate
+policies on a shared prompt set; and (ii) when stakes justify it,
+estimate levels for a KPI that matters (e.g., pass rate), with a
+confidence interval. Both questions are causal: <em>what would happen if
+we shipped policy <span class="math inline">\(\pi\)</span>?</em>
+Formally, the target is <span class="math display">\[V(\pi) =
+\E[Y(\pi)],\]</span> where <span class="math inline">\(Y \in [0,
+1]\)</span> is the outcome of interest under the policy we would
+deploy.</p>
+</section>
+<section id="why-the-heuristic-fails" class="level2">
+<h2>Why the heuristic fails</h2>
+<p>Naively averaging judge scores is a heuristic that breaks in
+predictable ways:</p>
 <ul>
-</p>
-<p>
-<li><strong>Wrong scale.</strong> Judge scores are not on your KPI scale; deltas can be misleading.
-<li><strong>Hidden drift and slice bias.</strong> The meaning of a score can change across time, prompt families, or length; averages hide this.
-<li><strong>No uncertainty.</strong> Without CIs it is hard to tell real uplifts from noise, especially at small label budgets.
-<li><strong>Off-policy illusion.</strong> Reusing one judged log to assess many candidates without correction answers the wrong counterfactual (it reflects the logger, not the candidate).
-</p>
-<p>
+<li><p><strong>Wrong scale.</strong> Judge scores are not on your KPI
+scale; deltas can be misleading.</p></li>
+<li><p><strong>Hidden drift and slice bias.</strong> The meaning of a
+score can change across time, prompt families, or length; averages hide
+this.</p></li>
+<li><p><strong>No uncertainty.</strong> Without CIs it is hard to tell
+real uplifts from noise, especially at small label budgets.</p></li>
+<li><p><strong>Off-policy illusion.</strong> Reusing one judged log to
+assess many candidates without correction answers the wrong
+counterfactual (it reflects the logger, not the candidate).</p></li>
 </ul>
-<h3>How CJE works</h3>
-<p>
-<strong>Causal Judge Evaluation (CJE)</strong> turns judge scores into reliable estimates with confidence intervals. The core workflow:
-</p>
+</section>
+<section id="how-cje-works" class="level2">
+<h2>How CJE works</h2>
+<p><strong>Causal Judge Evaluation ()</strong> turns judge scores into
+reliable estimates with confidence intervals. The core workflow:</p>
 <ol>
-</p>
-<p>
-<li><strong>Calibrate:</strong> Learn a mapping from judge scores to oracle labels on a small random sample (AutoCal-R).
-<li><strong>Evaluate:</strong> For on-policy comparison (<strong>Direct Mode</strong>), generate responses from each policy and average calibrated scores. For counterfactual inference (<strong>Off-Policy</strong>), reuse logged data with importance weighting.
-<li><strong>Report:</strong> Confidence intervals that account for all uncertainty (OUA).
-</p>
-<p>
+<li><p><strong>Calibrate:</strong> Learn a mapping from judge scores to
+oracle labels on a small random sample ().</p></li>
+<li><p><strong>Evaluate:</strong> For on-policy comparison
+(<strong>Direct Mode</strong>), generate responses from each policy and
+average calibrated scores. For counterfactual inference
+(<strong>Off-Policy</strong>), reuse logged data with importance
+weighting.</p></li>
+<li><p><strong>Report:</strong> Confidence intervals that account for
+all uncertainty ().</p></li>
 </ol>
-<p>
-Most users only need <strong>Direct Mode</strong>: generate outputs, calibrate judge scores, report CIs. For off-policy evaluation, CJE{} stabilizes importance weights (SIMCal) and optionally adds a critic (DR) for robustness. See §3 for details.
-</p>
-<h3>Quick Start: Direct Mode for Model Comparison</h3>
-<p>
-<strong>Just want to compare models on an eval set?</strong> This is the fastest path to reliable estimates with confidence intervals.
-</p>
-<h5>What you need:</h5>
+<p>Most users only need <strong>Direct Mode</strong>: generate outputs,
+calibrate judge scores, report CIs. For off-policy evaluation,
+stabilizes importance weights () and optionally adds a critic () for
+robustness. See §3 for details.</p>
+</section>
+<section id="quick-start-direct-mode-for-model-comparison"
+class="level2">
+<h2>Quick Start: Direct Mode for Model Comparison</h2>
+<p><strong>Just want to compare models on an eval set?</strong> This is
+the fastest path to reliable estimates with confidence intervals.</p>
+<section id="what-you-need" class="level4">
+<h4>What you need:</h4>
 <ul>
-</p>
-<p>
-<li>500–2000 prompts representative of deployment
-<li>Responses from each policy you want to compare
-<li>Judge scores for all responses (any scale works)
-<li>50–150 oracle labels (ground truth on a random sample)
-</p>
-<p>
+<li><p>500–2000 prompts representative of deployment</p></li>
+<li><p>Responses from each policy you want to compare</p></li>
+<li><p>Judge scores for all responses (any scale works)</p></li>
+<li><p>50–150 oracle labels (ground truth on a random sample)</p></li>
 </ul>
-<h5>Steps:</h5>
+</section>
+<section id="steps" class="level4">
+<h4>Steps:</h4>
 <ol>
-</p>
-<p>
-<li>Generate outputs from each policy on the same prompts (paired sampling reduces variance).
-<li>Score all outputs with your judge (fixed version, frozen config).
-<li>Label a random sample of 50–150 examples with ground truth $Y$.
-<li>Run <strong>Direct Mode</strong> (§2)—CJE learns the judge$\to$oracle calibration $f(S)$ automatically via AutoCal-R.
-<li>Check three core diagnostics: coverage (§4.1), calibration (§4.2), judge stability (§4.3).
-<li>Report estimates with 95\
-</p>
-<p>
+<li><p>Generate outputs from each policy on the same prompts (paired
+sampling reduces variance).</p></li>
+<li><p>Score all outputs with your judge (fixed version, frozen
+config).</p></li>
+<li><p>Label a random sample of 50–150 examples with ground truth <span
+class="math inline">\(Y\)</span>.</p></li>
+<li><p>Run <strong>Direct Mode</strong> (§2)—CJE learns the judge<span
+class="math inline">\(\to\)</span>oracle calibration <span
+class="math inline">\(f(S)\)</span> automatically via .</p></li>
+<li><p>Check three core diagnostics: coverage (§4.1), calibration
+(§4.2), judge stability (§4.3).</p></li>
+<li><p>Report estimates with 95% CIs (includes to account for calibrator
+uncertainty).</p></li>
 </ol>
-<h5>What to read:</h5>
+</section>
+<section id="what-to-read" class="level4">
+<h4>What to read:</h4>
 <ul>
-</p>
-<p>
-<li><strong>Essential:</strong> §2 (Direct Mode), §4.1–4.4 (core diagnostics), §6.1 (DM workflow).
-<li><strong>Skip for now:</strong> §3 (off-policy methods), §4.5–4.7 (weight diagnostics).
-</p>
-<p>
+<li><p><strong>Essential:</strong> §2 (Direct Mode), §4.1–4.4 (core
+diagnostics), §6.1 (DM workflow).</p></li>
+<li><p><strong>Skip for now:</strong> §3 (off-policy methods), §4.5–4.7
+(weight diagnostics).</p></li>
 </ul>
-<p>
-You can return to off-policy methods (§3) later if you want counterfactual inference ("What if we deployed policy X?") without regenerating outputs.
-</p>
-<h3>Notation at a glance</h3>
-<p>
-<p><em>[Table omitted - see PDF version]</em></p>
-</p>
-<h3>When you need more: Off-policy evaluation</h3>
-<p>
-Direct Mode requires generating fresh outputs for each policy. If you want to answer counterfactual questions without regenerating—"What if we deployed policy X instead of our current baseline?"—you need off-policy methods:
-</p>
+<p>You can return to off-policy methods (§3) later if you want
+counterfactual inference (“What if we deployed policy X?”) without
+regenerating outputs.</p>
+</section>
+</section>
+<section id="notation-at-a-glance" class="level2">
+<h2>Notation at a glance</h2>
+<div id="tab:notation">
+<table>
+<caption>Key notation and terminology</caption>
+<thead>
+<tr class="header">
+<th style="text-align: left;"><strong>Symbol/Term</strong></th>
+<th style="text-align: left;"><strong>Meaning</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td colspan="2" style="text-align: left;"><em>Core symbols (all
+modes):</em></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><span
+class="math inline">\(X\)</span></td>
+<td style="text-align: left;">Prompt (input)</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><span
+class="math inline">\(A\)</span></td>
+<td style="text-align: left;">Response (action/output)</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><span
+class="math inline">\(S\)</span></td>
+<td style="text-align: left;">Judge score <span class="math inline">\(S
+= s(X, A) \in \mathbb{R}\)</span></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><span
+class="math inline">\(Y\)</span></td>
+<td style="text-align: left;">Oracle label (ground truth outcome) <span
+class="math inline">\(\in [0, 1]\)</span></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><span
+class="math inline">\(R\)</span></td>
+<td style="text-align: left;">Calibrated reward <span
+class="math inline">\(R = f(S) \in [0, 1]\)</span></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong></strong></td>
+<td style="text-align: left;"><strong>AutoCal-R</strong>: Automatic
+Calibration for Rewards</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"></td>
+<td style="text-align: left;">Isotonic map <span
+class="math inline">\(f: S \to [0,1]\)</span> learned from oracle
+slice</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong></strong></td>
+<td style="text-align: left;"><strong>OUA</strong>: Oracle-Uncertainty
+Aware inference</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"></td>
+<td style="text-align: left;">Accounts for calibrator noise in
+confidence intervals</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong></strong></td>
+<td style="text-align: left;">Direct Modeling (on-policy, fresh draws
+only)</td>
+</tr>
+<tr class="even">
+<td colspan="2" style="text-align: left;"><em>Off-policy symbols (§3
+only):</em></td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><span
+class="math inline">\(\pi_0\)</span></td>
+<td style="text-align: left;">Logging policy (baseline, deployed)</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><span
+class="math inline">\(\pi&#39;\)</span></td>
+<td style="text-align: left;">Candidate policy (target for
+evaluation)</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><span
+class="math inline">\(W_i\)</span></td>
+<td style="text-align: left;">Raw importance weight <span
+class="math inline">\(W_i = \pi&#39;(A_i \mid X_i) / \pi_0(A_i \mid
+X_i)\)</span></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><span
+class="math inline">\(\tilde{w}_i\)</span></td>
+<td style="text-align: left;">Stabilized, mean-one weight after</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><span
+class="math inline">\(w^{\text{sn}}_i\)</span></td>
+<td style="text-align: left;">Self-normalized (Hájek) weight <span
+class="math inline">\(w^{\text{sn}}_i = W_i / \bar{W}\)</span></td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong></strong></td>
+<td style="text-align: left;"><strong>SIMCal</strong>: Score-Indexed
+Monotone Calibration</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"></td>
+<td style="text-align: left;">Stabilizes weights via monotone projection
++ variance cap</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;"><strong></strong></td>
+<td style="text-align: left;">Importance Sampling (off-policy, logged
+data)</td>
+</tr>
+<tr class="odd">
+<td style="text-align: left;"><strong></strong></td>
+<td style="text-align: left;">Doubly Robust (off-policy + critic/outcome
+model)</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="when-you-need-more-off-policy-evaluation" class="level2">
+<h2>When you need more: Off-policy evaluation</h2>
+<p>Direct Mode requires generating fresh outputs for each policy. If you
+want to answer counterfactual questions without regenerating—“What if we
+deployed policy X instead of our current baseline?”—you need off-policy
+methods:</p>
 <ul>
-</p>
-<p>
-<li><strong>Calibrated IPS{</strong>} reuses a single logged dataset to evaluate multiple candidate policies by reweighting with importance ratios. Requires per-sequence log probabilities.
-</p>
-<p>
-<li><strong>Calibrated DR{</strong>} combines importance weighting with an outcome model for robustness and tighter confidence intervals. Requires both logged data and a small set of fresh draws.
-</p>
-<p>
+<li><p><strong>Calibrated</strong> reuses a single logged dataset to
+evaluate multiple candidate policies by reweighting with importance
+ratios. Requires per-sequence log probabilities.</p></li>
+<li><p><strong>Calibrated</strong> combines importance weighting with an
+outcome model for robustness and tighter confidence intervals. Requires
+both logged data and a small set of fresh draws.</p></li>
 </ul>
-<p>
-Off-policy methods enable fast iteration (no regeneration), but introduce complexity (importance weights, overlap diagnostics). See §3 for full details, assumptions, and diagnostics. Most users should start with Direct Mode and adopt off-policy methods only when needed.
-</p>
-<h3>Core diagnostics</h3>
-<p>
-All CJE modes share three essential diagnostics that catch the most common failure modes:
-</p>
+<p>Off-policy methods enable fast iteration (no regeneration), but
+introduce complexity (importance weights, overlap diagnostics). See §3
+for full details, assumptions, and diagnostics. Most users should start
+with Direct Mode and adopt off-policy methods only when needed.</p>
+</section>
+<section id="core-diagnostics" class="level2">
+<h2>Core diagnostics</h2>
+<p>All CJE modes share three essential diagnostics that catch the most
+common failure modes:</p>
 <ol>
-[label=(*)]
-<li><strong>Score coverage:</strong> Does the oracle slice span the evaluation $S$-range? (fix: add labels in uncovered bins)
-</p>
-<p>
-<li><strong>Calibration reliability:</strong> Is $f(S)$ accurate across the $S$ spectrum? (fix: two-stage AutoCal-R{} or add labels in problematic regions)
-</p>
-<p>
-<li><strong>Judge stability:</strong> Is the judge's scoring consistent over time? (fix: freeze judge version, refresh oracle if drift detected)
-</p>
-<p>
+<li><p><strong>Score coverage:</strong> Does the oracle slice span the
+evaluation <span class="math inline">\(S\)</span>-range? (fix: add
+labels in uncovered bins)</p></li>
+<li><p><strong>Calibration reliability:</strong> Is <span
+class="math inline">\(f(S)\)</span> accurate across the <span
+class="math inline">\(S\)</span> spectrum? (fix: two-stage or add labels
+in problematic regions)</p></li>
+<li><p><strong>Judge stability:</strong> Is the judge’s scoring
+consistent over time? (fix: freeze judge version, refresh oracle if
+drift detected)</p></li>
 </ol>
-<p>
-These three checks apply whether you're using Direct Mode or off-policy methods. For off-policy evaluation (§3), three additional diagnostics are required:
-</p>
+<p>These three checks apply whether you’re using Direct Mode or
+off-policy methods. For off-policy evaluation (§3), three additional
+diagnostics are required:</p>
 <ol>
-[label=(*),resume]
-<li><strong>Effective sample size (ESS):</strong> Do we have enough effective samples after reweighting? (fix: cohort restriction or switch to DR)
-</p>
-<p>
-<li><strong>Tail heaviness:</strong> Are importance weights catastrophically heavy-tailed? (fix: SIMCal tuning or overlap-aware cohorting)
-</p>
-<p>
-<li><strong>DR orthogonality:</strong> Is the outcome model orthogonal to the weights? (fix: improve critic or revisit weight calibration)
-</p>
-<p>
+<li><p><strong>Effective sample size (ESS):</strong> Do we have enough
+effective samples after reweighting? (fix: cohort restriction or switch
+to DR)</p></li>
+<li><p><strong>Tail heaviness:</strong> Are importance weights
+catastrophically heavy-tailed? (fix: SIMCal tuning or overlap-aware
+cohorting)</p></li>
+<li><p><strong>DR orthogonality:</strong> Is the outcome model
+orthogonal to the weights? (fix: improve critic or revisit weight
+calibration)</p></li>
 </ol>
-<p>
-See §4 for detailed thresholds, interpretation, and fixes for each diagnostic.
-</p>
-<h3>What CJE provides</h3>
-<p>
-CJE{} gives practitioners a complete workflow for reliable LLM evaluation:
-</p>
+<p>See §4 for detailed thresholds, interpretation, and fixes for each
+diagnostic.</p>
+</section>
+<section id="what-cje-provides" class="level2">
+<h2>What CJE provides</h2>
+<p>gives practitioners a complete workflow for reliable LLM
+evaluation:</p>
 <ul>
-</p>
-<p>
-<li><strong>Three analysis modes:</strong> Direct Mode for on-policy comparison (simplest), Calibrated IPS for off-policy reuse, Calibrated DR for maximum accuracy when you have both logged data and fresh draws.
-</p>
-<p>
-<li><strong>Automatic calibration:</strong> AutoCal-R{} maps judge scores to oracle labels on a small random sample, putting estimates on the right scale.
-</p>
-<p>
-<li><strong>Honest confidence intervals:</strong> OUA{} accounts for calibrator uncertainty, not just sampling noise.
-</p>
-<p>
-<li><strong>Six diagnostics:</strong> Three core checks (coverage, calibration, judge stability) plus three off-policy checks (ESS, tail heaviness, orthogonality). Each includes thresholds, interpretation, and concrete fixes.
-</p>
-<p>
-<li><strong>Off-policy robustness:</strong> SIMCal{} stabilizes importance weights via monotone projection, and DR adds an outcome model for double robustness.
-</p>
-<p>
+<li><p><strong>Three analysis modes:</strong> Direct Mode for on-policy
+comparison (simplest), Calibrated IPS for off-policy reuse, Calibrated
+DR for maximum accuracy when you have both logged data and fresh
+draws.</p></li>
+<li><p><strong>Automatic calibration:</strong> maps judge scores to
+oracle labels on a small random sample, putting estimates on the right
+scale.</p></li>
+<li><p><strong>Honest confidence intervals:</strong> accounts for
+calibrator uncertainty, not just sampling noise.</p></li>
+<li><p><strong>Six diagnostics:</strong> Three core checks (coverage,
+calibration, judge stability) plus three off-policy checks (ESS, tail
+heaviness, orthogonality). Each includes thresholds, interpretation, and
+concrete fixes.</p></li>
+<li><p><strong>Off-policy robustness:</strong> stabilizes importance
+weights via monotone projection, and DR adds an outcome model for double
+robustness.</p></li>
 </ul>
-<h3>Scope and positioning</h3>
-<p>
-This playbook focuses on practical implementation: assumptions in plain English, minimal recipes, diagnostics with actionable fixes, and reporting templates. Advanced material (theoretical guarantees, projection properties, semiparametric efficiency) lives in the appendix.
-</p>
-<p>
-CJE{} builds on the treatment effect estimation literature, particularly work on efficient estimation with surrogates and limited outcome data [kallus2024role]. Like that work, we avoid restrictive surrogacy conditions and instead study efficiency gains when surrogates supplement—rather than replace—primary outcomes under standard missing-at-random assumptions.
-</p>
-<h3>Reader's guide</h3>
-<h5>For quick model comparison:</h5>
- Start with the Quick Start (§1.5), then read §2 (Direct Mode), §4.1–4.4 (core diagnostics), and §6.1 (DM workflow). Skip §3 and §4.5–4.7 unless you later need counterfactual inference.
-</p>
-<h5>For comprehensive coverage:</h5>
- We begin with DM—the default when you can generate on shared prompts—then show how to reuse judged logs with Calibrated IPS{} and Calibrated DR, followed by diagnostics, assumptions for causal interpretation, a practical playbook, compact case studies, and implementation notes.
-
-</p>
+</section>
+<section id="scope-and-positioning" class="level2">
+<h2>Scope and positioning</h2>
+<p>This playbook focuses on practical implementation: assumptions in
+plain English, minimal recipes, diagnostics with actionable fixes, and
+reporting templates. Advanced material (theoretical guarantees,
+projection properties, semiparametric efficiency) lives in the
+appendix.</p>
+<p>builds on the treatment effect estimation literature, particularly
+work on efficient estimation with surrogates and limited outcome data
+<span class="citation" data-cites="kallus2024role"></span>. Like that
+work, we avoid restrictive surrogacy conditions and instead study
+efficiency gains when surrogates supplement—rather than replace—primary
+outcomes under standard missing-at-random assumptions.</p>
+</section>
+<section id="readers-guide" class="level2">
+<h2>Reader’s guide</h2>
+<section id="for-quick-model-comparison" class="level4">
+<h4>For quick model comparison:</h4>
+<p>Start with the Quick Start (§1.5), then read §2 (Direct Mode),
+§4.1–4.4 (core diagnostics), and §6.1 (DM workflow). Skip §3 and
+§4.5–4.7 unless you later need counterfactual inference.</p>
+</section>
+<section id="for-comprehensive-coverage" class="level4">
+<h4>For comprehensive coverage:</h4>
+<p>We begin with —the default when you can generate on shared
+prompts—then show how to reuse judged logs with Calibrated and
+Calibrated , followed by diagnostics, assumptions for causal
+interpretation, a practical playbook, compact case studies, and
+implementation notes.</p>
+</section>
+</section>
+</section>
+</body>
+</html>
