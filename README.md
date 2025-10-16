@@ -16,29 +16,19 @@ CJE calibrates judge scores using a small oracle slice (5-10% coverage), then de
 ## How It Works
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│  YOUR DATA                                                          │
-│  • LLM-judge scores for all samples    (cheap, noisy)              │
-│  • Oracle labels for 5-10% of samples  (expensive, ground truth)   │
-└─────────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│  AUTOCAL-R (Automatic Calibration)                                  │
-│  Learn monotone mapping:  judge score → oracle outcome scale       │
-│  • Isotonic regression on labeled slice                            │
-│  • Automatically applies to all samples                            │
-└─────────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│  RESULTS                                                            │
-│  ✓ Unbiased policy estimates                                       │
-│  ✓ Valid 95% confidence intervals                                  │
-│  ✓ Accounts for calibration + sampling uncertainty                 │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────┐      ┌──────────────────┐      ┌──────────────────┐
+│   YOUR DATA      │      │    AUTOCAL-R     │      │     RESULTS      │
+│                  │  →   │                  │  →   │                  │
+│ Judge scores     │      │ Learn f: Judge   │      │ ✓ Unbiased       │
+│ (cheap, noisy)   │      │      ↓           │      │   estimates      │
+│                  │      │    Oracle scale  │      │                  │
+│ + 5-10% oracle   │      │                  │      │ ✓ Valid 95% CIs  │
+│   labels         │      │ (isotonic reg.)  │      │                  │
+└──────────────────┘      └──────────────────┘      └──────────────────┘
 ```
 
 **Key benefits:**
-- **Small label budget**: 5-10% oracle coverage often sufficient for accurate calibration
+- **Small label budget**: 5-10% oracle coverage often sufficient
 - **Unbiased estimates**: Judge scores mapped to oracle scale via isotonic regression
 - **Rigorous inference**: CIs account for both sampling and calibration uncertainty
 
