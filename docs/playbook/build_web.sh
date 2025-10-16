@@ -48,21 +48,24 @@ for tex_file in "$SECTIONS_DIR"/*.tex; do
         filename=$(basename "$tex_file" .tex)
         echo "  → $filename"
 
-        # Run pandoc
+        # Pre-process: pandoc doesn't recognize custom text commands like \cje, \autocal, etc.
+        # Create a temporary file with these commands replaced before pandoc runs
+        temp_tex=$(mktemp)
+        sed -e 's/\\cje/CJE/g' \
+            -e 's/\\autocal/AutoCal-R/g' \
+            -e 's/\\simcal/SIMCal/g' \
+            -e 's/\\oua/OUA/g' \
+            -e 's/\\dm/DM/g' \
+            -e 's/\\ips/IPS/g' \
+            -e 's/\\dr/DR/g' \
+            "$tex_file" > "$temp_tex"
+
+        # Run pandoc on the preprocessed file
         pandoc "${PANDOC_OPTS[@]}" \
-            "$tex_file" \
+            "$temp_tex" \
             -o "$WEB_DIR/$filename.html"
 
-        # Post-process: pandoc doesn't expand custom text commands like \cje, \autocal, etc.
-        # Replace them with their actual text to avoid empty parentheses in output
-        sed -i.bak -e 's/\\cje/CJE/g' \
-                   -e 's/\\autocal/AutoCal-R/g' \
-                   -e 's/\\simcal/SIMCal/g' \
-                   -e 's/\\oua/OUA/g' \
-                   -e 's/\\dm/DM/g' \
-                   -e 's/\\ips/IPS/g' \
-                   -e 's/\\dr/DR/g' \
-                   "$WEB_DIR/$filename.html" && rm "$WEB_DIR/$filename.html.bak"
+        rm "$temp_tex"
     fi
 done
 
