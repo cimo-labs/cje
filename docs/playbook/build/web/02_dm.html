@@ -82,15 +82,15 @@ data-reference="diag:transport">[diag:transport]</a>).</p>
 <em>higher judge score <span class="math inline">\(\Rightarrow\)</span>
 no worse expected outcome</em>. Unlike parametric links (sigmoid, beta)
 that impose a rigid shape and risk misspecification, isotonic adapts to
-the data while preserving ranking sanity. It is mean-preserving by
-construction (via projection onto the monotone cone), so your KPI stays
-on the right scale without post-hoc adjustments. With small oracle
-slices (5-10% coverage is often sufficient), this shape constraint buys
-strong stability—no spurious wiggles, no overfitting. The step-function
-output also makes edge fragility immediately visible, enabling targeted
-label collection. When monotonicity fails (e.g., length bias at fixed
-<span class="math inline">\(S\)</span>), the two-stage variant learns a
-smooth transformation first.</p>
+the data while preserving ranking sanity. <strong>We recenter the fitted
+map to preserve the oracle mean</strong>, ensuring your KPI stays on the
+right scale. With small oracle slices (5-10% coverage is often
+sufficient), this shape constraint buys strong stability—no spurious
+wiggles, no overfitting. The step-function output also makes edge
+fragility immediately visible, enabling targeted label collection. When
+monotonicity fails (e.g., length bias at fixed <span
+class="math inline">\(S\)</span>), the two-stage variant learns a smooth
+transformation first.</p>
 </section>
 <section id="operator-artifacts-to-check" class="level4">
 <h4>Operator artifacts to check:</h4>

@@ -93,12 +93,14 @@ class="math inline">\(\Var(W_{\text{blend}}) &gt; \rho \cdot
 <p><strong>Why it works:</strong> Monotone projections weakly reduce
 variance by majorization, and the cap <span
 class="math inline">\(\rho\)</span> (default 0.95) ensures strict
-variance reduction. SIMCal explicitly normalizes weights to mean one and
-projects them as a monotone function of <span
-class="math inline">\(S\)</span> out-of-fold. Under our J2-M assumption
-(score-indexed sufficiency), this projection reduces variance and
-<em>approximately</em> preserves the target; we surface trimming/cohort
-sensitivity and orthogonality to detect residual bias.</p>
+variance reduction. SIMCal explicitly normalizes weights to mean one (so
+stabilized weights average to 1) and projects them as a monotone
+function of <span class="math inline">\(S\)</span> out-of-fold. Under
+our J2-M/J2-MX assumptions (score-indexed monotone sufficiency), this
+projection <em>stabilizes variance with approximately unbiased mean-one
+normalization</em>. We surface cohort and trimming sensitivities in
+diagnostics to reveal any residual bias; if J2-M fails or overlap is
+poor, these sensitivity checks will flag the issue.</p>
 <section id="operator-artifacts-to-check" class="level4">
 <h4>Operator artifacts to check:</h4>
 <ul>

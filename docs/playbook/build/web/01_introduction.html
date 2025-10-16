@@ -80,13 +80,15 @@ sampling reduces variance).</p></li>
 <li><p>Score all outputs with your judge (fixed version, frozen
 config).</p></li>
 <li><p>Label a random sample of 50–150 examples with ground truth <span
-class="math inline">\(Y\)</span>.</p></li>
+class="math inline">\(Y\)</span> (must be a simple random sample;
+stratify if subgroups matter).</p></li>
 <li><p>Run <strong>Direct Mode</strong> (§2)—CJE learns the judge<span
 class="math inline">\(\to\)</span>oracle calibration <span
 class="math inline">\(f(S)\)</span> automatically via
 AutoCal-R.</p></li>
-<li><p>Check three core diagnostics: coverage (§4.1), calibration
-(§4.2), judge stability (§4.3).</p></li>
+<li><p>Check five core diagnostics: coverage (§4.1), calibration (§4.2),
+judge stability (§4.3), OUA share (§4.4), transportability
+(§4.5).</p></li>
 <li><p>Report estimates with 95% CIs (includes OUA to account for
 calibrator uncertainty).</p></li>
 </ol>
@@ -253,7 +255,7 @@ with Direct Mode and adopt off-policy methods only when needed.</p>
 </section>
 <section id="core-diagnostics" class="level2">
 <h2>Core diagnostics</h2>
-<p>All CJE modes share three essential diagnostics that catch the most
+<p>All CJE modes share five essential diagnostics that catch the most
 common failure modes:</p>
 <ol>
 <li><p><strong>Score coverage:</strong> Does the oracle slice span the
@@ -266,8 +268,13 @@ add labels in problematic regions)</p></li>
 <li><p><strong>Judge stability:</strong> Is the judge’s scoring
 consistent over time? (fix: freeze judge version, refresh oracle if
 drift detected)</p></li>
+<li><p><strong>OUA share:</strong> Is label scarcity the bottleneck for
+precision? (fix: add oracle labels in sparse regions)</p></li>
+<li><p><strong>Transportability:</strong> Does the calibrator transport
+across policies/time? (fix: refresh oracle or apply mean
+anchoring)</p></li>
 </ol>
-<p>These three checks apply whether you’re using Direct Mode or
+<p>These five checks apply whether you’re using Direct Mode or
 off-policy methods. For off-policy evaluation (§3), three additional
 diagnostics are required:</p>
 <ol>
@@ -298,10 +305,11 @@ scores to oracle labels on a small random sample, putting estimates on
 the right scale.</p></li>
 <li><p><strong>Honest confidence intervals:</strong> OUA accounts for
 calibrator uncertainty, not just sampling noise.</p></li>
-<li><p><strong>Six diagnostics:</strong> Three core checks (coverage,
-calibration, judge stability) plus three off-policy checks (ESS, tail
-heaviness, orthogonality). Each includes thresholds, interpretation, and
-concrete fixes.</p></li>
+<li><p><strong>Eight high-leverage diagnostics:</strong> Five core
+checks (coverage, calibration, judge stability, OUA share,
+transportability) plus three off-policy checks (ESS, tail heaviness,
+orthogonality). Each includes thresholds, interpretation, and concrete
+fixes.</p></li>
 <li><p><strong>Off-policy robustness:</strong> SIMCal stabilizes
 importance weights via monotone projection, and DR adds an outcome model
 for double robustness.</p></li>

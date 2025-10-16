@@ -334,6 +334,28 @@ focus labeling budget on coverage and regional balance.</p></li>
 <p>Test whether the source calibrator <span
 class="math inline">\(f\)</span> transports to a target policy or time
 window.</p>
+<div class="mdframed">
+<p><strong>Transportability vs. Judge Drift (terminology):</strong></p>
+<ul>
+<li><p><strong>Transportability</strong> (<em>this diagnostic</em>):
+Does the calibrator <span class="math inline">\(f\)</span> (the mapping
+from score <span class="math inline">\(S\)</span> to outcome <span
+class="math inline">\(Y\)</span>) remain accurate when applied to a
+<em>different policy</em> or <em>time window</em>? Formally: is <span
+class="math inline">\(Y \perp G \mid (S, X_{\mathrm{cov}})\)</span>
+where <span class="math inline">\(G\)</span> is group
+(policy/time)?</p></li>
+<li><p><strong>Judge Drift</strong> (Diagnostic 3): Does the <em>judge’s
+scoring function</em> <span class="math inline">\(s(X, A)\)</span>
+change over time? Formally: is <span class="math inline">\(s_t(X, A) =
+s_{t&#39;}(X, A)\)</span> across time?</p></li>
+</ul>
+<p><em>Key difference:</em> Judge drift invalidates scores;
+transportability failure means <span class="math inline">\(f\)</span>
+doesn’t generalize. <strong>If drift is detected (Diagnostic 3 fails),
+do not attempt transport—refresh the oracle and refit <span
+class="math inline">\(f\)</span>.</strong></p>
+</div>
 </section>
 <section id="probe-protocol-cheap." class="level4">
 <h4>Probe protocol (cheap).</h4>
@@ -704,13 +726,15 @@ class="math inline">\(\tau\)</span></td>
 <h4>Default refusal gates:</h4>
 <ul>
 <li><p>ESS <span class="math inline">\(&lt; 1\%\)</span> <span
-class="math inline">\(\to\)</span> refuse to estimate (off-policy
-only).</p></li>
+class="math inline">\(\to\)</span> refuse to estimate (estimate
+dominated by a handful of points; variance ill-posed).</p></li>
 <li><p>Hill index <span class="math inline">\(\alpha &lt; 2\)</span>
-<span class="math inline">\(\to\)</span> refuse (off-policy
-only).</p></li>
+<span class="math inline">\(\to\)</span> refuse (weights have infinite
+variance; estimates unstable and CIs arbitrarily wrong).</p></li>
 <li><p>Coverage <span class="math inline">\(&lt; 50\%\)</span> <span
-class="math inline">\(\to\)</span> warn strongly (all modes).</p></li>
+class="math inline">\(\to\)</span> warn strongly (majority of scores
+extrapolate beyond labeled range; high risk of severe
+miscalibration).</p></li>
 </ul>
 <p>Operators can adjust these gates or disable them for exploratory
 analysis, but the default is to fail loudly rather than produce
@@ -838,7 +862,10 @@ jackknife</strong>.</p></li>
 <p>Under the product-sample setup (oracle and eval are independent
 draws), these components are <strong>additive</strong>: <span
 class="math display">\[\widehat{\Var}_{\text{total}} =
-\widehat{\Var}_{\text{CR}} + \widehat{\Var}_{OUA}.\]</span></p>
+\widehat{\Var}_{\text{CR}} + \widehat{\Var}_{OUA}.\]</span> This
+additivity requires that oracle fold assignments are fixed before
+analysis begins (no data peeking) and that oracle and evaluation data
+come from independent sources.</p>
 </section>
 <section id="why-it-matters.-8" class="level4">
 <h4>Why it matters.</h4>
@@ -971,14 +998,14 @@ correlation.</p>
 </section>
 <section id="summary" class="level2">
 <h2>Summary</h2>
-<p>The six diagnostics are organized into two groups:</p>
+<p>The eight diagnostics are organized into two groups:</p>
 <p><strong>Core diagnostics (all modes):</strong> Coverage (§4.1),
-calibration reliability (§4.2), judge stability (§4.3), and OUA share
-(§4.4) apply to all evaluation modes. These catch fundamental validity
-issues like extrapolation, miscalibration, judge drift, and label
-scarcity.</p>
-<p><strong>Off-policy diagnostics (IPS/DR only):</strong> ESS (§4.5),
-tail heaviness (§4.6), and DR orthogonality (§4.7) only apply when
+calibration reliability (§4.2), judge stability (§4.3), OUA share
+(§4.4), and transportability (§4.5) apply to all evaluation modes. These
+catch fundamental validity issues like extrapolation, miscalibration,
+judge drift, label scarcity, and policy/time invariance.</p>
+<p><strong>Off-policy diagnostics (IPS/DR only):</strong> ESS (§4.6),
+tail heaviness (§4.7), and DR orthogonality (§4.8) only apply when
 reusing logged data. These diagnose overlap, weight behavior, and critic
 quality.</p>
 <p>Each diagnostic produces a compact artifact, a traffic-light signal,
