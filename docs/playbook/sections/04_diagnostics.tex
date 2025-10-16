@@ -337,9 +337,9 @@ Judge stability $\tau$ & $\ge 0.90$ & $[0.75, 0.90)$ & $< 0.75$ & — \\
 
 \paragraph{Default refusal gates:}
 \begin{itemize}
-\item ESS $< 1\%$ $\to$ refuse to estimate (off-policy only).
-\item Hill index $\alpha < 2$ $\to$ refuse (off-policy only).
-\item Coverage $< 50\%$ $\to$ warn strongly (all modes).
+\item ESS $< 1\%$ $\to$ refuse to estimate (estimate dominated by a handful of points; variance ill-posed).
+\item Hill index $\alpha < 2$ $\to$ refuse (weights have infinite variance; estimates unstable and CIs arbitrarily wrong).
+\item Coverage $< 50\%$ $\to$ warn strongly (majority of scores extrapolate beyond labeled range; high risk of severe miscalibration).
 \end{itemize}
 
 Operators can adjust these gates or disable them for exploratory analysis, but the default is to fail loudly rather than produce garbage.
@@ -432,6 +432,7 @@ Under the product-sample setup (oracle and eval are independent draws), these co
 \begin{equation}
 \widehat{\Var}_{\text{total}} = \widehat{\Var}_{\text{CR}} + \widehat{\Var}_{\oua}.
 \end{equation}
+This additivity requires that oracle fold assignments are fixed before analysis begins (no data peeking) and that oracle and evaluation data come from independent sources.
 
 \paragraph{Why it matters.} Ignoring clustering on the eval side can cause severe undercoverage (e.g., 86.9\% instead of 95\% observed empirically), while ignoring calibrator uncertainty understates risk when oracle slices are small. Both components are essential for honest inference.
 
