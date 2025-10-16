@@ -438,6 +438,88 @@ def test_covariate_validation_all_data_sources(tmp_path: Path) -> None:
     print("✅ Validation across data sources test passed!")
 
 
+def test_covariate_computation_consistency() -> None:
+    """REGRESSION TEST: Ensure calibration and fresh draws compute covariates identically.
+
+    This test catches the bug where calibration used word count but fresh draws
+    used log10(character count), causing systematic bias in DR/Direct estimates.
+
+    Bug context: Prior to Oct 2024, this mismatch caused ~0.06 systematic bias
+    in all estimators when use_covariates=True.
+    """
+    from cje.calibration.dataset import AUTO_COMPUTABLE_COVARIATES
+    from cje.data.fresh_draws import (
+        compute_response_covariates,
+        FreshDrawDataset,
+        FreshDrawSample,
+    )
+    from cje.data.models import Sample
+
+    # Test responses with varying lengths
+    test_responses = [
+        "This is a short response.",  # 5 words, 25 chars
+        "This is a much longer response with many more words to demonstrate the issue.",  # 14 words, 77 chars
+        "x" * 100,  # 1 word, 100 chars
+        "word " * 50,  # 50 words, 250 chars
+    ]
+
+    # Get calibration covariate function
+    calib_compute_fn, _ = AUTO_COMPUTABLE_COVARIATES["response_length"]
+
+    for response in test_responses:
+        # Compute via calibration path
+        sample = Sample(
+            prompt_id="test",
+            prompt="test prompt",
+            response=response,
+            reward=None,
+            base_policy_logprob=-1.0,
+            target_policy_logprobs={},
+            judge_score=0.5,
+            oracle_label=None,
+            metadata={},
+        )
+        calib_value = calib_compute_fn(sample)
+
+        # Compute via fresh draws path
+        fresh_sample = FreshDrawSample(
+            prompt_id="test",
+            target_policy="test",
+            response=response,
+            judge_score=0.5,
+            oracle_label=None,
+            draw_idx=0,
+            metadata={},
+        )
+        fresh_dataset = FreshDrawDataset(
+            target_policy="test", draws_per_prompt=1, samples=[fresh_sample]
+        )
+        fresh_with_covs = compute_response_covariates(
+            fresh_dataset, covariate_names=["response_length"]
+        )
+        fresh_value = fresh_with_covs.samples[0].metadata["response_length"]
+
+        # CRITICAL: These must match exactly
+        assert calib_value == fresh_value, (
+            f"Covariate mismatch for response '{response[:50]}...':\n"
+            f"  Calibration computed: {calib_value}\n"
+            f"  Fresh draws computed: {fresh_value}\n"
+            f"  This causes systematic bias in estimates!"
+        )
+
+        # Verify they both use word count
+        expected_word_count = len(response.split())
+        assert calib_value == float(
+            expected_word_count
+        ), f"Calibration not using word count! Expected {expected_word_count}, got {calib_value}"
+        assert fresh_value == float(
+            expected_word_count
+        ), f"Fresh draws not using word count! Expected {expected_word_count}, got {fresh_value}"
+
+    print("✅ Covariate computation consistency test passed!")
+    print("   Both calibration and fresh draws use word count (len(response.split()))")
+
+
 if __name__ == "__main__":
     # Run all tests directly
     import tempfile
@@ -456,5 +538,6 @@ if __name__ == "__main__":
         test_covariates_in_dr_mode(tmp_path)
         test_covariate_auto_computation_stores_in_metadata()
         test_covariate_validation_all_data_sources(tmp_path)
+        test_covariate_computation_consistency()  # REGRESSION TEST
 
         print("\n=== All Covariate Tests Passed! ===\n")

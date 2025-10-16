@@ -578,7 +578,7 @@ def compute_response_covariates(
     Args:
         fresh_draws: FreshDrawDataset to augment with covariates
         covariate_names: List of covariate names to compute. Currently supported:
-            - "response_length": log10(1 + len(response)) - matches calibration
+            - "response_length": word count (len(response.split())) - matches calibration
 
     Returns:
         New FreshDrawDataset with covariates computed and stored in metadata
@@ -605,12 +605,13 @@ def compute_response_covariates(
 
         for cov_name in covariate_names:
             if cov_name == "response_length":
-                # Compute response_length matching the formula in calibration
-                # Uses log10(1 + len(response)) for numerical stability
+                # Compute response_length matching the formula in calibration/dataset.py
+                # Uses word count (len(response.split())) to match calibration exactly
                 if sample.response is not None:
-                    response_len = len(sample.response)
-                    # Match the exact formula used in calibration/judge.py
-                    new_metadata["response_length"] = np.log10(1 + response_len)
+                    # CRITICAL: Must match calibration/dataset.py AUTO_COMPUTABLE_COVARIATES
+                    # which uses: lambda sample: float(len(sample.response.split()))
+                    word_count = len(sample.response.split())
+                    new_metadata["response_length"] = float(word_count)
                 else:
                     raise ValueError(
                         f"Cannot compute response_length for sample {sample.prompt_id} "
