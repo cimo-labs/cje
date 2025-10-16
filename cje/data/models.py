@@ -199,6 +199,7 @@ class EstimationResult(BaseModel):
         if (
             isinstance(self.metadata, dict)
             and "degrees_of_freedom" in self.metadata
+            and self.metadata["degrees_of_freedom"] is not None
             and "target_policies" in self.metadata
         ):
             df_info = self.metadata["degrees_of_freedom"]
