@@ -124,14 +124,14 @@ index.</p></li>
 <ul>
 <li><p>Calibrate rewards: <span class="math inline">\(R_{\pi i} =
 f(S_{\pi i})\)</span>.</p></li>
-<li><p>Compute <span class="math inline">\(\est{V}_{\dm}(\pi) =
+<li><p>Compute <span class="math inline">\(\est{V}_{DM}(\pi) =
 \frac{1}{m} \sum_i R_{\pi i}\)</span>.</p></li>
 <li><p>For pairwise contrasts, compute <span
 class="math inline">\(\est{\Delta}(\pi, \pi&#39;) = \frac{1}{m} \sum_i
 (R_{\pi i} - R_{\pi&#39; i})\)</span> (paired SE).</p></li>
 <li><p>Add by refitting <span class="math inline">\(f\)</span> across
 oracle folds and computing <span
-class="math inline">\(\Var_{\oua}\)</span>.</p></li>
+class="math inline">\(\Var_{OUA}\)</span>.</p></li>
 <li><p>Report 95% CIs: <span class="math inline">\(\est{V} \pm 1.96
 \cdot \SE_{\text{total}}\)</span>.</p></li>
 </ul>
@@ -210,7 +210,7 @@ class="math inline">\(\tilde{w}_i\)</span>.</p></li>
 <ul>
 <li><p>Calibrate rewards: <span class="math inline">\(R_i =
 f(S_i)\)</span>.</p></li>
-<li><p>Compute <span class="math inline">\(\est{V}_{\ips}(\pi&#39;) =
+<li><p>Compute <span class="math inline">\(\est{V}_{IPS}(\pi&#39;) =
 \frac{1}{n} \sum_i \tilde{w}_i \cdot R_i\)</span>, where <span
 class="math inline">\(\tilde{w}_i\)</span> are the stabilized, mean-one
 weights.</p></li>
@@ -264,7 +264,7 @@ with regularization.</p></li>
 <section id="step-7-compute-dr-estimate." class="level4">
 <h4>Step 7: Compute DR estimate.</h4>
 <ul>
-<li><p><span class="math inline">\(\est{V}_{\dr}(\pi&#39;) = \frac{1}{n}
+<li><p><span class="math inline">\(\est{V}_{DR}(\pi&#39;) = \frac{1}{n}
 \sum_i \left[ \tilde{w}_i \cdot (R_i - \hat{g}(X_i)) + \hat{g}(X_i)
 \right]\)</span>, where <span class="math inline">\(\tilde{w}_i\)</span>
 are the stabilized, mean-one weights after .</p></li>

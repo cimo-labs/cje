@@ -189,7 +189,7 @@ results = analyze_dataset(
 <h2>Estimator and paired contrasts</h2>
 <p>With <span class="math inline">\(R_{\pi i} = f(S_{\pi i})\)</span> on
 shared prompts, <span class="math display">\[\begin{aligned}
-\est{V}_{\dm}(\pi) &amp;= \frac{1}{m} \sum_{i=1}^m R_{\pi i}, \\
+\est{V}_{DM}(\pi) &amp;= \frac{1}{m} \sum_{i=1}^m R_{\pi i}, \\
 \est{\Delta}(\pi, \pi&#39;) &amp;= \frac{1}{m} \sum_{i=1}^m \left(
 R_{\pi i} - R_{\pi&#39; i} \right).
 \end{aligned}\]</span></p>
@@ -204,13 +204,13 @@ uncertainty when the oracle slice is small. <strong>(oracle-uncertainty
 aware)</strong> inference refits <span class="math inline">\(f\)</span>
 across label folds and adds the induced variance: <span
 class="math display">\[\SE^2_{\text{total}} = \Var_{\text{main}} +
-\Var_{\oua},\]</span> and forms 95% CIs using a
+\Var_{OUA},\]</span> and forms 95% CIs using a
 <strong>t</strong>-critical value with Satterthwaite df when
 clusters/oracle folds are small; normal quantile otherwise (see §<a
 href="#sec:uncertainty" data-reference-type="ref"
 data-reference="sec:uncertainty">[sec:uncertainty]</a>). Always show the
 share <span
-class="math inline">\(\Var_{\oua}/\SE^2_{\text{total}}\)</span>.</p>
+class="math inline">\(\Var_{OUA}/\SE^2_{\text{total}}\)</span>.</p>
 </section>
 <section id="diagnostics-highest-leverage-quick-fixes" class="level2">
 <h2>Diagnostics (highest leverage) &amp; quick fixes</h2>
@@ -241,7 +241,7 @@ most.</p></li>
 <p>For each policy (and for key pairwise contrasts), report:</p>
 <ul>
 <li><p>Calibrated mean <span
-class="math inline">\(\est{V}_{\dm}(\pi)\)</span> with 95% CI (paired
+class="math inline">\(\est{V}_{DM}(\pi)\)</span> with 95% CI (paired
 for <span class="math inline">\(\est{\Delta}\)</span>).</p></li>
 <li><p>share; note if paired design was used.</p></li>
 <li><p>reliability snippet (with regional error) and the score-coverage
@@ -255,7 +255,7 @@ badge.</p></li>
 prompt-level variance of <span class="math inline">\(R\)</span> for a
 policy on the evaluation set. Then a rough CI half-width for one policy
 is <span class="math display">\[\text{HalfWidth} \approx 1.96
-\sqrt{\frac{\hat{\sigma}_R^2}{m} + \Var_{\oua}}.\]</span></p>
+\sqrt{\frac{\hat{\sigma}_R^2}{m} + \Var_{OUA}}.\]</span></p>
 <p>More prompts shrink the first term; more labels shrink the second ().
 For pairwise contrasts, replace <span
 class="math inline">\(\hat{\sigma}_R^2\)</span> with the variance of
