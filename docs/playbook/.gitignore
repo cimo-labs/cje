@@ -17,8 +17,14 @@
 # Auto-generated version file
 VERSION.tex
 
-# Build artifacts
-build/
+# Build artifacts (except web HTML which is committed for website sync)
+build/*.pdf
+build/*.aux
+build/*.log
+build/*.out
+build/*.bbl
+build/*.blg
+build/*.toc
 
 # Editor temporary files
 *.swp

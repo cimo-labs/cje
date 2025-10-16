@@ -1,0 +1,433 @@
+<h2>Operator Playbook: Start to Finish</h2>
+<h3>Overview</h3>
+<p>
+This section is a step-by-step guide for practitioners. It covers the full evaluation workflow from data collection to reporting, with decision trees, checklists, and troubleshooting tips.
+</p>
+<h3>Decision tree: which mode to use?</h3>
+<ol>
+</p>
+<p>
+<li><strong>Can you generate fresh outputs for each candidate policy?</strong>
+</p>
+<ul>
+</p>
+<p>
+   <li><strong>Yes</strong> $\to$ Can you afford to label an oracle slice (50–200 examples)?
+</p>
+<ul>
+</p>
+<p>
+      <li><strong>Yes</strong> $\to$ Use <strong>DM</strong> (on-policy, simplest). If you also have logged data with logprobs, consider <strong>DR</strong> for tighter CIs.
+      <li><strong>No</strong> $\to$ Use <strong>Direct mode without calibration</strong> (raw judge scores, rank-only). No KPI-scale estimates, but still useful for ranking.
+</p>
+<p>
+</ul>
+<p>
+   <li><strong>No</strong> $\to$ Do you have a judged log with logprobs for $\pi_0$ and candidates $\pi'$?
+</p>
+<ul>
+</p>
+<p>
+      <li><strong>Yes</strong> $\to$ Can you label an oracle slice?
+</p>
+<ul>
+</p>
+<p>
+         <li><strong>Yes</strong> $\to$ Use <strong>IPS</strong> or <strong>DR</strong> (if you can generate a few fresh draws for a critic). Check ESS; if $< 10\%$, DR{} is strongly recommended.
+         <li><strong>No</strong> $\to$ Use <strong>IPS without calibration</strong> (relative comparisons only, no KPI scale).
+</p>
+<p>
+</ul>
+<p>
+      <li><strong>No</strong> $\to$ You cannot perform causal off-policy evaluation. Regenerate or use DM.
+</p>
+<p>
+</ul>
+<p>
+</ul>
+<p>
+</ol>
+<h3>Workflow 1: Direct Modeling (DM)</h3>
+<h5>Step 1: Design the evaluation set.</h5>
+<ul>
+</p>
+<p>
+<li>Choose $m$ prompts representative of deployment (e.g., 500–2000).
+<li>Ensure diversity: cover prompt families, lengths, difficulty levels.
+<li>Use stratified sampling if you have subgroups of interest.
+</p>
+<p>
+</ul>
+<h5>Step 2: Generate outputs.</h5>
+<ul>
+</p>
+<p>
+<li>For each policy $\pi$, generate one output per prompt.
+<li>Use the same random seed (or paired draws) across policies for variance reduction.
+<li>Log all outputs, prompts, and metadata (model version, temperature, etc.).
+</p>
+<p>
+</ul>
+<h5>Step 3: Judge all outputs.</h5>
+<ul>
+</p>
+<p>
+<li>Apply the judge to all $(X_i, A_{\pi i})$ pairs to get scores $S_{\pi i}$.
+<li>Use a fixed judge config (version, prompt, temperature).
+<li>Log judge metadata (timestamps, version, config).
+</p>
+<p>
+</ul>
+<h5>Step 4: Label an oracle slice.</h5>
+<ul>
+</p>
+<p>
+<li>Sample 50–200 examples uniformly at random from the evaluation set.
+<li>Obtain ground-truth labels $Y$ (human ratings, gold KPI, etc.).
+<li>Ensure labels are unbiased and representative.
+</p>
+<p>
+</ul>
+<h5>Step 4b (Optional): Use a dedicated calibration set.</h5>
+<ul>
+</p>
+<p>
+<li>If you have pre-existing curated oracle labels (e.g., from prior evaluation work), load them via <code>calibration_data_path</code> instead of sampling from the evaluation set.
+<li>CJE will auto-combine oracle labels from the calibration set with any labels in the evaluation data for maximum efficiency (priority: calibration $>$ fresh $>$ logged).
+<li>Inspect <code>results.metadata["oracle_sources"]</code> for source breakdown and conflicts.
+</p>
+<p>
+</ul>
+<h5>Step 5: Fit AutoCal-R.</h5>
+<ul>
+</p>
+<p>
+<li>Use 5-fold cross-fitting to learn $f: S \to [0, 1]$.
+<li>Check diagnostics: coverage (aim for $\ge 95\%$), reliability (OOF MAE $< 0.05$), mean preservation ($|\bar{f(S)} - \bar{Y}| < 0.02$).
+<li>If regional error is high, enable two-stage AutoCal-R{} or add a coarse index.
+</p>
+<p>
+</ul>
+<h5>Step 6: Compute estimates and CIs.</h5>
+<ul>
+</p>
+<p>
+<li>Calibrate rewards: $R_{\pi i} = f(S_{\pi i})$.
+<li>Compute $\est{V}_{\dm}(\pi) = \frac{1}{m} \sum_i R_{\pi i}$.
+<li>For pairwise contrasts, compute $\est{\Delta}(\pi, \pi') = \frac{1}{m} \sum_i (R_{\pi i} - R_{\pi' i})$ (paired SE).
+<li>Add OUA{} by refitting $f$ across oracle folds and computing $\Var_{\oua}$.
+<li>Report 95\
+</p>
+<p>
+</ul>
+<h5>Step 7: Report.</h5>
+<ul>
+</p>
+<p>
+<li>For each policy: $\est{V}$ with CI, OUA{} share, calibration diagnostics, coverage badge.
+<li>For key contrasts: $\est{\Delta}$ with paired CI.
+<li>Include diagnostic plots (calibration curve, coverage histogram).
+</p>
+<p>
+</ul>
+<h3>Workflow 2: Off-Policy IPS</h3>
+<h5>Step 1: Collect a judged log.</h5>
+<ul>
+</p>
+<p>
+<li>Deploy $\pi_0$ and log $(X_i, A_i, S_i)$ for $n$ prompts.
+<li>Store logprobs: $\log \pi_0(A_i \mid X_i)$ and $\log \pi'(A_i \mid X_i)$ for each candidate $\pi'$.
+</p>
+<p>
+</ul>
+<h5>Step 2: Label an oracle slice.</h5>
+<ul>
+</p>
+<p>
+<li>Sample 50–200 examples uniformly from the logged data.
+<li>Obtain ground-truth $Y$.
+</p>
+<p>
+</ul>
+<h5>Step 2b (Optional): Use a dedicated calibration set.</h5>
+<ul>
+</p>
+<p>
+<li>If you have pre-existing curated oracle labels, load them via <code>calibration_data_path</code>.
+<li>CJE will auto-combine with logged data oracle labels (priority: calibration $>$ fresh $>$ logged).
+<li>Check <code>results.metadata["oracle_sources"]</code> for distribution mismatch and temporal staleness warnings.
+</p>
+<p>
+</ul>
+<h5>Step 3: Fit AutoCal-R.</h5>
+<ul>
+</p>
+<p>
+<li>Same as DM: 5-fold cross-fitting, check diagnostics.
+</p>
+<p>
+</ul>
+<h5>Step 4: Compute and stabilize weights.</h5>
+<ul>
+</p>
+<p>
+<li>Raw weights: $W_i = \exp(\log \pi'(A_i \mid X_i) - \log \pi_0(A_i \mid X_i))$.
+<li>Apply SIMCal{} (5-fold, variance cap $\rho = 0.95$) to get stabilized, mean-one weights $\tilde{w}_i$.
+<li>Check ESS: $({\textstyle\sum} \tilde{w}_i)^2 / ({\textstyle\sum} \tilde{w}_i^2)$. Aim for $\ge 30\%$ (PASS), acceptable down to 10\
+<li>Check Hill index $\alpha \ge 2$.
+</p>
+<p>
+</ul>
+<h5>Step 5: Compute estimates and CIs.</h5>
+<ul>
+</p>
+<p>
+<li>Calibrate rewards: $R_i = f(S_i)$.
+<li>Compute $\est{V}_{\ips}(\pi') = \frac{1}{n} \sum_i \tilde{w}_i \cdot R_i$, where $\tilde{w}_i$ are the stabilized, mean-one weights.
+<li>Compute SE via influence functions, add OUA, form 95\
+</p>
+<p>
+</ul>
+<h5>Step 6: Report.</h5>
+<ul>
+</p>
+<p>
+<li>$\est{V}$ with CI, ESS (absolute and \
+<li>OUA{} share, calibration diagnostics, judge stability check (if available).
+</p>
+<p>
+</ul>
+<h3>Workflow 3: Off-Policy DR</h3>
+<h5>Steps 1–4: Same as IPS.</h5>
+<h5>Step 5: Generate fresh draws for the critic.</h5>
+<ul>
+</p>
+<p>
+<li>For each candidate $\pi'$, generate fresh outputs on the same prompts used in the log.
+<li>Judge these fresh outputs to get $S'_{\pi i}$ and calibrate to $R'_{\pi i} = f(S'_{\pi i})$.
+<li>This is your training set for the outcome model $\hat{g}(X)$.
+</p>
+<p>
+</ul>
+<h5>Step 6: Train the critic (cross-fitted).</h5>
+<ul>
+</p>
+<p>
+<li>Split fresh draws into 5 folds.
+<li>For each fold $k$, train $\hat{g}_k(X)$ on the other 4 folds to predict $R'_{\pi}$.
+<li>Predict on fold $k$ to get $\hat{g}(X_i)$ for logged prompts $X_i$.
+<li>Use a flexible model (e.g., gradient-boosted trees, neural net) with regularization.
+</p>
+<p>
+</ul>
+<h5>Step 7: Compute DR estimate.</h5>
+<ul>
+</p>
+<p>
+<li>$\est{V}_{\dr}(\pi') = \frac{1}{n} \sum_i \left[ \tilde{w}_i \cdot (R_i - \hat{g}(X_i)) + \hat{g}(X_i) \right]$, where $\tilde{w}_i$ are the stabilized, mean-one weights after SIMCal.
+<li>Compute orthogonality score: $\frac{1}{n} \sum_i \tilde{w}_i \cdot (R_i - \hat{g}(X_i))$ with CI (see §4.7).
+<li>If CI excludes zero, improve the critic or weights.
+</p>
+<p>
+</ul>
+<h5>Step 8: Report.</h5>
+<ul>
+</p>
+<p>
+<li>$\est{V}$ with CI, ESS, Hill index, weight summary.
+<li>Orthogonality score with CI, critic OOF $R^2$.
+<li>OUA{} share, calibration diagnostics.
+</p>
+<p>
+</ul>
+<h3>Checklist: before you ship an estimate</h3>
+<ol>
+</p>
+<p>
+<li>Checked score coverage ($\ge 85\%$)?
+<li>Checked calibration reliability (OOF MAE $< 0.10$, mean preservation OK)?
+<li>Checked judge stability ($\tau \ge 0.90$ or no temporal drift)?
+<li>Checked OUA{} share (if $> 50\%$, consider adding labels)?
+<li>(Off-policy) Checked ESS ($\ge 10\%$) and Hill index ($\alpha \ge 2$)?
+<li>(DR) Checked orthogonality (CI contains zero)?
+<li>Reported CIs that include OUA?
+<li>Included diagnostic plots and summary in the report?
+<li>Documented judge config, prompt set, oracle sampling procedure?
+<li>Ran sensitivity checks (cohort restriction, trimming, alternative calibrators)?
+</p>
+<p>
+</ol>
+<p>
+If any box is unchecked, do not ship the estimate.
+</p>
+<h3>Troubleshooting guide</h3>
+<h5>Problem: Low ESS ($< 10\%$).</h5>
+<ul>
+</p>
+<p>
+<li><strong>Cause:</strong> Poor overlap; policies are too different.
+<li><strong>Fixes:</strong> (1) Apply SIMCal{} with stricter $\rho$ (e.g., 0.90). (2) Restrict to high-overlap cohort ($|\log W| < 2$). (3) Switch to DR{} with a strong critic. (4) If ESS $< 1\%$, regenerate and use DM.
+</p>
+<p>
+</ul>
+<h5>Problem: Heavy tails ($\alpha < 2$).</h5>
+<ul>
+</p>
+<p>
+<li><strong>Cause:</strong> Extreme weights due to rare events or provider drift.
+<li><strong>Fixes:</strong> (1) Use SIMCal{} aggressively. (2) Cohort restriction. (3) Check for provider temperature/frequency-penalty changes. (4) Switch to DR{} or regenerate.
+</p>
+<p>
+</ul>
+<h5>Problem: Poor calibration (OOF MAE $> 0.10$).</h5>
+<ul>
+</p>
+<p>
+<li><strong>Cause:</strong> Judge scores are not monotone in outcome, or regional miscalibration.
+<li><strong>Fixes:</strong> (1) Enable two-stage AutoCal-R. (2) Add a coarse index (prompt family, length). (3) Add 10–30 labels in problematic $S$ regions. (4) Check for judge drift.
+</p>
+<p>
+</ul>
+<h5>Problem: Thin coverage ($< 85\%$).</h5>
+<ul>
+</p>
+<p>
+<li><strong>Cause:</strong> Oracle slice does not span the evaluation $S$-range.
+<li><strong>Fixes:</strong> (1) Add 5–20 labels targeting uncovered $S$ bins. (2) Narrow the prompt set to the intended deployment slice. (3) If stress-testing edges, ensure oracle includes edge examples.
+</p>
+<p>
+</ul>
+<h5>Problem: DR orthogonality CI excludes zero.</h5>
+<ul>
+</p>
+<p>
+<li><strong>Cause:</strong> Critic or weights are poor.
+<li><strong>Fixes:</strong> (1) Improve critic: add regularization, use a more flexible model, increase fresh draw sample size. (2) Revisit SIMCal{} or overlap diagnostics. (3) Check cross-fitting folds. (4) Fall back to IPS{} if orthogonality fails persistently.
+</p>
+<p>
+</ul>
+<h5>Problem: Large OUA{</h5>
+ share ($> 50\%$).}
+</p>
+<ul>
+</p>
+<p>
+<li><strong>Cause:</strong> Label scarcity is the bottleneck, not prompt scarcity.
+<li><strong>Fixes:</strong> (1) Add labels, prioritizing sparse $S$ regions or high-variance prompt families. (2) Adding more prompts yields diminishing returns; focus labeling budget on coverage and balance.
+</p>
+<p>
+</ul>
+<h3>Transporting Calibration Across Policies and Time</h3>
+<h5>When to probe.</h5>
+<ul>
+</p>
+<p>
+<li><strong>New policy candidate</strong> evaluated with an existing calibrator.
+<li><strong>New time window / model update</strong> of the judge (even minor rubric/version bumps).
+<li><strong>Large score-distribution shift:</strong> KS distance on $U$ (risk quantiles) $> 0.1$ or coverage drops $<95\%$.
+</p>
+<p>
+</ul>
+<h5>How many probe labels?</h5>
+<p>
+$n_{\text{probe}}=40\text{--}60$ per target stratum usually detects $\ge\!3$–$5$pp mean drift and obvious regional issues.
+If WARN/FAIL, collect an additional $50\text{--}150$ labels, <em>stratified by failing deciles</em> (and at boundaries).
+</p>
+<h5>What to do with old labels?</h5>
+<ol>
+</p>
+<p>
+<li><strong>PASS:</strong> keep the source calibrator $f$; no action.
+<li><strong>Uniform shift:</strong> apply mean anchoring per group; keep $f$ shape, document $\hat\delta_G$.
+<li><strong>Structural change (regional):</strong> refit AutoCal-R{} on the <em>union</em> of old + new labels with two-stage index and cross-fitting. If the judge changed meaning materially (low anchor $\tau$, Diagnostic 3), train a <em>new</em> calibrator version and deprecate the old one.
+</p>
+<p>
+</ol>
+<h5>Label budgeting for refresh.</h5>
+<p>
+Use OUA{} share as a guide: increase $n_{\text{oracle}}$ until $\text{OUA share} < 20\%$.
+A practical rule is $n_{\text{oracle}} \approx 5\sqrt{m}$ for $m$ prompts (see Sample size planning below).
+Prioritize labels in uncovered $U$ bins and bins with largest residuals.
+</p>
+<h3>Sample size planning</h3>
+<h5>Goal:</h5>
+ Achieve a target CI half-width $\delta$ (e.g., $\delta = 0.02$ for $\pm 2\%$ precision).
+</p>
+<h5>Prompt sample size (for DM or DR with good critic):</h5>
+<p>
+$$
+m \approx \left( \frac{1.96 \cdot \sigma_R}{\delta} \right)^2,
+$$
+where $\sigma_R$ is the SD of calibrated rewards $R$ (estimate from a pilot).
+</p>
+<h5>Label sample size (oracle):</h5>
+<p>
+The OUA{} variance scales as $1 / n_{\text{oracle}}$. For OUA{} share $< 20\%$, use:
+$$
+n_{\text{oracle}} \approx 5 \cdot m^{1/2}.
+$$
+For $m = 1000$, this gives $n_{\text{oracle}} \approx 150$.
+</p>
+<h5>Fresh draws for DR critic:</h5>
+<p>
+Use the same $m$ prompts as the logged data. More is better; diminishing returns after $m \approx 500$.
+</p>
+<h3>Reporting template</h3>
+<pre><code>=== CJE Evaluation Report ===
+Date: 2025-10-08
+Evaluator: Alice
+Mode: Calibrated DR
+Estimator: stacked-dr
+</p>
+<p>
+## Policies Evaluated
+- Baseline (pi_0): gpt-3.5-turbo (deployed 2025-09-01 to 2025-10-01)
+- Candidate (pi'): gpt-4-mini (under consideration)
+</p>
+<p>
+## Data
+- Logged prompts: n = 1,000
+- Oracle slice: 150 (15
+- Fresh draws (for critic): 1,000 (same prompts)
+- Judge: GPT-4-as-judge with rubric v2.3 (frozen)
+- Outcome: Binary pass rate (Y in {0, 1})
+</p>
+<p>
+## Estimates
+pi_0 (baseline): 0.72 [0.69, 0.75] (95
+pi' (gpt-4-mini): 0.81 [0.78, 0.84] (95
+Delta (pi' - pi_0): +0.09 [0.05, 0.13] (95
+</p>
+<p>
+## Diagnostics
+[1] Score Coverage: 94
+[2] Calibration Reliability: OOF MAE = 0.04 (PASS)
+[3] ESS: 34
+[4] Hill Index: alpha = 2.8 (PASS)
+[5] DR Orthogonality: 0.03 [-0.02, 0.08] (PASS, CI contains 0)
+[6] OUA Share: 15
+</p>
+<p>
+## Interpretation
+Switching from gpt-3.5-turbo to gpt-4-mini is estimated to increase
+the pass rate by 9 percentage points (95
+is reliable: all diagnostics pass, ESS is moderate (acceptable for DR),
+and orthogonality is good.
+</p>
+<p>
+## Recommendation
+Proceed with deployment of gpt-4-mini. Expected uplift is substantial
+and statistically significant.
+</p>
+<p>
+## Attachments
+- calibration_curve.pdf
+- weight_distribution.pdf
+- orthogonality_residuals.pdf
+- data_and_code.zip (for reproducibility)
+</code></pre>
+<h3>Summary</h3>
+<p>
+The operator playbook provides decision trees, workflows, checklists, and troubleshooting for the full CJE pipeline. Always check diagnostics before shipping, document everything, and report CIs with OUA. When in doubt, run sensitivity checks.
+
+</p>

@@ -1,0 +1,177 @@
+<h2>Case Studies</h2>
+<h3>Overview</h3>
+<p>
+This section presents three compact case studies illustrating CJE in practice: (1) a clean DM comparison, (2) an off-policy IPS evaluation with overlap challenges, and (3) a DR analysis combining logged data with fresh draws.
+</p>
+<h3>Case 1: DM for model selection (on-policy)</h3>
+<h5>Setting.</h5>
+ A team is choosing between three candidate models for a code-generation task: GPT-3.5, GPT-4, and Claude-3. They have 1,000 diverse coding prompts and can generate one output per model per prompt. The KPI is "correctness" (binary: code passes unit tests or not). They use GPT-4-as-judge to score outputs on a 1–10 scale.
+</p>
+<h5>Data collection.</h5>
+<ul>
+</p>
+<p>
+<li>Generate outputs: 3 models $\times$ 1,000 prompts $=$ 3,000 responses.
+<li>Judge all 3,000 with GPT-4, get scores $S \in [1, 10]$.
+<li>Sample 150 responses uniformly, run unit tests to get ground truth $Y \in \{0, 1\}$.
+</p>
+<p>
+</ul>
+<h5>Calibration.</h5>
+<ul>
+</p>
+<p>
+<li>Fit AutoCal-R{} (5-fold isotonic regression) on the 150-sample oracle slice.
+<li>Diagnostics: Coverage 96\
+<li>Map all 3,000 scores to calibrated rewards $R = f(S) \in [0, 1]$.
+</p>
+<p>
+</ul>
+<h5>Estimates (with OUA).</h5>
+<p>
+$$
+\est{V}_{\dm}(\text{GPT-3.5}) &= 0.62 \; [0.58, 0.66] \\
+\est{V}_{\dm}(\text{GPT-4}) &= 0.78 \; [0.75, 0.81] \\
+\est{V}_{\dm}(\text{Claude-3}) &= 0.81 \; [0.78, 0.84]
+$$
+Paired contrasts (tighter CIs due to pairing):
+$$
+\est{\Delta}(\text{GPT-4}, \text{GPT-3.5}) &= +0.16 \; [0.11, 0.21] \\
+\est{\Delta}(\text{Claude-3}, \text{GPT-4}) &= +0.03 \; [-0.01, 0.07]
+$$
+</p>
+<h5>Diagnostics.</h5>
+<ul>
+</p>
+<p>
+<li>OUA{} share: 12\
+<li>All diagnostics pass.
+</p>
+<p>
+</ul>
+<h5>Conclusion.</h5>
+ Claude-3 and GPT-4 are statistically indistinguishable; both substantially outperform GPT-3.5. Team chooses Claude-3 for deployment based on cost.
+</p>
+<h3>Case 2: IPS with overlap challenges (off-policy)</h3>
+<h5>Setting.</h5>
+ A team deployed GPT-3.5-turbo in production for a month, logging 10,000 prompts with responses, judge scores, and logprobs. They now want to estimate what the KPI would have been if they had deployed GPT-4-turbo instead, without regenerating.
+</p>
+<h5>Data.</h5>
+<ul>
+</p>
+<p>
+<li>Logged data: $n = 10{,}000$ with $(X_i, A_i, S_i, \log \pi_0(A_i \mid X_i), \log \pi'(A_i \mid X_i))$.
+<li>Oracle slice: 200 samples with ground truth $Y$ (user satisfaction, binary).
+<li>No fresh draws (cannot generate for GPT-4-turbo on these old prompts).
+</p>
+<p>
+</ul>
+<h5>Calibration.</h5>
+<ul>
+</p>
+<p>
+<li>Fit AutoCal-R{} on 200-sample oracle.
+<li>Diagnostics: Coverage 89\
+<li>Action: Add 20 labels targeting low-$S$ bins to improve coverage to 94\
+</p>
+<p>
+</ul>
+<h5>Weights and stabilization.</h5>
+<ul>
+</p>
+<p>
+<li>Raw weights: $W_i = \exp(\log \pi'(A_i \mid X_i) - \log \pi_0(A_i \mid X_i))$.
+<li>Raw ESS: 8\
+<li>Apply SIMCal{} with $\rho = 0.95$: stabilized ESS improves to 18\
+<li>Hill index $\alpha = 2.6$ (pass, finite variance).
+</p>
+<p>
+</ul>
+<h5>Estimate.</h5>
+<p>
+$$
+\est{V}_{\ips}(\text{GPT-4-turbo}) &= 0.74 \; [0.68, 0.80] \\
+\text{(Baseline GPT-3.5-turbo)} &= 0.65 \; [0.62, 0.68] \\
+\est{\Delta} &= +0.09 \; [0.02, 0.16]
+$$
+</p>
+<h5>Diagnostics.</h5>
+<ul>
+</p>
+<p>
+<li>ESS 18\
+<li>OUA{} share 22\
+<li>Weight max/median ratio: 45 (moderate tail).
+</p>
+<p>
+</ul>
+<h5>Sensitivity check.</h5>
+<ul>
+</p>
+<p>
+<li>Cohort restriction: Re-run on prompts with $|\log W| < 2$ ($n = 6{,}000$). ESS improves to 35\
+<li>Trimming: Drop top 1\
+</p>
+<p>
+</ul>
+<h5>Conclusion.</h5>
+ Switching to GPT-4-turbo would likely improve satisfaction by $\approx 9$ percentage points. The estimate is moderately reliable (ESS 18\
+</p>
+<h3>Case 3: DR for tight CIs (off-policy + fresh draws)</h3>
+<h5>Setting.</h5>
+ Same as Case 2, but the team can now afford to generate 2,000 fresh responses from GPT-4-turbo (20\
+</p>
+<h5>Data.</h5>
+<ul>
+</p>
+<p>
+<li>Logged data: $n = 10{,}000$ (same as Case 2).
+<li>Oracle slice: 200 (same).
+<li>Fresh draws: 2,000 prompts sampled uniformly from the 10k, with GPT-4-turbo outputs and judge scores.
+</p>
+<p>
+</ul>
+<h5>Weights and calibration.</h5>
+ Same as Case 2 (ESS 18\
+</p>
+<h5>Critic training.</h5>
+<ul>
+</p>
+<p>
+<li>Train a gradient-boosted tree $\hat{g}(X)$ on the 2,000 fresh draws (5-fold cross-fitted) to predict calibrated reward $R$.
+<li>OOF $R^2 = 0.58$ (moderate; prompt features include length, first-token embedding, topic cluster).
+</p>
+<p>
+</ul>
+<h5>DR estimate.</h5>
+<p>
+$$
+\est{V}_{\dr}(\text{GPT-4-turbo}) &= 0.75 \; [0.71, 0.79]
+$$
+</p>
+<h5>Diagnostics.</h5>
+<ul>
+</p>
+<p>
+<li>Orthogonality score: $0.02 \; [-0.03, 0.07]$ (pass, CI contains zero).
+<li>ESS: still 18\
+<li>OUA{} share: 18\
+<li>Compare to IPS: IPS gave $[0.68, 0.80]$ (width 0.12); DR gives $[0.71, 0.79]$ (width 0.08). DR is 33\
+</p>
+<p>
+</ul>
+<h5>Conclusion.</h5>
+ DR delivers a tighter CI and a more stable estimate. The point estimate (0.75) is consistent with IPS (0.74) and the sensitivity checks. The team is now confident enough to deploy GPT-4-turbo without an A/B test.
+</p>
+<h3>Lessons learned</h3>
+<ul>
+</p>
+<p>
+<li><strong>DM is simplest when you can generate.</strong> Case 1 shows clean paired comparisons with tight CIs.
+<li><strong>IPS works when overlap is moderate.</strong> Case 2 shows that ESS 18\
+<li><strong>DR tightens CIs and boosts confidence.</strong> Case 3 shows a 33\
+<li><strong>Always check diagnostics.</strong> Coverage, ESS, orthogonality, and OUA{} share catch issues early.
+<li><strong>Sensitivity checks build trust.</strong> Cohort restriction, trimming, and alternative calibrators confirm robustness.
+</p>
+<p>
+</ul>

@@ -1,0 +1,257 @@
+<h2>Assumptions for Causal Interpretation</h2>
+<h3>Overview</h3>
+<p>
+CJE estimates answer causal questions: "What would happen if we deployed $\pi'$?" To interpret estimates causally, we need assumptions. This section states them in plain English, explains when they matter, how to check them, and what happens when they fail.
+</p>
+<h3>Assumption hierarchy</h3>
+<p>
+Not all assumptions are created equal. We group them into three tiers:
+</p>
+<p>
+<li>Required for unbiased estimation; violations cause systematic errors. These are <strong>non-negotiable</strong>.
+<li>Required for valid inference (CIs); violations lead to underestimated uncertainty or bias. Checkable via diagnostics.
+<li>Required for optimal variance; violations cost power but do not bias point estimates.
+</p>
+<h3>Data assumptions</h3>
+<p>
+[SUTVA: Stable Unit Treatment Value]
+</p>
+<p>
+The outcome for prompt $X_i$ under policy $\pi$ does not depend on what policy was applied to other prompts. Formally: no interference and no hidden versions of treatment.
+</p>
+<h5>Plain English.</h5>
+ Evaluating one prompt doesn't affect another. This rules out settings where responses are shown to users sequentially and influence each other (e.g., conversational context bleeding across prompts).
+</p>
+<h5>When it matters.</h5>
+ All modes (DM, IPS, DR). Violations are rare in offline batch evaluation but common in online settings with statefulness.
+</p>
+<h5>How to check.</h5>
+ SUTVA is mostly a design question: ensure prompts are evaluated independently. In practice, use fixed seeds, separate sessions, or randomize order.
+</p>
+<h5>What happens if it fails.</h5>
+ Estimates are biased in unknown directions. The only fix is to redefine the estimand to account for interference (beyond this playbook's scope).
+</p>
+<p>
+[Overlap (Positivity)]
+</p>
+<p>
+For all prompts $X$ and responses $A$ such that $\pi'(A \mid X) > 0$, we have $\pi_0(A \mid X) > 0$. Informally: the logging policy could have generated any response the target policy might generate.
+</p>
+<h5>Plain English.</h5>
+ Off-policy evaluation requires that the logged data "covers" the target policy's behavior. If $\pi'$ generates responses that $\pi_0$ would never produce, we have no data to learn from.
+</p>
+<h5>When it matters.</h5>
+ Off-policy only (IPS, DR). Not needed for DM{} (you generate fresh outputs).
+</p>
+<h5>How to check.</h5>
+ ESS and tail diagnostics. Low ESS ($< 10\%$) or heavy tails ($\alpha < 2$) indicate poor overlap. Scatter plot of $\log \pi'(A \mid X) / \pi_0(A \mid X)$ vs.\ $X$ can reveal systematic gaps.
+</p>
+<h5>What happens if it fails.</h5>
+ Importance weights explode, variance becomes infinite, estimates are dominated by a few outliers. The only fix is to restrict to a high-overlap cohort, switch to DR{} with a strong critic, or regenerate (DM).
+</p>
+<h3>Judge and calibration assumptions</h3>
+<p>
+[Oracle Slice: Simple Random Subsample]
+</p>
+<p>
+The labeled oracle slice is a simple random sample from the evaluation distribution, and labels $Y$ are unbiased measurements of the true outcome.
+</p>
+<h5>Plain English.</h5>
+ The prompts you label should be representative of the prompts you evaluate. Don't cherry-pick easy prompts or focus only on one domain.
+</p>
+<h5>When it matters.</h5>
+ All modes that use AutoCal-R{} (DM, IPS, DR). Without this, calibration is biased.
+</p>
+<h5>How to check.</h5>
+ Compare the distribution of $S$ (and other covariates like prompt length, family) between the oracle slice and the full evaluation set. Use a two-sample test (e.g., Kolmogorov-Smirnov) or visual inspection.
+</p>
+<h5>What happens if it fails.</h5>
+ AutoCal-R{} learns the wrong mapping, leading to biased $R = f(S)$. CIs are too narrow because they don't account for the selection bias. Fix: stratify labeling by prompt family or $S$ bins; use inverse-propensity weighting if the labeling mechanism is known.
+</p>
+<p>
+[Judge Monotone Sufficiency (J2-M)]
+</p>
+<p>
+There exist monotone functions $h_Y$ and $h_W$ such that:
+</p>
+<ul>
+</p>
+<p>
+<li>$\E[Y \mid S] = h_Y(S)$ (outcome is monotone in score),
+<li>$\E[W \mid S] = h_W(S)$ (importance weight is monotone in score).
+</p>
+<p>
+</ul>
+<h5>Plain English.</h5>
+ Higher judge scores should correspond (on average) to better outcomes, and the importance weight should vary smoothly with the score. This is the key to AutoCal-R{} and SIMCal.
+</p>
+<h5>When it matters.</h5>
+ All modes for AutoCal-R{} (outcome); off-policy for SIMCal{} (weights).
+</p>
+<h5>How to check.</h5>
+<ul>
+</p>
+<p>
+<li>For $h_Y$: Bin the oracle slice by $S$ and check that mean $Y$ increases (or decreases) monotonically. Fit isotonic regression and inspect the fit.
+<li>For $h_W$: Bin logged data by $S$ and check that mean $W$ is monotone. Scatter plot of $W$ vs.\ $S$ should show a trend.
+</p>
+<p>
+</ul>
+<h5>What happens if it fails.</h5>
+<ul>
+</p>
+<p>
+<li>If $\E[Y \mid S]$ is not monotone, AutoCal-R{} can be badly miscalibrated. Use two-stage AutoCal-R{} (spline index $\to$ isotonic) or add a coarse index (prompt family).
+<li>If $\E[W \mid S]$ is not monotone, SIMCal{} may not help (or may hurt). Check the diagnostic; if monotonicity fails, consider model-based weight calibration or switch to DR.
+</p>
+<p>
+</ul>
+<p>
+[Single-Index Monotone Sufficiency (J2-MX)]
+</p>
+<p>
+There exists a one-dimensional index $T=g(S,X_{\mathrm{cov}})$ and a nondecreasing $\mu$ such that
+$\E[Y\mid S,X_{\mathrm{cov}}]=\mu(T)$.
+For off-policy weight calibration analogously assume
+$\E[W\mid S,X_{\mathrm{cov}}]=\nu(T)$ with nondecreasing $\nu$.
+</p>
+<h5>Plain English.</h5>
+ When judge monotonicity fails at fixed $S$ due to slice effects (e.g., length or domain bias), we assume there's still a one-dimensional summary $T$ of $(S, X_{\mathrm{cov}})$ where monotonicity holds. This is weaker than J2-M but still preserves the core structural belief in rank-ordering.
+</p>
+<h5>When it matters.</h5>
+ All modes when using two-stage AutoCal-R{} with covariates (§sec:two-stage-autocal). If plain J2-M holds, this is not needed.
+</p>
+<h5>How to check.</h5>
+ Bin the oracle slice by quantiles of $\widehat T$ and verify monotone $\bar Y$ across bins; for IPS/DR, verify monotone $\bar W$ across $\widehat T$ bins. Compare regional error before/after adding covariates.
+</p>
+<h5>What happens if it fails.</h5>
+ Add/adjust $X_{\mathrm{cov}}$ (e.g., response length, family), increase oracle labels in problematic regions, or fall back to plain monotone on $S$ with caveats.
+</p>
+<p>
+[Judge Stability]
+</p>
+<p>
+The judge's scoring function does not drift between the time the log is collected and the time fresh draws are evaluated. Formally: $s_t(X, A) = s_{t'}(X, A)$ for all $t, t'$ in the evaluation window.
+</p>
+<h5>Plain English.</h5>
+ The judge should assign the same score to the same $(X, A)$ pair regardless of when it's scored. Drift can come from model updates, prompt changes, or even randomness in sampling.
+</p>
+<h5>When it matters.</h5>
+ Off-policy (IPS, DR) when comparing logged scores to fresh scores. Less critical for DM{} if all scoring happens in one batch.
+</p>
+<h5>How to check.</h5>
+ Anchor set with Kendall $\tau$: score a fixed set of 20–50 prompts at $t_0$ and $t_1$, compute rank correlation. $\tau \ge 0.90$ is good; $\tau < 0.75$ is a red flag.
+</p>
+<h5>What happens if it fails.</h5>
+ Calibration breaks because the meaning of $S$ has changed. Oracle labels from $t_0$ don't predict outcomes at $t_1$. Fix: refresh the oracle slice with new labels from $t_1$ and re-fit AutoCal-R. Or freeze the judge version/config during the evaluation window.
+</p>
+<p>
+[Calibration Transportability]
+</p>
+<p>
+Let $f$ be the judge$\to$oracle map learned on a source stratum $\mathcal{S}$ (e.g., a policy or time window).
+We say $f$ is <em>transportable</em> to a target stratum $\mathcal{T}$ if, for all $(S, X_{\mathrm{cov}})$ in the target support,
+$$
+\E\!\left[\,Y \,\middle|\, S, X_{\mathrm{cov}}, G=\mathcal{T}\right]
+\;=\;
+\E\!\left[\,Y \,\middle|\, S, X_{\mathrm{cov}}, G=\mathcal{S}\right]
+\;=\; f^\star(S, X_{\mathrm{cov}})
+$$
+i.e., $Y \,\perp\, G \mid (S, X_{\mathrm{cov}})$, where $G$ is a group indicator (policy or time "era").
+</p>
+<h5>Interpretation.</h5>
+ Conditional on the score and any included covariates, the group (policy/time) carries no extra information about the outcome. Equivalently, $f$ is <em>policy-invariant</em> and <em>time-invariant</em> once you condition on $(S, X_{\mathrm{cov}})$.
+</p>
+<h5>Weaker variants.</h5>
+<p>
+(i) <strong>Mean-shift only:</strong> $\E[Y\!\mid\!S,X_{\mathrm{cov}},G] = f^\star(S,X_{\mathrm{cov}}) + c_G$
+(a constant vertical offset per group).
+(ii) <strong>Regional shift:</strong> small bounded deviations within quantiles of the two-stage index $T=g(S,X_{\mathrm{cov}})$.
+</p>
+<h5>When it can fail.</h5>
+ If a new policy changes outcome at fixed score (judge bias w.r.t.\ that policy), or if the judge's semantics drift over time (model/rubric changes), $f$ is not transportable without adjustment.
+</p>
+<h3>Structural assumptions</h3>
+<p>
+[Bounded Outcomes]
+</p>
+<p>
+Outcomes $Y \in [0, 1]$ are bounded. Judge scores $S$ may be unbounded, but calibrated rewards $R = f(S) \in [0, 1]$.
+</p>
+<h5>Plain English.</h5>
+ The outcome you care about (pass rate, reward, satisfaction) has a natural scale. AutoCal-R{} maps scores onto $[0, 1]$ to match that scale.
+</p>
+<h5>When it matters.</h5>
+ All modes. Boundedness is needed for mean preservation and honest CIs.
+</p>
+<h5>How to check.</h5>
+ Verify that oracle $Y \in [0, 1]$. If judge scores are on a different scale (e.g., 1–10), AutoCal-R{} automatically rescales.
+</p>
+<h5>What happens if it fails.</h5>
+ If outcomes are unbounded (e.g., token count, latency), variance can be huge and isotonic regression may overfit. Consider transforming to a bounded scale (e.g., log-transform or winsorize) before calibration.
+</p>
+<h3>Rate assumptions (for DR)</h3>
+<p>
+[Critic and Weight Convergence Rates (R3)]
+</p>
+<p>
+For doubly robust inference, either:
+</p>
+<ul>
+</p>
+<p>
+<li>The outcome model $\hat{g}(X)$ converges at rate $n^{-1/4}$ or faster, OR
+<li>The stabilized weights $W$ converge to the true weights at rate $n^{-1/4}$ or faster.
+</p>
+<p>
+</ul>
+<p>
+If both converge at $n^{-1/2}$, DR{} achieves the efficiency bound.
+</p>
+<h5>Plain English.</h5>
+ For DR{} to work well, you need either a decent critic or decent weights (or both). If both are terrible, DR{} loses its advantages.
+</p>
+<h5>When it matters.</h5>
+ DR{} only. Not needed for DM{} or IPS.
+</p>
+<h5>How to check.</h5>
+ Orthogonality diagnostic. If the orthogonality score CI contains zero, you're in good shape. If not, either the critic or the weights are too far off.
+</p>
+<h5>What happens if it fails.</h5>
+ DR{} is still consistent (unbiased) but loses efficiency and may have higher variance than IPS. The fix is to improve the critic (more fresh draws, better model) or improve the weights (better SIMCal, cohort restriction).
+</p>
+<h3>When assumptions can be relaxed</h3>
+<ul>
+</p>
+<p>
+<li><strong>Overlap (D2)</strong> can be relaxed if you use DR{} with a strong critic. The critic can extrapolate to regions with poor overlap.
+<li><strong>Monotone sufficiency (J2-M)</strong> can be relaxed with two-stage AutoCal-R{} or coarse indexing (prompt family).
+<li><strong>Judge stability (J3)</strong> can be relaxed if you refresh the oracle slice frequently and re-calibrate.
+<li><strong>Rate assumptions (R3)</strong> are not needed for point estimates, only for optimal inference. If you don't care about efficiency, you can ignore them.
+</p>
+<p>
+</ul>
+<h3>Sensitivity analysis and robustness checks</h3>
+<p>
+When assumptions are questionable, perform sensitivity checks:
+</p>
+<ul>
+</p>
+<p>
+<li><strong>Cohort restriction:</strong> Re-run the analysis on a subset with better overlap (e.g., $|\log W| < 2$). If estimates are stable, you're robust.
+<li><strong>Trimming:</strong> Drop the top 1–5\
+<li><strong>Alternative calibrators:</strong> Compare isotonic AutoCal-R{} to spline or linear calibration. Agreement suggests robustness.
+<li><strong>Alternative critics:</strong> For DR, try multiple outcome models (linear, random forest, boosting). If all agree, you're in good shape.
+<li><strong>Anchor set drift:</strong> Compute $\tau$ on multiple anchor sets or at multiple time points. Consistent high $\tau$ indicates stability.
+</p>
+<p>
+</ul>
+<h3>Minimal assumptions by mode</h3>
+<p>
+<p><em>[Table omitted - see PDF version]</em></p>
+</p>
+<h3>Summary</h3>
+<p>
+The key assumptions are SUTVA, overlap (for off-policy), oracle randomness, and judge monotone sufficiency. Most are checkable via diagnostics. When in doubt, run sensitivity checks and report them alongside results. If assumptions fail and cannot be fixed, switch modes or regenerate data.
+
+</p>

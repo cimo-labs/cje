@@ -1,0 +1,652 @@
+<h2>Diagnostics: The Eight High-Leverage Checks</h2>
+<h3>Overview</h3>
+<p>
+CJE's diagnostic dashboard is designed to catch the most important failure modes with minimal operator overhead. Each diagnostic points directly to a concrete fix. This section details the eight checks, their interpretation, thresholds, and remediations.
+</p>
+<h3>The diagnostic checklist</h3>
+<h5>Core diagnostics (all modes):</h5>
+<ol>
+</p>
+<p>
+<li><strong>Score coverage</strong>: Does the oracle slice span the evaluation $S$-range?
+<li><strong>Calibration reliability</strong>: Is $f(S)$ accurate across the $S$ spectrum?
+<li><strong>Judge stability</strong>: Is the judge's scoring consistent over time or across batches?
+<li><strong>Oracle uncertainty share</strong>: Is label scarcity the bottleneck for precision?
+<li><strong>Transportability audit</strong>: Does the calibrator transport to target policies/time windows?
+</p>
+<p>
+</ol>
+<h5>Off-policy diagnostics (for IPS/DR{</h5>
+ only):}
+</p>
+<ol>
+[resume]
+<li><strong>Effective sample size (ESS)</strong>: Do we have enough effective samples after reweighting?
+<li><strong>Tail heaviness</strong>: Are importance weights catastrophically heavy-tailed?
+<li><strong>DR orthogonality</strong> (for DR{} only): Is the critic good enough for doubly robust guarantees?
+</p>
+<p>
+</ol>
+<p>
+Each diagnostic produces a compact artifact (a number, a CI, or a plot) and a traffic-light signal (pass / warn / fail).
+</p>
+<p>
+<strong>If you're using Direct Mode only:</strong> Focus on diagnostics 1–5. Skip diagnostics 6–8 unless you later need counterfactual inference.
+</p>
+<h3>Diagnostic 1: Score coverage</h3>
+<h5>What it measures.</h5>
+ The fraction of evaluated scores $S$ that fall within the range of oracle scores used to train AutoCal-R. Also checks boundary slopes for extrapolation risk.
+</p>
+<h5>Why it matters.</h5>
+ If AutoCal-R{} must extrapolate beyond the labeled $S$-range, calibrated rewards $R = f(S)$ can be wildly wrong. This is the single most common source of large errors.
+</p>
+<h5>Artifacts to inspect:</h5>
+<ul>
+</p>
+<p>
+<li><strong>Coverage fraction:</strong> $\#\{i : S_{\min}^{\text{oracle}} \le S_i \le S_{\max}^{\text{oracle}}\} / n$.
+<li><strong>Boundary slopes:</strong> slope of $f$ near $S_{\min}$ and $S_{\max}$. Steep slopes indicate sensitive extrapolation (small $S$ changes yield large $R$ changes); flat slopes suggest poor discrimination at edges.
+<li><strong>Histogram overlay:</strong> oracle $S$ distribution vs.\ evaluation $S$ distribution.
+</p>
+<p>
+</ul>
+<h5>Thresholds:</h5>
+<ul>
+</p>
+<p>
+<li><strong>Pass:</strong> Coverage $\ge 95\%$, boundary slopes moderate.
+<li><strong>Warn:</strong> Coverage $\in [85\%, 95\%)$ or steep boundary slopes.
+<li><strong>Fail:</strong> Coverage $< 85\%$ or nearly-flat/nearly-vertical boundary slopes.
+</p>
+<p>
+</ul>
+<h5>Fixes:</h5>
+<ul>
+</p>
+<p>
+<li>Add a small number of labels (5–20) targeting the uncovered $S$ bins.
+<li>Narrow the prompt set to the intended deployment slice.
+<li>If the evaluation set is meant to stress-test edge cases, ensure the oracle slice includes examples from those edges.
+</p>
+<p>
+</ul>
+<h3>Diagnostic 2: Calibration reliability</h3>
+<h5>What it measures.</h5>
+ Out-of-fold (OOF) calibration accuracy: how well $f(S)$ predicts $Y$ on held-out oracle data. Includes overall error and regional error (low/mid/high $S$).
+</p>
+<h5>Why it matters.</h5>
+ Even if coverage is good, AutoCal-R{} can be miscalibrated in specific regions (e.g., $f(S)$ is too optimistic for high $S$). Regional miscalibration biases estimates and breaks mean preservation.
+</p>
+<h5>Artifacts to inspect:</h5>
+<ul>
+</p>
+<p>
+<li><strong>OOF calibration curve:</strong> scatter plot of $f(S)$ vs.\ $Y$ on held-out folds, with diagonal reference.
+<li><strong>Mean preservation check:</strong> $|\E_{\text{oracle}}[f(S)] - \E_{\text{oracle}}[Y]|$ (should be $\approx 0$).
+<li><strong>Regional error:</strong> mean absolute error (MAE) in low, mid, high $S$ terciles.
+</p>
+<p>
+</ul>
+<h5>Thresholds:</h5>
+<ul>
+</p>
+<p>
+<li><strong>Pass:</strong> OOF MAE $< 0.05$, regional MAE balanced, mean preservation within $\pm 0.02$.
+<li><strong>Warn:</strong> OOF MAE $\in [0.05, 0.10]$ or one region has $2\times$ the error of others.
+<li><strong>Fail:</strong> OOF MAE $> 0.10$ or severe regional imbalance or mean drift $> 0.05$.
+</p>
+<p>
+</ul>
+<h5>Fixes:</h5>
+<ul>
+</p>
+<p>
+<li>Enable two-stage AutoCal-R{} (spline index $\to$ isotonic) for regional adaptivity.
+<li>Add a coarse index (prompt family, length bin) to allow family-specific calibration.
+<li>Collect 10–30 additional labels in the problematic $S$ region.
+<li>Check if judge drift occurred (see §4.3).
+</p>
+<p>
+</ul>
+<h3>Diagnostic 2b: Covariate-aware reliability (two-stage)</h3>
+<h5>What it measures.</h5>
+ Whether the two-stage index $T=g(S,X_{\mathrm{cov}})$ resolves regional miscalibration when plain J2-M fails.
+</p>
+<h5>Why it matters.</h5>
+ When slice effects (e.g., length or domain bias at fixed $S$) cause regional miscalibration, two-stage AutoCal-R{} with covariates can capture heterogeneity while preserving monotonicity. This diagnostic validates that the covariate-augmented mapping improves accuracy.
+</p>
+<h5>Artifacts to inspect:</h5>
+<ul>
+</p>
+<p>
+<li><strong>Reliability by $T$-quantiles (OOF):</strong> calibration curve using the risk index $T$ instead of raw $S$.
+<li><strong>Residual MAE by slices of key covariates:</strong> e.g., short vs.\ long responses, or domain groups.
+<li><strong>Before/after regional MAE:</strong> compare plain isotonic on $S$ vs.\ two-stage with covariates.
+</p>
+<p>
+</ul>
+<h5>Thresholds:</h5>
+<p>
+Same as Diagnostic 2 (OOF MAE $< 0.05$ pass, $< 0.10$ warn, $> 0.10$ fail), applied on $T$-quantiles. Additionally flag if any covariate slice has $> 2\times$ the global MAE.
+</p>
+<h5>Fixes:</h5>
+<ul>
+</p>
+<p>
+<li>Add/modify covariates (e.g., include response length if not already used).
+<li>Increase labels in failing slices (e.g., long responses if they show high residual error).
+<li>Tune first-stage capacity: more knots for splines or shallow trees (avoid overfitting with small oracle slices).
+</p>
+<p>
+</ul>
+<h3>Diagnostic 3: Judge stability</h3>
+<h5>What it measures.</h5>
+ Rank stability of judge scores on a small anchor set (20–50 fixed prompts) over time or across batches, measured via Kendall $\tau$ or Spearman $\rho$.
+</p>
+<h5>Why it matters.</h5>
+ If the judge's interpretation of scores drifts between the time the log was collected and the time fresh draws are evaluated, calibration breaks. Judge drift affects <em>all</em> evaluation modes (DM, IPS, DR) because it invalidates the assumption that $S = s(X, A)$ is stable. This is a fundamental validity check.
+</p>
+<h5>Artifacts to inspect:</h5>
+<ul>
+</p>
+<p>
+<li><strong>Rank correlation:</strong> Kendall $\tau$ between scores at time $t_0$ (logging) and $t_1$ (evaluation).
+<li><strong>Score drift plot:</strong> scatter of $S_{t_0}$ vs.\ $S_{t_1}$ for anchor prompts.
+<li><strong>Temporal batch correlation:</strong> sequential $\tau$ across time-ordered batches (if timestamps available).
+</p>
+<p>
+</ul>
+<h5>Thresholds:</h5>
+<ul>
+</p>
+<p>
+<li><strong>Pass:</strong> $\tau \ge 0.90$ (strong stability).
+<li><strong>Warn:</strong> $\tau \in [0.75, 0.90)$ (moderate drift; check config).
+<li><strong>Fail:</strong> $\tau < 0.75$ (severe drift; refresh oracle and re-calibrate).
+</p>
+<p>
+</ul>
+<h5>Fixes:</h5>
+<ul>
+</p>
+<p>
+<li>Freeze judge version and config during the evaluation window.
+<li>If drift is detected, refresh the oracle slice with new labels and re-fit AutoCal-R.
+<li>Consider using a judging protocol with locked temperature/sampling to reduce stochasticity.
+<li>Use automated temporal drift detection: set <code>check_drift=True</code> and <code>timestamp_field</code> to monitor stability across batches.
+</p>
+<p>
+</ul>
+<h5>Automated detection.</h5>
+ When evaluation data includes timestamps, CJE can automatically detect drift over time using <code>timestamp_field</code> and <code>check_drift=True</code>. This sorts samples by timestamp, computes sequential Kendall $\tau$ correlations across time batches, and flags drift points. This automates the anchor-set workflow for datasets with temporal metadata.
+</p>
+<p>
+<em>Transport trigger:</em> If anchor $\tau < 0.90$ or the Transportability Audit (Diagnostic 5) fails, treat the mapping as <em>non-transportable</em>: gather a fresh calibration slice and refit; do not rely on old $f$ without adjustment.
+</p>
+<h3>Diagnostic 4: Oracle uncertainty (OUA) share</h3>
+<h5>What it measures.</h5>
+ The fraction of total variance attributable to oracle uncertainty (calibrator noise):
+$$
+\text{OUA share} = \frac{\Var_{\oua}}{\SE^2_{\text{total}}}.
+$$
+</p>
+<h5>Why it matters.</h5>
+ High OUA share means label scarcity is the bottleneck, not prompt scarcity. Adding more prompts won't help; you need more labels.
+</p>
+<h5>Artifacts to inspect:</h5>
+<ul>
+</p>
+<p>
+<li><strong>OUA share:</strong> reported as a percentage.
+<li><strong>Variance decomposition:</strong> $\SE^2_{\text{total}} = \Var_{\text{main}} + \Var_{\oua}$.
+</p>
+<p>
+</ul>
+<h5>Thresholds:</h5>
+<ul>
+</p>
+<p>
+<li><strong>Pass:</strong> OUA share $< 20\%$ (labels sufficient).
+<li><strong>Warn:</strong> OUA share $\in [20\%, 50\%]$ (labels becoming a bottleneck).
+<li><strong>Fail:</strong> OUA share $> 50\%$ (labels are the main source of uncertainty).
+</p>
+<p>
+</ul>
+<h5>Fixes:</h5>
+<ul>
+</p>
+<p>
+<li>Add labels, prioritizing regions where $S$ is sparse or where policy comparisons are sensitive.
+<li>For high OUA share, adding prompts yields diminishing returns; focus labeling budget on coverage and regional balance.
+</p>
+<p>
+</ul>
+<h3>Diagnostic 5: Transportability Audit (policy / time)</h3>
+<h5>Goal.</h5>
+ Test whether the source calibrator $f$ transports to a target policy or time window.
+</p>
+<h5>Probe protocol (cheap).</h5>
+ For each target stratum $G$:
+collect a small <em>probe</em> of $n_{\text{probe}}=40\text{--}60$ oracle labels,
+compute residuals $e_i = Y_i - f(S_i,X_{i,\mathrm{cov}})$, and evaluate:
+</p>
+<ol>
+</p>
+<p>
+<li><strong>Global residual mean:</strong>
+$\hat\delta_G = \frac{1}{n_{\text{probe}}}\sum e_i$ with
+$\mathrm{SE}(\hat\delta_G) = \hat\sigma_e/\sqrt{n_{\text{probe}}}$;
+95\
+<li><strong>Regional residuals:</strong>
+bin by deciles of the two-stage index $T=g(S,X_{\mathrm{cov}})$ (or $S$ if single-stage), compute mean $e$ per bin; require all bins within $\pm 0.05$ and no monotone pattern.
+<li><strong>Score/Index coverage:</strong>
+coverage of target $(S$ or $U=\mathrm{ECDF}(T))$ within the oracle training range $\ge 95\%$; inspect boundary slopes.
+</p>
+<p>
+</ol>
+<h5>Traffic-light thresholds.</h5>
+<ul>
+</p>
+<p>
+<li><strong>PASS:</strong> $0 \in \text{CI}(\hat\delta_G)$ and all decile residual means $\in [-0.05,0.05]$ and coverage $\ge 95\%$.
+<li><strong>WARN:</strong> $|\hat\delta_G| \in [0.02,0.05]$ or one/two bins exceed 0.05 in magnitude, or coverage $\in [85\%,95\%)$.
+<li><strong>FAIL:</strong> $0 \notin \text{CI}(\hat\delta_G)$ or 3+ bins exceed 0.05, or coverage $<85\%$.
+</p>
+<p>
+</ul>
+<h5>Fixes by failure mode.</h5>
+<ul>
+</p>
+<p>
+<li><strong>Uniform mean shift:</strong> apply a per-group intercept ("mean anchoring") $\tilde f_G(S,X)=\mathrm{clip}(f(S,X)+\hat\delta_G)$; re-check regional residuals.
+<li><strong>Regional pattern:</strong> enable two-stage AutoCal-R{} with covariates that explain the divergence (e.g., response length, domain); collect +20–40 labels concentrated in failing deciles; refit.
+<li><strong>Coverage failure:</strong> add targeted labels in uncovered $S$/$U$ bins or narrow scope to the intended deployment slice.
+<li><strong>Judge drift (over time):</strong> treat as a new era; gather a fresh calibration slice and refit (see §sec:calib-refresh).
+</p>
+<p>
+</ul>
+<p>
+*{Off-Policy Diagnostics (IPS/DR Only)}
+</p>
+<p>
+The following diagnostics only apply when reusing logged data. <strong>If you're using Direct Mode, you can skip to §4.9.</strong>
+</p>
+<h3>Diagnostic 6: Effective sample size (ESS)</h3>
+<h5>What it measures.</h5>
+ The number of "effective" independent samples after importance weighting:
+$$
+\text{ESS} = \frac{\big(\sum_{i=1}^n \tilde{w}_i\big)^2}{\sum_{i=1}^n \tilde{w}_i^2},
+$$
+where $\tilde{w}_i$ are the stabilized, mean-one weights after SIMCal. ESS ranges from 1 (one weight dominates) to $n$ (all weights equal).
+</p>
+<h5>Why it matters.</h5>
+ Low ESS means a few samples dominate the estimate, leading to high variance and unreliable CIs. ESS is the primary diagnostic for off-policy viability.
+</p>
+<h5>Artifacts to inspect:</h5>
+<ul>
+</p>
+<p>
+<li><strong>ESS (absolute and \
+<li><strong>Weight distribution:</strong> histogram or quantiles (min, median, 95th percentile, max) before and after SIMCal.
+<li><strong>Weight vs.\ $S$ scatter:</strong> check if weights are monotone in $S$ (validates J2-M assumption).
+</p>
+<p>
+</ul>
+<h5>Thresholds:</h5>
+<ul>
+</p>
+<p>
+<li><strong>Pass:</strong> ESS $\ge 30\%$ of $n$ (excellent overlap).
+<li><strong>Warn:</strong> ESS $\in [10\%, 30\%)$ (moderate overlap; DR{} recommended).
+<li><strong>Fail:</strong> ESS $< 10\%$ (poor overlap; estimates unreliable unless DR{} with strong outcome model).
+<li><strong>Refuse:</strong> ESS $< 1\%$ (catastrophic; do not trust any estimate).
+</p>
+<p>
+</ul>
+<h5>Fixes:</h5>
+<ul>
+</p>
+<p>
+<li>Use SIMCal{} with aggressive variance cap $\rho$ (e.g., 0.90).
+<li>Restrict to a high-overlap cohort (e.g., prompts where $|\log \tilde{w}_i| < 2$).
+<li>Switch from IPS{} to DR{} with a strong outcome model.
+<li>If ESS $< 1\%$, regenerate fresh outputs for the candidate policy and use DM{} instead.
+</p>
+<p>
+</ul>
+<h3>Diagnostic 7: Tail heaviness (Hill index)</h3>
+<h5>What it measures.</h5>
+ The tail index $\alpha$ of the weight distribution, estimated via the Hill estimator. If $\alpha < 2$, the weights have infinite variance; if $\alpha < 1$, infinite mean.
+</p>
+<h5>Why it matters.</h5>
+ Heavy-tailed weights break standard inference. Even if ESS looks reasonable, $\alpha < 2$ means variance estimates are unreliable and CIs can be arbitrarily wrong.
+</p>
+<h5>Artifacts to inspect:</h5>
+<ul>
+</p>
+<p>
+<li><strong>Hill index $\alpha$:</strong> estimated from the upper tail of $\tilde{w}$ (post-SIMCal{} weights).
+<li><strong>QQ-plot:</strong> compare weight quantiles to Pareto($\alpha$) reference.
+<li><strong>Max/median ratio:</strong> if $> 100$, likely heavy-tailed.
+</p>
+<p>
+</ul>
+<h5>Thresholds:</h5>
+<ul>
+</p>
+<p>
+<li><strong>Pass:</strong> $\alpha \ge 3$ (well-behaved tails).
+<li><strong>Warn:</strong> $\alpha \in [2, 3)$ (finite variance, but higher moments unstable).
+<li><strong>Fail:</strong> $\alpha < 2$ (infinite variance; estimates unstable).
+<li><strong>Critical:</strong> $\alpha < 1$ (infinite mean; nonsensical).
+</p>
+<p>
+</ul>
+<h5>Fixes:</h5>
+<ul>
+</p>
+<p>
+<li>Apply SIMCal{} with a strict variance cap $\rho < 0.95$.
+<li>Cohort restriction to high-overlap prompts.
+<li>Check for provider drift (temperature, frequency penalty) that might cause unexpected tail behavior.
+<li>If $\alpha < 2$ persists, switch to DR{} or regenerate.
+</p>
+<p>
+</ul>
+<h3>Diagnostic 8: DR orthogonality score</h3>
+<h5>What it measures.</h5>
+ The empirical moment
+$$
+\text{OrthoScore} = \frac{1}{n} \sum_{i=1}^n \tilde{w}_i \cdot (R_i - \hat{g}(S_i)),
+$$
+with a 95\
+</p>
+<h5>Why it matters.</h5>
+ Orthogonality is the key to doubly robust inference. If the orthogonality score is far from zero, either the weights or the outcome model (or both) are poor, and DR{} loses its efficiency and robustness guarantees.
+</p>
+<h5>Artifacts to inspect:</h5>
+<ul>
+</p>
+<p>
+<li><strong>Orthogonality score with CI:</strong> point estimate $\pm 1.96 \cdot \SE$.
+<li><strong>Residual plot:</strong> $(R_i - \hat{g}(S_i))$ vs.\ $\tilde{w}_i$ to spot patterns.
+<li><strong>Outcome model performance:</strong> OOF $R^2$ or MAE on fresh draws.
+</p>
+<p>
+</ul>
+<h5>Thresholds:</h5>
+<ul>
+</p>
+<p>
+<li><strong>Pass:</strong> 95\
+<li><strong>Warn:</strong> CI contains zero, but $|$OrthoScore$| \in [0.05, 0.10]$.
+<li><strong>Fail:</strong> CI does not contain zero or $|$OrthoScore$| > 0.10$.
+</p>
+<p>
+</ul>
+<h5>Fixes:</h5>
+<ul>
+</p>
+<p>
+<li>Improve the outcome model: add regularization, use a more flexible model (e.g., two-stage isotonic), or increase fresh draw sample size.
+<li>Revisit SIMCal{} settings or overlap diagnostics (poor weights can break orthogonality).
+<li>Check cross-fitting: ensure folds are balanced and representative.
+<li>If orthogonality fails persistently, fall back to IPS{} or regenerate for DM.
+</p>
+<p>
+</ul>
+<h3>Traffic-light summary and refusal gates</h3>
+<p>
+CJE estimators can optionally enforce <strong>refusal gates</strong>: if a diagnostic crosses a critical threshold, the estimator returns <code>NaN</code> instead of a potentially misleading number.
+</p>
+<h5>Unified diagnostic thresholds.</h5>
+<p>
+Table~§tab:thresholds summarizes all diagnostic thresholds in one place. Use this as the single source of truth for interpreting diagnostic outputs.
+</p>
+<p>
+<p><em>[Table omitted - see PDF version]</em></p>
+</p>
+<h5>Default refusal gates:</h5>
+<ul>
+</p>
+<p>
+<li>ESS $< 1\%$ $\to$ refuse to estimate (off-policy only).
+<li>Hill index $\alpha < 2$ $\to$ refuse (off-policy only).
+<li>Coverage $< 50\%$ $\to$ warn strongly (all modes).
+</p>
+<p>
+</ul>
+<p>
+Operators can adjust these gates or disable them for exploratory analysis, but the default is to fail loudly rather than produce garbage.
+</p>
+<h3>Diagnostic workflow (flowchart)</h3>
+<h5>Core diagnostics (all modes):</h5>
+<ol>
+</p>
+<p>
+<li><strong>Check score coverage.</strong> If $< 85\%$, add labels or narrow scope. If pass, continue.
+<li><strong>Check calibration reliability.</strong> If regional error is high, enable two-stage AutoCal-R{} or add labels. If pass, continue.
+<li><strong>Check judge stability.</strong> If $\tau < 0.75$, freeze judge config and refresh oracle. If pass, continue.
+<li><strong>Check OUA share.</strong> If $> 50\%$, add labels. If pass, you're done (for Direct Mode).
+</p>
+<p>
+</ol>
+<h5>Additional checks for off-policy (IPS/DR):</h5>
+<ol>
+[resume]
+<li><strong>Check ESS.</strong> If $< 30\%$ (WARN), review diagnostics and consider DR. If $< 10\%$ (FAIL), use SIMCal{} or switch to DR. If $< 1\%$ (REFUSE), regenerate. If pass, continue.
+<li><strong>Check tail index.</strong> If $\alpha < 2$, apply stricter SIMCal{} or cohort restriction. If pass, continue.
+<li><strong>(DR only) Check orthogonality.</strong> If CI excludes zero, improve outcome model or weights. If pass, trust the estimate.
+</p>
+<p>
+</ol>
+<p>
+If any diagnostic fails and the fix is not immediately available, report the failure and do not ship the estimate.
+</p>
+<h3>Visualization gallery (artifacts)</h3>
+<p>
+For full audit trails, CJE produces:
+</p>
+<ul>
+</p>
+<p>
+<li><strong>Calibration curve:</strong> $f(S)$ vs.\ $Y$ with OOF fit and mean-preservation line.
+<li><strong>Coverage histogram:</strong> oracle $S$ vs.\ evaluation $S$ distributions.
+<li><strong>Weight distribution:</strong> before/after SIMCal, with ESS and Hill index annotations.
+<li><strong>Orthogonality residual plot:</strong> $(R - \hat{g}(S))$ vs.\ $\tilde{w}$ with CI band.
+<li><strong>OUA variance decomposition:</strong> stacked bar showing $\Var_{\text{main}}$ vs.\ $\Var_{\oua}$.
+</p>
+<p>
+</ul>
+<p>
+These plots are auto-generated by the CJE visualization module and can be included in reports or dashboards.
+</p>
+<h3>Example: interpreting a diagnostic report</h3>
+<pre><code>=== CJE Diagnostic Report ===
+Mode: Calibrated DR
+Estimator: stacked-dr
+Target policy: gpt-4-mini
+Baseline policy: gpt-3.5-turbo
+</p>
+<p>
+== Core Diagnostics ==
+[1] Score Coverage: 92
+    Oracle S range: [2.1, 9.8]
+    Eval S range: [1.9, 9.9]
+    Boundary slopes: moderate
+</p>
+<p>
+[2] Calibration Reliability: OOF MAE = 0.04 (PASS)
+    Mean preservation: -0.01 (excellent)
+    Regional MAE: low=0.03, mid=0.04, high=0.05 (balanced)
+</p>
+<p>
+[3] Judge Stability: tau = 0.93 (PASS)
+    Temporal batches: 5
+    No drift detected across time periods
+</p>
+<p>
+[4] OUA Share: 15
+    Labels sufficient; variance dominated by prompt variation
+</p>
+<p>
+== Off-Policy Diagnostics ==
+[5] ESS: 342 / 1000 = 34
+    Raw ESS: 18
+    Post-SIMCal ESS: 34
+    Recommendation: acceptable for DR; consider cohort restriction if CI too wide
+</p>
+<p>
+[6] Tail Index: alpha = 2.8 (PASS)
+    Max/median weight ratio: 12.3
+    Tail behavior: well-behaved
+</p>
+<p>
+[7] DR Orthogonality: 0.03 [-0.02, 0.08] (PASS)
+    CI contains zero
+    Outcome model OOF R^2: 0.67
+</p>
+<p>
+Overall: PASS (with ESS warning)
+Recommendation: Estimate is reliable. Consider adding fresh draws or cohort restriction for tighter CIs.
+</code></pre>
+<h3>Uncertainty quantification: cluster-robust + OUA</h3>
+<h5>Two-component variance structure.</h5>
+ CJE's confidence intervals properly account for <em>two independent sources of uncertainty</em>:
+</p>
+<ol>
+</p>
+<p>
+<li><strong>Main sampling uncertainty</strong> (from the eval log/prompts) $\to$ <strong>cluster-robust SEs</strong>.
+<li><strong>Calibrator uncertainty</strong> (from the oracle slice) $\to$ <strong>OUA{</strong> jackknife}.
+</p>
+<p>
+</ol>
+<p>
+Under the product-sample setup (oracle and eval are independent draws), these components are <strong>additive</strong>:
+$$
+\widehat{\Var}_{\text{total}} = \widehat{\Var}_{\text{CR}} + \widehat{\Var}_{\oua}.
+$$
+</p>
+<h5>Why it matters.</h5>
+ Ignoring clustering on the eval side can cause severe undercoverage (e.g., 86.9\
+</p>
+<h5>Component 1: Cluster-robust variance (eval-side dependence).</h5>
+<p>
+Standard i.i.d.\ SEs assume independent samples. When evaluation rows cluster—e.g., multiple prompts per user/session, time blocks, conversation threads, or paired DM contrasts—the <em>effective</em> sample size is closer to the number of clusters $G$, not the number of rows $n$.
+</p>
+<p>
+<strong>What to cluster:</strong> any dependence structure in your eval data (user, session, time block, paired design).
+</p>
+<p>
+All CJE estimators are means of per-row <strong>influence contributions</strong> $\psi_i$:
+$$
+\text{DM level:} \quad &\psi_i = f(S_i^\pi) - \hat{V}, \\
+\text{DM paired contrast:} \quad &\psi_i = \bigl[f(S_i^\pi) - f(S_i^{\pi'})\bigr] - \widehat{\Delta}, \\
+\text{IPS:} \quad &\psi_i = \tilde{w}_i R_i - \hat{V}, \\
+\text{DR:} \quad &\psi_i = \hat{g}_\pi(X_i) + \tilde{w}_i\bigl(R_i - \hat{q}(X_i, A_i^0)\bigr) - \hat{V}.
+$$
+</p>
+<p>
+Aggregate to cluster sums $\Psi_g = \sum_{i:\, c(i)=g} \psi_i$, then compute the small-sample–corrected cluster-robust variance:
+$$
+\widehat{\Var}_{\text{CR}} = \frac{G}{G-1} \cdot \frac{1}{n^2} \sum_{g=1}^G \Psi_g^2.
+$$
+</p>
+<p>
+<strong>Edge cases:</strong>
+</p>
+<ul>
+</p>
+<p>
+<li><strong>Few clusters ($G < 15$):</strong> prefer wild-cluster bootstrap over CR1.
+<li><strong>Two-way dependence (e.g., user $\times$ day):</strong> use two-way clustering formula.
+<li><strong>Time series:</strong> use moving-block bootstrap with block length $\approx n^{1/3}$.
+</p>
+<p>
+</ul>
+<h5>Component 2: Oracle-uncertainty aware (OUA) jackknife.</h5>
+<p>
+When the oracle slice is small (5–10\
+</p>
+<ol>
+</p>
+<p>
+<li>Split oracle labels into $K$ folds (same folds used for cross-fitting).
+<li>For each fold $k$:
+</p>
+<ul>
+</p>
+<p>
+<li>Refit calibrator $f^{(-k)}$ on oracle $\setminus$ fold $k$ (let auto mode selection re-decide mono vs.\ two-stage).
+<li>Recompute calibrated rewards $R^{(-k)} = f^{(-k)}(S)$.
+<li><strong>For IPS/DR:</strong> re-select SIMCal{} weights (selection depends on $R$).
+<li><strong>For DR:</strong> refit outcome model (depends on $R$).
+<li>Compute point estimate $\hat{\theta}^{(-k)}$.
+</p>
+<p>
+</ul>
+<p>
+<li>Jackknife variance:
+$$
+\widehat{\Var}_{\oua} = \frac{K-1}{K} \sum_{k=1}^K \bigl(\hat{\theta}^{(-k)} - \bar{\theta}\bigr)^2, \quad \bar{\theta} = \frac{1}{K}\sum_k \hat{\theta}^{(-k)}.
+$$
+</p>
+<p>
+</ol>
+<p>
+<strong>Key principle:</strong> OUA{} captures <em>oracle-only</em> uncertainty. It holds the eval log fixed and only refits components that depend on calibrator outputs. This maintains independence with $\widehat{\Var}_{\text{CR}}$.
+</p>
+<h5>Combining the components and critical values.</h5>
+<p>
+Because oracle and eval are independent, the cross-term vanishes asymptotically:
+$$
+\SE_{\text{total}} = \sqrt{\widehat{\Var}_{\text{CR}} + \widehat{\Var}_{\oua}}.
+$$
+</p>
+<p>
+<strong>Critical value:</strong>
+</p>
+<ul>
+</p>
+<p>
+<li><strong>Large samples ($G \ge 30$, $K \ge 5$):</strong> use normal quantile (1.96 for 95\
+<li><strong>Small clusters or oracle:</strong> use Satterthwaite effective degrees of freedom:
+$$
+\text{df}_{\text{eff}} = \frac{\bigl(\widehat{\Var}_{\text{CR}} + \widehat{\Var}_{\oua}\bigr)^2}
+{\widehat{\Var}_{\text{CR}}^2/\text{df}_{\text{CR}} + \widehat{\Var}_{\oua}^2/\text{df}_{\oua}}
+$$
+where $\text{df}_{\text{CR}} = G-1$ and $\text{df}_{\oua} = K-1$. Then use $t_{1-\alpha/2, \text{df}_{\text{eff}}}$.
+</p>
+<p>
+</ul>
+<h5>What to report.</h5>
+ For complete transparency, always include:
+</p>
+<ul>
+</p>
+<p>
+<li>Point estimate with 95\
+<li><strong>OUA{</strong> share}: $\widehat{\Var}_{\oua}/\widehat{\Var}_{\text{total}}$ (shows which component dominates).
+<li>Cluster structure: number of clusters $G$, cluster size distribution.
+<li>Comparison: i.i.d.\ SE vs.\ cluster-robust SE (shows dependence penalty).
+</p>
+<p>
+</ul>
+<h5>Quick diagnostic.</h5>
+ If OUA{} share $> 50\%$, labels are the bottleneck—add more oracle labels. If cluster-robust SE is much larger than i.i.d.\ SE (e.g., 30\
+</p>
+<h3>Summary</h3>
+<p>
+The six diagnostics are organized into two groups:
+</p>
+<p>
+<strong>Core diagnostics (all modes):</strong> Coverage (§4.1), calibration reliability (§4.2), judge stability (§4.3), and OUA share (§4.4) apply to all evaluation modes. These catch fundamental validity issues like extrapolation, miscalibration, judge drift, and label scarcity.
+</p>
+<p>
+<strong>Off-policy diagnostics (IPS/DR only):</strong> ESS (§4.5), tail heaviness (§4.6), and DR orthogonality (§4.7) only apply when reusing logged data. These diagnose overlap, weight behavior, and critic quality.
+</p>
+<p>
+Each diagnostic produces a compact artifact, a traffic-light signal, and a concrete fix. Always inspect diagnostics before trusting estimates, and always report them alongside results.
+
+</p>

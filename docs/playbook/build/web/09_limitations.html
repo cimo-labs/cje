@@ -1,0 +1,199 @@
+<h2>Limitations and Known Issues</h2>
+<h3>Overview</h3>
+<p>
+CJE is a practical framework for causal judge evaluation, but it has limitations. This section documents known issues, settings where CJE may not apply, and open challenges.
+</p>
+<h3>Limitation 1: Reliance on judge quality</h3>
+<h5>The issue.</h5>
+ CJE calibrates judge scores to outcome-scale rewards, but if the judge is systematically biased or unreliable, calibration cannot fix it. Garbage in, garbage out.
+</p>
+<h5>When it matters.</h5>
+ All modes. If the judge is poorly correlated with the true outcome ($\rho < 0.5$), even with perfect calibration, estimates will be noisy or biased.
+</p>
+<h5>Mitigation.</h5>
+<ul>
+</p>
+<p>
+<li>Use a high-quality judge (e.g., GPT-4, Claude-3 with a well-designed rubric).
+<li>Validate judge-human agreement on a small pilot (aim for $\rho > 0.7$).
+<li>Use ensemble judges (average scores from multiple judges) to reduce variance.
+<li>Check calibration reliability: if OOF MAE $> 0.10$, the judge may not be sufficiently predictive.
+</p>
+<p>
+</ul>
+<h3>Limitation 2: Monotonicity assumption (J2-M)</h3>
+<h5>The issue.</h5>
+ AutoCal-R{} and SIMCal{} assume that outcomes and weights are monotone in the judge score $S$. If $\E[Y \mid S]$ is non-monotone (e.g., $U$-shaped), isotonic regression can be badly miscalibrated.
+</p>
+<h5>When it matters.</h5>
+ All modes for AutoCal-R; off-policy for SIMCal.
+</p>
+<h5>Mitigation.</h5>
+<ul>
+</p>
+<p>
+<li>Check monotonicity on the oracle slice: bin by $S$, plot mean $Y$.
+<li>If non-monotone, use two-stage AutoCal-R{} (flexible index $\to$ isotonic) or add a coarse index (prompt family, length).
+<li>For SIMCal, check $W$ vs.\ $S$ scatter; if clearly non-monotone, consider model-based weight calibration (e.g., fit $\E[W \mid S]$ with a flexible model).
+</p>
+<p>
+</ul>
+<h3>Limitation 3: Overlap (off-policy only)</h3>
+<h5>The issue.</h5>
+ Off-policy evaluation requires that the logging policy $\pi_0$ could have generated any response the target policy $\pi'$ might generate. If overlap is poor, importance weights explode and estimates are unreliable.
+</p>
+<h5>When it matters.</h5>
+ Off-policy only (IPS, DR). Not an issue for DM.
+</p>
+<h5>Mitigation.</h5>
+<ul>
+</p>
+<p>
+<li>Check ESS; if $< 10\%$, overlap is poor.
+<li>Use SIMCal{} to stabilize weights.
+<li>Restrict to high-overlap cohorts.
+<li>Switch to DR{} with a strong critic (critic can extrapolate to low-overlap regions).
+<li>If overlap is catastrophic (ESS $< 1\%$), regenerate and use DM.
+</p>
+<p>
+</ul>
+<h3>Limitation 4: Judge drift</h3>
+<h5>The issue.</h5>
+ If the judge's interpretation of scores changes over time (due to model updates, prompt changes, or even sampling randomness), calibration breaks. Old oracle labels don't predict new outcomes.
+</p>
+<h5>When it matters.</h5>
+ Off-policy when comparing old logs to new fresh draws; also DM{} if scoring happens over a long time window.
+</p>
+<h5>Mitigation.</h5>
+<ul>
+</p>
+<p>
+<li>Freeze judge version and config during the evaluation window.
+<li>Check stability via an anchor set (Kendall $\tau \ge 0.90$).
+<li>If drift is detected, refresh the oracle slice with new labels and re-fit AutoCal-R.
+<li>For long-running evaluations, re-calibrate periodically (e.g., monthly).
+</p>
+<p>
+</ul>
+<h3>Limitation 5: Small oracle slices</h3>
+<h5>The issue.</h5>
+ When the oracle slice is small ($< 50$ samples), AutoCal-R{} has high variance, leading to large OUA{} share and wide CIs. Calibration may also be unreliable (overfitting).
+</p>
+<h5>When it matters.</h5>
+ All modes. Especially problematic when the evaluation $S$-range is wide or when regional calibration is needed.
+</p>
+<h5>Mitigation.</h5>
+<ul>
+</p>
+<p>
+<li>Aim for $n_{\text{oracle}} \ge 100$ (150–200 recommended).
+<li>Check OUA{} share; if $> 50\%$, add labels.
+<li>Prioritize labels in sparse $S$ regions or high-variance prompt families.
+<li>Use regularization (smoothed isotonic regression) to reduce overfitting on small oracle slices.
+</p>
+<p>
+</ul>
+<h3>Limitation 6: Extrapolation beyond labeled range</h3>
+<h5>The issue.</h5>
+ If evaluation scores $S$ fall outside the oracle $S$-range, AutoCal-R{} must extrapolate. Extrapolation is unreliable, especially at the boundaries.
+</p>
+<h5>When it matters.</h5>
+ All modes. Coverage diagnostic flags this.
+</p>
+<h5>Mitigation.</h5>
+<ul>
+</p>
+<p>
+<li>Add labels targeting uncovered $S$ bins.
+<li>Narrow the prompt set to the intended deployment slice (avoid stress-testing edges unless you label them).
+<li>Inspect boundary slopes; if steep or flat, extrapolation is risky.
+<li>Report coverage badge; if $< 85\%$, flag the estimate as provisional.
+</p>
+<p>
+</ul>
+<h3>Limitation 7: High-dimensional prompts (DR critic)</h3>
+<h5>The issue.</h5>
+ For DR, the critic $\hat{g}(X)$ must predict calibrated rewards from prompt features. If prompts are high-dimensional or unstructured (e.g., raw text), the critic may overfit or fail to generalize.
+</p>
+<h5>When it matters.</h5>
+ DR{} only.
+</p>
+<h5>Mitigation.</h5>
+<ul>
+</p>
+<p>
+<li>Use feature engineering: extract prompt length, topic embeddings, difficulty scores.
+<li>Use flexible models with regularization (gradient-boosted trees, neural nets with dropout).
+<li>Check orthogonality: if CI excludes zero, the critic is not good enough; add features or fresh draws.
+<li>For very high-dimensional prompts, consider dimensionality reduction (e.g., PCA on embeddings).
+</p>
+<p>
+</ul>
+<h3>Limitation 8: Non-i.i.d. data</h3>
+<h5>The issue.</h5>
+ CJE assumes samples are independent and identically distributed (i.i.d.). If prompts are sequential or correlated (e.g., multi-turn conversations), SUTVA fails and estimates are biased.
+</p>
+<h5>When it matters.</h5>
+ All modes. Especially problematic in online settings with user sessions.
+</p>
+<h5>Mitigation.</h5>
+<ul>
+</p>
+<p>
+<li>For batch offline evaluation, ensure prompts are sampled independently.
+<li>For sequential data, break into independent chunks or use session-level aggregation.
+<li>If SUTVA is violated, redefine the estimand to account for interference (beyond this playbook).
+</p>
+<p>
+</ul>
+<h3>Limitation 9: Multiple testing</h3>
+<h5>The issue.</h5>
+ If you evaluate many policies or run many subgroup analyses, some will appear significant by chance (false positives). Standard CIs do not account for multiple comparisons.
+</p>
+<h5>When it matters.</h5>
+ When evaluating $> 5$ policies or running many subgroup analyses.
+</p>
+<h5>Mitigation.</h5>
+<ul>
+</p>
+<p>
+<li>Use Bonferroni or Benjamini-Hochberg correction for multiple testing.
+<li>Pre-specify a small number of key comparisons; treat others as exploratory.
+<li>Use a holdout set for final validation (train/eval/test split).
+</p>
+<p>
+</ul>
+<h3>Limitation 10: Generalization to deployment</h3>
+<h5>The issue.</h5>
+ CJE estimates are valid for the evaluation prompt distribution. If deployment prompts differ materially, estimates may not generalize.
+</p>
+<h5>When it matters.</h5>
+ All modes. This is a distribution-shift problem, not a CJE limitation per se.
+</p>
+<h5>Mitigation.</h5>
+<ul>
+</p>
+<p>
+<li>Ensure evaluation prompts are representative of deployment (stratified sampling by user segment, use case, etc.).
+<li>For new domains, collect a small deployment-representative slice and re-calibrate.
+<li>Monitor online KPIs after deployment and compare to offline estimates (meta-learning for future calibrations).
+</p>
+<p>
+</ul>
+<h3>Open challenges</h3>
+<ul>
+</p>
+<p>
+<li><strong>Sequential and adaptive evaluation:</strong> How to handle multi-turn conversations or adaptive prompting where responses depend on prior context.
+<li><strong>Distribution shift:</strong> Principled methods for extrapolating to new prompt distributions.
+<li><strong>Multi-objective optimization:</strong> Evaluating trade-offs between multiple KPIs (e.g., correctness vs.\ safety vs.\ latency).
+<li><strong>Online learning:</strong> Integrating CJE with bandit algorithms for continuous policy improvement.
+<li><strong>Fairness and robustness:</strong> Ensuring estimates are unbiased across demographic groups and robust to adversarial prompts.
+</p>
+<p>
+</ul>
+<h3>Summary</h3>
+<p>
+CJE's main limitations are judge quality, monotonicity assumptions, overlap (for off-policy), and oracle slice size. Most are checkable via diagnostics and addressable with targeted fixes. When limitations cannot be resolved, report them transparently and interpret estimates with appropriate caution.
+
+</p>

@@ -1,0 +1,175 @@
+<h2>Introduction</h2>
+<p>
+Large language models (LLMs) are increasingly used as judges: a model (or rubricized prompt) assigns a scalar score $S = s(X, A)$ to an answer $A$ given a prompt $X$. This setup is attractive: it is fast, cheap, and often strongly correlated with human preferences. As a result, many teams now compare policies by averaging raw judge scores and declaring a winner.
+</p>
+<h3>What practitioners really want</h3>
+<p>
+In day-to-day evaluation work there are two goals: (i) rank candidate policies on a shared prompt set; and (ii) when stakes justify it, estimate levels for a KPI that matters (e.g., pass rate), with a confidence interval. Both questions are causal: <em>what would happen if we shipped policy $\pi$?</em> Formally, the target is
+$$
+V(\pi) = \E[Y(\pi)],
+$$
+where $Y \in [0, 1]$ is the outcome of interest under the policy we would deploy.
+</p>
+<h3>Why the heuristic fails</h3>
+<p>
+Naively averaging judge scores is a heuristic that breaks in predictable ways:
+</p>
+<ul>
+</p>
+<p>
+<li><strong>Wrong scale.</strong> Judge scores are not on your KPI scale; deltas can be misleading.
+<li><strong>Hidden drift and slice bias.</strong> The meaning of a score can change across time, prompt families, or length; averages hide this.
+<li><strong>No uncertainty.</strong> Without CIs it is hard to tell real uplifts from noise, especially at small label budgets.
+<li><strong>Off-policy illusion.</strong> Reusing one judged log to assess many candidates without correction answers the wrong counterfactual (it reflects the logger, not the candidate).
+</p>
+<p>
+</ul>
+<h3>How CJE works</h3>
+<p>
+<strong>Causal Judge Evaluation (CJE)</strong> turns judge scores into reliable estimates with confidence intervals. The core workflow:
+</p>
+<ol>
+</p>
+<p>
+<li><strong>Calibrate:</strong> Learn a mapping from judge scores to oracle labels on a small random sample (AutoCal-R).
+<li><strong>Evaluate:</strong> For on-policy comparison (<strong>Direct Mode</strong>), generate responses from each policy and average calibrated scores. For counterfactual inference (<strong>Off-Policy</strong>), reuse logged data with importance weighting.
+<li><strong>Report:</strong> Confidence intervals that account for all uncertainty (OUA).
+</p>
+<p>
+</ol>
+<p>
+Most users only need <strong>Direct Mode</strong>: generate outputs, calibrate judge scores, report CIs. For off-policy evaluation, CJE{} stabilizes importance weights (SIMCal) and optionally adds a critic (DR) for robustness. See §3 for details.
+</p>
+<h3>Quick Start: Direct Mode for Model Comparison</h3>
+<p>
+<strong>Just want to compare models on an eval set?</strong> This is the fastest path to reliable estimates with confidence intervals.
+</p>
+<h5>What you need:</h5>
+<ul>
+</p>
+<p>
+<li>500–2000 prompts representative of deployment
+<li>Responses from each policy you want to compare
+<li>Judge scores for all responses (any scale works)
+<li>50–150 oracle labels (ground truth on a random sample)
+</p>
+<p>
+</ul>
+<h5>Steps:</h5>
+<ol>
+</p>
+<p>
+<li>Generate outputs from each policy on the same prompts (paired sampling reduces variance).
+<li>Score all outputs with your judge (fixed version, frozen config).
+<li>Label a random sample of 50–150 examples with ground truth $Y$.
+<li>Run <strong>Direct Mode</strong> (§2)—CJE learns the judge$\to$oracle calibration $f(S)$ automatically via AutoCal-R.
+<li>Check three core diagnostics: coverage (§4.1), calibration (§4.2), judge stability (§4.3).
+<li>Report estimates with 95\
+</p>
+<p>
+</ol>
+<h5>What to read:</h5>
+<ul>
+</p>
+<p>
+<li><strong>Essential:</strong> §2 (Direct Mode), §4.1–4.4 (core diagnostics), §6.1 (DM workflow).
+<li><strong>Skip for now:</strong> §3 (off-policy methods), §4.5–4.7 (weight diagnostics).
+</p>
+<p>
+</ul>
+<p>
+You can return to off-policy methods (§3) later if you want counterfactual inference ("What if we deployed policy X?") without regenerating outputs.
+</p>
+<h3>Notation at a glance</h3>
+<p>
+<p><em>[Table omitted - see PDF version]</em></p>
+</p>
+<h3>When you need more: Off-policy evaluation</h3>
+<p>
+Direct Mode requires generating fresh outputs for each policy. If you want to answer counterfactual questions without regenerating—"What if we deployed policy X instead of our current baseline?"—you need off-policy methods:
+</p>
+<ul>
+</p>
+<p>
+<li><strong>Calibrated IPS{</strong>} reuses a single logged dataset to evaluate multiple candidate policies by reweighting with importance ratios. Requires per-sequence log probabilities.
+</p>
+<p>
+<li><strong>Calibrated DR{</strong>} combines importance weighting with an outcome model for robustness and tighter confidence intervals. Requires both logged data and a small set of fresh draws.
+</p>
+<p>
+</ul>
+<p>
+Off-policy methods enable fast iteration (no regeneration), but introduce complexity (importance weights, overlap diagnostics). See §3 for full details, assumptions, and diagnostics. Most users should start with Direct Mode and adopt off-policy methods only when needed.
+</p>
+<h3>Core diagnostics</h3>
+<p>
+All CJE modes share three essential diagnostics that catch the most common failure modes:
+</p>
+<ol>
+[label=(*)]
+<li><strong>Score coverage:</strong> Does the oracle slice span the evaluation $S$-range? (fix: add labels in uncovered bins)
+</p>
+<p>
+<li><strong>Calibration reliability:</strong> Is $f(S)$ accurate across the $S$ spectrum? (fix: two-stage AutoCal-R{} or add labels in problematic regions)
+</p>
+<p>
+<li><strong>Judge stability:</strong> Is the judge's scoring consistent over time? (fix: freeze judge version, refresh oracle if drift detected)
+</p>
+<p>
+</ol>
+<p>
+These three checks apply whether you're using Direct Mode or off-policy methods. For off-policy evaluation (§3), three additional diagnostics are required:
+</p>
+<ol>
+[label=(*),resume]
+<li><strong>Effective sample size (ESS):</strong> Do we have enough effective samples after reweighting? (fix: cohort restriction or switch to DR)
+</p>
+<p>
+<li><strong>Tail heaviness:</strong> Are importance weights catastrophically heavy-tailed? (fix: SIMCal tuning or overlap-aware cohorting)
+</p>
+<p>
+<li><strong>DR orthogonality:</strong> Is the outcome model orthogonal to the weights? (fix: improve critic or revisit weight calibration)
+</p>
+<p>
+</ol>
+<p>
+See §4 for detailed thresholds, interpretation, and fixes for each diagnostic.
+</p>
+<h3>What CJE provides</h3>
+<p>
+CJE{} gives practitioners a complete workflow for reliable LLM evaluation:
+</p>
+<ul>
+</p>
+<p>
+<li><strong>Three analysis modes:</strong> Direct Mode for on-policy comparison (simplest), Calibrated IPS for off-policy reuse, Calibrated DR for maximum accuracy when you have both logged data and fresh draws.
+</p>
+<p>
+<li><strong>Automatic calibration:</strong> AutoCal-R{} maps judge scores to oracle labels on a small random sample, putting estimates on the right scale.
+</p>
+<p>
+<li><strong>Honest confidence intervals:</strong> OUA{} accounts for calibrator uncertainty, not just sampling noise.
+</p>
+<p>
+<li><strong>Six diagnostics:</strong> Three core checks (coverage, calibration, judge stability) plus three off-policy checks (ESS, tail heaviness, orthogonality). Each includes thresholds, interpretation, and concrete fixes.
+</p>
+<p>
+<li><strong>Off-policy robustness:</strong> SIMCal{} stabilizes importance weights via monotone projection, and DR adds an outcome model for double robustness.
+</p>
+<p>
+</ul>
+<h3>Scope and positioning</h3>
+<p>
+This playbook focuses on practical implementation: assumptions in plain English, minimal recipes, diagnostics with actionable fixes, and reporting templates. Advanced material (theoretical guarantees, projection properties, semiparametric efficiency) lives in the appendix.
+</p>
+<p>
+CJE{} builds on the treatment effect estimation literature, particularly work on efficient estimation with surrogates and limited outcome data [kallus2024role]. Like that work, we avoid restrictive surrogacy conditions and instead study efficiency gains when surrogates supplement—rather than replace—primary outcomes under standard missing-at-random assumptions.
+</p>
+<h3>Reader's guide</h3>
+<h5>For quick model comparison:</h5>
+ Start with the Quick Start (§1.5), then read §2 (Direct Mode), §4.1–4.4 (core diagnostics), and §6.1 (DM workflow). Skip §3 and §4.5–4.7 unless you later need counterfactual inference.
+</p>
+<h5>For comprehensive coverage:</h5>
+ We begin with DM—the default when you can generate on shared prompts—then show how to reuse judged logs with Calibrated IPS{} and Calibrated DR, followed by diagnostics, assumptions for causal interpretation, a practical playbook, compact case studies, and implementation notes.
+
+</p>

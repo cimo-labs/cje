@@ -1,0 +1,138 @@
+<h2>Conclusion</h2>
+<h3>Summary</h3>
+<p>
+Causal Judge Evaluation (CJE) provides a principled, practitioner-first framework for turning LLM-as-judge scores into causally interpretable estimates with honest confidence intervals. This playbook has covered:
+</p>
+<ul>
+</p>
+<p>
+<li><strong>The problem:</strong> Naive averaging of judge scores is a heuristic that breaks in predictable ways (wrong scale, hidden drift, no uncertainty, off-policy illusion).
+</p>
+<p>
+<li><strong>The solution:</strong> Three analysis modes—DM{} (on-policy), Calibrated IPS{} (off-policy with weights), and Calibrated DR{} (off-policy with critic)—each tailored to common evaluation workflows.
+</p>
+<p>
+<li><strong>The core methods:</strong> AutoCal-R{} to map scores to outcomes, SIMCal{} to stabilize weights, and OUA{} to keep CIs honest.
+</p>
+<p>
+<li><strong>The diagnostics:</strong> Five high-leverage checks (coverage, reliability, ESS, tail index, orthogonality) that catch the most important failure modes and point to concrete fixes.
+</p>
+<p>
+<li><strong>The assumptions:</strong> SUTVA, overlap, oracle randomness, and judge monotone sufficiency, all checkable via diagnostics.
+</p>
+<p>
+<li><strong>The playbook:</strong> Decision trees, workflows, checklists, troubleshooting, and reporting templates for operators.
+</p>
+<p>
+<li><strong>The evidence:</strong> Case studies showing DM, IPS, and DR in action, with realistic numbers and sensitivity checks.
+</p>
+<p>
+<li><strong>The limitations:</strong> Judge quality, monotonicity, overlap, drift, and small oracle slices are the main constraints; most are addressable with targeted remediations.
+</p>
+<p>
+</ul>
+<h3>When to use CJE</h3>
+<p>
+Use CJE when you need to:
+</p>
+<ul>
+</p>
+<p>
+<li>Rank candidate policies on a shared prompt set with statistical rigor.
+<li>Estimate policy values on a meaningful KPI scale (e.g., pass rate, satisfaction) with confidence intervals.
+<li>Reuse judged logs to assess multiple candidates without regenerating (off-policy evaluation).
+<li>Combine logged data with fresh draws for tighter CIs and robustness (DR).
+<li>Audit and document evaluation assumptions, diagnostics, and sensitivity checks.
+</p>
+<p>
+</ul>
+<h3>What CJE is not</h3>
+<p>
+CJE is not:
+</p>
+<ul>
+</p>
+<p>
+<li>A replacement for A/B testing. Use CJE for rapid offline iteration; validate winners with online tests when stakes are high.
+<li>A fix for poor judges. If the judge is biased or unreliable, calibration cannot save you.
+<li>A method for sequential or adaptive settings (multi-turn conversations with context dependence). Extensions are possible but beyond this playbook.
+<li>A universal solution. When assumptions fail and cannot be fixed, CJE may not apply. In such cases, report limitations transparently.
+</p>
+<p>
+</ul>
+<h3>Best practices</h3>
+<ol>
+</p>
+<p>
+<li><strong>Design for paired comparisons.</strong> Use the same prompts and seeds across policies to reduce variance.
+</p>
+<p>
+<li><strong>Invest in oracle quality.</strong> A well-chosen, representative oracle slice (150–200 samples) is the foundation of reliable calibration.
+</p>
+<p>
+<li><strong>Check diagnostics before shipping.</strong> Coverage, ESS, reliability, and OUA{} share catch most issues. Always inspect them.
+</p>
+<p>
+<li><strong>Report CIs with OUA.</strong> Honest intervals that include calibrator uncertainty build trust and prevent overconfidence.
+</p>
+<p>
+<li><strong>Run sensitivity checks.</strong> Cohort restriction, trimming, and alternative calibrators confirm robustness and flag fragility.
+</p>
+<p>
+<li><strong>Document everything.</strong> Judge config, prompt sampling, oracle slice, estimator choice, and diagnostic results. Reproducibility matters.
+</p>
+<p>
+<li><strong>Iterate.</strong> Use CJE diagnostics to guide data collection: add labels where coverage is thin, improve the judge where reliability is poor, collect fresh draws where ESS is low.
+</p>
+<p>
+</ol>
+<h3>Future directions</h3>
+<p>
+Ongoing and future work includes:
+</p>
+<ul>
+</p>
+<p>
+<li><strong>Sequential and adaptive evaluation:</strong> Extensions for multi-turn conversations and adaptive prompting.
+<li><strong>Multi-objective optimization:</strong> Methods for evaluating trade-offs across multiple KPIs.
+<li><strong>Online integration:</strong> Combining CJE with bandit algorithms for continuous policy improvement.
+<li><strong>Fairness and robustness:</strong> Ensuring unbiased estimates across demographic groups and robust to adversarial prompts.
+<li><strong>Meta-learning for calibration:</strong> Using historical evaluations to improve calibration on new domains.
+</p>
+<p>
+</ul>
+<h3>Acknowledgments</h3>
+<p>
+CJE builds on decades of work in causal inference, importance sampling, doubly robust estimation, and calibration. Key intellectual debts include:
+</p>
+<ul>
+</p>
+<p>
+<li>Doubly robust methods (Robins, Rotnitzky, Scharfstein; Bang, Robins; Chernozhukov et al.).
+<li>Importance sampling and overlap diagnostics (Hirano, Imbens, Ridder; Li, Sävje, Sussman).
+<li>Isotonic regression and calibration (Zadrozny, Elkan; Platt; Guo et al.).
+<li>Influence functions and semiparametric efficiency (van der Laan, Robins).
+</p>
+<p>
+</ul>
+<p>
+This playbook synthesizes these methods into a practitioner-first toolkit for LLM evaluation.
+</p>
+<h3>Final thoughts</h3>
+<p>
+LLM-as-judge evaluation is here to stay. As models improve, so do the stakes: small differences in policy performance can translate to large impacts at scale. CJE provides a rigorous, transparent, and practical framework for making these decisions with confidence.
+</p>
+<p>
+The diagnostics are not gatekeepers—they are guides. When diagnostics pass, trust the estimate. When they fail, use the fixes. When fixes don't work, report the limitations and proceed with caution (or regenerate).
+</p>
+<p>
+Evaluation is not a one-shot activity. It's a loop: design, collect, calibrate, diagnose, remediate, report, and iterate. CJE is designed to support that loop with minimal friction and maximum transparency.
+</p>
+<p>
+We hope this playbook serves as a practical companion for teams building and deploying LLMs. For questions, contributions, or feedback, visit the CJE repository at <a href="https://github.com/cimo-labs/cje" target="_blank">https://github.com/cimo-labs/cje</a>.
+</p>
+<p>
+1em
+<strong>Happy evaluating!</strong>
+
+</p>
