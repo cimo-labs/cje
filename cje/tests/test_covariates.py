@@ -489,6 +489,7 @@ def test_covariate_computation_consistency() -> None:
             judge_score=0.5,
             oracle_label=None,
             draw_idx=0,
+            fold_id=None,
             metadata={},
         )
         fresh_dataset = FreshDrawDataset(
