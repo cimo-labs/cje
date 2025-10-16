@@ -37,7 +37,7 @@ See [`cje/calibration/README.md`](cje/calibration/README.md#why-isotonic-regress
 
 ## Calibration Methods
 
-CJE provides two calibration modes for mapping judge scores to oracle outcomes:
+CJE provides two calibration modes for mapping judge scores to oracle outcomes (i.e., the KPI you care about):
 
 ### Monotone (Default)
 Standard isotonic regression enforces: *higher judge score → no worse expected outcome*.
