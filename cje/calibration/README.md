@@ -47,6 +47,8 @@ AutoCal-R maps cheap LLM judge scores to expensive oracle labels with automatic 
 
 Auto mode detects non-monotonicity by comparing regional performance and selects the appropriate method. The selected mode is stored in metadata for transparency. This automatic selection is a key feature of AutoCal-R.
 
+**Why isotonic?** Isotonic regression is the default because it imposes exactly the right inductive bias (monotonicity) while making minimal assumptions, preserves oracle KPI levels by construction, and is highly efficient with small label budgets (5-10% coverage often sufficient). See the detailed rationale below.
+
 ### 2. Weight Calibration (SIMCal)
 Stabilizes importance weights through score-indexed monotone projection:
 - Projects weights to be monotone with an ordering index

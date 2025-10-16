@@ -40,7 +40,11 @@ See [`cje/calibration/README.md`](cje/calibration/README.md#why-isotonic-regress
 CJE provides two calibration modes for mapping judge scores to oracle outcomes:
 
 ### Monotone (Default)
-Standard isotonic regression enforces: *higher judge score → no worse expected outcome*. Simple, stable, works well when the judge-oracle relationship is already monotone.
+Standard isotonic regression enforces: *higher judge score → no worse expected outcome*.
+
+**Why isotonic?** It's the right structural prior—assumes only monotonicity (which you actually believe), preserves oracle KPI levels by construction (mean-preserving by KKT conditions), and is highly efficient with small label budgets. See [technical rationale](cje/calibration/README.md#why-isotonic-regression-for-reward-calibration).
+
+Simple, stable, works well when the judge-oracle relationship is already monotone.
 
 ### Two-Stage (Flexible)
 Learns smooth transformation g(S) → rank → isotonic. Handles non-monotone patterns (e.g., length bias, regional miscalibration) while maintaining final monotonicity guarantee.
