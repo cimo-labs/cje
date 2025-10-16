@@ -48,7 +48,7 @@ where $W_i = \pi'(A_i \mid X_i) / \pi_0(A_i \mid X_i)$ and $R_i = f(S_i)$.
 \item \textbf{Variance cap:} if $\Var(W_{\text{blend}}) > \rho \cdot \Var(W)$, reproject to enforce $\Var \le \rho \cdot \Var(W)$.
 \end{enumerate}
 
-\textbf{Why it works:} Monotone projections weakly reduce variance by majorization, and the cap $\rho$ (default 0.95) ensures strict variance reduction. \simcal{} explicitly normalizes weights to mean one and projects them as a monotone function of $S$ out-of-fold. Under our J2-M assumption (score-indexed sufficiency), this projection reduces variance and \emph{approximately} preserves the target; we surface trimming/cohort sensitivity and orthogonality to detect residual bias.
+\textbf{Why it works:} Monotone projections weakly reduce variance by majorization, and the cap $\rho$ (default 0.95) ensures strict variance reduction. \simcal{} explicitly normalizes weights to mean one (so stabilized weights average to 1) and projects them as a monotone function of $S$ out-of-fold. Under our J2-M/J2-MX assumptions (score-indexed monotone sufficiency), this projection \emph{stabilizes variance with approximately unbiased mean-one normalization}. We surface cohort and trimming sensitivities in diagnostics to reveal any residual bias; if J2-M fails or overlap is poor, these sensitivity checks will flag the issue.
 
 \paragraph{Operator artifacts to check:}
 \begin{itemize}

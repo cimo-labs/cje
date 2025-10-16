@@ -49,9 +49,9 @@ Most users only need \textbf{Direct Mode}: generate outputs, calibrate judge sco
 \begin{enumerate}
 \item Generate outputs from each policy on the same prompts (paired sampling reduces variance).
 \item Score all outputs with your judge (fixed version, frozen config).
-\item Label a random sample of 50--150 examples with ground truth $Y$.
+\item Label a random sample of 50--150 examples with ground truth $Y$ (must be a simple random sample; stratify if subgroups matter).
 \item Run \textbf{Direct Mode} (§2)---CJE learns the judge$\to$oracle calibration $f(S)$ automatically via \autocal.
-\item Check three core diagnostics: coverage (§4.1), calibration (§4.2), judge stability (§4.3).
+\item Check five core diagnostics: coverage (§4.1), calibration (§4.2), judge stability (§4.3), OUA share (§4.4), transportability (§4.5).
 \item Report estimates with 95\% CIs (includes \oua{} to account for calibrator uncertainty).
 \end{enumerate}
 
@@ -113,7 +113,7 @@ Off-policy methods enable fast iteration (no regeneration), but introduce comple
 
 \subsection{Core diagnostics}
 
-All CJE modes share three essential diagnostics that catch the most common failure modes:
+All CJE modes share five essential diagnostics that catch the most common failure modes:
 
 \begin{enumerate}[label=(\alph*)]
 \item \textbf{Score coverage:} Does the oracle slice span the evaluation $S$-range? (fix: add labels in uncovered bins)
@@ -121,9 +121,13 @@ All CJE modes share three essential diagnostics that catch the most common failu
 \item \textbf{Calibration reliability:} Is $f(S)$ accurate across the $S$ spectrum? (fix: two-stage \autocal{} or add labels in problematic regions)
 
 \item \textbf{Judge stability:} Is the judge's scoring consistent over time? (fix: freeze judge version, refresh oracle if drift detected)
+
+\item \textbf{OUA share:} Is label scarcity the bottleneck for precision? (fix: add oracle labels in sparse regions)
+
+\item \textbf{Transportability:} Does the calibrator transport across policies/time? (fix: refresh oracle or apply mean anchoring)
 \end{enumerate}
 
-These three checks apply whether you're using Direct Mode or off-policy methods. For off-policy evaluation (§3), three additional diagnostics are required:
+These five checks apply whether you're using Direct Mode or off-policy methods. For off-policy evaluation (§3), three additional diagnostics are required:
 
 \begin{enumerate}[label=(\alph*),resume]
 \item \textbf{Effective sample size (ESS):} Do we have enough effective samples after reweighting? (fix: cohort restriction or switch to DR)
@@ -146,7 +150,7 @@ See §4 for detailed thresholds, interpretation, and fixes for each diagnostic.
 
 \item \textbf{Honest confidence intervals:} \oua{} accounts for calibrator uncertainty, not just sampling noise.
 
-\item \textbf{Six diagnostics:} Three core checks (coverage, calibration, judge stability) plus three off-policy checks (ESS, tail heaviness, orthogonality). Each includes thresholds, interpretation, and concrete fixes.
+\item \textbf{Eight high-leverage diagnostics:} Five core checks (coverage, calibration, judge stability, OUA share, transportability) plus three off-policy checks (ESS, tail heaviness, orthogonality). Each includes thresholds, interpretation, and concrete fixes.
 
 \item \textbf{Off-policy robustness:} \simcal{} stabilizes importance weights via monotone projection, and DR adds an outcome model for double robustness.
 \end{itemize}

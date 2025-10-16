@@ -169,6 +169,15 @@ Same as Diagnostic 2 (OOF MAE $< 0.05$ pass, $< 0.10$ warn, $> 0.10$ fail), appl
 
 \paragraph{Goal.} Test whether the source calibrator $f$ transports to a target policy or time window.
 
+\begin{mdframed}[linecolor=cjegray, backgroundcolor=white, linewidth=1pt]
+\textbf{Transportability vs.\ Judge Drift (terminology):}
+\begin{itemize}
+\item \textbf{Transportability} (\emph{this diagnostic}): Does the calibrator $f$ (the mapping from score $S$ to outcome $Y$) remain accurate when applied to a \emph{different policy} or \emph{time window}? Formally: is $Y \perp G \mid (S, X_{\mathrm{cov}})$ where $G$ is group (policy/time)?
+\item \textbf{Judge Drift} (Diagnostic 3): Does the \emph{judge's scoring function} $s(X, A)$ change over time? Formally: is $s_t(X, A) = s_{t'}(X, A)$ across time?
+\end{itemize}
+\emph{Key difference:} Judge drift invalidates scores; transportability failure means $f$ doesn't generalize.  \textbf{If drift is detected (Diagnostic 3 fails), do not attempt transport---refresh the oracle and refit $f$.}
+\end{mdframed}
+
 \paragraph{Probe protocol (cheap).} For each target stratum $G$:
 collect a small \emph{probe} of $n_{\text{probe}}=40\text{--}60$ oracle labels,
 compute residuals $e_i = Y_i - f(S_i,X_{i,\mathrm{cov}})$, and evaluate:
@@ -504,10 +513,10 @@ where $\text{df}_{\text{CR}} = G-1$ and $\text{df}_{\oua} = K-1$. Then use $t_{1
 
 \subsection{Summary}
 
-The six diagnostics are organized into two groups:
+The eight diagnostics are organized into two groups:
 
-\textbf{Core diagnostics (all modes):} Coverage (§4.1), calibration reliability (§4.2), judge stability (§4.3), and OUA share (§4.4) apply to all evaluation modes. These catch fundamental validity issues like extrapolation, miscalibration, judge drift, and label scarcity.
+\textbf{Core diagnostics (all modes):} Coverage (§4.1), calibration reliability (§4.2), judge stability (§4.3), OUA share (§4.4), and transportability (§4.5) apply to all evaluation modes. These catch fundamental validity issues like extrapolation, miscalibration, judge drift, label scarcity, and policy/time invariance.
 
-\textbf{Off-policy diagnostics (IPS/DR only):} ESS (§4.5), tail heaviness (§4.6), and DR orthogonality (§4.7) only apply when reusing logged data. These diagnose overlap, weight behavior, and critic quality.
+\textbf{Off-policy diagnostics (IPS/DR only):} ESS (§4.6), tail heaviness (§4.7), and DR orthogonality (§4.8) only apply when reusing logged data. These diagnose overlap, weight behavior, and critic quality.
 
 Each diagnostic produces a compact artifact, a traffic-light signal, and a concrete fix. Always inspect diagnostics before trusting estimates, and always report them alongside results.
