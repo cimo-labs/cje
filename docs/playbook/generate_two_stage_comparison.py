@@ -26,8 +26,8 @@ with open(data_path) as f:
 print(f"Loaded {len(samples)} samples")
 
 # Extract judge scores and oracle labels
-judge_scores = []
-oracle_labels = []
+judge_scores_list = []
+oracle_labels_list = []
 
 for sample in samples:
     metadata = sample.get("metadata", {})
@@ -35,30 +35,60 @@ for sample in samples:
     oracle_label = metadata.get("oracle_label")
 
     if judge_score is not None and oracle_label is not None:
-        judge_scores.append(judge_score)
-        oracle_labels.append(oracle_label)
+        judge_scores_list.append(judge_score)
+        oracle_labels_list.append(oracle_label)
 
-judge_scores = np.array(judge_scores)
-oracle_labels = np.array(oracle_labels)
+judge_scores = np.array(judge_scores_list)
+oracle_labels = np.array(oracle_labels_list)
 
 print(f"Found {len(judge_scores)} samples with both judge scores and oracle labels")
 print(f"Judge score range: [{judge_scores.min():.3f}, {judge_scores.max():.3f}]")
 print(f"Oracle label range: [{oracle_labels.min():.3f}, {oracle_labels.max():.3f}]")
 
-# Fit both calibrators
-print("\nFitting monotone calibrator...")
+# Fit both calibrators with cross-validation for OOF RMSE
+print("\nFitting monotone calibrator with 5-fold CV...")
 cal_monotone = JudgeCalibrator(calibration_mode="monotone")
-result_monotone = cal_monotone.fit_transform(judge_scores, oracle_labels)
+result_monotone = cal_monotone.fit_cv(judge_scores, oracle_labels, n_folds=5)
 
-print("Fitting two-stage calibrator...")
+print("Fitting two-stage calibrator with 5-fold CV...")
 cal_two_stage = JudgeCalibrator(calibration_mode="two_stage")
-result_two_stage = cal_two_stage.fit_transform(judge_scores, oracle_labels)
+result_two_stage = cal_two_stage.fit_cv(judge_scores, oracle_labels, n_folds=5)
+
+# Compute RMSEs
+rmse_monotone = np.sqrt(
+    np.mean((oracle_labels - result_monotone.calibrated_scores) ** 2)
+)
+rmse_two_stage = np.sqrt(
+    np.mean((oracle_labels - result_two_stage.calibrated_scores) ** 2)
+)
+
+# Check if predictions differ
+n_different = np.sum(
+    np.abs(result_monotone.calibrated_scores - result_two_stage.calibrated_scores)
+    > 1e-6
+)
+max_diff = np.max(
+    np.abs(result_monotone.calibrated_scores - result_two_stage.calibrated_scores)
+)
+
+# Also check residual distributions
+resid_monotone = oracle_labels - result_monotone.calibrated_scores
+resid_two_stage = oracle_labels - result_two_stage.calibrated_scores
+ss_monotone = np.sum(resid_monotone**2)
+ss_two_stage = np.sum(resid_two_stage**2)
 
 print(
     f"\nMonotone - Calibrated range: [{result_monotone.calibrated_scores.min():.3f}, {result_monotone.calibrated_scores.max():.3f}]"
 )
+print(f"Monotone - In-sample RMSE: {rmse_monotone:.6f}")
+print(f"Monotone - OOF RMSE: {result_monotone.oof_rmse:.6f}")
 print(
     f"Two-stage - Calibrated range: [{result_two_stage.calibrated_scores.min():.3f}, {result_two_stage.calibrated_scores.max():.3f}]"
+)
+print(f"Two-stage - In-sample RMSE: {rmse_two_stage:.6f}")
+print(f"Two-stage - OOF RMSE: {result_two_stage.oof_rmse:.6f}")
+print(
+    f"\nDifferences: {n_different}/{len(judge_scores)} predictions differ (max diff: {max_diff:.6f})"
 )
 
 # Create comparison visualization
@@ -92,7 +122,7 @@ binned_means_valid = np.array(binned_means)[valid_bins]
 
 
 # Function to plot calibration
-def plot_calibration(ax, calibrator, result, title, mode):
+def plot_calibration(ax, calibrator, result, title, mode):  # type: ignore[no-untyped-def]
     # Scatter plot with transparency
     ax.scatter(
         judge_scores, oracle_labels, alpha=0.1, s=10, color="gray", label="Samples"
@@ -128,8 +158,8 @@ def plot_calibration(ax, calibrator, result, title, mode):
     # Plot diagonal reference
     ax.plot([0, 1], [0, 1], "--", color="gray", alpha=0.5, label="Perfect (y=x)")
 
-    # Compute RMSE
-    rmse = np.sqrt(np.mean((oracle_labels - result.calibrated_scores) ** 2))
+    # Use OOF RMSE from result (more honest than in-sample)
+    rmse = result.oof_rmse
 
     # Labels and formatting
     ax.set_xlabel("Judge Score", fontsize=16, fontweight="bold")
@@ -153,8 +183,8 @@ def plot_calibration(ax, calibrator, result, title, mode):
 
     # Add stats box
     stats_text = (
-        f"RMSE: {rmse:.3f}\n"
-        f"Range: [{result.calibrated_scores.min():.3f}, {result.calibrated_scores.max():.3f}]\n"
+        f"RMSE: {rmse:.4f}\n"
+        f"Calibrated range: [{result.calibrated_scores.min():.3f}, {result.calibrated_scores.max():.3f}]\n"
         f"Samples: {len(judge_scores):,}"
     )
     ax.text(

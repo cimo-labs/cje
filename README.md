@@ -49,6 +49,8 @@ Learns smooth transformation g(S) → rank → isotonic. Handles non-monotone pa
   <img src="two_stage_comparison.png" alt="Calibration Comparison" width="100%">
 </div>
 
+<sub>*Data from [LMSYS Chatbot Arena](https://huggingface.co/datasets/agie-ai/lmsys-chatbot_arena_conversations). Judge scores from GPT-4-nano, oracle labels from GPT-5. RMSE computed out-of-fold (5-fold CV) for honest generalization performance.*</sub>
+
 **When to use two-stage:**
 - Regional miscalibration (monotone works well at low/high but poorly at mid-range)
 - Length bias (judge gives same score to different-quality responses based on length)
