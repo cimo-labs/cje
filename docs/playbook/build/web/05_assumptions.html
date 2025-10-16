@@ -47,8 +47,8 @@ where responses are shown to users sequentially and influence each other
 </section>
 <section id="when-it-matters." class="level4">
 <h4>When it matters.</h4>
-<p>All modes (, , ). Violations are rare in offline batch evaluation but
-common in online settings with statefulness.</p>
+<p>All modes (DM, IPS, DR). Violations are rare in offline batch
+evaluation but common in online settings with statefulness.</p>
 </section>
 <section id="how-to-check." class="level4">
 <h4>How to check.</h4>
@@ -81,7 +81,7 @@ data to learn from.</p>
 </section>
 <section id="when-it-matters.-1" class="level4">
 <h4>When it matters.</h4>
-<p>Off-policy only (, ). Not needed for (you generate fresh
+<p>Off-policy only (IPS, DR). Not needed for DM (you generate fresh
 outputs).</p>
 </section>
 <section id="how-to-check.-1" class="level4">
@@ -97,8 +97,8 @@ gaps.</p>
 <h4>What happens if it fails.</h4>
 <p>Importance weights explode, variance becomes infinite, estimates are
 dominated by a few outliers. The only fix is to restrict to a
-high-overlap cohort, switch to with a strong critic, or regenerate
-().</p>
+high-overlap cohort, switch to DR with a strong critic, or regenerate
+(DM).</p>
 </section>
 </section>
 <section id="judge-and-calibration-assumptions" class="level2">
@@ -117,7 +117,8 @@ domain.</p>
 </section>
 <section id="when-it-matters.-2" class="level4">
 <h4>When it matters.</h4>
-<p>All modes that use (, , ). Without this, calibration is biased.</p>
+<p>All modes that use AutoCal-R (DM, IPS, DR). Without this, calibration
+is biased.</p>
 </section>
 <section id="how-to-check.-2" class="level4">
 <h4>How to check.</h4>
@@ -128,7 +129,7 @@ Kolmogorov-Smirnov) or visual inspection.</p>
 </section>
 <section id="what-happens-if-it-fails.-2" class="level4">
 <h4>What happens if it fails.</h4>
-<p>learns the wrong mapping, leading to biased <span
+<p>AutoCal-R learns the wrong mapping, leading to biased <span
 class="math inline">\(R = f(S)\)</span>. CIs are too narrow because they
 don’t account for the selection bias. Fix: stratify labeling by prompt
 family or <span class="math inline">\(S\)</span> bins; use
@@ -149,11 +150,12 @@ class="math inline">\(h_W\)</span> such that:</p>
 <h4>Plain English.</h4>
 <p>Higher judge scores should correspond (on average) to better
 outcomes, and the importance weight should vary smoothly with the score.
-This is the key to and .</p>
+This is the key to AutoCal-R and SIMCal.</p>
 </section>
 <section id="when-it-matters.-3" class="level4">
 <h4>When it matters.</h4>
-<p>All modes for (outcome); off-policy for (weights).</p>
+<p>All modes for AutoCal-R (outcome); off-policy for SIMCal
+(weights).</p>
 </section>
 <section id="how-to-check.-3" class="level4">
 <h4>How to check.</h4>
@@ -173,13 +175,13 @@ class="math inline">\(S\)</span> should show a trend.</p></li>
 <h4>What happens if it fails.</h4>
 <ul>
 <li><p>If <span class="math inline">\(\E[Y \mid S]\)</span> is not
-monotone, can be badly miscalibrated. Use two-stage (spline index <span
-class="math inline">\(\to\)</span> isotonic) or add a coarse index
-(prompt family).</p></li>
+monotone, AutoCal-R can be badly miscalibrated. Use two-stage AutoCal-R
+(spline index <span class="math inline">\(\to\)</span> isotonic) or add
+a coarse index (prompt family).</p></li>
 <li><p>If <span class="math inline">\(\E[W \mid S]\)</span> is not
-monotone, may not help (or may hurt). Check the diagnostic; if
+monotone, SIMCal may not help (or may hurt). Check the diagnostic; if
 monotonicity fails, consider model-based weight calibration or switch to
-.</p></li>
+DR.</p></li>
 </ul>
 <div class="assumption">
 <p><span id="assump:j2mx" label="assump:j2mx"></span> There exists a
@@ -204,7 +206,7 @@ rank-ordering.</p>
 </section>
 <section id="when-it-matters.-4" class="level4">
 <h4>When it matters.</h4>
-<p>All modes when using two-stage with covariates (§<a
+<p>All modes when using two-stage AutoCal-R with covariates (§<a
 href="#sec:two-stage-autocal" data-reference-type="ref"
 data-reference="sec:two-stage-autocal">[sec:two-stage-autocal]</a>). If
 plain J2-M holds, this is not needed.</p>
@@ -242,8 +244,8 @@ randomness in sampling.</p>
 </section>
 <section id="when-it-matters.-5" class="level4">
 <h4>When it matters.</h4>
-<p>Off-policy (, ) when comparing logged scores to fresh scores. Less
-critical for if all scoring happens in one batch.</p>
+<p>Off-policy (IPS, DR) when comparing logged scores to fresh scores.
+Less critical for DM if all scoring happens in one batch.</p>
 </section>
 <section id="how-to-check.-5" class="level4">
 <h4>How to check.</h4>
@@ -260,8 +262,9 @@ class="math inline">\(\tau &lt; 0.75\)</span> is a red flag.</p>
 class="math inline">\(S\)</span> has changed. Oracle labels from <span
 class="math inline">\(t_0\)</span> don’t predict outcomes at <span
 class="math inline">\(t_1\)</span>. Fix: refresh the oracle slice with
-new labels from <span class="math inline">\(t_1\)</span> and re-fit . Or
-freeze the judge version/config during the evaluation window.</p>
+new labels from <span class="math inline">\(t_1\)</span> and re-fit
+AutoCal-R. Or freeze the judge version/config during the evaluation
+window.</p>
 <div class="assumption">
 <p><span id="assum:transport" label="assum:transport"></span> Let <span
 class="math inline">\(f\)</span> be the judge<span
@@ -317,8 +320,8 @@ rewards <span class="math inline">\(R = f(S) \in [0, 1]\)</span>.</p>
 <section id="plain-english.-6" class="level4">
 <h4>Plain English.</h4>
 <p>The outcome you care about (pass rate, reward, satisfaction) has a
-natural scale. maps scores onto <span class="math inline">\([0,
-1]\)</span> to match that scale.</p>
+natural scale. AutoCal-R maps scores onto <span
+class="math inline">\([0, 1]\)</span> to match that scale.</p>
 </section>
 <section id="when-it-matters.-6" class="level4">
 <h4>When it matters.</h4>
@@ -328,8 +331,8 @@ CIs.</p>
 <section id="how-to-check.-6" class="level4">
 <h4>How to check.</h4>
 <p>Verify that oracle <span class="math inline">\(Y \in [0, 1]\)</span>.
-If judge scores are on a different scale (e.g., 1–10), automatically
-rescales.</p>
+If judge scores are on a different scale (e.g., 1–10), AutoCal-R
+automatically rescales.</p>
 </section>
 <section id="what-happens-if-it-fails.-6" class="level4">
 <h4>What happens if it fails.</h4>
@@ -351,17 +354,17 @@ faster, OR</p></li>
 converge to the true weights at rate <span
 class="math inline">\(n^{-1/4}\)</span> or faster.</p></li>
 </ul>
-<p>If both converge at <span class="math inline">\(n^{-1/2}\)</span>,
+<p>If both converge at <span class="math inline">\(n^{-1/2}\)</span>, DR
 achieves the efficiency bound.</p>
 </div>
 <section id="plain-english.-7" class="level4">
 <h4>Plain English.</h4>
-<p>For to work well, you need either a decent critic or decent weights
-(or both). If both are terrible, loses its advantages.</p>
+<p>For DR to work well, you need either a decent critic or decent
+weights (or both). If both are terrible, DR loses its advantages.</p>
 </section>
 <section id="when-it-matters.-7" class="level4">
 <h4>When it matters.</h4>
-<p>only. Not needed for or .</p>
+<p>DR only. Not needed for DM or IPS.</p>
 </section>
 <section id="how-to-check.-7" class="level4">
 <h4>How to check.</h4>
@@ -371,20 +374,20 @@ too far off.</p>
 </section>
 <section id="what-happens-if-it-fails.-7" class="level4">
 <h4>What happens if it fails.</h4>
-<p>is still consistent (unbiased) but loses efficiency and may have
-higher variance than . The fix is to improve the critic (more fresh
-draws, better model) or improve the weights (better , cohort
+<p>DR is still consistent (unbiased) but loses efficiency and may have
+higher variance than IPS. The fix is to improve the critic (more fresh
+draws, better model) or improve the weights (better SIMCal, cohort
 restriction).</p>
 </section>
 </section>
 <section id="when-assumptions-can-be-relaxed" class="level2">
 <h2>When assumptions can be relaxed</h2>
 <ul>
-<li><p><strong>Overlap (D2)</strong> can be relaxed if you use with a
+<li><p><strong>Overlap (D2)</strong> can be relaxed if you use DR with a
 strong critic. The critic can extrapolate to regions with poor
 overlap.</p></li>
 <li><p><strong>Monotone sufficiency (J2-M)</strong> can be relaxed with
-two-stage or coarse indexing (prompt family).</p></li>
+two-stage AutoCal-R or coarse indexing (prompt family).</p></li>
 <li><p><strong>Judge stability (J3)</strong> can be relaxed if you
 refresh the oracle slice frequently and re-calibrate.</p></li>
 <li><p><strong>Rate assumptions (R3)</strong> are not needed for point
@@ -401,11 +404,12 @@ subset with better overlap (e.g., <span class="math inline">\(|\log W|
 &lt; 2\)</span>). If estimates are stable, you’re robust.</p></li>
 <li><p><strong>Trimming:</strong> Drop the top 1–5% of weights and see
 if results change. Large changes indicate tail sensitivity.</p></li>
-<li><p><strong>Alternative calibrators:</strong> Compare isotonic to
-spline or linear calibration. Agreement suggests robustness.</p></li>
-<li><p><strong>Alternative critics:</strong> For , try multiple outcome
-models (linear, random forest, boosting). If all agree, you’re in good
-shape.</p></li>
+<li><p><strong>Alternative calibrators:</strong> Compare isotonic
+AutoCal-R to spline or linear calibration. Agreement suggests
+robustness.</p></li>
+<li><p><strong>Alternative critics:</strong> For DR, try multiple
+outcome models (linear, random forest, boosting). If all agree, you’re
+in good shape.</p></li>
 <li><p><strong>Anchor set drift:</strong> Compute <span
 class="math inline">\(\tau\)</span> on multiple anchor sets or at
 multiple time points. Consistent high <span
@@ -420,9 +424,9 @@ to robustness. — = not needed.</caption>
 <thead>
 <tr class="header">
 <th style="text-align: left;">Assumption</th>
-<th style="text-align: center;"></th>
-<th style="text-align: center;"></th>
-<th style="text-align: center;"></th>
+<th style="text-align: center;">DM</th>
+<th style="text-align: center;">IPS</th>
+<th style="text-align: center;">DR</th>
 </tr>
 </thead>
 <tbody>

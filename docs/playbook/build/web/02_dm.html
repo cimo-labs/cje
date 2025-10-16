@@ -7,8 +7,8 @@ class="level1">
 we shipped policy <span class="math inline">\(\pi\)</span>?” It is the
 closest offline analog to an A/B test: generate outputs for each policy
 on the same prompts (paired design), map judge scores to an outcome
-scale with , average the calibrated rewards, and attach confidence
-intervals that include calibration uncertainty ().</p>
+scale with AutoCal-R, average the calibrated rewards, and attach
+confidence intervals that include calibration uncertainty (OUA).</p>
 <div class="quickref">
 <p><strong>DM in one minute (operator view)</strong></p>
 <ol>
@@ -22,10 +22,10 @@ relevant).</p></li>
 <li><p>Score each <span class="math inline">\((X_i, A_{\pi i})\)</span>
 with the judge to get <span class="math inline">\(S_{\pi
 i}\)</span>.</p></li>
-<li><p>Calibrate scores to outcome-scale rewards via : <span
+<li><p>Calibrate scores to outcome-scale rewards via AutoCal-R: <span
 class="math inline">\(R_{\pi i} = f(S_{\pi i})\)</span>.</p></li>
 <li><p>Estimate the value and (paired) differences with honest CIs (add
-).</p></li>
+OUA).</p></li>
 </ol>
 </div>
 </section>
@@ -37,7 +37,7 @@ shared prompt set.</p></li>
 <li><p>You want clean causal comparisons without dealing with
 propensities/overlap.</p></li>
 <li><p>Your main risks are calibration coverage, judge drift, and label
-scarcity (handled by + diagnostics + ).</p></li>
+scarcity (handled by AutoCal-R + diagnostics + OUA).</p></li>
 </ul>
 </section>
 <section id="inputs-setup" class="level2">
@@ -57,14 +57,14 @@ design).</p>
 <dt>Oracle slice:</dt>
 <dd>
 <p>a small, diverse set with ground-truth labels <span
-class="math inline">\(Y\)</span> to train .</p>
+class="math inline">\(Y\)</span> to train AutoCal-R.</p>
 </dd>
 </dl>
 </section>
 <section id="autocal-r-map-judge-score-to-outcome" class="level2">
 <h2>AutoCal-R: map judge score to outcome</h2>
-<p>learns a mean-preserving mapping <span class="math inline">\(f:
-\mathbb{R} \to [0,1]\)</span> from score <span
+<p>AutoCal-R learns a mean-preserving mapping <span
+class="math inline">\(f: \mathbb{R} \to [0,1]\)</span> from score <span
 class="math inline">\(S\)</span> to calibrated reward <span
 class="math inline">\(R = f(S)\)</span>. By default it fits a monotone
 mapping; when needed, it auto-switches to a light two-stage index (e.g.,
@@ -108,7 +108,7 @@ slopes.</p></li>
 </ul>
 </section>
 <section id="sec:two-stage-autocal" class="level3">
-<h3>Two-Stage (with covariates)</h3>
+<h3>Two-Stage AutoCal-R (with covariates)</h3>
 <p>When <span class="math inline">\(\E[Y\mid S]\)</span> is only
 approximately monotone or exhibits slice effects (e.g., length or domain
 bias at fixed <span class="math inline">\(S\)</span>), we use a light
@@ -163,7 +163,7 @@ data-reference="assump:j2mx">[assump:j2mx]</a>.</p>
 <h4>Why it helps.</h4>
 <p>(i) Captures slice heterogeneity with one d.o.f.; (ii)
 rank–uniformization makes the mapping scale-free and density-stable;
-(iii) preserves interpretability and mean; (iv) plays well with and
+(iii) preserves interpretability and mean; (iv) plays well with OUA and
 regional diagnostics.</p>
 </section>
 <section id="when-to-enable." class="level4">
@@ -200,16 +200,16 @@ prompt-level noise cancels).</p>
 <section id="uncertainty-that-stays-honest-oua" class="level2">
 <h2>Uncertainty that stays honest (OUA)</h2>
 <p>Treating <span class="math inline">\(f\)</span> as fixed understates
-uncertainty when the oracle slice is small. <strong>(oracle-uncertainty
-aware)</strong> inference refits <span class="math inline">\(f\)</span>
-across label folds and adds the induced variance: <span
-class="math display">\[\SE^2_{\text{total}} = \Var_{\text{main}} +
-\Var_{OUA},\]</span> and forms 95% CIs using a
+uncertainty when the oracle slice is small. <strong>OUA
+(oracle-uncertainty aware)</strong> inference refits <span
+class="math inline">\(f\)</span> across label folds and adds the induced
+variance: <span class="math display">\[\SE^2_{\text{total}} =
+\Var_{\text{main}} + \Var_{OUA},\]</span> and forms 95% CIs using a
 <strong>t</strong>-critical value with Satterthwaite df when
 clusters/oracle folds are small; normal quantile otherwise (see §<a
 href="#sec:uncertainty" data-reference-type="ref"
 data-reference="sec:uncertainty">[sec:uncertainty]</a>). Always show the
-share <span
+OUA share <span
 class="math inline">\(\Var_{OUA}/\SE^2_{\text{total}}\)</span>.</p>
 </section>
 <section id="diagnostics-highest-leverage-quick-fixes" class="level2">
@@ -223,14 +223,14 @@ class="math inline">\(S\)</span> bins; consider narrowing the prompt set
 to the intended deployment slice.</p></li>
 <li><p><strong>Calibration reliability</strong> (OOF curve + regional
 error).</p>
-<p><em>Fix:</em> enable the two-stage fallback; add a coarse index
-(prompt family / length); collect a handful of labels in problematic
-regions.</p></li>
+<p><em>Fix:</em> enable the two-stage AutoCal-R fallback; add a coarse
+index (prompt family / length); collect a handful of labels in
+problematic regions.</p></li>
 <li><p><strong>Judge stability / drift</strong> (rank stability on a
 small anchor set; unchanged judge config).</p>
 <p><em>Fix:</em> freeze judge version during the eval window; if drift
-appears, refresh the oracle slice and re-fit .</p></li>
-<li><p><strong>share</strong> (how much labels drive the CI).</p>
+appears, refresh the oracle slice and re-fit AutoCal-R.</p></li>
+<li><p><strong>OUA share</strong> (how much labels drive the CI).</p>
 <p><em>Fix:</em> if large, add labels (especially in sparse <span
 class="math inline">\(S\)</span> regions); otherwise more prompts help
 most.</p></li>
@@ -241,11 +241,11 @@ most.</p></li>
 <p>For each policy (and for key pairwise contrasts), report:</p>
 <ul>
 <li><p>Calibrated mean <span
-class="math inline">\(\est{V}_{DM}(\pi)\)</span> with 95% CI (paired
-for <span class="math inline">\(\est{\Delta}\)</span>).</p></li>
-<li><p>share; note if paired design was used.</p></li>
-<li><p>reliability snippet (with regional error) and the score-coverage
-badge.</p></li>
+class="math inline">\(\est{V}_{DM}(\pi)\)</span> with 95% CI (paired for
+<span class="math inline">\(\est{\Delta}\)</span>).</p></li>
+<li><p>OUA share; note if paired design was used.</p></li>
+<li><p>AutoCal-R reliability snippet (with regional error) and the
+score-coverage badge.</p></li>
 <li><p>Any drift checks performed on the judge.</p></li>
 </ul>
 </section>
@@ -256,8 +256,8 @@ prompt-level variance of <span class="math inline">\(R\)</span> for a
 policy on the evaluation set. Then a rough CI half-width for one policy
 is <span class="math display">\[\text{HalfWidth} \approx 1.96
 \sqrt{\frac{\hat{\sigma}_R^2}{m} + \Var_{OUA}}.\]</span></p>
-<p>More prompts shrink the first term; more labels shrink the second ().
-For pairwise contrasts, replace <span
+<p>More prompts shrink the first term; more labels shrink the second
+(OUA). For pairwise contrasts, replace <span
 class="math inline">\(\hat{\sigma}_R^2\)</span> with the variance of
 <span class="math inline">\(R_\pi - R_{\pi&#39;}\)</span> (often smaller
 due to pairing).</p>
@@ -272,10 +272,10 @@ match seeds if stochastic.</p></li>
 class="math inline">\(S\)</span>.</strong> Target labels to those bins
 or focus the prompt set; report the coverage badge.</p></li>
 <li><p><strong>Calibration curve looks good overall but bad in one
-region.</strong> Use two-stage or add a coarse index and a few
+region.</strong> Use two-stage AutoCal-R or add a coarse index and a few
 labels.</p></li>
-<li><p><strong>Large share.</strong> Label more—prioritize regions where
-<span class="math inline">\(S\)</span> is sparse or where policy
+<li><p><strong>Large OUA share.</strong> Label more—prioritize regions
+where <span class="math inline">\(S\)</span> is sparse or where policy
 comparisons matter.</p></li>
 </ul>
 </section>
@@ -313,9 +313,9 @@ SE_total_squared = SE_main**2 + Var_OUA
 </section>
 <section id="scope-notes" class="level2">
 <h2>Scope notes</h2>
-<p>is on-policy for your chosen prompt distribution. If deployment
+<p>DM is on-policy for your chosen prompt distribution. If deployment
 prompts differ materially, treat that as a distribution-shift question:
 either adapt the prompt set to match deployment or build a small label
-slice representative of the target domain and re-fit .</p>
+slice representative of the target domain and re-fit AutoCal-R.</p>
 </section>
 </section>

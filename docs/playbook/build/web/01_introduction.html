@@ -39,23 +39,24 @@ counterfactual (it reflects the logger, not the candidate).</p></li>
 </section>
 <section id="how-cje-works" class="level2">
 <h2>How CJE works</h2>
-<p><strong>Causal Judge Evaluation ()</strong> turns judge scores into
-reliable estimates with confidence intervals. The core workflow:</p>
+<p><strong>Causal Judge Evaluation (CJE)</strong> turns judge scores
+into reliable estimates with confidence intervals. The core
+workflow:</p>
 <ol>
 <li><p><strong>Calibrate:</strong> Learn a mapping from judge scores to
-oracle labels on a small random sample ().</p></li>
+oracle labels on a small random sample (AutoCal-R).</p></li>
 <li><p><strong>Evaluate:</strong> For on-policy comparison
 (<strong>Direct Mode</strong>), generate responses from each policy and
 average calibrated scores. For counterfactual inference
 (<strong>Off-Policy</strong>), reuse logged data with importance
 weighting.</p></li>
 <li><p><strong>Report:</strong> Confidence intervals that account for
-all uncertainty ().</p></li>
+all uncertainty (OUA).</p></li>
 </ol>
 <p>Most users only need <strong>Direct Mode</strong>: generate outputs,
-calibrate judge scores, report CIs. For off-policy evaluation,
-stabilizes importance weights () and optionally adds a critic () for
-robustness. See §3 for details.</p>
+calibrate judge scores, report CIs. For off-policy evaluation, CJE
+stabilizes importance weights (SIMCal) and optionally adds a critic (DR)
+for robustness. See §3 for details.</p>
 </section>
 <section id="quick-start-direct-mode-for-model-comparison"
 class="level2">
@@ -82,11 +83,12 @@ config).</p></li>
 class="math inline">\(Y\)</span>.</p></li>
 <li><p>Run <strong>Direct Mode</strong> (§2)—CJE learns the judge<span
 class="math inline">\(\to\)</span>oracle calibration <span
-class="math inline">\(f(S)\)</span> automatically via .</p></li>
+class="math inline">\(f(S)\)</span> automatically via
+AutoCal-R.</p></li>
 <li><p>Check three core diagnostics: coverage (§4.1), calibration
 (§4.2), judge stability (§4.3).</p></li>
-<li><p>Report estimates with 95% CIs (includes to account for calibrator
-uncertainty).</p></li>
+<li><p>Report estimates with 95% CIs (includes OUA to account for
+calibrator uncertainty).</p></li>
 </ol>
 </section>
 <section id="what-to-read" class="level4">
@@ -147,7 +149,7 @@ class="math inline">\(R\)</span></td>
 class="math inline">\(R = f(S) \in [0, 1]\)</span></td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;"><strong></strong></td>
+<td style="text-align: left;"><strong>AutoCal-R</strong></td>
 <td style="text-align: left;"><strong>AutoCal-R</strong>: Automatic
 Calibration for Rewards</td>
 </tr>
@@ -158,7 +160,7 @@ class="math inline">\(f: S \to [0,1]\)</span> learned from oracle
 slice</td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;"><strong></strong></td>
+<td style="text-align: left;"><strong>OUA</strong></td>
 <td style="text-align: left;"><strong>OUA</strong>: Oracle-Uncertainty
 Aware inference</td>
 </tr>
@@ -168,7 +170,7 @@ Aware inference</td>
 confidence intervals</td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;"><strong></strong></td>
+<td style="text-align: left;"><strong>DM</strong></td>
 <td style="text-align: left;">Direct Modeling (on-policy, fresh draws
 only)</td>
 </tr>
@@ -197,7 +199,8 @@ X_i)\)</span></td>
 <tr class="even">
 <td style="text-align: left;"><span
 class="math inline">\(\tilde{w}_i\)</span></td>
-<td style="text-align: left;">Stabilized, mean-one weight after</td>
+<td style="text-align: left;">Stabilized, mean-one weight after
+SIMCal</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;"><span
@@ -206,7 +209,7 @@ class="math inline">\(w^{\text{sn}}_i\)</span></td>
 class="math inline">\(w^{\text{sn}}_i = W_i / \bar{W}\)</span></td>
 </tr>
 <tr class="even">
-<td style="text-align: left;"><strong></strong></td>
+<td style="text-align: left;"><strong>SIMCal</strong></td>
 <td style="text-align: left;"><strong>SIMCal</strong>: Score-Indexed
 Monotone Calibration</td>
 </tr>
@@ -216,12 +219,12 @@ Monotone Calibration</td>
 + variance cap</td>
 </tr>
 <tr class="even">
-<td style="text-align: left;"><strong></strong></td>
+<td style="text-align: left;"><strong>IPS</strong></td>
 <td style="text-align: left;">Importance Sampling (off-policy, logged
 data)</td>
 </tr>
 <tr class="odd">
-<td style="text-align: left;"><strong></strong></td>
+<td style="text-align: left;"><strong>DR</strong></td>
 <td style="text-align: left;">Doubly Robust (off-policy + critic/outcome
 model)</td>
 </tr>
@@ -236,12 +239,12 @@ want to answer counterfactual questions without regenerating—“What if we
 deployed policy X instead of our current baseline?”—you need off-policy
 methods:</p>
 <ul>
-<li><p><strong>Calibrated</strong> reuses a single logged dataset to
+<li><p><strong>Calibrated IPS</strong> reuses a single logged dataset to
 evaluate multiple candidate policies by reweighting with importance
 ratios. Requires per-sequence log probabilities.</p></li>
-<li><p><strong>Calibrated</strong> combines importance weighting with an
-outcome model for robustness and tighter confidence intervals. Requires
-both logged data and a small set of fresh draws.</p></li>
+<li><p><strong>Calibrated DR</strong> combines importance weighting with
+an outcome model for robustness and tighter confidence intervals.
+Requires both logged data and a small set of fresh draws.</p></li>
 </ul>
 <p>Off-policy methods enable fast iteration (no regeneration), but
 introduce complexity (importance weights, overlap diagnostics). See §3
@@ -258,8 +261,8 @@ evaluation <span class="math inline">\(S\)</span>-range? (fix: add
 labels in uncovered bins)</p></li>
 <li><p><strong>Calibration reliability:</strong> Is <span
 class="math inline">\(f(S)\)</span> accurate across the <span
-class="math inline">\(S\)</span> spectrum? (fix: two-stage or add labels
-in problematic regions)</p></li>
+class="math inline">\(S\)</span> spectrum? (fix: two-stage AutoCal-R or
+add labels in problematic regions)</p></li>
 <li><p><strong>Judge stability:</strong> Is the judge’s scoring
 consistent over time? (fix: freeze judge version, refresh oracle if
 drift detected)</p></li>
@@ -283,25 +286,25 @@ diagnostic.</p>
 </section>
 <section id="what-cje-provides" class="level2">
 <h2>What CJE provides</h2>
-<p>gives practitioners a complete workflow for reliable LLM
+<p>CJE gives practitioners a complete workflow for reliable LLM
 evaluation:</p>
 <ul>
 <li><p><strong>Three analysis modes:</strong> Direct Mode for on-policy
 comparison (simplest), Calibrated IPS for off-policy reuse, Calibrated
 DR for maximum accuracy when you have both logged data and fresh
 draws.</p></li>
-<li><p><strong>Automatic calibration:</strong> maps judge scores to
-oracle labels on a small random sample, putting estimates on the right
-scale.</p></li>
-<li><p><strong>Honest confidence intervals:</strong> accounts for
+<li><p><strong>Automatic calibration:</strong> AutoCal-R maps judge
+scores to oracle labels on a small random sample, putting estimates on
+the right scale.</p></li>
+<li><p><strong>Honest confidence intervals:</strong> OUA accounts for
 calibrator uncertainty, not just sampling noise.</p></li>
 <li><p><strong>Six diagnostics:</strong> Three core checks (coverage,
 calibration, judge stability) plus three off-policy checks (ESS, tail
 heaviness, orthogonality). Each includes thresholds, interpretation, and
 concrete fixes.</p></li>
-<li><p><strong>Off-policy robustness:</strong> stabilizes importance
-weights via monotone projection, and DR adds an outcome model for double
-robustness.</p></li>
+<li><p><strong>Off-policy robustness:</strong> SIMCal stabilizes
+importance weights via monotone projection, and DR adds an outcome model
+for double robustness.</p></li>
 </ul>
 </section>
 <section id="scope-and-positioning" class="level2">
@@ -311,12 +314,13 @@ plain English, minimal recipes, diagnostics with actionable fixes, and
 reporting templates. Advanced material (theoretical guarantees,
 projection properties, semiparametric efficiency) lives in the
 appendix.</p>
-<p>builds on the treatment effect estimation literature, particularly
-work on efficient estimation with surrogates and limited outcome data
-<span class="citation" data-cites="kallus2024role"></span>. Like that
-work, we avoid restrictive surrogacy conditions and instead study
-efficiency gains when surrogates supplement—rather than replace—primary
-outcomes under standard missing-at-random assumptions.</p>
+<p>CJE builds on the treatment effect estimation literature,
+particularly work on efficient estimation with surrogates and limited
+outcome data <span class="citation" data-cites="kallus2024role"></span>.
+Like that work, we avoid restrictive surrogacy conditions and instead
+study efficiency gains when surrogates supplement—rather than
+replace—primary outcomes under standard missing-at-random
+assumptions.</p>
 </section>
 <section id="readers-guide" class="level2">
 <h2>Reader’s guide</h2>
@@ -328,9 +332,9 @@ outcomes under standard missing-at-random assumptions.</p>
 </section>
 <section id="for-comprehensive-coverage" class="level4">
 <h4>For comprehensive coverage:</h4>
-<p>We begin with —the default when you can generate on shared
-prompts—then show how to reuse judged logs with Calibrated and
-Calibrated , followed by diagnostics, assumptions for causal
+<p>We begin with DM—the default when you can generate on shared
+prompts—then show how to reuse judged logs with Calibrated IPS and
+Calibrated DR, followed by diagnostics, assumptions for causal
 interpretation, a practical playbook, compact case studies, and
 implementation notes.</p>
 </section>

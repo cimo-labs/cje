@@ -25,15 +25,15 @@ bottleneck for precision?</p></li>
 transport to target policies/time windows?</p></li>
 </ol>
 </section>
-<section id="off-policy-diagnostics-for-only" class="level4">
-<h4>Off-policy diagnostics (for / only):</h4>
+<section id="off-policy-diagnostics-for-ipsdr-only" class="level4">
+<h4>Off-policy diagnostics (for IPS/DR only):</h4>
 <ol>
 <li><p><strong>Effective sample size (ESS)</strong>: Do we have enough
 effective samples after reweighting?</p></li>
 <li><p><strong>Tail heaviness</strong>: Are importance weights
 catastrophically heavy-tailed?</p></li>
-<li><p><strong>DR orthogonality</strong> (for only): Is the critic good
-enough for doubly robust guarantees?</p></li>
+<li><p><strong>DR orthogonality</strong> (for DR only): Is the critic
+good enough for doubly robust guarantees?</p></li>
 </ol>
 <p>Each diagnostic produces a compact artifact (a number, a CI, or a
 plot) and a traffic-light signal (pass / warn / fail).</p>
@@ -48,12 +48,12 @@ counterfactual inference.</p>
 <h4>What it measures.</h4>
 <p>The fraction of evaluated scores <span
 class="math inline">\(S\)</span> that fall within the range of oracle
-scores used to train . Also checks boundary slopes for extrapolation
-risk.</p>
+scores used to train AutoCal-R. Also checks boundary slopes for
+extrapolation risk.</p>
 </section>
 <section id="why-it-matters." class="level4">
 <h4>Why it matters.</h4>
-<p>If must extrapolate beyond the labeled <span
+<p>If AutoCal-R must extrapolate beyond the labeled <span
 class="math inline">\(S\)</span>-range, calibrated rewards <span
 class="math inline">\(R = f(S)\)</span> can be wildly wrong. This is the
 single most common source of large errors.</p>
@@ -110,10 +110,10 @@ class="math inline">\(S\)</span>).</p>
 </section>
 <section id="why-it-matters.-1" class="level4">
 <h4>Why it matters.</h4>
-<p>Even if coverage is good, can be miscalibrated in specific regions
-(e.g., <span class="math inline">\(f(S)\)</span> is too optimistic for
-high <span class="math inline">\(S\)</span>). Regional miscalibration
-biases estimates and breaks mean preservation.</p>
+<p>Even if coverage is good, AutoCal-R can be miscalibrated in specific
+regions (e.g., <span class="math inline">\(f(S)\)</span> is too
+optimistic for high <span class="math inline">\(S\)</span>). Regional
+miscalibration biases estimates and breaks mean preservation.</p>
 </section>
 <section id="artifacts-to-inspect-1" class="level4">
 <h4>Artifacts to inspect:</h4>
@@ -147,7 +147,7 @@ class="math inline">\(&gt; 0.05\)</span>.</p></li>
 <section id="fixes-1" class="level4">
 <h4>Fixes:</h4>
 <ul>
-<li><p>Enable two-stage (spline index <span
+<li><p>Enable two-stage AutoCal-R (spline index <span
 class="math inline">\(\to\)</span> isotonic) for regional
 adaptivity.</p></li>
 <li><p>Add a coarse index (prompt family, length bin) to allow
@@ -171,9 +171,9 @@ miscalibration when plain J2-M fails.</p>
 <h4>Why it matters.</h4>
 <p>When slice effects (e.g., length or domain bias at fixed <span
 class="math inline">\(S\)</span>) cause regional miscalibration,
-two-stage with covariates can capture heterogeneity while preserving
-monotonicity. This diagnostic validates that the covariate-augmented
-mapping improves accuracy.</p>
+two-stage AutoCal-R with covariates can capture heterogeneity while
+preserving monotonicity. This diagnostic validates that the
+covariate-augmented mapping improves accuracy.</p>
 </section>
 <section id="artifacts-to-inspect-2" class="level4">
 <h4>Artifacts to inspect:</h4>
@@ -259,7 +259,7 @@ timestamps available).</p></li>
 <li><p>Freeze judge version and config during the evaluation
 window.</p></li>
 <li><p>If drift is detected, refresh the oracle slice with new labels
-and re-fit .</p></li>
+and re-fit AutoCal-R.</p></li>
 <li><p>Consider using a judging protocol with locked
 temperature/sampling to reduce stochasticity.</p></li>
 <li><p>Use automated temporal drift detection: set
@@ -384,9 +384,10 @@ coverage <span class="math inline">\(\in [85\%,95\%)\)</span>.</p></li>
 (“mean anchoring”) <span class="math inline">\(\tilde
 f_G(S,X)=\mathrm{clip}(f(S,X)+\hat\delta_G)\)</span>; re-check regional
 residuals.</p></li>
-<li><p><strong>Regional pattern:</strong> enable two-stage with
-covariates that explain the divergence (e.g., response length, domain);
-collect +20–40 labels concentrated in failing deciles; refit.</p></li>
+<li><p><strong>Regional pattern:</strong> enable two-stage AutoCal-R
+with covariates that explain the divergence (e.g., response length,
+domain); collect +20–40 labels concentrated in failing deciles;
+refit.</p></li>
 <li><p><strong>Coverage failure:</strong> add targeted labels in
 uncovered <span class="math inline">\(S\)</span>/<span
 class="math inline">\(U\)</span> bins or narrow scope to the intended
@@ -413,7 +414,7 @@ weighting: <span class="math display">\[\text{ESS} =
 \frac{\big(\sum_{i=1}^n \tilde{w}_i\big)^2}{\sum_{i=1}^n
 \tilde{w}_i^2},\]</span> where <span
 class="math inline">\(\tilde{w}_i\)</span> are the stabilized, mean-one
-weights after . ESS ranges from 1 (one weight dominates) to <span
+weights after SIMCal. ESS ranges from 1 (one weight dominates) to <span
 class="math inline">\(n\)</span> (all weights equal).</p>
 </section>
 <section id="why-it-matters.-5" class="level4">
@@ -428,7 +429,7 @@ off-policy viability.</p>
 <li><p><strong>ESS (absolute and %)</strong>: report both raw ESS and
 ESS<span class="math inline">\(/n\)</span>.</p></li>
 <li><p><strong>Weight distribution:</strong> histogram or quantiles
-(min, median, 95th percentile, max) before and after .</p></li>
+(min, median, 95th percentile, max) before and after SIMCal.</p></li>
 <li><p><strong>Weight vs. <span class="math inline">\(S\)</span>
 scatter:</strong> check if weights are monotone in <span
 class="math inline">\(S\)</span> (validates J2-M assumption).</p></li>
@@ -441,9 +442,9 @@ class="math inline">\(S\)</span> (validates J2-M assumption).</p></li>
 30\%\)</span> of <span class="math inline">\(n\)</span> (excellent
 overlap).</p></li>
 <li><p><strong>Warn:</strong> ESS <span class="math inline">\(\in [10\%,
-30\%)\)</span> (moderate overlap; recommended).</p></li>
+30\%)\)</span> (moderate overlap; DR recommended).</p></li>
 <li><p><strong>Fail:</strong> ESS <span class="math inline">\(&lt;
-10\%\)</span> (poor overlap; estimates unreliable unless with strong
+10\%\)</span> (poor overlap; estimates unreliable unless DR with strong
 outcome model).</p></li>
 <li><p><strong>Refuse:</strong> ESS <span class="math inline">\(&lt;
 1\%\)</span> (catastrophic; do not trust any estimate).</p></li>
@@ -452,13 +453,13 @@ outcome model).</p></li>
 <section id="fixes-5" class="level4">
 <h4>Fixes:</h4>
 <ul>
-<li><p>Use with aggressive variance cap <span
+<li><p>Use SIMCal with aggressive variance cap <span
 class="math inline">\(\rho\)</span> (e.g., 0.90).</p></li>
 <li><p>Restrict to a high-overlap cohort (e.g., prompts where <span
 class="math inline">\(|\log \tilde{w}_i| &lt; 2\)</span>).</p></li>
-<li><p>Switch from to with a strong outcome model.</p></li>
+<li><p>Switch from IPS to DR with a strong outcome model.</p></li>
 <li><p>If ESS <span class="math inline">\(&lt; 1\%\)</span>, regenerate
-fresh outputs for the candidate policy and use instead.</p></li>
+fresh outputs for the candidate policy and use DM instead.</p></li>
 </ul>
 </section>
 </section>
@@ -483,7 +484,7 @@ variance estimates are unreliable and CIs can be arbitrarily wrong.</p>
 <ul>
 <li><p><strong>Hill index <span
 class="math inline">\(\alpha\)</span>:</strong> estimated from the upper
-tail of <span class="math inline">\(\tilde{w}\)</span> (post-
+tail of <span class="math inline">\(\tilde{w}\)</span> (post-SIMCal
 weights).</p></li>
 <li><p><strong>QQ-plot:</strong> compare weight quantiles to
 Pareto(<span class="math inline">\(\alpha\)</span>) reference.</p></li>
@@ -507,13 +508,13 @@ class="math inline">\(&gt; 100\)</span>, likely heavy-tailed.</p></li>
 <section id="fixes-6" class="level4">
 <h4>Fixes:</h4>
 <ul>
-<li><p>Apply with a strict variance cap <span class="math inline">\(\rho
-&lt; 0.95\)</span>.</p></li>
+<li><p>Apply SIMCal with a strict variance cap <span
+class="math inline">\(\rho &lt; 0.95\)</span>.</p></li>
 <li><p>Cohort restriction to high-overlap prompts.</p></li>
 <li><p>Check for provider drift (temperature, frequency penalty) that
 might cause unexpected tail behavior.</p></li>
 <li><p>If <span class="math inline">\(\alpha &lt; 2\)</span> persists,
-switch to or regenerate.</p></li>
+switch to DR or regenerate.</p></li>
 </ul>
 </section>
 </section>
@@ -525,14 +526,14 @@ switch to or regenerate.</p></li>
 \frac{1}{n} \sum_{i=1}^n \tilde{w}_i \cdot (R_i -
 \hat{g}(S_i)),\]</span> with a 95% CI, where <span
 class="math inline">\(\tilde{w}_i\)</span> are the stabilized, mean-one
-weights after . Under ideal conditions (mean-one weights and
+weights after SIMCal. Under ideal conditions (mean-one weights and
 well-specified outcome model), this should be near zero.</p>
 </section>
 <section id="why-it-matters.-7" class="level4">
 <h4>Why it matters.</h4>
 <p>Orthogonality is the key to doubly robust inference. If the
 orthogonality score is far from zero, either the weights or the outcome
-model (or both) are poor, and loses its efficiency and robustness
+model (or both) are poor, and DR loses its efficiency and robustness
 guarantees.</p>
 </section>
 <section id="artifacts-to-inspect-7" class="level4">
@@ -567,12 +568,12 @@ class="math inline">\(|\)</span>OrthoScore<span class="math inline">\(|
 <li><p>Improve the outcome model: add regularization, use a more
 flexible model (e.g., two-stage isotonic), or increase fresh draw sample
 size.</p></li>
-<li><p>Revisit settings or overlap diagnostics (poor weights can break
-orthogonality).</p></li>
+<li><p>Revisit SIMCal settings or overlap diagnostics (poor weights can
+break orthogonality).</p></li>
 <li><p>Check cross-fitting: ensure folds are balanced and
 representative.</p></li>
-<li><p>If orthogonality fails persistently, fall back to or regenerate
-for .</p></li>
+<li><p>If orthogonality fails persistently, fall back to IPS or
+regenerate for DM.</p></li>
 </ul>
 </section>
 </section>
@@ -602,7 +603,7 @@ interpreting diagnostic outputs.</p>
 <tbody>
 <tr class="odd">
 <td style="text-align: left;">ESS / <span
-class="math inline">\(n\)</span> (post-)</td>
+class="math inline">\(n\)</span> (post-SIMCal)</td>
 <td style="text-align: center;"><span class="math inline">\(\ge
 30\%\)</span></td>
 <td style="text-align: center;"><span class="math inline">\([10\%,
@@ -725,7 +726,8 @@ garbage.</p>
 class="math inline">\(&lt; 85\%\)</span>, add labels or narrow scope. If
 pass, continue.</p></li>
 <li><p><strong>Check calibration reliability.</strong> If regional error
-is high, enable two-stage or add labels. If pass, continue.</p></li>
+is high, enable two-stage AutoCal-R or add labels. If pass,
+continue.</p></li>
 <li><p><strong>Check judge stability.</strong> If <span
 class="math inline">\(\tau &lt; 0.75\)</span>, freeze judge config and
 refresh oracle. If pass, continue.</p></li>
@@ -738,13 +740,13 @@ done (for Direct Mode).</p></li>
 <h4>Additional checks for off-policy (IPS/DR):</h4>
 <ol>
 <li><p><strong>Check ESS.</strong> If <span class="math inline">\(&lt;
-30\%\)</span> (WARN), review diagnostics and consider . If <span
-class="math inline">\(&lt; 10\%\)</span> (FAIL), use or switch to . If
-<span class="math inline">\(&lt; 1\%\)</span> (REFUSE), regenerate. If
-pass, continue.</p></li>
+30\%\)</span> (WARN), review diagnostics and consider DR. If <span
+class="math inline">\(&lt; 10\%\)</span> (FAIL), use SIMCal or switch to
+DR. If <span class="math inline">\(&lt; 1\%\)</span> (REFUSE),
+regenerate. If pass, continue.</p></li>
 <li><p><strong>Check tail index.</strong> If <span
-class="math inline">\(\alpha &lt; 2\)</span>, apply stricter or cohort
-restriction. If pass, continue.</p></li>
+class="math inline">\(\alpha &lt; 2\)</span>, apply stricter SIMCal or
+cohort restriction. If pass, continue.</p></li>
 <li><p><strong>(DR only) Check orthogonality.</strong> If CI excludes
 zero, improve outcome model or weights. If pass, trust the
 estimate.</p></li>
@@ -764,8 +766,8 @@ line.</p></li>
 <li><p><strong>Coverage histogram:</strong> oracle <span
 class="math inline">\(S\)</span> vs. evaluation <span
 class="math inline">\(S\)</span> distributions.</p></li>
-<li><p><strong>Weight distribution:</strong> before/after , with ESS and
-Hill index annotations.</p></li>
+<li><p><strong>Weight distribution:</strong> before/after SIMCal, with
+ESS and Hill index annotations.</p></li>
 <li><p><strong>Orthogonality residual plot:</strong> <span
 class="math inline">\((R - \hat{g}(S))\)</span> vs. <span
 class="math inline">\(\tilde{w}\)</span> with CI band.</p></li>
@@ -830,8 +832,8 @@ sources of uncertainty</em>:</p>
 log/prompts) <span class="math inline">\(\to\)</span>
 <strong>cluster-robust SEs</strong>.</p></li>
 <li><p><strong>Calibrator uncertainty</strong> (from the oracle slice)
-<span class="math inline">\(\to\)</span>
-<strong>jackknife</strong>.</p></li>
+<span class="math inline">\(\to\)</span> <strong>OUA
+jackknife</strong>.</p></li>
 </ol>
 <p>Under the product-sample setup (oracle and eval are independent
 draws), these components are <strong>additive</strong>: <span
@@ -888,7 +890,7 @@ class="level4">
 <h4>Component 2: Oracle-uncertainty aware (OUA) jackknife.</h4>
 <p>When the oracle slice is small (5–10% coverage is common), treating
 the calibrator <span class="math inline">\(f\)</span> as fixed
-drastically understates total uncertainty. properly accounts for
+drastically understates total uncertainty. OUA properly accounts for
 this:</p>
 <ol>
 <li><p>Split oracle labels into <span class="math inline">\(K\)</span>
@@ -901,19 +903,19 @@ class="math inline">\(k\)</span> (let auto mode selection re-decide mono
 vs. two-stage).</p></li>
 <li><p>Recompute calibrated rewards <span class="math inline">\(R^{(-k)}
 = f^{(-k)}(S)\)</span>.</p></li>
-<li><p><strong>For IPS/DR:</strong> re-select weights (selection depends
-on <span class="math inline">\(R\)</span>).</p></li>
+<li><p><strong>For IPS/DR:</strong> re-select SIMCal weights (selection
+depends on <span class="math inline">\(R\)</span>).</p></li>
 <li><p><strong>For DR:</strong> refit outcome model (depends on <span
 class="math inline">\(R\)</span>).</p></li>
 <li><p>Compute point estimate <span
 class="math inline">\(\hat{\theta}^{(-k)}\)</span>.</p></li>
 </ul></li>
 <li><p>Jackknife variance: <span
-class="math display">\[\widehat{\Var}_{OUA} = \frac{K-1}{K}
-\sum_{k=1}^K \bigl(\hat{\theta}^{(-k)} - \bar{\theta}\bigr)^2, \quad
-\bar{\theta} = \frac{1}{K}\sum_k \hat{\theta}^{(-k)}.\]</span></p></li>
+class="math display">\[\widehat{\Var}_{OUA} = \frac{K-1}{K} \sum_{k=1}^K
+\bigl(\hat{\theta}^{(-k)} - \bar{\theta}\bigr)^2, \quad \bar{\theta} =
+\frac{1}{K}\sum_k \hat{\theta}^{(-k)}.\]</span></p></li>
 </ol>
-<p><strong>Key principle:</strong> captures <em>oracle-only</em>
+<p><strong>Key principle:</strong> OUA captures <em>oracle-only</em>
 uncertainty. It holds the eval log fixed and only refits components that
 depend on calibrator outputs. This maintains independence with <span
 class="math inline">\(\widehat{\Var}_{\text{CR}}\)</span>.</p>
@@ -947,7 +949,7 @@ class="math inline">\(t_{1-\alpha/2,
 <ul>
 <li><p>Point estimate with 95% CI using <span
 class="math inline">\(\SE_{\text{total}}\)</span>.</p></li>
-<li><p><strong>share</strong>: <span
+<li><p><strong>OUA share</strong>: <span
 class="math inline">\(\widehat{\Var}_{OUA}/\widehat{\Var}_{\text{total}}\)</span>
 (shows which component dominates).</p></li>
 <li><p>Cluster structure: number of clusters <span
@@ -958,8 +960,8 @@ penalty).</p></li>
 </section>
 <section id="quick-diagnostic." class="level4">
 <h4>Quick diagnostic.</h4>
-<p>If share <span class="math inline">\(&gt; 50\%\)</span>, labels are
-the bottleneck—add more oracle labels. If cluster-robust SE is much
+<p>If OUA share <span class="math inline">\(&gt; 50\%\)</span>, labels
+are the bottleneck—add more oracle labels. If cluster-robust SE is much
 larger than i.i.d. SE (e.g., 30%+ inflation), dependence is
 substantial—ensure you’ve identified the right cluster definition. If
 you’re using paired DM contrasts, <em>always</em> use cluster-robust

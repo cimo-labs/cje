@@ -29,12 +29,13 @@ A_i, S_i)\)</span> with logprobs for <span
 class="math inline">\(\pi_0\)</span> and candidate <span
 class="math inline">\(\pi&#39;\)</span>.</p></li>
 <li><p>Calibrate scores to outcome-scale rewards: <span
-class="math inline">\(R_i = f(S_i)\)</span> via .</p></li>
+class="math inline">\(R_i = f(S_i)\)</span> via AutoCal-R.</p></li>
 <li><p>Compute importance weights: <span class="math inline">\(W_i =
 \pi&#39;(A_i \mid X_i) / \pi_0(A_i \mid X_i)\)</span>.</p></li>
-<li><p>Stabilize weights with (monotone projection + variance
+<li><p>Stabilize weights with SIMCal (monotone projection + variance
 cap).</p></li>
-<li><p>Estimate value via (weights only) or (weights + critic).</p></li>
+<li><p>Estimate value via IPS (weights only) or DR (weights +
+critic).</p></li>
 </ol>
 </div>
 </section>
@@ -49,16 +50,17 @@ regenerating.</p></li>
 class="math inline">\(\pi_0\)</span> and candidate policies.</p></li>
 <li><p>Your main risks are poor overlap (use diagnostics: ESS, tail
 index) and judge drift (check stability).</p></li>
-<li><p>For , you also need fresh draws to train a critic (outcome
+<li><p>For DR, you also need fresh draws to train a critic (outcome
 model).</p></li>
 </ul>
 </section>
 <section id="calibrated-ips-reweight-with-stabilized-weights"
 class="level2">
 <h2>Calibrated IPS: reweight with stabilized weights</h2>
-<p>The basic estimator reweights calibrated rewards by the likelihood
-ratio: <span class="math display">\[\est{V}_{\text{IPS}}(\pi&#39;) =
-\frac{1}{n} \sum_{i=1}^n W_i \cdot R_i,\]</span> where <span
+<p>The basic IPS estimator reweights calibrated rewards by the
+likelihood ratio: <span
+class="math display">\[\est{V}_{\text{IPS}}(\pi&#39;) = \frac{1}{n}
+\sum_{i=1}^n W_i \cdot R_i,\]</span> where <span
 class="math inline">\(W_i = \pi&#39;(A_i \mid X_i) / \pi_0(A_i \mid
 X_i)\)</span> and <span class="math inline">\(R_i = f(S_i)\)</span>.</p>
 <section id="the-variance-problem." class="level4">
@@ -72,10 +74,10 @@ weight can dominate the sum.</p>
 <section id="simcal-stabilize-weights-via-monotone-projection"
 class="level2">
 <h2>SIMCal: stabilize weights via monotone projection</h2>
-<p><strong>(Score-Indexed Monotone Calibration)</strong> stabilizes
-weights by projecting them onto monotone functions of the judge score
-<span class="math inline">\(S\)</span>, then applying a variance
-cap:</p>
+<p><strong>SIMCal (Score-Indexed Monotone Calibration)</strong>
+stabilizes weights by projecting them onto monotone functions of the
+judge score <span class="math inline">\(S\)</span>, then applying a
+variance cap:</p>
 <ol>
 <li><p><strong>Fit three candidates</strong> on a fold-out basis:
 baseline (<span class="math inline">\(W\)</span>), monotone increasing
@@ -91,7 +93,7 @@ class="math inline">\(\Var(W_{\text{blend}}) &gt; \rho \cdot
 <p><strong>Why it works:</strong> Monotone projections weakly reduce
 variance by majorization, and the cap <span
 class="math inline">\(\rho\)</span> (default 0.95) ensures strict
-variance reduction. explicitly normalizes weights to mean one and
+variance reduction. SIMCal explicitly normalizes weights to mean one and
 projects them as a monotone function of <span
 class="math inline">\(S\)</span> out-of-fold. Under our J2-M assumption
 (score-indexed sufficiency), this projection reduces variance and
@@ -103,8 +105,8 @@ sensitivity and orthogonality to detect residual bias.</p>
 <li><p><strong>ESS (Effective Sample Size):</strong> <span
 class="math inline">\(({\textstyle\sum} \tilde{w})^2 / ({\textstyle\sum}
 \tilde{w}^2)\)</span>, where <span
-class="math inline">\(\tilde{w}\)</span> are post- weights. Aim for ESS
-<span class="math inline">\(\ge 30\%\)</span> of <span
+class="math inline">\(\tilde{w}\)</span> are post-SIMCal weights. Aim
+for ESS <span class="math inline">\(\ge 30\%\)</span> of <span
 class="math inline">\(n\)</span> (PASS); 10–30% is acceptable (WARN);
 <span class="math inline">\(&lt; 10\%\)</span> is poor (FAIL); <span
 class="math inline">\(&lt; 1\%\)</span> is catastrophic
@@ -114,16 +116,16 @@ class="math inline">\(\alpha \ge 2\)</span> (finite variance). If <span
 class="math inline">\(\alpha &lt; 2\)</span>, weights are
 catastrophic.</p></li>
 <li><p><strong>Weight summary:</strong> min, median, max, 95th
-percentile before/after .</p></li>
+percentile before/after SIMCal.</p></li>
 </ul>
 </section>
 </section>
 <section id="calibrated-dr-add-an-outcome-model-for-robustness"
 class="level2">
 <h2>Calibrated DR: add an outcome model for robustness</h2>
-<p>Doubly robust (DR) combines with an outcome model to gain efficiency
-and robustness. CJE supports two DR implementations, both valid under
-different modeling assumptions.</p>
+<p>Doubly robust (DR) combines IPS with an outcome model to gain
+efficiency and robustness. CJE supports two DR implementations, both
+valid under different modeling assumptions.</p>
 <section id="two-dr-implementations." class="level4">
 <h4>Two DR implementations.</h4>
 <p><em>(A) Score-only AIPW (lightweight, default).</em> Fit <span
@@ -134,10 +136,11 @@ class="math display">\[\est{V}_{\text{DR-S}}(\pi&#39;) = \frac{1}{n}
 \sum_{i=1}^n \left[ \tilde{w}_i \cdot (R_i - \hat{g}(S_i)) +
 \hat{g}(S_i) \right],\]</span> where <span
 class="math inline">\(\tilde{w}_i\)</span> are the stabilized, mean-one
-weights after , and <span class="math inline">\(\hat{g}\)</span> is
-typically a monotone function of <span class="math inline">\(S\)</span>
-(isotonic regression). This is the default in CJE: low cost, works well
-when <span class="math inline">\(S\)</span> is a strong predictor.</p>
+weights after SIMCal, and <span class="math inline">\(\hat{g}\)</span>
+is typically a monotone function of <span
+class="math inline">\(S\)</span> (isotonic regression). This is the
+default in CJE: low cost, works well when <span
+class="math inline">\(S\)</span> is a strong predictor.</p>
 <p><em>(B) Action-conditioned DR (canonical, research).</em> Fit <span
 class="math inline">\(\hat{q}(X,A) \approx \E[R \mid X, A]\)</span>
 using prompt features <span class="math inline">\(X\)</span> and
@@ -185,8 +188,8 @@ and achieves strong stability with few fresh draws (5-10% coverage often
 sufficient). Isotonic’s step-function output also makes edge fragility
 visible in diagnostics, enabling targeted label collection. When
 monotonicity fails (e.g., systematic length bias at fixed <span
-class="math inline">\(S\)</span>), ’s two-stage variant learns a smooth
-transformation first.</p>
+class="math inline">\(S\)</span>), AutoCal-R’s two-stage variant learns
+a smooth transformation first.</p>
 </section>
 </section>
 <section id="inputs-setup-off-policy" class="level2">
@@ -202,7 +205,7 @@ class="math inline">\(\pi&#39;\)</span>.</p>
 <dt>Oracle slice:</dt>
 <dd>
 <p>A small random subsample with ground truth <span
-class="math inline">\(Y\)</span> for (same as DM).</p>
+class="math inline">\(Y\)</span> for AutoCal-R (same as DM).</p>
 </dd>
 <dt>Fresh draws (DR only):</dt>
 <dd>
@@ -219,20 +222,20 @@ class="math inline">\(\tau\)</span> on an anchor set).</p>
 </section>
 <section id="fresh-draws-for-outcome-modeling" class="level2">
 <h2>Fresh draws for outcome modeling</h2>
-<p>For , the outcome model <span
+<p>For DR, the outcome model <span
 class="math inline">\(\hat{g}(X)\)</span> must predict what <span
 class="math inline">\(\pi&#39;\)</span> would achieve. Train it on
 <strong>fresh draws</strong>: responses generated by <span
 class="math inline">\(\pi&#39;\)</span> on the same prompts, with judge
 scores.</p>
-<p>Without fresh draws, you cannot build a valid outcome model, and is
-your only option.</p>
+<p>Without fresh draws, you cannot build a valid outcome model, and IPS
+is your only option.</p>
 </section>
 <section id="estimator-and-inference" class="level2">
 <h2>Estimator and inference</h2>
 <p>With calibrated rewards <span class="math inline">\(R_i =
 f(S_i)\)</span> and stabilized, mean-one weights <span
-class="math inline">\(\tilde{w}_i\)</span> (via ), compute: <span
+class="math inline">\(\tilde{w}_i\)</span> (via SIMCal), compute: <span
 class="math display">\[\begin{aligned}
 \est{V}_{\text{IPS}}(\pi&#39;) &amp;= \frac{1}{n} \sum_{i=1}^n
 \tilde{w}_i \cdot R_i, \\
@@ -241,32 +244,33 @@ class="math display">\[\begin{aligned}
 \end{aligned}\]</span></p>
 <p>Standard errors are computed via influence functions (per-sample
 contributions), which account for calibration, cross-fitting, and oracle
-uncertainty (via ). Calibrated IPS uses <em>outer cross-validation</em>
-for selection by default, so weight-learning uncertainty is reflected in
-the SEs. CIs are formed using the normal approximation for large samples
-or t-critical with Satterthwaite df when clusters/oracle folds are small
-(see §<a href="#sec:uncertainty" data-reference-type="ref"
+uncertainty (via OUA). Calibrated IPS uses <em>outer
+cross-validation</em> for SIMCal selection by default, so
+weight-learning uncertainty is reflected in the SEs. CIs are formed
+using the normal approximation for large samples or t-critical with
+Satterthwaite df when clusters/oracle folds are small (see §<a
+href="#sec:uncertainty" data-reference-type="ref"
 data-reference="sec:uncertainty">[sec:uncertainty]</a>).</p>
 </section>
 <section id="diagnostics-highest-leverage-quick-fixes" class="level2">
 <h2>Diagnostics (highest leverage) &amp; quick fixes</h2>
 <ol>
-<li><p><strong>ESS (Effective Sample Size)</strong> after .</p>
+<li><p><strong>ESS (Effective Sample Size)</strong> after SIMCal.</p>
 <p><em>Fix:</em> If ESS <span class="math inline">\(&lt; 30\%\)</span>
 (WARN), try cohort restriction (focus on prompts with better overlap) or
-tune variance cap <span class="math inline">\(\rho\)</span>. If ESS
-<span class="math inline">\(&lt; 10\%\)</span> (FAIL), switch to with a
-stronger outcome model. If ESS <span class="math inline">\(&lt;
+tune SIMCal variance cap <span class="math inline">\(\rho\)</span>. If
+ESS <span class="math inline">\(&lt; 10\%\)</span> (FAIL), switch to DR
+with a stronger outcome model. If ESS <span class="math inline">\(&lt;
 1\%\)</span> (REFUSE), the estimate is unreliable—regenerate or narrow
 scope.</p></li>
 <li><p><strong>Tail heaviness</strong> (Hill index <span
 class="math inline">\(\alpha\)</span>).</p>
 <p><em>Fix:</em> If <span class="math inline">\(\alpha &lt; 2\)</span>,
-weights have infinite variance. Use aggressively, restrict to
-high-overlap cohorts, or switch to . Check for provider
+weights have infinite variance. Use SIMCal aggressively, restrict to
+high-overlap cohorts, or switch to DR. Check for provider
 temperature/frequency-penalty drift.</p></li>
-<li><p><strong>Weight stability</strong> (compare raw vs. -adjusted
-distributions).</p>
+<li><p><strong>Weight stability</strong> (compare raw
+vs. SIMCal-adjusted distributions).</p>
 <p><em>Fix:</em> Large changes indicate strong reliance on monotonicity
 assumption (J2-M). Validate by checking that <span
 class="math inline">\(\E[Y \mid S]\)</span> and <span
@@ -276,10 +280,10 @@ oracle slice.</p></li>
 CI).</p>
 <p><em>Fix:</em> If the orthogonality CI does not contain zero, either
 the outcome model or the weights are poor. Improve outcome model
-regularization, add fresh draws, or revisit / overlap
+regularization, add fresh draws, or revisit SIMCal / overlap
 diagnostics.</p></li>
 <li><p><strong>Oracle uncertainty share</strong> (fraction of total
-variance from ).</p>
+variance from OUA).</p>
 <p><em>Fix:</em> If large, add labels targeting uncovered <span
 class="math inline">\(S\)</span> regions or high-variance prompt
 families.</p></li>
@@ -290,15 +294,15 @@ families.</p></li>
 <p>For each candidate policy, report:</p>
 <ul>
 <li><p>Calibrated mean <span
-class="math inline">\(\est{V}(\pi&#39;)\)</span> with 95% CI ( or
-).</p></li>
+class="math inline">\(\est{V}(\pi&#39;)\)</span> with 95% CI (IPS or
+DR).</p></li>
 <li><p>ESS (absolute and as % of <span
 class="math inline">\(n\)</span>), Hill index <span
 class="math inline">\(\alpha\)</span>.</p></li>
 <li><p>Weight summary: min, median, max, 95th percentile (raw and
-post-).</p></li>
-<li><p>For , orthogonality score with CI.</p></li>
-<li><p>share; note if oracle slice coverage is thin.</p></li>
+post-SIMCal).</p></li>
+<li><p>For DR, orthogonality score with CI.</p></li>
+<li><p>OUA share; note if oracle slice coverage is thin.</p></li>
 <li><p>Any judge stability checks (e.g., Kendall <span
 class="math inline">\(\tau\)</span> on anchor set).</p></li>
 </ul>
@@ -306,24 +310,25 @@ class="math inline">\(\tau\)</span> on anchor set).</p></li>
 <section id="sample-size-label-planner-off-policy" class="level2">
 <h2>Sample size &amp; label planner (off-policy)</h2>
 <p>Let <span class="math inline">\(\hat{\sigma}_W^2\)</span> be the
-variance of <span class="math inline">\(W_i \cdot R_i\)</span> for , or
-the variance of the DR influence function. Then a rough CI half-width is
-<span class="math display">\[\text{HalfWidth} \approx 1.96
+variance of <span class="math inline">\(W_i \cdot R_i\)</span> for IPS,
+or the variance of the DR influence function. Then a rough CI half-width
+is <span class="math display">\[\text{HalfWidth} \approx 1.96
 \sqrt{\frac{\hat{\sigma}_W^2}{n} + \Var_{OUA}}.\]</span></p>
-<p>For , more data helps only if ESS is not the bottleneck; if ESS is
-low, improving overlap (via cohort restriction or stronger ) is more
-effective than adding samples. For , more fresh draws improve the
+<p>For IPS, more data helps only if ESS is not the bottleneck; if ESS is
+low, improving overlap (via cohort restriction or stronger SIMCal) is
+more effective than adding samples. For DR, more fresh draws improve the
 outcome model and tighten intervals.</p>
 </section>
 <section id="when-to-use-ips-vs.-dr" class="level2">
 <h2>When to use IPS vs. DR</h2>
 <ul>
-<li><p><strong>Use</strong> when you cannot generate fresh draws, or
+<li><p><strong>Use IPS</strong> when you cannot generate fresh draws, or
 when overlap is excellent (ESS <span class="math inline">\(\ge
 30\%\)</span>, PASS) and variance is low.</p></li>
-<li><p><strong>Use</strong> when you can afford fresh draws and overlap
-is moderate to poor (ESS <span class="math inline">\(&lt; 30\%\)</span>,
-WARN/FAIL). is more robust and typically yields tighter CIs.</p></li>
+<li><p><strong>Use DR</strong> when you can afford fresh draws and
+overlap is moderate to poor (ESS <span class="math inline">\(&lt;
+30\%\)</span>, WARN/FAIL). DR is more robust and typically yields
+tighter CIs.</p></li>
 <li><p><strong>Use stacked-DR</strong> (ensemble of DR variants) when
 you want the best of all worlds: robustness, efficiency, and automatic
 selection among multiple outcome models.</p></li>
@@ -336,23 +341,23 @@ selection among multiple outcome models.</p></li>
 dominate. Always check ESS; if <span class="math inline">\(&lt;
 30\%\)</span> (WARN), investigate via diagnostics; if <span
 class="math inline">\(&lt; 10\%\)</span> (FAIL), restrict scope or
-switch to .</p></li>
+switch to DR.</p></li>
 <li><p><strong>Assuming weights have finite variance.</strong> Check the
 Hill index <span class="math inline">\(\alpha\)</span>; if <span
-class="math inline">\(&lt; 2\)</span>, estimates are unstable. Use or
-cohort restriction.</p></li>
+class="math inline">\(&lt; 2\)</span>, estimates are unstable. Use
+SIMCal or cohort restriction.</p></li>
 <li><p><strong>Reusing logged responses for the outcome model.</strong>
 The outcome model must be trained on <em>fresh draws</em> from <span
 class="math inline">\(\pi&#39;\)</span>, not on <span
-class="math inline">\(\pi_0\)</span>’s responses. Otherwise
+class="math inline">\(\pi_0\)</span>’s responses. Otherwise DR
 fails.</p></li>
 <li><p><strong>Ignoring judge drift.</strong> If the judge’s scoring
 changes over time, scores from the log are not comparable to fresh
 scores. Check stability via an anchor set.</p></li>
 <li><p><strong>Thin oracle coverage.</strong> If labeled <span
 class="math inline">\(S\)</span> does not cover the range of evaluated
-<span class="math inline">\(S\)</span>, extrapolates poorly. Target
-labels to uncovered bins or report the coverage badge.</p></li>
+<span class="math inline">\(S\)</span>, AutoCal-R extrapolates poorly.
+Target labels to uncovered bins or report the coverage badge.</p></li>
 </ul>
 </section>
 <section id="minimal-recipe-pseudocode-ips" class="level2">
@@ -433,7 +438,7 @@ generating any response that <span
 class="math inline">\(\pi&#39;\)</span> might generate (overlap,
 assumption D2). If policies are too different (e.g., different model
 families with non-overlapping support), off-policy methods fail. In such
-cases, generate fresh outputs and use instead.</p>
+cases, generate fresh outputs and use DM instead.</p>
 <p>Judge stability is also critical: if the judge’s meaning of a score
 changes between the time the log was collected and the time fresh draws
 are evaluated, calibration breaks. Always check drift via an anchor set

@@ -10,11 +10,13 @@ playbook has covered:</p>
 <li><p><strong>The problem:</strong> Naive averaging of judge scores is
 a heuristic that breaks in predictable ways (wrong scale, hidden drift,
 no uncertainty, off-policy illusion).</p></li>
-<li><p><strong>The solution:</strong> Three analysis modes— (on-policy),
-Calibrated (off-policy with weights), and Calibrated (off-policy with
-critic)—each tailored to common evaluation workflows.</p></li>
-<li><p><strong>The core methods:</strong> to map scores to outcomes, to
-stabilize weights, and to keep CIs honest.</p></li>
+<li><p><strong>The solution:</strong> Three analysis modes—DM
+(on-policy), Calibrated IPS (off-policy with weights), and Calibrated DR
+(off-policy with critic)—each tailored to common evaluation
+workflows.</p></li>
+<li><p><strong>The core methods:</strong> AutoCal-R to map scores to
+outcomes, SIMCal to stabilize weights, and OUA to keep CIs
+honest.</p></li>
 <li><p><strong>The diagnostics:</strong> Five high-leverage checks
 (coverage, reliability, ESS, tail index, orthogonality) that catch the
 most important failure modes and point to concrete fixes.</p></li>
@@ -42,7 +44,7 @@ rate, satisfaction) with confidence intervals.</p></li>
 <li><p>Reuse judged logs to assess multiple candidates without
 regenerating (off-policy evaluation).</p></li>
 <li><p>Combine logged data with fresh draws for tighter CIs and
-robustness ().</p></li>
+robustness (DR).</p></li>
 <li><p>Audit and document evaluation assumptions, diagnostics, and
 sensitivity checks.</p></li>
 </ul>
@@ -73,7 +75,7 @@ prompts and seeds across policies to reduce variance.</p></li>
 representative oracle slice (150–200 samples) is the foundation of
 reliable calibration.</p></li>
 <li><p><strong>Check diagnostics before shipping.</strong> Coverage,
-ESS, reliability, and share catch most issues. Always inspect
+ESS, reliability, and OUA share catch most issues. Always inspect
 them.</p></li>
 <li><p><strong>Report CIs with OUA.</strong> Honest intervals that
 include calibrator uncertainty build trust and prevent

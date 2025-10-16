@@ -39,15 +39,15 @@ sufficiently predictive.</p></li>
 <h2>Limitation 2: Monotonicity assumption (J2-M)</h2>
 <section id="the-issue.-1" class="level4">
 <h4>The issue.</h4>
-<p>and assume that outcomes and weights are monotone in the judge score
-<span class="math inline">\(S\)</span>. If <span
+<p>AutoCal-R and SIMCal assume that outcomes and weights are monotone in
+the judge score <span class="math inline">\(S\)</span>. If <span
 class="math inline">\(\E[Y \mid S]\)</span> is non-monotone (e.g., <span
 class="math inline">\(U\)</span>-shaped), isotonic regression can be
 badly miscalibrated.</p>
 </section>
 <section id="when-it-matters.-1" class="level4">
 <h4>When it matters.</h4>
-<p>All modes for ; off-policy for .</p>
+<p>All modes for AutoCal-R; off-policy for SIMCal.</p>
 </section>
 <section id="mitigation.-1" class="level4">
 <h4>Mitigation.</h4>
@@ -55,12 +55,12 @@ badly miscalibrated.</p>
 <li><p>Check monotonicity on the oracle slice: bin by <span
 class="math inline">\(S\)</span>, plot mean <span
 class="math inline">\(Y\)</span>.</p></li>
-<li><p>If non-monotone, use two-stage (flexible index <span
+<li><p>If non-monotone, use two-stage AutoCal-R (flexible index <span
 class="math inline">\(\to\)</span> isotonic) or add a coarse index
 (prompt family, length).</p></li>
-<li><p>For , check <span class="math inline">\(W\)</span> vs. <span
-class="math inline">\(S\)</span> scatter; if clearly non-monotone,
-consider model-based weight calibration (e.g., fit <span
+<li><p>For SIMCal, check <span class="math inline">\(W\)</span>
+vs. <span class="math inline">\(S\)</span> scatter; if clearly
+non-monotone, consider model-based weight calibration (e.g., fit <span
 class="math inline">\(\E[W \mid S]\)</span> with a flexible
 model).</p></li>
 </ul>
@@ -78,19 +78,19 @@ are unreliable.</p>
 </section>
 <section id="when-it-matters.-2" class="level4">
 <h4>When it matters.</h4>
-<p>Off-policy only (, ). Not an issue for .</p>
+<p>Off-policy only (IPS, DR). Not an issue for DM.</p>
 </section>
 <section id="mitigation.-2" class="level4">
 <h4>Mitigation.</h4>
 <ul>
 <li><p>Check ESS; if <span class="math inline">\(&lt; 10\%\)</span>,
 overlap is poor.</p></li>
-<li><p>Use to stabilize weights.</p></li>
+<li><p>Use SIMCal to stabilize weights.</p></li>
 <li><p>Restrict to high-overlap cohorts.</p></li>
-<li><p>Switch to with a strong critic (critic can extrapolate to
+<li><p>Switch to DR with a strong critic (critic can extrapolate to
 low-overlap regions).</p></li>
 <li><p>If overlap is catastrophic (ESS <span class="math inline">\(&lt;
-1\%\)</span>), regenerate and use .</p></li>
+1\%\)</span>), regenerate and use DM.</p></li>
 </ul>
 </section>
 </section>
@@ -104,7 +104,7 @@ breaks. Old oracle labels don’t predict new outcomes.</p>
 </section>
 <section id="when-it-matters.-3" class="level4">
 <h4>When it matters.</h4>
-<p>Off-policy when comparing old logs to new fresh draws; also if
+<p>Off-policy when comparing old logs to new fresh draws; also DM if
 scoring happens over a long time window.</p>
 </section>
 <section id="mitigation.-3" class="level4">
@@ -115,7 +115,7 @@ window.</p></li>
 <li><p>Check stability via an anchor set (Kendall <span
 class="math inline">\(\tau \ge 0.90\)</span>).</p></li>
 <li><p>If drift is detected, refresh the oracle slice with new labels
-and re-fit .</p></li>
+and re-fit AutoCal-R.</p></li>
 <li><p>For long-running evaluations, re-calibrate periodically (e.g.,
 monthly).</p></li>
 </ul>
@@ -126,8 +126,9 @@ monthly).</p></li>
 <section id="the-issue.-4" class="level4">
 <h4>The issue.</h4>
 <p>When the oracle slice is small (<span class="math inline">\(&lt;
-50\)</span> samples), has high variance, leading to large share and wide
-CIs. Calibration may also be unreliable (overfitting).</p>
+50\)</span> samples), AutoCal-R has high variance, leading to large OUA
+share and wide CIs. Calibration may also be unreliable
+(overfitting).</p>
 </section>
 <section id="when-it-matters.-4" class="level4">
 <h4>When it matters.</h4>
@@ -140,8 +141,8 @@ calibration is needed.</p>
 <ul>
 <li><p>Aim for <span class="math inline">\(n_{\text{oracle}} \ge
 100\)</span> (150–200 recommended).</p></li>
-<li><p>Check share; if <span class="math inline">\(&gt; 50\%\)</span>,
-add labels.</p></li>
+<li><p>Check OUA share; if <span class="math inline">\(&gt;
+50\%\)</span>, add labels.</p></li>
 <li><p>Prioritize labels in sparse <span
 class="math inline">\(S\)</span> regions or high-variance prompt
 families.</p></li>
@@ -156,9 +157,9 @@ class="level2">
 <section id="the-issue.-5" class="level4">
 <h4>The issue.</h4>
 <p>If evaluation scores <span class="math inline">\(S\)</span> fall
-outside the oracle <span class="math inline">\(S\)</span>-range, must
-extrapolate. Extrapolation is unreliable, especially at the
-boundaries.</p>
+outside the oracle <span class="math inline">\(S\)</span>-range,
+AutoCal-R must extrapolate. Extrapolation is unreliable, especially at
+the boundaries.</p>
 </section>
 <section id="when-it-matters.-5" class="level4">
 <h4>When it matters.</h4>
@@ -183,14 +184,14 @@ class="level2">
 <h2>Limitation 7: High-dimensional prompts (DR critic)</h2>
 <section id="the-issue.-6" class="level4">
 <h4>The issue.</h4>
-<p>For , the critic <span class="math inline">\(\hat{g}(X)\)</span> must
-predict calibrated rewards from prompt features. If prompts are
+<p>For DR, the critic <span class="math inline">\(\hat{g}(X)\)</span>
+must predict calibrated rewards from prompt features. If prompts are
 high-dimensional or unstructured (e.g., raw text), the critic may
 overfit or fail to generalize.</p>
 </section>
 <section id="when-it-matters.-6" class="level4">
 <h4>When it matters.</h4>
-<p>only.</p>
+<p>DR only.</p>
 </section>
 <section id="mitigation.-6" class="level4">
 <h4>Mitigation.</h4>

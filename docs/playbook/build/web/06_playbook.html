@@ -16,8 +16,8 @@ policy?</strong></p>
 you afford to label an oracle slice (50–200 examples)?</p>
 <ul>
 <li><p><strong>Yes</strong> <span class="math inline">\(\to\)</span> Use
-<strong></strong> (on-policy, simplest). If you also have logged data
-with logprobs, consider <strong></strong> for tighter CIs.</p></li>
+<strong>DM</strong> (on-policy, simplest). If you also have logged data
+with logprobs, consider <strong>DR</strong> for tighter CIs.</p></li>
 <li><p><strong>No</strong> <span class="math inline">\(\to\)</span> Use
 <strong>Direct mode without calibration</strong> (raw judge scores,
 rank-only). No KPI-scale estimates, but still useful for
@@ -32,16 +32,17 @@ class="math inline">\(\pi&#39;\)</span>?</p>
 you label an oracle slice?</p>
 <ul>
 <li><p><strong>Yes</strong> <span class="math inline">\(\to\)</span> Use
-<strong></strong> or <strong></strong> (if you can generate a few fresh
-draws for a critic). Check ESS; if <span class="math inline">\(&lt;
-10\%\)</span>, is strongly recommended.</p></li>
+<strong>IPS</strong> or <strong>DR</strong> (if you can generate a few
+fresh draws for a critic). Check ESS; if <span
+class="math inline">\(&lt; 10\%\)</span>, DR is strongly
+recommended.</p></li>
 <li><p><strong>No</strong> <span class="math inline">\(\to\)</span> Use
 <strong>IPS without calibration</strong> (relative comparisons only, no
 KPI scale).</p></li>
 </ul></li>
 <li><p><strong>No</strong> <span class="math inline">\(\to\)</span> You
 cannot perform causal off-policy evaluation. Regenerate or use
-.</p></li>
+DM.</p></li>
 </ul></li>
 </ul></li>
 </ol>
@@ -115,8 +116,8 @@ class="math inline">\(\ge 95\%\)</span>), reliability (OOF MAE <span
 class="math inline">\(&lt; 0.05\)</span>), mean preservation (<span
 class="math inline">\(|\bar{f(S)} - \bar{Y}| &lt;
 0.02\)</span>).</p></li>
-<li><p>If regional error is high, enable two-stage or add a coarse
-index.</p></li>
+<li><p>If regional error is high, enable two-stage AutoCal-R or add a
+coarse index.</p></li>
 </ul>
 </section>
 <section id="step-6-compute-estimates-and-cis." class="level4">
@@ -129,8 +130,8 @@ f(S_{\pi i})\)</span>.</p></li>
 <li><p>For pairwise contrasts, compute <span
 class="math inline">\(\est{\Delta}(\pi, \pi&#39;) = \frac{1}{m} \sum_i
 (R_{\pi i} - R_{\pi&#39; i})\)</span> (paired SE).</p></li>
-<li><p>Add by refitting <span class="math inline">\(f\)</span> across
-oracle folds and computing <span
+<li><p>Add OUA by refitting <span class="math inline">\(f\)</span>
+across oracle folds and computing <span
 class="math inline">\(\Var_{OUA}\)</span>.</p></li>
 <li><p>Report 95% CIs: <span class="math inline">\(\est{V} \pm 1.96
 \cdot \SE_{\text{total}}\)</span>.</p></li>
@@ -140,7 +141,7 @@ class="math inline">\(\Var_{OUA}\)</span>.</p></li>
 <h4>Step 7: Report.</h4>
 <ul>
 <li><p>For each policy: <span class="math inline">\(\est{V}\)</span>
-with CI, share, calibration diagnostics, coverage badge.</p></li>
+with CI, OUA share, calibration diagnostics, coverage badge.</p></li>
 <li><p>For key contrasts: <span
 class="math inline">\(\est{\Delta}\)</span> with paired CI.</p></li>
 <li><p>Include diagnostic plots (calibration curve, coverage
@@ -194,9 +195,9 @@ distribution mismatch and temporal staleness warnings.</p></li>
 <ul>
 <li><p>Raw weights: <span class="math inline">\(W_i = \exp(\log
 \pi&#39;(A_i \mid X_i) - \log \pi_0(A_i \mid X_i))\)</span>.</p></li>
-<li><p>Apply (5-fold, variance cap <span class="math inline">\(\rho =
-0.95\)</span>) to get stabilized, mean-one weights <span
-class="math inline">\(\tilde{w}_i\)</span>.</p></li>
+<li><p>Apply SIMCal (5-fold, variance cap <span
+class="math inline">\(\rho = 0.95\)</span>) to get stabilized, mean-one
+weights <span class="math inline">\(\tilde{w}_i\)</span>.</p></li>
 <li><p>Check ESS: <span class="math inline">\(({\textstyle\sum}
 \tilde{w}_i)^2 / ({\textstyle\sum} \tilde{w}_i^2)\)</span>. Aim for
 <span class="math inline">\(\ge 30\%\)</span> (PASS), acceptable down to
@@ -214,7 +215,8 @@ f(S_i)\)</span>.</p></li>
 \frac{1}{n} \sum_i \tilde{w}_i \cdot R_i\)</span>, where <span
 class="math inline">\(\tilde{w}_i\)</span> are the stabilized, mean-one
 weights.</p></li>
-<li><p>Compute SE via influence functions, add , form 95% CI.</p></li>
+<li><p>Compute SE via influence functions, add OUA, form 95%
+CI.</p></li>
 </ul>
 </section>
 <section id="step-6-report." class="level4">
@@ -223,7 +225,7 @@ weights.</p></li>
 <li><p><span class="math inline">\(\est{V}\)</span> with CI, ESS
 (absolute and %), Hill index, weight summary (min, median, max, 95th
 pct).</p></li>
-<li><p>share, calibration diagnostics, judge stability check (if
+<li><p>OUA share, calibration diagnostics, judge stability check (if
 available).</p></li>
 </ul>
 </section>
@@ -267,7 +269,7 @@ with regularization.</p></li>
 <li><p><span class="math inline">\(\est{V}_{DR}(\pi&#39;) = \frac{1}{n}
 \sum_i \left[ \tilde{w}_i \cdot (R_i - \hat{g}(X_i)) + \hat{g}(X_i)
 \right]\)</span>, where <span class="math inline">\(\tilde{w}_i\)</span>
-are the stabilized, mean-one weights after .</p></li>
+are the stabilized, mean-one weights after SIMCal.</p></li>
 <li><p>Compute orthogonality score: <span
 class="math inline">\(\frac{1}{n} \sum_i \tilde{w}_i \cdot (R_i -
 \hat{g}(X_i))\)</span> with CI (see §4.7).</p></li>
@@ -281,7 +283,7 @@ class="math inline">\(\frac{1}{n} \sum_i \tilde{w}_i \cdot (R_i -
 index, weight summary.</p></li>
 <li><p>Orthogonality score with CI, critic OOF <span
 class="math inline">\(R^2\)</span>.</p></li>
-<li><p>share, calibration diagnostics.</p></li>
+<li><p>OUA share, calibration diagnostics.</p></li>
 </ul>
 </section>
 </section>
@@ -295,13 +297,13 @@ class="math inline">\(&lt; 0.10\)</span>, mean preservation
 OK)?</p></li>
 <li><p>Checked judge stability (<span class="math inline">\(\tau \ge
 0.90\)</span> or no temporal drift)?</p></li>
-<li><p>Checked share (if <span class="math inline">\(&gt; 50\%\)</span>,
-consider adding labels)?</p></li>
+<li><p>Checked OUA share (if <span class="math inline">\(&gt;
+50\%\)</span>, consider adding labels)?</p></li>
 <li><p>(Off-policy) Checked ESS (<span class="math inline">\(\ge
 10\%\)</span>) and Hill index (<span class="math inline">\(\alpha \ge
 2\)</span>)?</p></li>
 <li><p>(DR) Checked orthogonality (CI contains zero)?</p></li>
-<li><p>Reported CIs that include ?</p></li>
+<li><p>Reported CIs that include OUA?</p></li>
 <li><p>Included diagnostic plots and summary in the report?</p></li>
 <li><p>Documented judge config, prompt set, oracle sampling
 procedure?</p></li>
@@ -318,11 +320,11 @@ calibrators)?</p></li>
 <ul>
 <li><p><strong>Cause:</strong> Poor overlap; policies are too
 different.</p></li>
-<li><p><strong>Fixes:</strong> (1) Apply with stricter <span
+<li><p><strong>Fixes:</strong> (1) Apply SIMCal with stricter <span
 class="math inline">\(\rho\)</span> (e.g., 0.90). (2) Restrict to
 high-overlap cohort (<span class="math inline">\(|\log W| &lt;
-2\)</span>). (3) Switch to with a strong critic. (4) If ESS <span
-class="math inline">\(&lt; 1\%\)</span>, regenerate and use .</p></li>
+2\)</span>). (3) Switch to DR with a strong critic. (4) If ESS <span
+class="math inline">\(&lt; 1\%\)</span>, regenerate and use DM.</p></li>
 </ul>
 </section>
 <section id="problem-heavy-tails-alpha-2." class="level4">
@@ -331,9 +333,9 @@ class="math inline">\(&lt; 1\%\)</span>, regenerate and use .</p></li>
 <ul>
 <li><p><strong>Cause:</strong> Extreme weights due to rare events or
 provider drift.</p></li>
-<li><p><strong>Fixes:</strong> (1) Use aggressively. (2) Cohort
+<li><p><strong>Fixes:</strong> (1) Use SIMCal aggressively. (2) Cohort
 restriction. (3) Check for provider temperature/frequency-penalty
-changes. (4) Switch to or regenerate.</p></li>
+changes. (4) Switch to DR or regenerate.</p></li>
 </ul>
 </section>
 <section id="problem-poor-calibration-oof-mae-0.10." class="level4">
@@ -342,10 +344,10 @@ changes. (4) Switch to or regenerate.</p></li>
 <ul>
 <li><p><strong>Cause:</strong> Judge scores are not monotone in outcome,
 or regional miscalibration.</p></li>
-<li><p><strong>Fixes:</strong> (1) Enable two-stage . (2) Add a coarse
-index (prompt family, length). (3) Add 10–30 labels in problematic <span
-class="math inline">\(S\)</span> regions. (4) Check for judge
-drift.</p></li>
+<li><p><strong>Fixes:</strong> (1) Enable two-stage AutoCal-R. (2) Add a
+coarse index (prompt family, length). (3) Add 10–30 labels in
+problematic <span class="math inline">\(S\)</span> regions. (4) Check
+for judge drift.</p></li>
 </ul>
 </section>
 <section id="problem-thin-coverage-85." class="level4">
@@ -366,12 +368,12 @@ oracle includes edge examples.</p></li>
 <li><p><strong>Cause:</strong> Critic or weights are poor.</p></li>
 <li><p><strong>Fixes:</strong> (1) Improve critic: add regularization,
 use a more flexible model, increase fresh draw sample size. (2) Revisit
-or overlap diagnostics. (3) Check cross-fitting folds. (4) Fall back to
-if orthogonality fails persistently.</p></li>
+SIMCal or overlap diagnostics. (3) Check cross-fitting folds. (4) Fall
+back to IPS if orthogonality fails persistently.</p></li>
 </ul>
 </section>
-<section id="problem-large-share-50." class="level4">
-<h4>Problem: Large share (<span class="math inline">\(&gt;
+<section id="problem-large-oua-share-50." class="level4">
+<h4>Problem: Large OUA share (<span class="math inline">\(&gt;
 50\%\)</span>).</h4>
 <ul>
 <li><p><strong>Cause:</strong> Label scarcity is the bottleneck, not
@@ -416,8 +418,8 @@ class="math inline">\(f\)</span>; no action.</p></li>
 <li><p><strong>Uniform shift:</strong> apply mean anchoring per group;
 keep <span class="math inline">\(f\)</span> shape, document <span
 class="math inline">\(\hat\delta_G\)</span>.</p></li>
-<li><p><strong>Structural change (regional):</strong> refit on the
-<em>union</em> of old + new labels with two-stage index and
+<li><p><strong>Structural change (regional):</strong> refit AutoCal-R on
+the <em>union</em> of old + new labels with two-stage index and
 cross-fitting. If the judge changed meaning materially (low anchor <span
 class="math inline">\(\tau\)</span>, Diagnostic 3), train a <em>new</em>
 calibrator version and deprecate the old one.</p></li>
@@ -425,7 +427,7 @@ calibrator version and deprecate the old one.</p></li>
 </section>
 <section id="label-budgeting-for-refresh." class="level4">
 <h4>Label budgeting for refresh.</h4>
-<p>Use share as a guide: increase <span
+<p>Use OUA share as a guide: increase <span
 class="math inline">\(n_{\text{oracle}}\)</span> until <span
 class="math inline">\(\text{OUA share} &lt; 20\%\)</span>. A practical
 rule is <span class="math inline">\(n_{\text{oracle}} \approx
@@ -454,12 +456,13 @@ class="math inline">\(\sigma_R\)</span> is the SD of calibrated rewards
 </section>
 <section id="label-sample-size-oracle" class="level4">
 <h4>Label sample size (oracle):</h4>
-<p>The variance scales as <span class="math inline">\(1 /
-n_{\text{oracle}}\)</span>. For share <span class="math inline">\(&lt;
-20\%\)</span>, use: <span class="math display">\[n_{\text{oracle}}
-\approx 5 \cdot m^{1/2}.\]</span> For <span class="math inline">\(m =
-1000\)</span>, this gives <span class="math inline">\(n_{\text{oracle}}
-\approx 150\)</span>.</p>
+<p>The OUA variance scales as <span class="math inline">\(1 /
+n_{\text{oracle}}\)</span>. For OUA share <span
+class="math inline">\(&lt; 20\%\)</span>, use: <span
+class="math display">\[n_{\text{oracle}} \approx 5 \cdot
+m^{1/2}.\]</span> For <span class="math inline">\(m = 1000\)</span>,
+this gives <span class="math inline">\(n_{\text{oracle}} \approx
+150\)</span>.</p>
 </section>
 <section id="fresh-draws-for-dr-critic" class="level4">
 <h4>Fresh draws for DR critic:</h4>
@@ -520,7 +523,7 @@ and statistically significant.
 <h2>Summary</h2>
 <p>The operator playbook provides decision trees, workflows, checklists,
 and troubleshooting for the full CJE pipeline. Always check diagnostics
-before shipping, document everything, and report CIs with . When in
+before shipping, document everything, and report CIs with OUA. When in
 doubt, run sensitivity checks.</p>
 </section>
 </section>

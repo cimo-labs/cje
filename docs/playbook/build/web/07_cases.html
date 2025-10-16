@@ -32,8 +32,8 @@ truth <span class="math inline">\(Y \in \{0, 1\}\)</span>.</p></li>
 <section id="calibration." class="level4">
 <h4>Calibration.</h4>
 <ul>
-<li><p>Fit (5-fold isotonic regression) on the 150-sample oracle
-slice.</p></li>
+<li><p>Fit AutoCal-R (5-fold isotonic regression) on the 150-sample
+oracle slice.</p></li>
 <li><p>Diagnostics: Coverage 96% (pass), OOF MAE 0.03 (pass), mean
 preservation <span class="math inline">\(|\bar{f(S)} - \bar{Y}| =
 0.01\)</span> (excellent).</p></li>
@@ -41,8 +41,8 @@ preservation <span class="math inline">\(|\bar{f(S)} - \bar{Y}| =
 class="math inline">\(R = f(S) \in [0, 1]\)</span>.</p></li>
 </ul>
 </section>
-<section id="estimates-with-." class="level4">
-<h4>Estimates (with ).</h4>
+<section id="estimates-with-oua." class="level4">
+<h4>Estimates (with OUA).</h4>
 <p><span class="math display">\[\begin{aligned}
 \est{V}_{DM}(\text{GPT-3.5}) &amp;= 0.62 \; [0.58, 0.66] \\
 \est{V}_{DM}(\text{GPT-4}) &amp;= 0.78 \; [0.75, 0.81] \\
@@ -58,7 +58,7 @@ class="math inline">\(R = f(S) \in [0, 1]\)</span>.</p></li>
 <section id="diagnostics." class="level4">
 <h4>Diagnostics.</h4>
 <ul>
-<li><p>share: 12% (labels sufficient, variance dominated by prompt
+<li><p>OUA share: 12% (labels sufficient, variance dominated by prompt
 variation).</p></li>
 <li><p>All diagnostics pass.</p></li>
 </ul>
@@ -95,7 +95,7 @@ prompts).</p></li>
 <section id="calibration.-1" class="level4">
 <h4>Calibration.</h4>
 <ul>
-<li><p>Fit on 200-sample oracle.</p></li>
+<li><p>Fit AutoCal-R on 200-sample oracle.</p></li>
 <li><p>Diagnostics: Coverage 89% (warn), OOF MAE 0.06 (pass), mean
 preservation OK.</p></li>
 <li><p>Action: Add 20 labels targeting low-<span
@@ -110,8 +110,8 @@ class="math inline">\(S\)</span> bins to improve coverage to
 \pi&#39;(A_i \mid X_i) - \log \pi_0(A_i \mid X_i))\)</span>.</p></li>
 <li><p>Raw ESS: 8% (poor overlap; GPT-4-turbo is quite different from
 GPT-3.5-turbo).</p></li>
-<li><p>Apply with <span class="math inline">\(\rho = 0.95\)</span>:
-stabilized ESS improves to 18%.</p></li>
+<li><p>Apply SIMCal with <span class="math inline">\(\rho =
+0.95\)</span>: stabilized ESS improves to 18%.</p></li>
 <li><p>Hill index <span class="math inline">\(\alpha = 2.6\)</span>
 (pass, finite variance).</p></li>
 </ul>
@@ -129,7 +129,7 @@ stabilized ESS improves to 18%.</p></li>
 <ul>
 <li><p>ESS 18% (warn, but acceptable given no fresh draws
 available).</p></li>
-<li><p>share 22% (warn; labels are becoming a bottleneck).</p></li>
+<li><p>OUA share 22% (warn; labels are becoming a bottleneck).</p></li>
 <li><p>Weight max/median ratio: 45 (moderate tail).</p></li>
 </ul>
 </section>
@@ -175,8 +175,8 @@ GPT-4-turbo outputs and judge scores.</p></li>
 </section>
 <section id="weights-and-calibration." class="level4">
 <h4>Weights and calibration.</h4>
-<p>Same as Case 2 (ESS 18% after , <span class="math inline">\(\alpha =
-2.6\)</span>).</p>
+<p>Same as Case 2 (ESS 18% after SIMCal, <span
+class="math inline">\(\alpha = 2.6\)</span>).</p>
 </section>
 <section id="critic-training." class="level4">
 <h4>Critic training.</h4>
@@ -202,7 +202,7 @@ cluster).</p></li>
 <li><p>Orthogonality score: <span class="math inline">\(0.02 \; [-0.03,
 0.07]\)</span> (pass, CI contains zero).</p></li>
 <li><p>ESS: still 18% (unchanged by DR; weights are the same).</p></li>
-<li><p>share: 18% (slightly lower than IPS due to variance reduction
+<li><p>OUA share: 18% (slightly lower than IPS due to variance reduction
 from the critic).</p></li>
 <li><p>Compare to IPS: IPS gave <span class="math inline">\([0.68,
 0.80]\)</span> (width 0.12); DR gives <span class="math inline">\([0.71,
@@ -228,7 +228,7 @@ that ESS 18% is usable, especially with sensitivity checks.</p></li>
 shows a 33% CI reduction with only 2,000 fresh draws (20% of logged
 data).</p></li>
 <li><p><strong>Always check diagnostics.</strong> Coverage, ESS,
-orthogonality, and share catch issues early.</p></li>
+orthogonality, and OUA share catch issues early.</p></li>
 <li><p><strong>Sensitivity checks build trust.</strong> Cohort
 restriction, trimming, and alternative calibrators confirm
 robustness.</p></li>
