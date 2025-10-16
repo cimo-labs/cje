@@ -31,13 +31,14 @@ if ! command -v pandoc &> /dev/null; then
 fi
 
 # Pandoc options for clean HTML output
+# Note: NOT using --standalone so we get pure content fragments
+# The website provides its own HTML wrapper, CSS, and MathJax
 PANDOC_OPTS=(
     "--from=latex"
     "--to=html"
-    "--mathjax"  # Use MathJax for equations (better web compatibility)
+    "--mathjax"  # Preserve MathJax-compatible markup (website loads MathJax)
     "--section-divs"  # Wrap sections in divs
     "--no-highlight"  # We'll handle code highlighting in CSS
-    "--standalone"  # Each section is standalone HTML fragment
 )
 
 # Convert each section

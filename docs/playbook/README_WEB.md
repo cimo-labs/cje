@@ -98,12 +98,14 @@ docs/playbook/
 
 ## Pandoc Conversion
 
-`build_web.sh` converts each `.tex` file to standalone HTML using:
+`build_web.sh` converts each `.tex` file to HTML fragments using:
 - `--from=latex` - Parse LaTeX syntax
-- `--to=html` - Output HTML
-- `--mathjax` - Math rendering via MathJax
+- `--to=html` - Output HTML fragments (NOT standalone)
+- `--mathjax` - Preserve MathJax-compatible math markup
 - `--section-divs` - Wrap sections in divs
-- `--standalone` - Complete HTML fragments
+- `--no-highlight` - Website provides code styling
+
+Note: We generate **content fragments**, not complete HTML documents. The website provides the HTML wrapper, CSS styling, and loads MathJax.
 
 ## Dependencies
 
