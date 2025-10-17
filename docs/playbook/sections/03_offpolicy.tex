@@ -40,7 +40,7 @@ where $W_i = \pi'(A_i \mid X_i) / \pi_0(A_i \mid X_i)$ and $R_i = f(S_i)$.
 
 \subsection{SIMCal: stabilize weights via monotone projection}
 
-\textbf{\simcal{} (Score-Indexed Monotone Calibration)} stabilizes weights by projecting them onto monotone functions of the judge score $S$, then applying a variance cap:
+\textbf{\simcal{} (Surrogate Indexed Monotone Calibration)} stabilizes weights by projecting them onto monotone functions of the judge score $S$, then applying a variance cap:
 
 \begin{enumerate}
 \item \textbf{Fit three candidates} on a fold-out basis: baseline ($W$), monotone increasing ($W^\uparrow$), monotone decreasing ($W^\downarrow$).
