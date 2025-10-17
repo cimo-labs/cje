@@ -333,6 +333,30 @@ def test_covariates_in_dr_mode(tmp_path: Path) -> None:
     # DR mode should use metadata from mode detection or explicit
     assert results.metadata.get("mode") in ["dr", None]
 
+    # REGRESSION TEST: Ensure all three DR estimators work with covariates
+    # This catches bugs where TMLE/MRDR fail to pass covariates to outcome_model.predict()
+    # which causes SplineTransformer feature mismatch errors when use_covariates=True
+    assert (
+        "valid_estimators" in results.metadata
+    ), "Missing 'valid_estimators' in metadata - stacking may have failed"
+    valid_estimators = results.metadata["valid_estimators"]
+    assert set(valid_estimators) == {"dr-cpo", "mrdr", "tmle"}, (
+        f"Expected all three DR estimators to work with covariates, "
+        f"but got: {valid_estimators}. "
+        f"Failed estimators: {results.metadata.get('failed_estimators', [])}"
+    )
+
+    # Verify no estimators failed
+    failed_estimators = results.metadata.get("failed_estimators", [])
+    assert (
+        len(failed_estimators) == 0
+    ), f"Some estimators failed with covariates: {failed_estimators}"
+
+    # Verify stacking actually used all three estimators
+    assert (
+        "stacking_weights" in results.metadata
+    ), "Missing 'stacking_weights' - stacking may have fallen back to single estimator"
+
     print("✅ Covariates in DR mode test passed!")
 
 
