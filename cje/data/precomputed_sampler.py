@@ -307,13 +307,19 @@ class PrecomputedSampler:
                     ),
                 }
 
-                # Flatten response-level covariates from metadata (e.g., response_length)
+                # Flatten ALL covariates from metadata (e.g., response_length, domain, etc.)
+                # This ensures any covariate computed during calibration is available
+                # at the top level for DR estimators to use
                 if sample.metadata:
-                    # Add response_length if present (used for covariate-based calibration)
-                    if "response_length" in sample.metadata:
-                        data_dict["response_length"] = sample.metadata[
-                            "response_length"
-                        ]
+                    for key, value in sample.metadata.items():
+                        # Only add if not already in data_dict (don't overwrite core fields)
+                        # Skip keys that are already flattened (judge_score, oracle_label)
+                        if key not in data_dict and key not in (
+                            "judge_score",
+                            "oracle_label",
+                            "prompt_id",
+                        ):
+                            data_dict[key] = value
 
                 policy_data.append(data_dict)
 
