@@ -1,6 +1,6 @@
 {
   "version": "0.2.1",
-  "generated": "2025-10-17T18:07:26Z",
+  "generated": "2025-10-17T18:36:08Z",
   "sections": [
     {"id": "01_introduction", "title": "Introduction", "slug": "introduction"},
     {"id": "02_dm", "title": "Direct Method (DM)", "slug": "direct-method"},
