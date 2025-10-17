@@ -499,6 +499,27 @@ class MRDREstimator(DREstimator):
             prompts = [d["prompt"] for d in data]
             responses = [d["response"] for d in data]
 
+            # Extract covariates if using them
+            logged_covariates = None
+            if hasattr(self, "_covariate_names") and self._covariate_names:
+                covariate_values = []
+                for d in data:
+                    sample_covariates = []
+                    for cov_name in self._covariate_names:
+                        cov_value = d.get(cov_name)
+                        if cov_value is None:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' not found or is None in data for policy '{policy}'"
+                            )
+                        try:
+                            sample_covariates.append(float(cov_value))  # type: ignore[arg-type]
+                        except (TypeError, ValueError) as e:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' has non-numeric value: {e}"
+                            )
+                    covariate_values.append(sample_covariates)
+                logged_covariates = np.array(covariate_values)
+
             # Get fold assignments
             if self._promptid_to_fold:
                 fold_ids = np.array(
@@ -512,7 +533,9 @@ class MRDREstimator(DREstimator):
             outcome_model = self._policy_models[policy]
 
             # Get predictions on logged data
-            g_logged = outcome_model.predict(prompts, responses, judge_scores, fold_ids)
+            g_logged = outcome_model.predict(
+                prompts, responses, judge_scores, fold_ids, covariates=logged_covariates
+            )
 
             # Get predictions on fresh draws
             g_fresh_all = []
@@ -522,8 +545,19 @@ class MRDREstimator(DREstimator):
                 fresh_responses = [""] * len(fresh_scores)
                 fresh_fold_ids = np.full(len(fresh_scores), fold_ids[i])
 
+                # Get covariate for this prompt (if using covariates)
+                fresh_covariates = None
+                if logged_covariates is not None:
+                    fresh_covariates = np.tile(
+                        logged_covariates[i], (len(fresh_scores), 1)
+                    )
+
                 g_fresh_prompt = outcome_model.predict(
-                    fresh_prompts, fresh_responses, fresh_scores, fresh_fold_ids
+                    fresh_prompts,
+                    fresh_responses,
+                    fresh_scores,
+                    fresh_fold_ids,
+                    covariates=fresh_covariates,
                 )
                 g_fresh_all.append(g_fresh_prompt.mean())
 

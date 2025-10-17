@@ -142,6 +142,27 @@ class TMLEEstimator(DREstimator):
             prompts = [d["prompt"] for d in data]
             responses = [d["response"] for d in data]
 
+            # Extract covariates if using them
+            logged_covariates = None
+            if hasattr(self, "_covariate_names") and self._covariate_names:
+                covariate_values = []
+                for d in data:
+                    sample_covariates = []
+                    for cov_name in self._covariate_names:
+                        cov_value = d.get(cov_name)
+                        if cov_value is None:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' not found or is None in data for policy '{policy}'"
+                            )
+                        try:
+                            sample_covariates.append(float(cov_value))  # type: ignore[arg-type]
+                        except (TypeError, ValueError) as e:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' has non-numeric value: {e}"
+                            )
+                    covariate_values.append(sample_covariates)
+                logged_covariates = np.array(covariate_values)
+
             # Get fold assignments - strict mode (no fallback)
             unknown_pids = [
                 pid for pid in prompt_ids if pid not in self._promptid_to_fold
@@ -157,7 +178,9 @@ class TMLEEstimator(DREstimator):
             )
 
             # 1) Get initial cross-fitted predictions on logged data
-            g_logged0 = self.outcome_model.predict(prompts, responses, scores, fold_ids)
+            g_logged0 = self.outcome_model.predict(
+                prompts, responses, scores, fold_ids, covariates=logged_covariates
+            )
 
             # 2) Get initial predictions on fresh draws
             fresh_dataset = self._fresh_draws[policy]
@@ -170,8 +193,19 @@ class TMLEEstimator(DREstimator):
                 fresh_responses = [""] * len(fresh_scores)
                 fresh_fold_ids = np.full(len(fresh_scores), fold_ids[i])
 
+                # Get covariate for this prompt (if using covariates)
+                fresh_covariates = None
+                if logged_covariates is not None:
+                    fresh_covariates = np.tile(
+                        logged_covariates[i], (len(fresh_scores), 1)
+                    )
+
                 g_fresh_prompt = self.outcome_model.predict(
-                    fresh_prompts, fresh_responses, fresh_scores, fresh_fold_ids
+                    fresh_prompts,
+                    fresh_responses,
+                    fresh_scores,
+                    fresh_fold_ids,
+                    covariates=fresh_covariates,
                 )
                 g_fresh0_all.append(g_fresh_prompt.mean())
 
@@ -307,6 +341,27 @@ class TMLEEstimator(DREstimator):
             prompts = [d["prompt"] for d in data]
             responses = [d["response"] for d in data]
 
+            # Extract covariates if using them
+            logged_covariates = None
+            if hasattr(self, "_covariate_names") and self._covariate_names:
+                covariate_values = []
+                for d in data:
+                    sample_covariates = []
+                    for cov_name in self._covariate_names:
+                        cov_value = d.get(cov_name)
+                        if cov_value is None:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' not found or is None in data for policy '{policy}'"
+                            )
+                        try:
+                            sample_covariates.append(float(cov_value))  # type: ignore[arg-type]
+                        except (TypeError, ValueError) as e:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' has non-numeric value: {e}"
+                            )
+                    covariate_values.append(sample_covariates)
+                logged_covariates = np.array(covariate_values)
+
             # Get fold assignments - strict mode (no fallback)
             unknown_pids = [
                 pid for pid in prompt_ids if pid not in self._promptid_to_fold
@@ -322,7 +377,9 @@ class TMLEEstimator(DREstimator):
             )
 
             # Get ORIGINAL predictions (not targeted) for honest R²
-            g_logged0 = self.outcome_model.predict(prompts, responses, scores, fold_ids)
+            g_logged0 = self.outcome_model.predict(
+                prompts, responses, scores, fold_ids, covariates=logged_covariates
+            )
 
             # Get fresh predictions
             fresh_dataset = self._fresh_draws[policy]
@@ -335,8 +392,19 @@ class TMLEEstimator(DREstimator):
                 fresh_responses = [""] * len(fresh_scores)
                 fresh_fold_ids = np.full(len(fresh_scores), fold_ids[i])
 
+                # Get covariate for this prompt (if using covariates)
+                fresh_covariates = None
+                if logged_covariates is not None:
+                    fresh_covariates = np.tile(
+                        logged_covariates[i], (len(fresh_scores), 1)
+                    )
+
                 g_fresh_prompt = self.outcome_model.predict(
-                    fresh_prompts, fresh_responses, fresh_scores, fresh_fold_ids
+                    fresh_prompts,
+                    fresh_responses,
+                    fresh_scores,
+                    fresh_fold_ids,
+                    covariates=fresh_covariates,
                 )
                 g_fresh0_all.append(g_fresh_prompt.mean())
 
