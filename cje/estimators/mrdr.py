@@ -304,6 +304,14 @@ class MRDREstimator(DREstimator):
             super().fit()
             return
 
+        # Extract covariate names from reward_calibrator (same as dr_base._fit_outcome_model)
+        covariate_names: List[str] = []
+        if self.reward_calibrator is not None and hasattr(
+            self.reward_calibrator, "covariate_names"
+        ):
+            covariate_names = self.reward_calibrator.covariate_names or []
+        self._covariate_names = covariate_names
+
         # Build prompt_id -> fold map from dataset metadata (if available)
         # This ensures we reuse the same folds as reward calibration
         cv_map = {}
