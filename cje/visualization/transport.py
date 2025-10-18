@@ -187,7 +187,7 @@ def plot_transport_audit(
         ),
     )
 
-    plt.tight_layout(rect=[0, 0.12, 1, 0.96])
+    plt.tight_layout(rect=(0, 0.12, 1, 0.96))
 
     # Save if requested
     if save_path:
