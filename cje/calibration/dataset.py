@@ -27,7 +27,7 @@ def calibrate_dataset(
     dataset: Dataset,
     judge_field: str = "judge_score",
     oracle_field: str = "oracle_label",
-    enable_cross_fit: bool = False,
+    enable_cross_fit: bool = True,
     n_folds: int = 5,
     calibration_mode: Optional[str] = None,
     use_response_length: bool = False,
@@ -44,7 +44,8 @@ def calibrate_dataset(
         dataset: Dataset containing judge scores and oracle labels
         judge_field: Field name in metadata containing judge scores
         oracle_field: Field name in metadata containing oracle labels
-        enable_cross_fit: If True, also fits cross-fitted models for DR
+        enable_cross_fit: If True, fits cross-fitted models for DR estimation and
+                         oracle-uncertainty-aware (OUA) inference. Default True.
         n_folds: Number of CV folds (only used if enable_cross_fit=True)
         calibration_mode: Calibration mode ('auto', 'monotone', 'two_stage').
                          If None, defaults to 'two_stage' when covariates present,
