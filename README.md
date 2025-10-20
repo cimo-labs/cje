@@ -16,20 +16,21 @@ CJE calibrates judge scores using a small oracle slice (5-10% coverage), then de
 ## How It Works
 
 ```
-┌──────────────────┐      ┌──────────────────┐      ┌──────────────────┐
-│   YOUR DATA      │      │    AUTOCAL-R     │      │     RESULTS      │
-│                  │  →   │                  │  →   │                  │
-│ Judge scores     │      │ Learn f: Judge   │      │ ✓ Unbiased       │
-│ (cheap, noisy)   │      │      ↓           │      │   estimates      │
-│                  │      │    Oracle scale  │      │                  │
-│ + 5-10% oracle   │      │                  │      │ ✓ Valid 95% CIs  │
-│   labels         │      │ (isotonic reg.)  │      │                  │
-└──────────────────┘      └──────────────────┘      └──────────────────┘
+┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+│  YOUR DATA   │   │  CALIBRATE   │   │   VALIDATE   │   │   RESULTS    │
+│              │ → │              │ → │              │ → │              │
+│ Judge scores │   │ Learn f:     │   │ Check        │   │ ✓ Unbiased   │
+│ (cheap,      │   │ Judge →      │   │ assumptions  │   │   estimates  │
+│  noisy)      │   │ Oracle scale │   │              │   │              │
+│              │   │              │   │ Run          │   │ ✓ Valid 95%  │
+│ + 5-10%      │   │              │   │ diagnostics  │   │   CIs        │
+│   oracle     │   │              │   │              │   │              │
+└──────────────┘   └──────────────┘   └──────────────┘   └──────────────┘
 ```
 
 **Key benefits:**
 - **Small label budget**: 5-10% oracle coverage often sufficient
-- **Unbiased estimates**: Judge scores mapped to oracle scale via isotonic regression
+- **Unbiased estimates**: Judge scores (+ optional covariates) mapped to oracle scale
 - **Rigorous inference**: CIs account for both sampling and calibration uncertainty
 
 
@@ -39,37 +40,53 @@ See [`cje/calibration/README.md`](cje/calibration/README.md#why-isotonic-regress
 
 CJE provides two calibration modes for mapping judge scores to oracle outcomes (i.e., the KPI you care about):
 
-### Monotone (Default)
+### Monotone
 Standard isotonic regression enforces: *higher judge score → no worse expected outcome*.
 
 **Why isotonic?** It's the right structural prior—assumes only monotonicity (which you actually believe), preserves oracle KPI levels by construction (mean-preserving by KKT conditions), and is highly efficient with small label budgets. See [technical rationale](cje/calibration/README.md#why-isotonic-regression-for-reward-calibration).
 
 Simple, stable, works well when the judge-oracle relationship is already monotone.
 
-### Two-Stage (Flexible)
-Learns smooth transformation g(S) → rank → isotonic. Handles non-monotone patterns (e.g., length bias, regional miscalibration) while maintaining final monotonicity guarantee.
+### Two-Stage (Default with Covariates)
+Learns smooth transformation g(S, X) → rank → isotonic. Handles non-monotone patterns and incorporates additional covariates (e.g., response length, domain metadata) while maintaining final monotonicity guarantee.
 
 <div align="center">
-  <img src="two_stage_comparison.png" alt="Calibration Comparison" width="100%">
+  <img src="two_stage_comparison.png" alt="Two-Stage Calibration with Covariates" width="100%">
 </div>
 
-<sub>*Data from [LMSYS Chatbot Arena](https://huggingface.co/datasets/agie-ai/lmsys-chatbot_arena_conversations). Judge scores from GPT-4-nano, oracle labels from GPT-5. RMSE computed out-of-fold (5-fold CV) for honest generalization performance.*</sub>
+<sub>*Two-stage calibration learns flexible relationships between covariates (judge score, response length) and oracle outcomes in Stage 1, then enforces monotonicity via isotonic regression in Stage 2. **Left/Middle:** Partial dependence plots show how each covariate relates to oracle score while holding others at mean values. **Right:** Final monotone mapping from Stage 1 risk index to calibrated oracle score. Data from [LMSYS Chatbot Arena](https://huggingface.co/datasets/agie-ai/lmsys-chatbot_arena_conversations).*</sub>
 
 **When to use two-stage:**
+- **You have covariates** (response length, domain, etc.) → two-stage is default and recommended
+- Judge shows non-monotone empirical E[Oracle|Judge] relationship
 - Regional miscalibration (monotone works well at low/high but poorly at mid-range)
-- Length bias (judge gives same score to different-quality responses based on length)
-- Non-monotone empirical E[Oracle|Judge] relationship
+- Length bias (judge gives different scores to same-quality responses based on length)
 
-**Auto mode:** CJE automatically selects the better method via cross-validation (1-SE rule).
+**Auto mode:**
+- **With covariates:** Two-stage is automatically used (can incorporate additional features)
+- **Judge score only:** CJE automatically selects monotone vs two-stage via cross-validation (1-SE rule)
 
 ```python
-# Let CJE choose automatically (default)
+# Default: Judge score only (no covariates, auto-selects monotone/two-stage via CV)
 result = analyze_dataset(fresh_draws_dir="responses/")
 
-# Or force a specific mode
+# Include response_length covariate for two-stage calibration
 result = analyze_dataset(
     fresh_draws_dir="responses/",
-    calibration_mode="two_stage"  # or "monotone"
+    include_response_length=True
+)
+
+# Add domain as additional covariate (combine with response_length)
+result = analyze_dataset(
+    fresh_draws_dir="responses/",
+    include_response_length=True,
+    calibration_covariates=["domain"]
+)
+
+# Force a specific mode
+result = analyze_dataset(
+    fresh_draws_dir="responses/",
+    calibration_mode="monotone"  # or "two_stage"
 )
 ```
 

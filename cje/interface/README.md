@@ -395,8 +395,8 @@ def analyze_dataset(
   - Manual: `direct`, `calibrated-ips`, `stacked-dr`, `dr-cpo`, `tmle`, `mrdr`, etc.
 - `judge_field`: Metadata field with judge scores (default: "judge_score")
 - `oracle_field`: Metadata field with oracle labels (default: "oracle_label")
-- `calibration_covariates`: Optional list of metadata field names to use as covariates in two-stage calibration (e.g., `["response_length", "domain"]`). Helps handle judge bias where judge scores at fixed S have different oracle outcomes based on observable features like response length or domain. Only works with two-stage or auto calibration mode.
-- `include_response_length`: Automatically include response length (word count) as a covariate. Computed as `len(response.split())`. Requires all samples (logged data, fresh draws, and calibration data) to have a `"response"` field. If True, `"response_length"` is automatically prepended to `calibration_covariates`. Convenient for handling length bias.
+- `calibration_covariates`: Optional list of metadata field names to use as covariates in two-stage reward calibration (e.g., `["domain", "difficulty"]`). Helps handle confounding where judge scores at fixed S have different oracle outcomes based on observable features. Only works with two-stage or auto calibration mode.
+- `include_response_length`: If True, automatically includes response length (word count) as a covariate. Computed as `len(response.split())`. Requires all samples to have a `response` field. If True, `response_length` is prepended to `calibration_covariates`. Convenient for handling length bias.
 - `verbose`: Print detailed progress
 
 **Returns:**
@@ -601,30 +601,36 @@ if diag.status == "FAIL":
 Handle judge bias using observable features as covariates in two-stage calibration:
 
 ```python
-# Example 1: Use response length covariate (auto-computed)
+# Example 1: Include response_length covariate (auto-computed)
 results = analyze_dataset(
     logged_data_path="logs.jsonl",
-    include_response_length=True,  # Automatically computes len(response.split())
+    include_response_length=True,  # Auto-compute response length
     estimator="calibrated-ips"
 )
 
-# Example 2: Use custom metadata covariates
+# Example 2: Add custom metadata covariates with response_length
 # Assumes your data has "domain" and "difficulty" in metadata
 results = analyze_dataset(
     logged_data_path="logs.jsonl",
-    calibration_covariates=["domain", "difficulty"],
+    include_response_length=True,
+    calibration_covariates=["domain", "difficulty"],  # Additional covariates
     estimator="stacked-dr",
     fresh_draws_dir="responses/"
 )
+# Effective covariates: ["response_length", "domain", "difficulty"]
 
-# Example 3: Combine auto-computed and custom covariates
+# Example 3: Judge score only (default - no covariates)
 results = analyze_dataset(
     logged_data_path="logs.jsonl",
-    include_response_length=True,        # Auto-computed first
-    calibration_covariates=["domain"],   # Then custom covariates
     estimator="calibrated-ips"
 )
-# Effective covariates: ["response_length", "domain"]
+
+# Example 4: Custom covariates without response_length
+results = analyze_dataset(
+    logged_data_path="logs.jsonl",
+    calibration_covariates=["domain"],  # Only domain, no response_length
+    estimator="calibrated-ips"
+)
 ```
 
 **When to use covariates:**

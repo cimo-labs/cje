@@ -299,13 +299,24 @@ min_π π'Σπ s.t. π ≥ 0, Σπ = 1
 ```python
 from cje.calibration import calibrate_dataset
 
-# Calibrate judge scores to oracle labels (auto mode by default)
+# Default: Judge score only (no covariates, auto-selects monotone/two-stage via CV)
 calibrated_dataset, cal_result = calibrate_dataset(
     dataset,
     judge_field="judge_score",
-    oracle_field="oracle_label",
-    calibration_mode="auto",  # Or "monotone", "two_stage"
-    random_seed=42  # For reproducibility
+    oracle_field="oracle_label"
+)
+
+# Include response_length covariate with two-stage calibration
+calibrated_dataset, cal_result = calibrate_dataset(
+    dataset,
+    use_response_length=True
+)
+
+# Add domain as additional covariate (combine with response_length)
+calibrated_dataset, cal_result = calibrate_dataset(
+    dataset,
+    use_response_length=True,
+    covariate_names=["domain"]
 )
 
 # Access calibration quality metrics and metadata
