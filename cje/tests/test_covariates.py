@@ -18,6 +18,7 @@ import numpy as np
 from cje import analyze_dataset
 from cje.calibration import calibrate_dataset
 from cje.data import load_dataset_from_jsonl
+from cje.data.models import Dataset
 
 
 def test_include_response_length_flag(tmp_path: Path) -> None:
@@ -543,6 +544,36 @@ def test_covariate_computation_consistency() -> None:
 
     print("✅ Covariate computation consistency test passed!")
     print("   Both calibration and fresh draws use word count (len(response.split()))")
+
+
+@pytest.mark.e2e
+@pytest.mark.uses_arena_sample
+def test_covariates_with_real_arena_data(arena_sample: Dataset) -> None:
+    """E2E smoke test: Covariates work end-to-end with real arena sample data."""
+    from pathlib import Path
+
+    # Use the real arena sample data
+    data_path = (
+        Path(__file__).parent.parent.parent
+        / "examples"
+        / "arena_sample"
+        / "logged_data.jsonl"
+    )
+
+    # Run with response_length covariate on real data
+    results = analyze_dataset(
+        logged_data_path=str(data_path),
+        include_response_length=True,
+        estimator="calibrated-ips",
+        verbose=False,
+    )
+
+    # Basic validation
+    assert results is not None
+    assert len(results.estimates) == 3  # clone, parallel, unhelpful
+    assert all(0 <= e <= 1 for e in results.estimates)
+
+    print("✅ Arena data E2E smoke test passed!")
 
 
 if __name__ == "__main__":

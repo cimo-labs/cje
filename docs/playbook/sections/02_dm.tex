@@ -1,8 +1,8 @@
-\section{Direct Modeling (DM): Calibrated On-Policy Evaluation}
+\section{Direct Model (DM): Calibrated On-Policy Evaluation}
 
 \subsection{What DM solves}
 
-Direct Modeling answers: ``What KPI would we see on this prompt set if we shipped policy $\pi$?'' It is the closest offline analog to an A/B test: generate outputs for each policy on the same prompts (paired design), map judge scores to an outcome scale with \autocal, average the calibrated rewards, and attach confidence intervals that include calibration uncertainty (\oua).
+Direct Model answers: ``What KPI would we see on this prompt set if we shipped policy $\pi$?'' It is the closest offline analog to an A/B test: generate outputs for each policy on the same prompts (paired design), map judge scores to an outcome scale with \autocal, average the calibrated rewards, and attach confidence intervals that include calibration uncertainty (\oua).
 
 \begin{quickref}
 \textbf{DM in one minute (operator view)}

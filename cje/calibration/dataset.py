@@ -30,6 +30,7 @@ def calibrate_dataset(
     enable_cross_fit: bool = False,
     n_folds: int = 5,
     calibration_mode: Optional[str] = None,
+    use_response_length: bool = False,
     covariate_names: Optional[List[str]] = None,
     random_seed: int = 42,
 ) -> Tuple[Dataset, CalibrationResult]:
@@ -37,8 +38,7 @@ def calibrate_dataset(
 
     This is the main AutoCal-R entry point. It extracts judge scores and oracle
     labels from the dataset, applies AutoCal-R to learn a mean-preserving calibration
-    function, and returns a new dataset with calibrated rewards. By default, uses
-    'auto' mode to automatically select between monotone and flexible calibration.
+    function, and returns a new dataset with calibrated rewards.
 
     Args:
         dataset: Dataset containing judge scores and oracle labels
@@ -47,23 +47,37 @@ def calibrate_dataset(
         enable_cross_fit: If True, also fits cross-fitted models for DR
         n_folds: Number of CV folds (only used if enable_cross_fit=True)
         calibration_mode: Calibration mode ('auto', 'monotone', 'two_stage').
-                         If None, defaults to 'auto' for cross-fit, 'monotone' otherwise.
-        covariate_names: Optional list of metadata field names to use as covariates
-                        in two-stage calibration (e.g., ["response_length", "domain"]).
+                         If None, defaults to 'two_stage' when covariates present,
+                         'auto' for cross-fit without covariates, 'monotone' otherwise.
+        use_response_length: If True, includes response length as a covariate
+                            for two-stage calibration. Auto-computed from response text.
+        covariate_names: Optional list of additional metadata field names to use as
+                        covariates (e.g., ["domain", "difficulty"]). Combined with
+                        response_length if use_response_length=True.
         random_seed: Random seed for reproducibility
 
     Returns:
         Tuple of (calibrated_dataset, calibration_result)
 
     Example:
-        >>> # Load dataset with judge scores
-        >>> dataset = load_dataset_from_jsonl("data.jsonl", reward_field="judge_score")
-        >>>
-        >>> # Calibrate judge scores to oracle labels
+        >>> # Default: judge score only (no covariates)
         >>> calibrated_dataset, stats = calibrate_dataset(
         ...     dataset,
         ...     judge_field="judge_score",
         ...     oracle_field="oracle_label"
+        ... )
+        >>>
+        >>> # Include response_length covariate with two-stage calibration
+        >>> calibrated_dataset, stats = calibrate_dataset(
+        ...     dataset,
+        ...     use_response_length=True
+        ... )
+        >>>
+        >>> # Add domain as additional covariate (response_length too if flag is True)
+        >>> calibrated_dataset, stats = calibrate_dataset(
+        ...     dataset,
+        ...     use_response_length=True,
+        ...     covariate_names=["domain"]
         ... )
     """
     # Extract judge scores, oracle labels, and prompt_ids
@@ -79,9 +93,16 @@ def calibrate_dataset(
             "raw and calibrated values. Use a different field name in metadata."
         )
 
-    # Auto-compute covariates if needed
+    # Combine response_length with additional covariates
+    all_covariate_names: List[str] = []
+    if use_response_length:
+        all_covariate_names.append("response_length")
     if covariate_names:
-        for cov_name in covariate_names:
+        all_covariate_names.extend(covariate_names)
+
+    # Auto-compute covariates if needed
+    if all_covariate_names:
+        for cov_name in all_covariate_names:
             if cov_name in AUTO_COMPUTABLE_COVARIATES:
                 compute_fn, required_field = AUTO_COMPUTABLE_COVARIATES[cov_name]
 
@@ -154,13 +175,13 @@ def calibrate_dataset(
     if len(oracle_labels_array) == 0:
         raise ValueError(f"No oracle labels found in field '{oracle_field}'")
 
-    # Extract covariate matrix if covariate_names provided
+    # Extract covariate matrix if all_covariate_names provided
     covariates_array: Optional[np.ndarray] = None
-    if covariate_names:
+    if all_covariate_names:
         covariate_values = []
         for i, sample in enumerate(dataset.samples):
             sample_covariates = []
-            for cov_name in covariate_names:
+            for cov_name in all_covariate_names:
                 if cov_name not in sample.metadata:
                     # Build helpful error message
                     available_fields = sorted(sample.metadata.keys())
@@ -202,15 +223,23 @@ def calibrate_dataset(
 
     # Determine calibration mode
     if calibration_mode is None:
-        # Default to auto for cross-fit (better for DR), monotone otherwise
-        calibration_mode = "auto" if enable_cross_fit else "monotone"
+        # Default based on whether we have covariates
+        if all_covariate_names:
+            # With covariates, default to two-stage (flexible calibration)
+            calibration_mode = "two_stage"
+        elif enable_cross_fit:
+            # Cross-fit without covariates: use auto-selection
+            calibration_mode = "auto"
+        else:
+            # Simple case: monotone calibration
+            calibration_mode = "monotone"
 
     # Calibrate judge scores (even with 100% coverage, we need f̂ for DR models)
     calibrator = JudgeCalibrator(
         calibration_mode=cast(
             Literal["monotone", "two_stage", "auto"], calibration_mode
         ),
-        covariate_names=covariate_names,
+        covariate_names=all_covariate_names if all_covariate_names else None,
         random_seed=random_seed,
     )
     if enable_cross_fit:
@@ -377,13 +406,14 @@ def calibrate_from_raw_data(
     judge_field: str = "judge_score",
     oracle_field: str = "oracle_label",
     reward_field: str = "reward",
-    calibration_mode: Optional[Literal["auto", "monotone", "two_stage"]] = "monotone",
+    calibration_mode: Optional[Literal["auto", "monotone", "two_stage"]] = "auto",
     random_seed: int = 42,
 ) -> Tuple[List[Dict[str, Any]], CalibrationResult]:
     """Calibrate judge scores in raw data to create calibrated rewards.
 
     This is a lower-level function that works with raw dictionaries
-    instead of Dataset objects.
+    instead of Dataset objects. Note: This function doesn't support covariates.
+    Use calibrate_dataset() for full functionality.
 
     Args:
         data: List of dictionaries containing judge scores and oracle labels
@@ -391,7 +421,7 @@ def calibrate_from_raw_data(
         oracle_field: Field name containing oracle labels
         reward_field: Field name to store calibrated rewards
         calibration_mode: Calibration mode ('auto', 'monotone', 'two_stage').
-                         Defaults to 'monotone' for backward compatibility.
+                         Defaults to 'auto' (automatic selection).
 
     Returns:
         Tuple of (calibrated_data, calibration_result)
