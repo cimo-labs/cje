@@ -28,7 +28,7 @@ try:
     # Import transport diagnostics
     from .transport import (
         plot_transport_audit,
-        plot_transport_residuals_scatter,
+        plot_transport_comparison,
     )
 
     __all__ = [
@@ -43,7 +43,7 @@ try:
         "plot_dr_dashboard",
         # Transport
         "plot_transport_audit",
-        "plot_transport_residuals_scatter",
+        "plot_transport_comparison",
     ]
 
 except ImportError as e:
