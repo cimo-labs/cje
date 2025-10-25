@@ -348,7 +348,7 @@ from cje.visualization.transport import plot_transport_audit
 # Fit calibrator on source policy
 calibrator = fit_judge_calibrator(source_samples, mode="auto")
 
-# Test transport to new policy with 40-60 sample probe
+# Test transport to new policy with probe samples
 probe_samples = load_samples("probes/gpt4_mini_probe.jsonl")
 diag = audit_transportability(
     calibrator,
@@ -362,31 +362,29 @@ plot_transport_audit(diag, save_path="transport_audit.png")
 
 # Take action based on result
 if diag.status == "PASS":
-    # Safe to reuse calibrator
+    # Safe to reuse calibrator (unbiased: 0 ∈ CI)
     pass
-elif diag.status == "WARN" and "anchor" in diag.recommended_action:
-    # Apply mean anchoring (uniform shift detected)
-    calibrator_adjusted = calibrator.with_group_anchor(
-        group="policy:gpt-4-mini",
-        delta=diag.delta_hat
-    )
+elif diag.status == "WARN":
+    # Small but detectable bias - monitor
+    print(f"Small bias detected: δ̂={diag.delta_hat:+.3f}")
 elif diag.status == "FAIL":
-    # Refit calibrator on union of old + probe labels
+    # Large systematic bias - refit with pooled data
     combined_samples = source_samples + probe_samples
     calibrator = fit_judge_calibrator(combined_samples, mode="auto")
 ```
 
-**Traffic-light thresholds:**
-- **PASS**: Global mean shift CI contains 0, all decile residuals ≤ 0.05, coverage ≥ 95%
-- **WARN**: |δ̂| ∈ [0.02, 0.05] OR 1-2 bins > 0.05 OR coverage ∈ [85%, 95%)
-- **FAIL**: 0 ∉ CI(δ̂) OR 3+ bins > 0.05 OR coverage < 85%
+**Simple unbiasedness test:**
+
+Tests H₀: E[Y - f̂(S)] = 0 for target policy using parametric 95% CI.
+
+- **PASS**: 0 ∈ CI (calibrator is unbiased on target)
+- **WARN**: 0 ∉ CI but |δ̂| < 0.05 (small bias)
+- **FAIL**: 0 ∉ CI and |δ̂| ≥ 0.05 (large bias)
 
 **Recommended actions:**
 - `none` - Safe to reuse calibrator
-- `mean_anchor` - Apply per-group intercept adjustment
-- `refit_two_stage` - Regional miscalibration, use two-stage AutoCal-R
-- `add_labels_boundary` - Poor coverage, collect labels at score boundaries
-- `collect_more_in_deciles_X,Y,Z` - Sparse deciles, target specific bins
+- `monitor` - Small bias detected, monitor or collect more data
+- `refit_two_stage` - Large bias, refit with pooled data or use two-stage calibration
 
 ## Uncertainty Quantification: Two-Component Structure
 

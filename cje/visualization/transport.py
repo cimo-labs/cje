@@ -167,7 +167,6 @@ def plot_transport_audit(
         f"N = {diag.n_probe}\n"
         f"Mean shift: {diag.delta_hat:+.3f} (95% CI: [{diag.delta_ci[0]:+.3f}, {diag.delta_ci[1]:+.3f}])\n"
         f"Coverage: {diag.coverage:.1%}\n"
-        f"KS statistic: {diag.ks_statistic:.3f}\n"
         f"Action: {diag.recommended_action}"
     )
 
