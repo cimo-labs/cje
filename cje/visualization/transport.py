@@ -249,13 +249,13 @@ def plot_transport_comparison(
             linewidth=0,
         )
 
-        # Scatter plot - translucent black points
+        # Scatter plot - translucent blue points
         ax.scatter(
             S,
             residuals,
             alpha=0.2,
             s=20,
-            color="black",
+            color="#3498db",
             edgecolors="none",
             zorder=3,
             label="Individual residuals",
@@ -265,21 +265,21 @@ def plot_transport_comparison(
         ax.axhline(
             0,
             color="black",
-            linestyle="-",
-            linewidth=2,
+            linestyle="--",
+            linewidth=1,
             label="Perfect calibration",
-            zorder=5,
+            zorder=2,
+            alpha=0.5,
         )
 
-        # Mean residual
+        # Mean residual - solid line colored by status
         ax.axhline(
             diag.delta_hat,
-            color="darkgray",
-            linestyle="--",
-            linewidth=2,
+            color=status_color,
+            linestyle="-",
+            linewidth=1,
             label=f"Mean: {diag.delta_hat:+.3f}",
             zorder=4,
-            alpha=0.7,
         )
 
         # Formatting

@@ -122,7 +122,7 @@ ax1.scatter(
     alpha=0.15,
     s=8,
     color="gray",
-    label="Data",
+    label="AI responses",
 )
 
 # Binned empirical means
@@ -208,7 +208,7 @@ ax2.scatter(
     alpha=0.15,
     s=8,
     color="gray",
-    label="Data",
+    label="AI responses",
 )
 
 # Binned empirical means
@@ -286,7 +286,7 @@ ax3.scatter(
     alpha=0.15,
     s=8,
     color="gray",
-    label="Oracle labels",
+    label="AI responses",
 )
 
 # Binned means

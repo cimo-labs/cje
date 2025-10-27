@@ -92,7 +92,7 @@ print(
 )
 
 # Create comparison visualization
-fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
 # Common parameters
 bin_width = 0.05
@@ -123,21 +123,32 @@ binned_means_valid = np.array(binned_means)[valid_bins]
 
 # Function to plot calibration
 def plot_calibration(ax, calibrator, result, title, mode):  # type: ignore[no-untyped-def]
+    # Plot diagonal reference first (background)
+    ax.plot(
+        [0, 1],
+        [0, 1],
+        "--",
+        color="black",
+        linewidth=2,
+        alpha=0.4,
+        zorder=8,
+    )
+
     # Scatter plot with transparency
     ax.scatter(
-        judge_scores, oracle_labels, alpha=0.1, s=10, color="gray", label="Samples"
+        judge_scores, oracle_labels, alpha=0.15, s=8, color="gray", label="AI responses"
     )
 
     # Plot binned empirical means
     ax.scatter(
         bin_centers_valid,
         binned_means_valid,
-        s=80,
-        alpha=0.7,
-        color="darkblue",
+        s=120,
+        alpha=1.0,
+        color="steelblue",
         edgecolor="white",
-        linewidth=1,
-        label="Empirical mean E[Oracle|Judge]",
+        linewidth=2,
+        label="Empirical mean",
         zorder=10,
     )
 
@@ -148,62 +159,23 @@ def plot_calibration(ax, calibrator, result, title, mode):  # type: ignore[no-un
         judge_grid,
         calibrated_grid,
         "-",
-        color="red",
-        alpha=0.9,
-        linewidth=3,
-        label=f"{mode} calibration function",
+        color="#D95319",
+        linewidth=3.5,
+        alpha=1.0,
+        label="Learned calibration",
         zorder=12,
     )
 
-    # Plot diagonal reference
-    ax.plot([0, 1], [0, 1], "--", color="gray", alpha=0.5, label="Perfect (y=x)")
-
-    # Use OOF RMSE from result (more honest than in-sample)
-    rmse = result.oof_rmse
-
     # Labels and formatting
-    ax.set_xlabel("Judge Score", fontsize=16, fontweight="bold")
-    ax.set_ylabel("Oracle Label / Calibrated Reward", fontsize=16, fontweight="bold")
-    ax.set_title(title, fontsize=18, fontweight="bold", pad=14)
-    ax.tick_params(axis="both", which="major", labelsize=13)
+    ax.set_xlabel("Judge Score", fontsize=14, fontweight="bold")
+    ax.set_ylabel("Oracle Score", fontsize=14, fontweight="bold")
+    ax.set_title(title, fontsize=15, fontweight="bold", pad=15)
     ax.grid(True, alpha=0.3)
     ax.set_xlim((0, 1))
     ax.set_ylim((0, 1))
 
-    # Legend with better readability
-    legend = ax.legend(
-        loc="upper left",
-        fontsize=13,
-        framealpha=0.98,
-        edgecolor="gray",
-        fancybox=False,
-        shadow=False,
-    )
-    legend.get_frame().set_linewidth(1.5)
-
-    # Add stats box
-    stats_text = (
-        f"RMSE: {rmse:.4f}\n"
-        f"Calibrated range: [{result.calibrated_scores.min():.3f}, {result.calibrated_scores.max():.3f}]\n"
-        f"Samples: {len(judge_scores):,}"
-    )
-    ax.text(
-        0.98,
-        0.02,
-        stats_text,
-        transform=ax.transAxes,
-        fontsize=13,
-        horizontalalignment="right",
-        verticalalignment="bottom",
-        bbox=dict(
-            boxstyle="round,pad=0.6",
-            facecolor="white",
-            alpha=0.98,
-            edgecolor="gray",
-            linewidth=2,
-        ),
-        fontweight="bold",
-    )
+    # Add legend
+    ax.legend(loc="upper left", fontsize=12)
 
 
 # Plot both calibrators
@@ -220,6 +192,14 @@ plot_calibration(
     result_two_stage,
     "Two-Stage Calibration (Flexible)",
     "Two-stage",
+)
+
+# Overall title
+fig.suptitle(
+    "Calibration Comparison: Monotone vs. Two-Stage",
+    fontsize=17,
+    fontweight="bold",
+    y=1.02,
 )
 
 plt.tight_layout()
