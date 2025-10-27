@@ -15,26 +15,30 @@ CJE calibrates judge scores using a small oracle slice (5-10% coverage), then de
 
 ## How It Works
 
+CJE follows a simple three-step workflow:
+
 ```
-┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│  YOUR DATA   │   │  CALIBRATE   │   │   VALIDATE   │   │   RESULTS    │
-│              │ → │              │ → │              │ → │              │
-│ Judge scores │   │ Learn f:     │   │ Check        │   │ ✓ Unbiased   │
-│ (cheap,      │   │ Judge →      │   │ assumptions  │   │   estimates  │
-│  noisy)      │   │ Oracle scale │   │              │   │              │
-│              │   │              │   │ Run          │   │ ✓ Valid 95%  │
-│ + 5-10%      │   │              │   │ diagnostics  │   │   CIs        │
-│   oracle     │   │              │   │              │   │              │
-└──────────────┘   └──────────────┘   └──────────────┘   └──────────────┘
+Data → Calibrate → Estimate
 ```
+
+1. **Data**: LLM-judge scores + oracle slice (5-50% labeled examples)
+2. **Calibrate**: Learn mapping from judge scores to oracle outcomes
+3. **Estimate**: Apply calibration to get policy estimates with honest uncertainty
 
 **Key benefits:**
 - **Small label budget**: 5-10% oracle coverage often sufficient
 - **Unbiased estimates**: Judge scores (+ optional covariates) mapped to oracle scale
 - **Rigorous inference**: CIs account for both sampling and calibration uncertainty
 
-
 See [`cje/calibration/README.md`](cje/calibration/README.md#why-isotonic-regression-for-reward-calibration) for technical details.
+
+## 📊 Performance
+
+**[Arena Experiment: 5k Real Evaluations](https://cimolabs.com/blog/arena-experiment)** - Comprehensive benchmarking on ChatBot Arena data:
+- **94% pairwise ranking accuracy** with Direct Model + covariates
+- **158× ESS improvement** with SIMCal-W vs raw SNIPS
+- **Kendall τ = 0.837** vs -0.235 for uncalibrated methods
+- Validates AutoCal-R calibration and doubly-robust estimation on real data
 
 ## Calibration Methods
 
