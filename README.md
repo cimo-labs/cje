@@ -51,6 +51,8 @@ See [`cje/calibration/README.md`](cje/calibration/README.md#why-isotonic-regress
 - **Kendall τ = 0.837** vs -0.235 for uncalibrated methods
 - Validates AutoCal-R calibration and doubly-robust estimation on real data
 
+**Reproduction code:** Full experimental pipeline available at [cje-arena-experiments](https://github.com/cimo-labs/cje-arena-experiments)
+
 ## Calibration Methods
 
 CJE provides two calibration modes for mapping judge scores to oracle outcomes (i.e., the KPI you care about):
