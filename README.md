@@ -18,12 +18,23 @@ CJE calibrates judge scores using a small oracle slice (5-10% coverage), then de
 CJE follows a simple three-step workflow:
 
 ```
-Data → Calibrate → Estimate
+┌─────────────────────────────────┐
+│           Data                  │
+│  LLM-judge scores +             │
+│  oracle slice (5-50%)           │
+└─────────────────────────────────┘
+              ↓
+┌─────────────────────────────────┐
+│         Calibrate               │
+│  Learn judge → oracle mapping   │
+└─────────────────────────────────┘
+              ↓
+┌─────────────────────────────────┐
+│          Estimate               │
+│  Estimates with honest          │
+│  uncertainty                    │
+└─────────────────────────────────┘
 ```
-
-1. **Data**: LLM-judge scores + oracle slice (5-50% labeled examples)
-2. **Calibrate**: Learn mapping from judge scores to oracle outcomes
-3. **Estimate**: Apply calibration to get policy estimates with honest uncertainty
 
 **Key benefits:**
 - **Small label budget**: 5-10% oracle coverage often sufficient
