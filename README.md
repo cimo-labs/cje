@@ -69,7 +69,7 @@ Learns smooth transformation g(S, X) → rank → isotonic. Handles non-monotone
   <img src="two_stage_comparison.png" alt="Two-Stage Calibration with Covariates" width="100%">
 </div>
 
-<sub>*Two-stage calibration learns flexible relationships between covariates (judge score, response length) and oracle outcomes in Stage 1, then enforces monotonicity via isotonic regression in Stage 2. **Left/Middle:** Partial dependence plots show how each covariate relates to oracle score while holding others at mean values. **Right:** Final monotone mapping from Stage 1 risk index to calibrated oracle score. Data from [LMSYS Chatbot Arena](https://huggingface.co/datasets/agie-ai/lmsys-chatbot_arena_conversations).*</sub>
+<sub>*Two-stage calibration learns flexible relationships between covariates (judge score, response length) and oracle outcomes in Stage 1, then enforces monotonicity via isotonic regression in Stage 2. **Left/Middle:** Partial dependence plots show how each covariate relates to oracle score while holding others at mean values. **Right:** Final monotone mapping from Stage 1 risk index to calibrated oracle score. Full benchmarking results: [Arena Experiment](https://www.cimolabs.com/blog/arena-experiment). Data from [LMSYS Chatbot Arena](https://huggingface.co/datasets/lmsys/chatbot_arena_conversations).*</sub>
 
 **When to use two-stage:**
 - **You have covariates** (response length, domain, etc.) → two-stage is default and recommended
