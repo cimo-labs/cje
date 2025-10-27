@@ -339,7 +339,7 @@ if drift_result["tau"] < 0.5:
 ```
 
 ### Transportability Audit
-Tests whether a calibrator fitted on one policy/era can safely transport to another (Diagnostic 5 from playbook §4):
+Tests whether a calibrator fitted on one policy/era can safely transport to another:
 
 ```python
 from cje.diagnostics.transport import audit_transportability

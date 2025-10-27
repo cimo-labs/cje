@@ -594,7 +594,7 @@ if diag.status == "FAIL":
 - Stratify by risk index for better coverage
 - Can pool across multiple target policies for efficiency
 
-**See also:** `cje/diagnostics/README.md` for details on transportability diagnostics and playbook §4 Diagnostic 5 for theory.
+**See also:** `cje/diagnostics/README.md` for details on transportability diagnostics.
 
 ### Covariate Support
 

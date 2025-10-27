@@ -237,8 +237,6 @@ See [`cje/visualization/README.md`](cje/visualization/README.md) for complete gu
 - [Estimators](cje/estimators/README.md) - Direct, IPS, DR implementations
 - [Interface/API](cje/interface/README.md) - `analyze_dataset` implementation and mode selection
 
-📖 **Theory**
-- [Playbook](docs/playbook/) - Mathematical foundations, assumptions, diagnostics
 
 ## Development
 
