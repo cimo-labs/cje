@@ -62,7 +62,6 @@ See `arena_sample/README.md` for details.
 ## Next Steps
 
 - **Documentation**: See [cje/interface/README.md](../cje/interface/README.md) for API details
-- **Production Pipeline**: See [cje/experiments/arena_10k_simplified/](../cje/experiments/arena_10k_simplified/) for complete workflow (based on 5K evaluation)
 - **Main README**: See [README.md](../README.md) for installation and overview
 
 ## Running Locally
