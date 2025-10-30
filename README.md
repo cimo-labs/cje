@@ -160,23 +160,7 @@ responses/
 CJE automatically:
 - Discovers policies from filenames (`model_a_responses.jsonl` → policy `"model_a"`)
 - Applies AutoCal-R when oracle labels are present
-- Uses cluster-robust SEs for paired comparisons (when same prompts across policies)
 - Returns unbiased estimates with valid 95% CIs
-
-### Paired Comparisons
-
-When comparing policies on the **same prompts** (paired design), CJE automatically uses cluster-robust standard errors:
-
-```python
-# Both files must have matching prompt_ids for pairing
-result = analyze_dataset(fresh_draws_dir="responses/")
-
-# CJE automatically clusters by prompt for valid inference
-if result.metadata.get("prompts_aligned"):
-    print("✓ Paired comparison - using cluster-robust SEs")
-```
-
-**Why it matters:** Paired designs have correlated outcomes across policies (same prompt evaluated by multiple models). Standard SEs would understate uncertainty. CJE automatically accounts for this by clustering by `prompt_id`.
 
 ## Beyond Direct Mode
 
