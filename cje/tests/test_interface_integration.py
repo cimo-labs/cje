@@ -352,9 +352,10 @@ def test_direct_only_mode_works() -> None:
 
     assert results is not None
     assert results.metadata.get("mode") == "direct"
-    # Fresh draws in examples don't have oracle labels (realistic scenario)
-    # So calibration should be "none" and we use raw judge scores
-    assert results.metadata.get("calibration") == "none"
+    # Fresh draws now include base policy with oracle labels (48% coverage)
+    # So calibration should be "from_fresh_draws" using AutoCal-R
+    assert results.metadata.get("calibration") == "from_fresh_draws"
+    assert results.metadata.get("oracle_coverage", 0) > 0
     assert len(results.estimates) > 0
     assert "target_policies" in results.metadata
 
