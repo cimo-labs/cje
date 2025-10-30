@@ -41,7 +41,7 @@ poetry run python examples/quickstart.py
 Both examples use real data from the [LMSYS Chatbot Arena](https://huggingface.co/datasets/lmsys/chatbot_arena_conversations):
 
 - **1000 prompts** from Arena conversations
-- **4 LLM policies** (clone, premium, parallel_universe_prompt, unhelpful)
+- **3 LLM policies** (clone, parallel_universe_prompt, unhelpful)
 - **Oracle labels** (GPT-5) at 50% coverage for calibration
 - **Judge scores** (GPT-4.1-nano) for all responses
 - **Fresh draws** for doubly robust estimation
@@ -62,7 +62,7 @@ See `arena_sample/README.md` for details.
 ## Next Steps
 
 - **Documentation**: See [cje/interface/README.md](../cje/interface/README.md) for API details
-- **Production Pipeline**: See [cje/experiments/arena_10k_simplified/](../cje/experiments/arena_10k_simplified/) for complete workflow
+- **Production Pipeline**: See [cje/experiments/arena_10k_simplified/](../cje/experiments/arena_10k_simplified/) for complete workflow (based on 5K evaluation)
 - **Main README**: See [README.md](../README.md) for installation and overview
 
 ## Running Locally

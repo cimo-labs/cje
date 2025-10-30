@@ -8,7 +8,7 @@ This example shows the most common workflow:
 2. Run CJE analysis (automatic mode selection)
 3. Get policy estimates with confidence intervals
 
-Dataset: 1000 Arena prompts with 4 LLM policies
+Dataset: 1000 Arena prompts with 3 LLM policies
 Oracle: GPT-5 labels (simulated ground truth)
 Judge: GPT-4.1-nano (cheap proxy)
 """
