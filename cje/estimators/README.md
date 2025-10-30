@@ -333,7 +333,7 @@ Always computed and stored for proper inference, policy comparison, and diagnost
 - **IPS**: Horvitz & Thompson (1952)
 - **Doubly Robust**: Robins et al. (1994)
 - **TMLE**: van der Laan & Rubin (2006)
-- **SIMCal**: Score-indexed monotone calibration (2024)
+- **SIMCal**: Surrogate-indexed monotone calibration (2024)
 
 ## Summary
 

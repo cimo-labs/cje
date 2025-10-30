@@ -2,11 +2,11 @@
 
 ## Overview
 
-The calibration module implements **AutoCal-R** (Automatic Calibration for Rewards), the core mathematical machinery that enables unbiased causal inference from judge-based evaluations. AutoCal-R provides three distinct calibration approaches that work together to transform raw logged data into reliable policy value estimates with controlled variance:
+The calibration module implements **AutoCal-R** (Automatic Calibration for Rewards), the core mathematical machinery that maps judge scores to oracle labels with automatic mode selection. The module also provides **SIMCal-W** (Surrogate-Indexed Monotone Calibration for Weights), a separate method for stabilizing importance weights in off-policy estimation. These are independent calibration techniques:
 
-1. **Judge→Oracle calibration**: Maps judge scores to oracle labels with automatic mode selection
-2. **Weight stabilization (SIMCal)**: Stabilizes importance weights for off-policy estimation
-3. **Cross-fitted models**: Enables orthogonality guarantees for doubly robust methods
+1. **AutoCal-R (Reward Calibration)**: Maps judge scores to oracle labels with automatic mode selection between monotone and two-stage calibration
+2. **SIMCal-W (Weight Stabilization)**: Stabilizes importance weights for off-policy estimation via surrogate-indexed monotone projection (separate from AutoCal-R)
+3. **Cross-fitted models**: Enables orthogonality guarantees for doubly robust methods (used by both AutoCal-R and SIMCal-W when needed)
 
 ## When to Use Each Calibration
 
@@ -18,7 +18,7 @@ The calibration module implements **AutoCal-R** (Automatic Calibration for Rewar
 ### Use **Weight Calibration** (SIMCal) when:
 - Importance weights have high variance
 - You want to stabilize IPS estimates
-- You're using CalibratedIPS estimator
+- You're using CalibratedIPS or Calibrated DR estimators
 
 ### Use **Cross-Fitted Models** when:
 - You're using DR estimators
@@ -50,7 +50,7 @@ Auto mode detects non-monotonicity by comparing regional performance and selects
 **Why isotonic?** Isotonic regression is the default because it imposes exactly the right inductive bias (monotonicity) while making minimal assumptions, preserves oracle KPI levels by construction, and is highly efficient with small label budgets (5-10% coverage often sufficient). See the detailed rationale below.
 
 ### 2. Weight Calibration (SIMCal)
-Stabilizes importance weights through score-indexed monotone projection:
+Stabilizes importance weights through surrogate-indexed monotone projection:
 - Projects weights to be monotone with an ordering index
 - Enforces variance constraints via blending
 - Maintains mean-1 property for unbiasedness
@@ -59,12 +59,10 @@ Stabilizes importance weights through score-indexed monotone projection:
 For doubly robust methods, provides out-of-fold predictions to maintain orthogonality between nuisance functions.
 Stacking relies on the component estimators' influence functions and does not re-fit nuisances at the stack level.
 
-### 4. Oracle Uncertainty Quantification (Two Approaches)
-When we calibrate judge scores using only a subset of oracle labels (e.g., 10% coverage), the calibration function f̂ itself has uncertainty. We handle this through two complementary mechanisms:
+### 4. Oracle-Uncertainty Aware (OUA) Inference
+When we calibrate judge scores using only a subset of oracle labels (e.g., 10% coverage), the calibration function f̂ itself has uncertainty. **OUA** uses delete-one-fold jackknife to add a **variance** component to standard errors, accounting for calibration learning uncertainty. Used by all Cal-IPS/DR estimators and enabled by default.
 
-**Oracle Uncertainty Augmentation (OUA)**: The default approach that uses fold-jackknife to add a **variance** component to CIs, accounting for calibration-induced uncertainty. Used by all Cal-IPS/DR estimators.
-
-**Oracle Slice Augmentation**: An optional point-estimate **bias correction** term `(L/π_L)m̂(S)(Y-f̂(S))` used **only** in TR-CPO under MAR with fitted π_L(S), or optionally as an MCAR engineering fallback (off by default).
+**Separate concept—Oracle Slice Augmentation**: An optional bias correction term `(L/π_L)m̂(S)(Y-f̂(S))` for point estimates, used **only** in TR-CPO under MAR/MCAR assumptions (off by default, deprecated). This is NOT the same as OUA.
 
 ## Why Isotonic Regression for Reward Calibration?
 
@@ -239,7 +237,7 @@ Each calibration type is isolated with clear interfaces:
 
 ### 2. **Mean Preservation**
 Calibrations preserve means for unbiased estimation:
-- Isotonic preserves the **slice sample mean** exactly, and the **population mean asymptotically** under J₁ (representative slice)
+- Isotonic preserves the **slice sample mean** exactly on the labeled calibration data; population mean preservation requires representative slice (MAR/MCAR), monotone relationship, and successful transport to target policies/contexts
 - Weight projections preserve the **sample** mean-one exactly (Hájek normalization)
 - Critical for unbiased estimation
 
@@ -404,8 +402,9 @@ estimator = CalibratedIPS(
     oracle_slice_config=oracle_config
 )
 
-# The augmentation automatically adjusts standard errors
-# to account for calibration uncertainty
+# Note: Oracle Slice Augmentation is a separate, optional bias correction (off by default).
+# OUA (Oracle-Uncertainty Aware) jackknife is the default and only approach for
+# accounting for calibration uncertainty in standard errors (see example above).
 result = estimator.fit_and_estimate()
 
 # Check oracle uncertainty via OUA jackknife (if enabled)

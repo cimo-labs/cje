@@ -1,4 +1,4 @@
-"""Stacked Score-Indexed Monotone Calibration (SIMCal) for importance weights.
+"""Stacked Surrogate-Indexed Monotone Calibration (SIMCal) for importance weights.
 
 This module implements stacked SIMCal, which combines {increasing, decreasing}
 isotonic candidates via convex optimization to minimize out-of-fold (OOF)
@@ -183,7 +183,7 @@ class SIMCalibrator:
         residuals: Optional[np.ndarray] = None,
         fold_ids: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
-        """Calibrate weights using stacked score-indexed monotone projection.
+        """Calibrate weights using stacked surrogate-indexed monotone projection.
 
         This method maintains backward compatibility by delegating to fit_transform().
         For new code, consider using fit() and predict() separately if you need to
