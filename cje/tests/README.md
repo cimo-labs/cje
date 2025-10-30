@@ -2,31 +2,39 @@
 
 ## Overview
 
-The CJE test suite focuses on end-to-end testing with real data. The suite consists of 8 core test files (~87 tests) providing comprehensive coverage of critical functionality.
+The CJE test suite focuses on end-to-end testing with real data. The suite consists of 13 test files (111 tests) providing comprehensive coverage of critical functionality.
 
 ## File Structure
 
 ```
 tests/
-├── conftest.py                    # Shared fixtures and arena data loaders
-├── run_all_tests.py              # Test runner script
+├── conftest.py                           # Shared fixtures and arena data loaders
+├── run_all_tests.py                     # Test runner script
 │
-├── E2E Tests
-│   ├── test_e2e_estimators.py    # Complete pipelines for all estimators
-│   ├── test_e2e_features.py      # SIMCal, cross-fitting
-│   └── test_interface_integration.py # High-level API testing
+├── E2E Tests (User Workflows)
+│   ├── test_e2e_estimators.py           # Complete pipelines for all estimators
+│   ├── test_e2e_features.py             # SIMCal, cross-fitting, OUA
+│   ├── test_interface_integration.py    # High-level API testing
+│   └── test_examples.py                 # Tutorial notebook and quickstart validation
 │
-├── Core Tests
-│   ├── test_infrastructure.py    # Critical infrastructure and edge cases
-│   ├── test_unified_folds.py     # Comprehensive fold management
-│   ├── test_mc_variance.py       # Monte Carlo variance testing
-│   └── test_reproducibility.py   # Determinism and seed propagation
+├── Core Tests (Infrastructure)
+│   ├── test_infrastructure.py           # Critical infrastructure and edge cases
+│   ├── test_unified_folds.py            # Comprehensive fold management
+│   ├── test_mc_variance.py              # Monte Carlo variance testing
+│   └── test_reproducibility.py          # Determinism and seed propagation
 │
-└── data/                          # Test datasets
-    ├── arena_sample/              # Real Arena 10K subset (100 samples)
-    │   ├── logged_data.jsonl      # Main dataset with judge scores
-    │   └── fresh_draws/           # Fresh draws for DR estimation
-    └── *.jsonl                    # Synthetic test data for edge cases
+├── Feature Tests
+│   ├── test_covariates.py               # Calibration covariates
+│   ├── test_data_loaders.py             # Data loading functions
+│   ├── test_calibration_data_smoke.py   # calibration_data_path parameter
+│   ├── test_oua_at_full_coverage.py     # OUA skipping at 100% coverage
+│   └── test_transport_diagnostics.py    # Transportability probe protocol
+│
+└── data/                                 # Test datasets
+    ├── arena_sample/                     # Real Arena 10K subset (100 samples)
+    │   ├── logged_data.jsonl             # Main dataset with judge scores
+    │   └── fresh_draws/                  # Fresh draws for DR estimation
+    └── *.jsonl                           # Synthetic test data for edge cases
 ```
 
 ## Core Concepts
@@ -44,6 +52,8 @@ Real subset from Arena 10K evaluation:
 - Fresh draws for each policy enabling DR estimation
 - Ground truth for validation
 
+**Note**: The same arena sample data is used in `examples/arena_sample/` for the tutorial notebook and quickstart script.
+
 ### 3. Fixture Architecture
 Shared fixtures in `conftest.py` provide consistent test data:
 - **arena_sample**: Real 100-sample Arena dataset
@@ -56,6 +66,7 @@ Shared fixtures in `conftest.py` provide consistent test data:
 - **Complete Workflows**: Test what users actually do
 - **Fast Feedback**: Most tests run in < 1 second
 - **Clear Intent**: Each test has one clear purpose
+- **Example Validation**: `test_examples.py` ensures tutorial notebook and quickstart work correctly
 
 ## Running Tests
 
@@ -69,6 +80,7 @@ poetry run pytest cje/tests/test_e2e*.py -q
 # Run specific test files
 poetry run pytest cje/tests/test_e2e_estimators.py -v
 poetry run pytest cje/tests/test_unified_folds.py
+poetry run pytest cje/tests/test_examples.py  # Validate tutorial and examples
 
 # Run with markers
 poetry run pytest cje/tests -m e2e
@@ -163,7 +175,7 @@ pip install -e .
 
 - **E2E tests**: < 2 seconds each
 - **Infrastructure tests**: < 1 second each
-- **Full suite**: ~15 seconds for all tests
+- **Full suite**: ~25 seconds for 111 tests
 
 Test execution tips:
 - Use `-x` to stop on first failure
@@ -174,4 +186,4 @@ Test execution tips:
 
 ## Summary
 
-The CJE test suite contains ~87 focused tests that validate real workflows with real data. This approach catches integration issues, runs fast, and provides comprehensive coverage of all estimators, calibration methods, diagnostic tools, and reproducibility guarantees.
+The CJE test suite contains 111 focused tests across 13 test files that validate real workflows with real data. This approach catches integration issues, runs fast, and provides comprehensive coverage of all estimators, calibration methods, diagnostic tools, covariates, data loading, and reproducibility guarantees. The `test_examples.py` file ensures the tutorial notebook and quickstart script remain accurate and functional.

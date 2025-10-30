@@ -1,69 +1,79 @@
 # CJE Examples
 
-Focused examples showing CJE's three analysis modes. Each example is ~20 lines and teaches one concept.
+Two entry points to get started with CJE:
 
-## Running Examples
+## 🚀 Interactive Tutorial (Recommended)
+
+**Try CJE in your browser - no installation required:**
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_tutorial.ipynb)
+
+The Colab notebook (`cje_tutorial.ipynb`) provides a complete walkthrough:
+- **Setup**: Install CJE and download Arena sample data
+- **Inspect Data**: Understand the dataset structure
+- **Three Modes**: Direct, IPS, and DR estimation
+- **Policy Selection**: Statistical comparison with confidence intervals
+- **Diagnostics**: Check reliability and transportability
+
+**What you'll learn:**
+- When to use each mode (Direct vs IPS vs DR)
+- How AutoCal-R calibrates judge scores to oracle labels
+- How SIMCal stabilizes importance weights
+- How to interpret diagnostics (ESS, transportability tests)
+- How to select the best policy with proper statistical inference
+
+## 🐍 Python Quickstart
+
+**Want a copy-paste script?** Use `quickstart.py`:
 
 ```bash
 # From the repo root
-poetry run python examples/01_understanding_modes.py
-poetry run python examples/02_minimal.py
-poetry run python examples/03_with_fresh_draws.py
-poetry run python examples/04_comparing_policies.py
-poetry run python examples/05_checking_reliability.py
-poetry run python examples/06_testing_transport.py
+poetry run python examples/quickstart.py
 ```
 
-## What Each Example Shows
+15-line script showing the most common workflow:
+- Load Arena sample data (logged responses + fresh draws)
+- Run doubly robust analysis (most accurate mode)
+- Get policy estimates with 95% confidence intervals
 
-### 1. Understanding Modes (`01_understanding_modes.py`)
-Comprehensive overview of CJE's three analysis modes: Direct, IPS, and DR.
+## Dataset: Arena Sample
 
-**Key concept:** When to use each mode and what they estimate.
+Both examples use real data from the [LMSYS Chatbot Arena](https://huggingface.co/datasets/lmsys/chatbot_arena_conversations):
 
-### 2. Minimal Usage (`02_minimal.py`)
-The absolute simplest CJE workflow - load data and get estimates.
+- **1000 prompts** from Arena conversations
+- **4 LLM policies** (clone, premium, parallel_universe_prompt, unhelpful)
+- **Oracle labels** (GPT-5) at 50% coverage for calibration
+- **Judge scores** (GPT-4.1-nano) for all responses
+- **Fresh draws** for doubly robust estimation
 
-**Key concept:** Getting started with CJE in ~10 lines of code.
+See `arena_sample/README.md` for details.
 
-### 3. With Fresh Draws (`03_with_fresh_draws.py`)
-Shows how to use doubly-robust estimation with fresh draws from target policies.
+## What is CJE?
 
-**Key concept:** Fresh draws enable more accurate estimates via DR methods.
+**Causal Judge Evaluation (CJE)** transforms LLM-as-judge scores into causally interpretable policy value estimates:
 
-### 4. Comparing Policies (`04_comparing_policies.py`)
-Find the best policy and compare against a baseline using proper statistical inference.
+1. **AutoCal-R**: Calibrates cheap judge scores (GPT-4.1-nano) to expensive oracle labels (GPT-5) using isotonic regression
+2. **SIMCal-W**: Stabilizes importance weights via surrogate-indexed monotone projection
+3. **Three Modes**: Direct (on-policy), IPS (off-policy), DR (doubly robust)
+4. **Valid Inference**: Confidence intervals account for sampling, calibration, and Monte Carlo uncertainty
 
-**Key concept:** Policy selection and comparison with significance testing.
-
-### 5. Checking Reliability (`05_checking_reliability.py`)
-Use diagnostics to assess whether your estimates are trustworthy.
-
-**Key concept:** Effective Sample Size (ESS) and reliability assessment for IPS mode.
-
-### 6. Testing Transport (`06_testing_transport.py`)
-Test if a calibrator can safely transport across policies or time periods.
-
-**Key concept:** Transportability diagnostics using the probe protocol to detect miscalibration.
-
-## Data
-
-All examples use the arena sample dataset included in `cje/tests/data/arena_sample/`:
-- 100 samples from Arena 10K evaluation
-- 4 target policies: clone, premium, parallel_universe_prompt, unhelpful
-- Judge scores and oracle labels for calibration
-- Fresh draws for doubly-robust estimation
-
-## Interactive Demo
-
-**🚀 Try CJE in your browser:**
-
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_arena_demo.ipynb)
-
-The Colab notebook (`cje_arena_demo.ipynb`) provides an interactive walkthrough of CJE's three modes using the Arena sample data. No installation required - runs entirely in your browser!
+**Key insight**: Judge scores are correlational (E[judge | policy]). CJE makes them causal (E[oracle | policy]).
 
 ## Next Steps
 
-- **Main README:** [README.md](../README.md) for Quick Start and overview
-- **API details:** Run `help(analyze_dataset)` or see [cje/interface/README.md](../cje/interface/README.md)
-- **Production example:** [cje/experiments/arena_10k_simplified/](../cje/experiments/arena_10k_simplified/) for complete pipeline
+- **Documentation**: See [cje/interface/README.md](../cje/interface/README.md) for API details
+- **Production Pipeline**: See [cje/experiments/arena_10k_simplified/](../cje/experiments/arena_10k_simplified/) for complete workflow
+- **Main README**: See [README.md](../README.md) for installation and overview
+
+## Running Locally
+
+```bash
+# Install CJE
+pip install cje-eval
+
+# Run quickstart
+python examples/quickstart.py
+
+# Or open the notebook in Jupyter
+jupyter notebook examples/cje_tutorial.ipynb
+```

@@ -115,7 +115,7 @@ pip install cje-eval
 
 ## 🚀 Try it Now - Interactive Demo
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_arena_demo.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_tutorial.ipynb)
 
 ## Quick Start
 
@@ -230,7 +230,7 @@ See [`cje/visualization/README.md`](cje/visualization/README.md) for complete gu
 ## Documentation
 
 📚 **Getting Started**
-- [Interactive Demo](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_arena_demo.ipynb) - Try in your browser
+- [Interactive Demo](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_tutorial.ipynb) - Try in your browser
 - [Examples](examples/) - Working code samples
 
 🔧 **For Engineers**

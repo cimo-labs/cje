@@ -263,8 +263,8 @@ class TestAutoModeSelection:
 class TestNotebookExecution:
     """Test that the actual notebooks execute without errors."""
 
-    def test_direct_mode_intro_notebook(self) -> None:
-        """Execute the Direct Mode intro notebook to catch runtime errors.
+    def test_tutorial_notebook(self) -> None:
+        """Execute the main tutorial notebook to catch runtime errors.
 
         This test catches issues that the API tests miss, such as:
         - KeyError from direct dict access without .get()
@@ -283,9 +283,7 @@ class TestNotebookExecution:
 
         # Find the notebook
         notebook_path = (
-            Path(__file__).parent.parent.parent
-            / "examples"
-            / "cje_direct_mode_intro.ipynb"
+            Path(__file__).parent.parent.parent / "examples" / "cje_tutorial.ipynb"
         )
         assert notebook_path.exists(), f"Notebook not found at {notebook_path}"
 
@@ -308,53 +306,6 @@ class TestNotebookExecution:
             with tempfile.TemporaryDirectory() as tmpdir:
                 ep.preprocess(nb, {"metadata": {"path": tmpdir}})
         except Exception as e:
-            pytest.fail(f"Direct Mode intro notebook execution failed: {e}")
+            pytest.fail(f"Tutorial notebook execution failed: {e}")
 
-        print("✓ Direct Mode intro notebook executed successfully")
-
-    def test_ope_methods_notebook(self) -> None:
-        """Execute the OPE methods notebook to catch runtime errors.
-
-        This test catches issues that the API tests miss, such as:
-        - KeyError from direct dict access without .get()
-        - Missing imports in cells
-        - Broken cell execution order
-        - Invalid markdown or formatting
-
-        Uses nbconvert to execute all cells in order, simulating Colab execution.
-        """
-        pytest.importorskip("nbformat")
-        pytest.importorskip("nbconvert")
-
-        import nbformat
-        from nbconvert.preprocessors import ExecutePreprocessor
-        from pathlib import Path
-
-        # Find the notebook
-        notebook_path = (
-            Path(__file__).parent.parent.parent / "examples" / "cje_ope_methods.ipynb"
-        )
-        assert notebook_path.exists(), f"Notebook not found at {notebook_path}"
-
-        # Read the notebook
-        with open(notebook_path) as f:
-            nb = nbformat.read(f, as_version=4)
-
-        # Execute all cells
-        # Note: This will download data, install packages, etc. - mark as slow test
-        ep = ExecutePreprocessor(
-            timeout=600,  # 10 minutes max
-            kernel_name="python3",
-            allow_errors=False,  # Fail on any cell error
-        )
-
-        try:
-            # Execute in a temporary directory to avoid polluting the repo
-            import tempfile
-
-            with tempfile.TemporaryDirectory() as tmpdir:
-                ep.preprocess(nb, {"metadata": {"path": tmpdir}})
-        except Exception as e:
-            pytest.fail(f"OPE methods notebook execution failed: {e}")
-
-        print("✓ OPE methods notebook executed successfully")
+        print("✓ Tutorial notebook executed successfully")
