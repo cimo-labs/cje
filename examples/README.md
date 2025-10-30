@@ -42,9 +42,13 @@ Both examples use real data from the [LMSYS Chatbot Arena](https://huggingface.c
 
 - **1000 prompts** from Arena conversations
 - **4 LLM policies** (base, clone, parallel_universe_prompt, unhelpful)
-- **Oracle labels** (GPT-5) at 50% coverage for calibration
 - **Judge scores** (GPT-4.1-nano) for all responses
-- **Fresh draws** for doubly robust estimation
+- **Oracle labels** (GPT-5) for calibration:
+  - Logged data: 48% oracle coverage across all policies
+  - Fresh draws: 48% oracle coverage for base policy only
+- **Fresh draws** for all policies for doubly robust estimation
+
+**Why oracle labels in base fresh draws?** This enables Direct mode examples to demonstrate AutoCal-R. When running Direct mode with only fresh draws, the base policy serves as the source of oracle labels for learning the calibration function that maps judge scores → oracle labels.
 
 See `arena_sample/README.md` for details.
 
