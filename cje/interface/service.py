@@ -205,6 +205,9 @@ class AnalysisService:
                 n_with_oracle / len(all_fresh_draws) if all_fresh_draws else 0
             )
 
+            # Initialize covariate_names to None (will be set if calibration occurs)
+            covariate_names = None
+
             if oracle_coverage > 0:
                 if config.verbose:
                     logger.info(
