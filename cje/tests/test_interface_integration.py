@@ -352,9 +352,9 @@ def test_direct_only_mode_works() -> None:
 
     assert results is not None
     assert results.metadata.get("mode") == "direct"
-    # Fresh draws have oracle labels, so calibration should be learned from them
-    assert results.metadata.get("calibration") == "from_fresh_draws"
-    assert results.metadata.get("oracle_coverage", 0) > 0
+    # Fresh draws in examples don't have oracle labels (realistic scenario)
+    # So calibration should be "none" and we use raw judge scores
+    assert results.metadata.get("calibration") == "none"
     assert len(results.estimates) > 0
     assert "target_policies" in results.metadata
 
@@ -372,12 +372,14 @@ def test_three_modes_estimate_clone_accurately() -> None:
     - Regression protection for all three mode implementations
     """
     from cje.data import load_dataset_from_jsonl
-    from cje.calibration import calibrate_dataset
     import numpy as np
 
     dataset_path, fresh_draws_dir = _arena_paths()
 
     # Calculate ground truth: mean calibrated reward in logged data
+    # All three modes should use the same calibration (learned from logged data's oracle labels)
+    from cje.calibration import calibrate_dataset
+
     dataset = load_dataset_from_jsonl(str(dataset_path))
     calibrated_dataset, _ = calibrate_dataset(
         dataset,
@@ -405,10 +407,13 @@ def test_three_modes_estimate_clone_accurately() -> None:
         verbose=False,
     )
 
-    # Run Direct mode (fresh draws only)
+    # Run Direct mode (fresh draws for estimation, logged data for calibration)
     results_direct = analyze_dataset(
+        logged_data_path=str(
+            dataset_path
+        ),  # Use logged data's oracle labels for calibration
         fresh_draws_dir=str(fresh_draws_dir),
-        estimator="auto",
+        estimator="direct",  # Force direct mode (auto would select DR with both data sources)
         verbose=False,
     )
 
