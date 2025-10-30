@@ -48,9 +48,9 @@ Instead of testing individual functions, we test complete pipelines:
 ### 2. Arena Sample Data
 Real subset from Arena 5K evaluation:
 - 1000 samples with actual judge scores and oracle labels
-- 3 target policies: clone, parallel_universe_prompt, unhelpful
+- 4 target policies: base, clone, parallel_universe_prompt, unhelpful
 - Fresh draws for each policy enabling DR estimation
-- Ground truth for validation
+- Ground truth for validation (48% oracle coverage in base policy for AutoCal-R)
 
 **Note**: The same arena sample data is used in `examples/arena_sample/` for the tutorial notebook and quickstart script.
 
