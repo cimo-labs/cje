@@ -31,7 +31,7 @@ tests/
 │   └── test_transport_diagnostics.py    # Transportability probe protocol
 │
 └── data/                                 # Test datasets
-    ├── arena_sample/                     # Real Arena 5K subset (100 samples)
+    ├── arena_sample/                     # Real Arena 5K subset (1000 samples)
     │   ├── logged_data.jsonl             # Main dataset with judge scores
     │   └── fresh_draws/                  # Fresh draws for DR estimation
     └── *.jsonl                           # Synthetic test data for edge cases
@@ -47,7 +47,7 @@ Instead of testing individual functions, we test complete pipelines:
 
 ### 2. Arena Sample Data
 Real subset from Arena 5K evaluation:
-- 100 samples with actual judge scores and oracle labels
+- 1000 samples with actual judge scores and oracle labels
 - 4 target policies: clone, premium, parallel_universe_prompt, unhelpful
 - Fresh draws for each policy enabling DR estimation
 - Ground truth for validation
