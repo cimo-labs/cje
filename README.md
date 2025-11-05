@@ -8,6 +8,7 @@
 [![Python](https://img.shields.io/badge/python-3.9%E2%80%933.12-blue)](https://www.python.org/downloads/)
 [![Tests](https://img.shields.io/badge/tests-passing-green)](https://github.com/cimo-labs/cje/actions)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/cje-eval?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/cje-eval)
 
 **Turn noisy LLM-judge scores into precise, unbiased estimates of the outcomes you care about.**
 
@@ -50,6 +51,12 @@ See [`cje/calibration/README.md`](cje/calibration/README.md#why-isotonic-regress
 - **158× ESS improvement** with SIMCal-W vs raw SNIPS
 - **Kendall τ = 0.837** vs -0.235 for uncalibrated methods
 - Validates AutoCal-R calibration and doubly-robust estimation on real data
+
+<div align="center">
+  <img src="forest_plot_n1000_oracle25.png" alt="CJE Calibration Accuracy" width="80%">
+</div>
+
+<sub>*Calibration accuracy on Arena data: Blue dots show CJE estimates (with 95% CIs), red dots show ground truth oracle scores. AutoCal-R learned from 25% oracle slice in base policy, then applied across all policies. Close alignment demonstrates unbiased calibration. N=1000 prompts from [LMSYS Chatbot Arena](https://huggingface.co/datasets/lmsys/chatbot_arena_conversations).*</sub>
 
 **Reproduction code:** Full experimental pipeline available at [cje-arena-experiments](https://github.com/cimo-labs/cje-arena-experiments)
 
@@ -113,9 +120,17 @@ result = analyze_dataset(
 pip install cje-eval
 ```
 
-## 🚀 Try it Now - Interactive Demo
+## 🚀 Try it Now - Interactive Demos
 
+**Quick Start (5 minutes):**
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_tutorial.ipynb)
+
+Learn Direct Mode - the simplest way to compare policies (no logprobs needed!)
+
+**Advanced Tutorial:**
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_advanced.ipynb)
+
+Learn IPS and DR modes for off-policy (counterfactual) evaluation
 
 ## Quick Start
 
@@ -214,7 +229,8 @@ See [`cje/visualization/README.md`](cje/visualization/README.md) for complete gu
 ## Documentation
 
 📚 **Getting Started**
-- [Interactive Demo](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_tutorial.ipynb) - Try in your browser
+- [Quick Start Tutorial](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_tutorial.ipynb) - Direct Mode (5 minutes)
+- [Advanced Tutorial](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_advanced.ipynb) - IPS & DR modes
 - [Examples](examples/) - Working code samples
 
 🔧 **For Engineers**
