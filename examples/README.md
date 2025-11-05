@@ -1,26 +1,34 @@
 # CJE Examples
 
-Two entry points to get started with CJE:
+Two interactive notebooks to get started with CJE:
 
-## 🚀 Interactive Tutorial (Recommended)
+## 🚀 Quick Start Tutorial (Recommended for Beginners)
 
 **Try CJE in your browser - no installation required:**
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_tutorial.ipynb)
 
-The Colab notebook (`cje_tutorial.ipynb`) provides a complete walkthrough:
-- **Setup**: Install CJE and download Arena sample data
-- **Inspect Data**: Understand the dataset structure
-- **Three Modes**: Direct, IPS, and DR estimation
-- **Policy Selection**: Statistical comparison with confidence intervals
-- **Diagnostics**: Check reliability and transportability
+**Get started in 5 minutes** with [`cje_tutorial.ipynb`](cje_tutorial.ipynb):
+- **Direct Mode**: Simplest policy comparison (no logprobs needed!)
+- **AutoCal-R**: Calibrate judge scores to oracle labels
+- **Policy Selection**: Find the best policy with statistical tests
+- **Visualization**: Forest plots with confidence intervals
 
-**What you'll learn:**
-- When to use each mode (Direct vs IPS vs DR)
-- How AutoCal-R calibrates judge scores to oracle labels
-- How SIMCal stabilizes importance weights
-- How to interpret diagnostics (ESS, transportability tests)
-- How to select the best policy with proper statistical inference
+**Perfect for**: Quick comparisons, A/B testing, leaderboards, closed-source APIs
+
+## 📚 Advanced Tutorial (Off-Policy Evaluation)
+
+**Want counterfactual deployment estimates?**
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_advanced.ipynb)
+
+**Learn IPS and DR modes** with [`cje_advanced.ipynb`](cje_advanced.ipynb):
+- **IPS Mode**: Reuse logged data with importance sampling
+- **DR Mode**: Doubly robust estimation (most accurate)
+- **Diagnostics**: ESS, overlap, weight analysis
+- **Mode Comparison**: When to use Direct vs IPS vs DR
+
+**Perfect for**: Production deployment decisions, logged data reuse, maximum accuracy
 
 ## 🐍 Python Quickstart
 
@@ -54,14 +62,13 @@ See `arena_sample/README.md` for details.
 
 ## What is CJE?
 
-**Causal Judge Evaluation (CJE)** transforms LLM-as-judge scores into causally interpretable policy value estimates:
+**Causal Judge Evaluation (CJE)** transforms LLM-as-judge scores into calibrated policy estimates:
 
-1. **AutoCal-R**: Calibrates cheap judge scores (GPT-4.1-nano) to expensive oracle labels (GPT-5) using isotonic regression
-2. **SIMCal-W**: Stabilizes importance weights via surrogate-indexed monotone projection
-3. **Three Modes**: Direct (on-policy), IPS (off-policy), DR (doubly robust)
-4. **Valid Inference**: Confidence intervals account for sampling, calibration, and Monte Carlo uncertainty
+- **AutoCal-R**: Calibrates cheap judge scores to expensive oracle labels (only 5-10% oracle coverage needed!)
+- **Three Modes**: Direct (on-policy), IPS (off-policy), DR (doubly robust)
+- **Valid Inference**: Confidence intervals account for all uncertainty (sampling, calibration, Monte Carlo)
 
-**Key insight**: Judge scores are correlational (E[judge | policy]). CJE makes them causal (E[oracle | policy]).
+**Key insight**: Raw judge scores are correlational. CJE makes them causal through calibration.
 
 ## Next Steps
 

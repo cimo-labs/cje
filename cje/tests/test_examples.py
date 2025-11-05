@@ -264,7 +264,7 @@ class TestNotebookExecution:
     """Test that the actual notebooks execute without errors."""
 
     def test_tutorial_notebook(self) -> None:
-        """Execute the main tutorial notebook to catch runtime errors.
+        """Execute the quick start tutorial notebook (Direct mode only).
 
         This test catches issues that the API tests miss, such as:
         - KeyError from direct dict access without .get()
@@ -309,3 +309,47 @@ class TestNotebookExecution:
             pytest.fail(f"Tutorial notebook execution failed: {e}")
 
         print("✓ Tutorial notebook executed successfully")
+
+    def test_advanced_notebook(self) -> None:
+        """Execute the advanced tutorial notebook (IPS and DR modes).
+
+        Tests the advanced off-policy evaluation tutorial covering:
+        - IPS mode with logged data
+        - DR mode with logged data + fresh draws
+        - ESS diagnostics
+        - Mode comparisons
+        """
+        pytest.importorskip("nbformat")
+        pytest.importorskip("nbconvert")
+
+        import nbformat
+        from nbconvert.preprocessors import ExecutePreprocessor
+        from pathlib import Path
+
+        # Find the notebook
+        notebook_path = (
+            Path(__file__).parent.parent.parent / "examples" / "cje_advanced.ipynb"
+        )
+        assert notebook_path.exists(), f"Notebook not found at {notebook_path}"
+
+        # Read the notebook
+        with open(notebook_path) as f:
+            nb = nbformat.read(f, as_version=4)
+
+        # Execute all cells
+        ep = ExecutePreprocessor(
+            timeout=600,  # 10 minutes max
+            kernel_name="python3",
+            allow_errors=False,  # Fail on any cell error
+        )
+
+        try:
+            # Execute in a temporary directory to avoid polluting the repo
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                ep.preprocess(nb, {"metadata": {"path": tmpdir}})
+        except Exception as e:
+            pytest.fail(f"Advanced notebook execution failed: {e}")
+
+        print("✓ Advanced notebook executed successfully")
