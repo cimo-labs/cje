@@ -22,8 +22,6 @@ def analyze_dataset(
     fresh_draws_dir: Optional[str] = None,
     calibration_data_path: Optional[str] = None,
     combine_oracle_sources: bool = True,
-    timestamp_field: Optional[str] = None,
-    check_drift: bool = False,
     estimator: str = "auto",
     judge_field: str = "judge_score",
     oracle_field: str = "oracle_label",
@@ -39,7 +37,6 @@ def analyze_dataset(
     - Data loading and validation
     - Automatic reward calibration (judge → oracle mapping)
     - Oracle source combining (pooling labels from multiple sources)
-    - Temporal drift detection
     - Estimator selection and configuration
     - Fresh draw loading for DR/Direct estimators
     - Complete analysis workflow
@@ -59,12 +56,6 @@ def analyze_dataset(
             (calibration_data + logged_data + fresh_draws). Default True for data efficiency.
             Set False to use ONLY calibration_data_path for learning calibration.
             Priority order when combining: calibration_data > fresh_draws > logged_data.
-        timestamp_field: Metadata field containing timestamps (Unix int or ISO string).
-            If provided with check_drift=True, enables automatic temporal drift detection
-            using Kendall tau correlation over time batches.
-        check_drift: Enable temporal drift detection. Requires timestamp_field to be set.
-            Computes sequential drift across time batches and adds diagnostics to
-            results.metadata["drift_diagnostics"].
         estimator: Estimator type. Options:
             - "auto" (default): Automatically select based on available data
             - "calibrated-ips": Importance sampling (requires logged_data_path with logprobs)
@@ -91,10 +82,6 @@ def analyze_dataset(
         - results.metadata["oracle_sources"]: Breakdown of oracle labels by source
         - results.metadata["oracle_conflicts"]: Prompts with conflicting oracle values
         - results.metadata["distribution_mismatch"]: KS test results
-        - results.metadata["calibration_staleness"]: Time gap warnings
-
-        New metadata fields when using check_drift=True:
-        - results.metadata["drift_diagnostics"]: Temporal stability metrics
 
     Raises:
         ValueError: If required data is missing for the selected estimator
@@ -124,26 +111,13 @@ def analyze_dataset(
         ... )
         >>> print(f"Oracle sources: {results.metadata['oracle_sources']}")
 
-    Example - Drift detection:
-        >>> # Monitor judge stability over time
-        >>> results = analyze_dataset(
-        ...     logged_data_path="logs_q1.jsonl",
-        ...     timestamp_field="timestamp",
-        ...     check_drift=True
-        ... )
-        >>> drift = results.metadata["drift_diagnostics"]
-        >>> if drift["has_drift"]:
-        ...     print(f"Drift detected at batches: {drift['drift_points']}")
-
-    Example - Combined features:
-        >>> # Use dedicated calibration + auto-combine + drift detection
+    Example - Combined oracle sources:
+        >>> # Pool oracle labels from multiple sources
         >>> results = analyze_dataset(
         ...     logged_data_path="eval_data.jsonl",           # 100 oracle labels
         ...     fresh_draws_dir="responses/",                  # 200 oracle labels
         ...     calibration_data_path="certified_labels.jsonl", # 500 oracle labels
         ...     combine_oracle_sources=True,                   # Use all 800 labels
-        ...     timestamp_field="timestamp",
-        ...     check_drift=True,
         ...     verbose=True
         ... )
     """
@@ -159,8 +133,6 @@ def analyze_dataset(
         fresh_draws_dir=fresh_draws_dir,
         calibration_data_path=calibration_data_path,
         combine_oracle_sources=combine_oracle_sources,
-        timestamp_field=timestamp_field,
-        check_drift=check_drift,
         estimator=estimator,
         judge_field=judge_field,
         oracle_field=oracle_field,

@@ -493,20 +493,6 @@ class AnalysisService:
             if oracle_sources_metadata:
                 oracle_sources_metadata["distribution_mismatch"] = distribution_check
 
-            # Check for temporal staleness if timestamps are available
-            if config.timestamp_field:
-                if config.verbose:
-                    logger.info(
-                        f"Checking temporal staleness using field '{config.timestamp_field}'"
-                    )
-
-                staleness_check = self._check_temporal_staleness(
-                    calibration_dataset, dataset, config.timestamp_field, config.verbose
-                )
-
-                if oracle_sources_metadata:
-                    oracle_sources_metadata["temporal_staleness"] = staleness_check
-
         # Build covariate list
         covariate_names = self._build_covariate_list(
             config, calibration_dataset_for_rewards
@@ -975,113 +961,6 @@ class AnalysisService:
                 else None
             ),
         }
-
-    def _check_temporal_staleness(
-        self,
-        calibration_dataset: Dataset,
-        evaluation_dataset: Dataset,
-        timestamp_field: str,
-        verbose: bool = False,
-    ) -> Dict[str, Any]:
-        """
-        Check if calibration data is temporally stale compared to evaluation data.
-
-        Compares timestamp ranges to detect significant time gaps.
-
-        Args:
-            calibration_dataset: Dataset used for learning calibration
-            evaluation_dataset: Dataset being evaluated
-            timestamp_field: Metadata field containing timestamps
-            verbose: Whether to log warnings
-
-        Returns:
-            Dict with staleness check results
-        """
-        import numpy as np
-        from datetime import datetime
-
-        # Extract timestamps
-        calib_timestamps = []
-        for sample in calibration_dataset.samples:
-            ts = sample.metadata.get(timestamp_field)
-            if ts is not None:
-                # Handle both Unix timestamps and ISO strings
-                if isinstance(ts, str):
-                    try:
-                        ts = datetime.fromisoformat(ts).timestamp()
-                    except:
-                        continue
-                calib_timestamps.append(float(ts))
-
-        eval_timestamps = []
-        for sample in evaluation_dataset.samples:
-            ts = sample.metadata.get(timestamp_field)
-            if ts is not None:
-                if isinstance(ts, str):
-                    try:
-                        ts = datetime.fromisoformat(ts).timestamp()
-                    except:
-                        continue
-                eval_timestamps.append(float(ts))
-
-        if not calib_timestamps or not eval_timestamps:
-            return {
-                "has_staleness": False,
-                "warning": f"Missing timestamps in field '{timestamp_field}'",
-            }
-
-        calib_array = np.array(calib_timestamps)
-        eval_array = np.array(eval_timestamps)
-
-        # Compute time ranges
-        calib_min, calib_max = calib_array.min(), calib_array.max()
-        eval_min, eval_max = eval_array.min(), eval_array.max()
-
-        # Check for time gap (calibration data ends before evaluation data starts)
-        time_gap_days = 0.0
-        if calib_max < eval_min:
-            # Calibration data is entirely before evaluation data
-            time_gap_days = (eval_min - calib_max) / (24 * 3600)
-        elif eval_max < calib_min:
-            # Evaluation data is entirely before calibration data (unusual)
-            time_gap_days = (calib_min - eval_max) / (24 * 3600)
-
-        # Flag as stale if gap > 7 days
-        has_staleness = time_gap_days > 7.0
-
-        # Compute temporal overlap
-        overlap_start = max(calib_min, eval_min)
-        overlap_end = min(calib_max, eval_max)
-        has_overlap = overlap_end > overlap_start
-
-        result = {
-            "has_staleness": has_staleness,
-            "time_gap_days": float(time_gap_days) if time_gap_days > 0 else 0.0,
-            "has_temporal_overlap": has_overlap,
-            "calibration_time_range": {
-                "min": float(calib_min),
-                "max": float(calib_max),
-                "span_days": float((calib_max - calib_min) / (24 * 3600)),
-            },
-            "evaluation_time_range": {
-                "min": float(eval_min),
-                "max": float(eval_max),
-                "span_days": float((eval_max - eval_min) / (24 * 3600)),
-            },
-            "warning": (
-                f"Calibration data is stale: {time_gap_days:.1f} day gap from evaluation data"
-                if has_staleness
-                else None
-            ),
-        }
-
-        if has_staleness and verbose:
-            logger.warning(
-                f"Temporal staleness detected: Calibration data has {time_gap_days:.1f} day gap from evaluation data. "
-                f"Consider using more recent calibration data."
-            )
-
-        return result
 
     def _prepare_rewards(
         self,
