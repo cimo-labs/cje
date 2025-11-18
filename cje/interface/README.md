@@ -405,7 +405,6 @@ def analyze_dataset(
 **Additional metadata fields** (when using calibration_data_path):
 - `metadata["oracle_sources"]`: Breakdown of oracle labels by source (calibration_data, logged_data, fresh_draws)
 - `metadata["oracle_sources"]["distribution_mismatch"]`: KS test results comparing calibration vs. evaluation distributions
-- `metadata["oracle_sources"]["temporal_staleness"]`: Time gap warnings between calibration and evaluation data
 
 **At least one of `logged_data_path` or `fresh_draws_dir` must be provided.**
 
@@ -478,7 +477,6 @@ results = analyze_dataset(
 **Metadata outputs**:
 - `oracle_sources`: Breakdown of oracle labels by source
 - `distribution_mismatch`: KS test comparing calibration vs. evaluation judge score distributions
-- `temporal_staleness`: Time gap warnings if timestamp_field provided
 
 ### Transportability Auditing
 

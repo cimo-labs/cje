@@ -4,7 +4,7 @@ Consolidated module for all diagnostic functionality:
 - Data models (IPSDiagnostics, DRDiagnostics)
 - Weight diagnostics computation
 - DR-specific diagnostics
-- Stability and drift detection
+- Transportability auditing
 - Display utilities
 - Robust inference tools
 """
