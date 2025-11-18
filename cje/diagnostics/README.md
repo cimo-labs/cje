@@ -329,62 +329,331 @@ for policy, ifs in results.influence_functions.items():
     print(f"{policy}: {n_outliers} influential points")
 ```
 
-### Drift Detection
-The Kendall-τ drift test is available but not integrated (Unix philosophy - you orchestrate):
+## Drift Detection and Transportability
+
+CJE provides **two complementary methods** for detecting judge drift and testing calibrator transportability:
+
+### Method Comparison
+
+| Method | When to Use | Data Needed | Cost | Integration |
+|--------|-------------|-------------|------|-------------|
+| **Temporal Drift** | Monitor production over time | Timestamps in logs | Automatic | Fully integrated |
+| **Transportability Audit** | Test specific policy/era shift | 40-60 probe labels | $20-100 labeling | Manual workflow |
+
+---
+
+### 1. Temporal Drift Detection (Integrated)
+
+**Use case:** Automatically detect judge behavior changes over time in production logs.
+
+**How it works:**
+1. Sorts data by `timestamp_field` (accepts Unix timestamps or ISO strings)
+2. Divides into temporal batches (~10% of data, minimum 50 samples)
+3. Computes Kendall τ between consecutive batches
+4. Flags drift when τ < 0.8 and p < 0.05
+
+**Basic Usage:**
+
 ```python
-from cje.diagnostics import kendall_tau_drift
-drift_result = kendall_tau_drift(historical_scores, current_scores)
-if drift_result["tau"] < 0.5:
-    print("Drift detected!")
+from cje import analyze_dataset
+
+# Enable automatic temporal drift detection
+result = analyze_dataset(
+    "production_logs.jsonl",
+    timestamp_field="created_at",  # Unix timestamp or ISO string
+    check_drift=True,               # Enable drift detection
+    estimator="direct"
+)
+
+# Check for drift
+drift = result.metadata["drift_diagnostics"]
+
+if drift["drift_detection"]["has_drift"]:
+    print(f"⚠️ Drift detected at batches: {drift['drift_detection']['drift_points']}")
+    print(f"Overall stability (min τ): {drift['drift_detection']['overall_stability']:.3f}")
+    print(f"Time span: {drift['temporal_info']['time_span_days']:.1f} days")
+
+# Inspect per-batch stability
+tau_sequence = drift["drift_detection"]["tau_sequence"]
+print(f"τ across batches: {tau_sequence}")
+
+# If oracle labels available, check calibration stability
+if "tau_with_oracle_per_batch" in drift:
+    print(f"Judge-oracle correlation per batch: {drift['tau_with_oracle_per_batch']}")
+    print(f"Overall τ with oracle: {drift['overall_tau_with_oracle']:.3f}")
 ```
 
-### Transportability Audit
-Tests whether a calibrator fitted on one policy/era can safely transport to another:
+**Output Structure:**
 
 ```python
-from cje.diagnostics.transport import audit_transportability
-from cje.visualization.transport import plot_transport_audit
+drift_diagnostics = {
+    "drift_detection": {
+        "has_drift": bool,                    # Overall drift flag
+        "drift_points": [2, 5, 8],           # Batch indices with drift
+        "overall_stability": 0.65,            # Minimum τ across batches
+        "tau_sequence": [0.92, 0.88, 0.65...], # τ for each pair
+        "n_batches": 10                       # Number of temporal batches
+    },
+    "temporal_info": {
+        "timestamp_field": "created_at",
+        "time_range_start": 1698883200.0,    # Unix timestamp
+        "time_range_end": 1706659200.0,
+        "time_span_days": 90.0,
+        "sorted_by_timestamp": True
+    },
+    # Optional - if oracle labels available:
+    "tau_with_oracle_per_batch": [0.85, 0.82, 0.79...],
+    "overall_tau_with_oracle": 0.81,
+    "tau_stability": 0.03  # Std dev of τ across batches
+}
+```
 
-# Fit calibrator on source policy
-calibrator = fit_judge_calibrator(source_samples, mode="auto")
+**Timestamp Format:**
 
-# Test transport to new policy with probe samples
-probe_samples = load_samples("probes/gpt4_mini_probe.jsonl")
+```json
+{
+  "prompt": "User question",
+  "response": "Model answer",
+  "judge_score": 0.85,
+  "oracle_label": 0.80,
+  "created_at": 1698883200  // Unix timestamp (int)
+}
+```
+
+Or ISO strings:
+```json
+{
+  "created_at": "2023-11-02T08:00:00Z"  // ISO format
+}
+```
+
+**Interpretation Thresholds:**
+
+```python
+if τ > 0.9:   # "Excellent stability" - no action needed
+if τ > 0.8:   # "Good stability" - continue monitoring
+if τ > 0.6:   # "Moderate drift" ⚠️ - collect probe labels soon
+if τ > 0.4:   # "Significant drift" 🚨 - recalibrate within 1 week
+if τ ≤ 0.4:   # "Severe drift" 🔴 - stop using judge, recalibrate immediately
+```
+
+**Recalibration Trigger:**
+
+Drift is **flagged** when:
+```python
+p_value < 0.05 AND tau < 0.8
+```
+
+This indicates statistically significant rank disagreement between temporal batches.
+
+**Production Example:**
+
+```python
+# Q1-Q2 production logs
+result = analyze_dataset(
+    "logs_q1_q2.jsonl",
+    timestamp_field="logged_at",
+    check_drift=True,
+    estimator="calibrated-ips"
+)
+
+drift = result.metadata["drift_diagnostics"]
+
+if drift["drift_detection"]["has_drift"]:
+    # Drift detected at batch 5 (around March → April transition)
+    time_of_drift = drift["temporal_info"]["time_span_days"] * 5/10
+    print(f"Judge stability degraded around day {time_of_drift:.0f}")
+    print(f"Action: Collect 50-100 new oracle labels from April onward and recalibrate")
+```
+
+---
+
+### 2. Transportability Audit (Probe-Based)
+
+**Use case:** Test if a calibrator fitted on policy A/era 1 can be safely reused for policy B/era 2.
+
+**Advantages over temporal drift:**
+- ✅ No timestamps needed
+- ✅ Cheap (40-60 probe labels vs hundreds for temporal batching)
+- ✅ Tests specific policy/era shift
+- ✅ Gives actionable recommendations (monitor vs refit)
+- ✅ Works cross-policy (not just cross-time)
+
+**How it works:**
+1. Computes mean residual: δ̂ = E[Y - f̂(S)] on target probe
+2. Constructs 95% CI: δ̂ ± 1.96 × SE
+3. Tests unbiasedness: Is 0 ∈ CI?
+4. Checks regional residuals by decile (catches non-uniform drift)
+5. Verifies coverage of score range
+
+**Basic Usage:**
+
+```python
+from cje.calibration import calibrate_dataset
+from cje.diagnostics import audit_transportability
+from cje.visualization import plot_transport_audit
+from cje.data import load_samples
+
+# Step 1: Fit calibrator on source (e.g., GPT-4 or Q1 logs)
+source_data = load_samples("gpt4_logs.jsonl")
+calibrated, cal_result = calibrate_dataset(
+    source_data,
+    judge_field="judge_score",
+    oracle_field="oracle_label"
+)
+calibrator = cal_result.calibrator
+
+# Step 2: Collect 40-60 probe samples on target (e.g., GPT-4-mini)
+probe = load_samples("gpt4_mini_probe.jsonl")  # 50 samples with oracle labels
+
+# Step 3: Test transportability
 diag = audit_transportability(
     calibrator,
-    probe_samples,
+    probe,
     group_label="policy:gpt-4-mini"
 )
 
-# Check status
-print(diag.summary())  # PASS/WARN/FAIL + recommended action
+# Step 4: Check result
+print(diag.summary())
+# Output: "Transport: PASS | Group: policy:gpt-4-mini | N=50 | δ̂: +0.012 (CI: [-0.008, +0.032])"
+
+# Step 5: Visualize
 plot_transport_audit(diag, save_path="transport_audit.png")
 
-# Take action based on result
+# Step 6: Take action
 if diag.status == "PASS":
-    # Safe to reuse calibrator (unbiased: 0 ∈ CI)
-    pass
+    # δ̂ CI includes 0 → calibrator is unbiased on target
+    print("✅ Calibrator transports - safe to reuse")
+
 elif diag.status == "WARN":
-    # Small but detectable bias - monitor
-    print(f"Small bias detected: δ̂={diag.delta_hat:+.3f}")
+    # δ̂ CI excludes 0 but |δ̂| < 0.05 → small bias
+    print(f"⚠️ Small bias detected: δ̂={diag.delta_hat:+.3f}")
+    print(f"Action: {diag.recommended_action}")  # "monitor"
+    # Consider mean anchoring or collecting more probe labels
+
 elif diag.status == "FAIL":
-    # Large systematic bias - refit with pooled data
-    combined_samples = source_samples + probe_samples
-    calibrator = fit_judge_calibrator(combined_samples, mode="auto")
+    # |δ̂| ≥ 0.05 → clear systematic bias
+    print(f"🔴 Clear drift detected: δ̂={diag.delta_hat:+.3f}")
+    print(f"Action: {diag.recommended_action}")  # "refit_two_stage"
+
+    # Refit with pooled data
+    combined = source_data.samples + probe
+    new_calibrator = calibrate_dataset(
+        Dataset(samples=combined, target_policies=source_data.target_policies),
+        judge_field="judge_score",
+        oracle_field="oracle_label"
+    )
 ```
 
-**Simple unbiasedness test:**
+**Status Classification:**
 
 Tests H₀: E[Y - f̂(S)] = 0 for target policy using parametric 95% CI.
 
-- **PASS**: 0 ∈ CI (calibrator is unbiased on target)
-- **WARN**: 0 ∉ CI but |δ̂| < 0.05 (small bias)
-- **FAIL**: 0 ∉ CI and |δ̂| ≥ 0.05 (large bias)
+- **PASS**: 0 ∈ CI → calibrator is unbiased on target
+- **WARN**: 0 ∉ CI but |δ̂| < 0.05 → small but detectable bias
+- **FAIL**: 0 ∉ CI and |δ̂| ≥ 0.05 → large systematic bias
 
-**Recommended actions:**
-- `none` - Safe to reuse calibrator
-- `monitor` - Small bias detected, monitor or collect more data
+**Recommended Actions:**
+- `none` - Safe to reuse calibrator as-is
+- `monitor` - Small bias detected, monitor or collect more probe labels
 - `refit_two_stage` - Large bias, refit with pooled data or use two-stage calibration
+
+**Probe Sampling Strategy:**
+
+For best coverage, stratify by risk index:
+
+```python
+# Stratified sampling for better score range coverage
+probe = stratified_sample(
+    target_data,
+    strata_field="risk_index_decile",
+    n_per_stratum=5,  # 50 total for 10 deciles
+    oracle_label_required=True
+)
+```
+
+**Common Use Cases:**
+
+1. **Policy change**: GPT-4 → GPT-4-mini
+2. **Temporal shift**: Q1 logs → Q2 logs (without timestamps)
+3. **Domain shift**: Customer support → Sales queries
+4. **Judge update**: After rubric or model changes
+5. **Cross-user**: Power users → Novice users
+
+**Example: Cross-Era Transport**
+
+```python
+# Fit on Q1 data
+q1_data = load_samples("q1_logs.jsonl")
+calibrated, cal_result = calibrate_dataset(q1_data, ...)
+calibrator = cal_result.calibrator
+
+# Test on Q2 with 50 probe labels
+q2_probe = load_samples("q2_probe.jsonl")
+diag = audit_transportability(calibrator, q2_probe, group_label="era:Q2-2025")
+
+print(diag.summary())
+# Output: "Transport: FAIL | Group: era:Q2-2025 | N=50 | δ̂: -0.082 (CI: [-0.114, -0.050]) | Action: refit_two_stage"
+
+# Interpretation: Judge systematically under-predicts by ~8% in Q2
+# Action: Collect 100-200 Q2 oracle labels and refit
+```
+
+---
+
+### Low-Level API (Manual Usage)
+
+For custom drift analysis, you can use the underlying functions directly:
+
+**Kendall τ drift test:**
+
+```python
+from cje.diagnostics import kendall_tau_drift
+
+# Compare two time periods manually
+scores_jan = [0.8, 0.7, 0.9, 0.6, ...]
+scores_feb = [0.7, 0.6, 0.8, 0.5, ...]
+
+drift_result = kendall_tau_drift(scores_jan, scores_feb)
+
+print(f"Kendall τ: {drift_result['tau']:.3f}")
+print(f"p-value: {drift_result['p_value']:.3f}")
+print(f"Drift detected: {drift_result['drift_detected']}")
+print(f"Interpretation: {drift_result['interpretation']}")
+
+# With oracle labels (checks calibration drift)
+labels_jan = [0.82, 0.69, 0.91, 0.58, ...]
+labels_feb = [0.71, 0.62, 0.79, 0.48, ...]
+
+drift_result = kendall_tau_drift(
+    scores_jan, scores_feb,
+    labels_1=labels_jan, labels_2=labels_feb
+)
+
+if "calibration_drift" in drift_result:
+    print(f"Calibration drift: {drift_result['calibration_drift']}")
+    print(f"Severity: {drift_result['calibration_drift_severity']}")
+```
+
+**Sequential drift detection:**
+
+```python
+from cje.diagnostics import sequential_drift_detection
+
+# Monitor across multiple batches
+score_batches = [
+    np.array([...]),  # Batch 1
+    np.array([...]),  # Batch 2
+    np.array([...]),  # Batch 3
+    # ...
+]
+
+result = sequential_drift_detection(score_batches)
+
+print(f"Drift points: {result['drift_points']}")
+print(f"τ sequence: {result['tau_sequence']}")
+print(f"Overall stability: {result['overall_stability']:.3f}")
+```
 
 ## Uncertainty Quantification: Two-Component Structure
 
