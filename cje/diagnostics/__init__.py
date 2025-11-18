@@ -37,15 +37,6 @@ from .dr import (
     compute_orthogonality_score,
 )
 
-# Stability diagnostics
-from .stability import (
-    kendall_tau_drift,
-    sequential_drift_detection,
-    reliability_diagram,
-    eif_qq_plot_data,
-    compute_stability_diagnostics,
-)
-
 # Transport diagnostics
 from .transport import (
     TransportDiagnostics,
@@ -91,12 +82,6 @@ __all__ = [
     "compute_dr_diagnostics_all",
     "compute_dm_ips_decomposition",
     "compute_orthogonality_score",
-    # Stability
-    "kendall_tau_drift",
-    "sequential_drift_detection",
-    "reliability_diagram",
-    "eif_qq_plot_data",
-    "compute_stability_diagnostics",
     # Transport
     "TransportDiagnostics",
     "audit_transportability",

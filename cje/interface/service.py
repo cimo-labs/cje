@@ -15,7 +15,6 @@ from ..data import load_dataset_from_jsonl
 from ..data.models import Dataset, EstimationResult
 from ..data.precomputed_sampler import PrecomputedSampler
 from ..calibration import calibrate_dataset
-from ..diagnostics import compute_stability_diagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -521,22 +520,6 @@ class AnalysisService:
             config.verbose,
         )
 
-        # Check for drift if requested
-        drift_diagnostics = None
-        if config.check_drift and config.timestamp_field:
-            if config.verbose:
-                logger.info(
-                    f"Computing temporal drift diagnostics using '{config.timestamp_field}'"
-                )
-
-            drift_diagnostics = self._compute_drift_diagnostics(
-                dataset,  # Use original logged dataset for drift detection
-                config.timestamp_field,
-                config.judge_field,
-                config.oracle_field,
-                config.verbose,
-            )
-
         # Auto mode detection
         detected_mode: Optional[str] = None
         logprob_coverage: float = 0.0
@@ -652,10 +635,6 @@ class AnalysisService:
         # NEW: Add oracle sources metadata if available
         if oracle_sources_metadata:
             results.metadata["oracle_sources"] = oracle_sources_metadata
-
-        # Add drift diagnostics if computed
-        if drift_diagnostics:
-            results.metadata["drift_diagnostics"] = drift_diagnostics
 
         # Add mode_selection metadata
         results.metadata["mode_selection"] = {
@@ -1103,92 +1082,6 @@ class AnalysisService:
             )
 
         return result
-
-    def _compute_drift_diagnostics(
-        self,
-        dataset: Dataset,
-        timestamp_field: str,
-        judge_field: str = "judge_score",
-        oracle_field: Optional[str] = None,
-        verbose: bool = False,
-    ) -> Dict[str, Any]:
-        """
-        Compute temporal drift diagnostics using timestamps.
-
-        Sorts data by timestamp and applies existing stability diagnostics.
-
-        Args:
-            dataset: Dataset to analyze for drift
-            timestamp_field: Metadata field containing timestamps
-            judge_field: Field containing judge scores
-            oracle_field: Optional field containing oracle labels
-            verbose: Whether to log progress
-
-        Returns:
-            Dict with drift diagnostics from compute_stability_diagnostics()
-        """
-        from datetime import datetime
-        from ..data.models import Sample
-
-        # Extract samples with timestamps
-        samples_with_ts = []
-        for sample in dataset.samples:
-            ts = sample.metadata.get(timestamp_field)
-            if ts is not None:
-                # Convert to Unix timestamp for sorting
-                if isinstance(ts, str):
-                    try:
-                        ts_float = datetime.fromisoformat(ts).timestamp()
-                    except:
-                        continue
-                else:
-                    ts_float = float(ts)
-
-                samples_with_ts.append((ts_float, sample))
-
-        if not samples_with_ts:
-            return {
-                "error": f"No valid timestamps found in field '{timestamp_field}'",
-                "has_drift": False,
-            }
-
-        # Sort by timestamp
-        samples_with_ts.sort(key=lambda x: x[0])
-        sorted_samples = [sample for _, sample in samples_with_ts]
-
-        # Create temporary dataset with sorted samples
-        sorted_dataset = Dataset(
-            samples=sorted_samples,
-            target_policies=dataset.target_policies,
-            metadata=dataset.metadata.copy(),
-        )
-
-        # Use existing drift detection (reuses the codebase's stable implementation)
-        drift_result = compute_stability_diagnostics(
-            sorted_dataset,
-            batch_size=None,  # Auto-determine
-            judge_field=judge_field,
-            oracle_field=oracle_field,
-        )
-
-        # Add temporal info
-        timestamps = [ts for ts, _ in samples_with_ts]
-        drift_result["temporal_info"] = {
-            "timestamp_field": timestamp_field,
-            "time_range_start": float(min(timestamps)),
-            "time_range_end": float(max(timestamps)),
-            "time_span_days": float((max(timestamps) - min(timestamps)) / (24 * 3600)),
-            "sorted_by_timestamp": True,
-        }
-
-        if verbose and drift_result.get("drift_detection", {}).get("has_drift"):
-            drift_points = drift_result["drift_detection"].get("drift_points", [])
-            logger.warning(
-                f"Judge drift detected over time at {len(drift_points)} batch transitions. "
-                f"Consider checking judge stability."
-            )
-
-        return drift_result
 
     def _prepare_rewards(
         self,

@@ -25,15 +25,6 @@ class AnalysisConfig(BaseModel):
         description="Pool oracle labels from all sources (calibration + logged + fresh) "
         "for maximum data efficiency. Set False to use only calibration_data_path.",
     )
-    timestamp_field: Optional[str] = Field(
-        None,
-        description="Metadata field containing timestamps (Unix int or ISO string) "
-        "for temporal drift detection.",
-    )
-    check_drift: bool = Field(
-        False,
-        description="Enable temporal drift detection. Requires timestamp_field to be set.",
-    )
     estimator: str = Field(
         "auto",
         description="Estimator name: auto, calibrated-ips, stacked-dr, direct, etc.",
