@@ -62,8 +62,6 @@ Stacking relies on the component estimators' influence functions and does not re
 ### 4. Oracle-Uncertainty Aware (OUA) Inference
 When we calibrate judge scores using only a subset of oracle labels (e.g., 10% coverage), the calibration function f̂ itself has uncertainty. **OUA** uses delete-one-fold jackknife to add a **variance** component to standard errors, accounting for calibration learning uncertainty. Used by all Cal-IPS/DR estimators and enabled by default.
 
-**Separate concept—Oracle Slice Augmentation**: An optional bias correction term `(L/π_L)m̂(S)(Y-f̂(S))` for point estimates, used **only** in TR-CPO under MAR/MCAR assumptions (off by default, deprecated). This is NOT the same as OUA.
-
 ## Why Isotonic Regression for Reward Calibration?
 
 Isotonic regression is the default choice for learning f̂(S) = E[Y|S] because it imposes exactly the right inductive bias while making minimal assumptions:
@@ -216,16 +214,6 @@ Advanced weight calibration through stacking:
   - `fit()`: Learn isotonic models and mixture weights on training data
   - `predict()`: Apply learned calibration to new data with score clipping
   - `fit_transform()`: Backward-compatible single-pass method
-
-### `oracle_slice.py` - Oracle Slice Augmentation
-Implements the optional point-estimate bias correction (used primarily in TR-CPO):
-- **Problem**: We use f̂(S) everywhere but only have true Y on oracle subset  
-- **Solution**: Add augmentation term `(L/π_L) * m̂(S) * (Y - f̂(S))` where:
-  - L indicates oracle label presence, π_L = labeling propensity
-  - m̂(S) = E[W|S] estimated via isotonic regression
-  - Unbiased correction for proxy-truth gap under MAR/MCAR
-- **Usage**: Enabled in TR-CPO for MAR setting; optional MCAR fallback (off by default)
-- **Note**: This is separate from OUA jackknife variance (the default uncertainty method)
 
 ## Key Design Decisions
 
@@ -387,25 +375,6 @@ from cje import CalibratedIPS
 estimator = CalibratedIPS(sampler, oua_jackknife=True)  # Default
 result = estimator.fit_and_estimate()
 # Result has both standard_errors and robust_standard_errors
-
-# Optional: Enable bias correction augmentation (engineering fallback)
-from cje.calibration import OracleSliceConfig
-oracle_config = OracleSliceConfig(
-    enable_augmentation=True,
-    enable_cross_fit=True,
-    min_pi=0.01,
-    use_mar=False  # MCAR assumption
-)
-
-estimator = CalibratedIPS(
-    sampler,
-    oracle_slice_config=oracle_config
-)
-
-# Note: Oracle Slice Augmentation is a separate, optional bias correction (off by default).
-# OUA (Oracle-Uncertainty Aware) jackknife is the default and only approach for
-# accounting for calibration uncertainty in standard errors (see example above).
-result = estimator.fit_and_estimate()
 
 # Check oracle uncertainty via OUA jackknife (if enabled)
 if result.robust_standard_errors is not None:
