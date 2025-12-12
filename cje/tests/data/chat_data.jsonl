@@ -1,0 +1,5 @@
+{"chat": [{"role": "user", "content": "Question 0: What is 0 + 0?"}, {"role": "assistant", "content": "The answer is 0."}], "reward": 0.7184729063478077, "model": "test-model"}
+{"chat": [{"role": "user", "content": "Question 1: What is 1 + 1?"}, {"role": "assistant", "content": "The answer is 2."}], "reward": 0.869909238185999, "model": "test-model"}
+{"chat": [{"role": "user", "content": "Question 2: What is 2 + 2?"}, {"role": "assistant", "content": "The answer is 4."}], "reward": 0.8599896633711006, "model": "test-model"}
+{"chat": [{"role": "user", "content": "Question 3: What is 3 + 3?"}, {"role": "assistant", "content": "The answer is 6."}], "reward": 0.7518751866176494, "model": "test-model"}
+{"chat": [{"role": "user", "content": "Question 4: What is 4 + 4?"}, {"role": "assistant", "content": "The answer is 8."}], "reward": 0.5906205995964937, "model": "test-model"}

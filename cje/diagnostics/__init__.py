@@ -41,6 +41,7 @@ from .dr import (
 from .transport import (
     TransportDiagnostics,
     audit_transportability,
+    plot_transport_comparison,
 )
 
 # Display utilities
@@ -60,6 +61,17 @@ from .robust_inference import (
     benjamini_hochberg_correction,
     compute_simultaneous_bands,
     compute_robust_inference,
+)
+
+# Overlap and CLE diagnostics
+from .overlap import (
+    OverlapMetrics,
+    CLEDiagnostics,
+    hellinger_affinity,
+    compute_ttc,
+    compute_overlap_metrics,
+    compute_cle_diagnostics,
+    diagnose_overlap_problems,
 )
 
 __all__ = [
@@ -85,6 +97,7 @@ __all__ = [
     # Transport
     "TransportDiagnostics",
     "audit_transportability",
+    "plot_transport_comparison",
     # Display
     "create_weight_summary_table",
     "format_dr_diagnostic_summary",
@@ -98,4 +111,12 @@ __all__ = [
     "benjamini_hochberg_correction",
     "compute_simultaneous_bands",
     "compute_robust_inference",
+    # Overlap and CLE diagnostics
+    "OverlapMetrics",
+    "CLEDiagnostics",
+    "hellinger_affinity",
+    "compute_ttc",
+    "compute_overlap_metrics",
+    "compute_cle_diagnostics",
+    "diagnose_overlap_problems",
 ]

@@ -1,0 +1,10 @@
+{"prompt": "Extreme test 0", "response": "Response 0", "reward": 0.3389692418971622, "base_policy_logprob": -27.44479350490551, "target_policy_logprobs": {"pi_extreme": -29.79455338191422}}
+{"prompt": "Extreme test 1", "response": "Response 1", "reward": 0.7780608992669826, "base_policy_logprob": -37.930951985753616, "target_policy_logprobs": {"pi_extreme": -39.0011870630582}}
+{"prompt": "Extreme test 2", "response": "Response 2", "reward": 1.0, "base_policy_logprob": -30.39381369521957, "target_policy_logprobs": {"pi_extreme": -29.711433891407182}}
+{"prompt": "Extreme test 3", "response": "Response 3", "reward": 0.3970666414522475, "base_policy_logprob": -28.771397050969732, "target_policy_logprobs": {"pi_extreme": -29.744869924456413}}
+{"prompt": "Extreme test 4", "response": "Response 4", "reward": 0.8909114358886552, "base_policy_logprob": -36.37561612597261, "target_policy_logprobs": {"pi_extreme": -35.59596774322734}}
+{"prompt": "Extreme test 5", "response": "Response 5", "reward": 0.9080763614406854, "base_policy_logprob": -108.28093019622648, "target_policy_logprobs": {"pi_extreme": -58.28093019622648}}
+{"prompt": "Extreme test 6", "response": "Response 6", "reward": 0.7358536457634894, "base_policy_logprob": -138.8039309192714, "target_policy_logprobs": {"pi_extreme": -188.8039309192714}}
+{"prompt": "Extreme test 7", "response": "Response 7", "reward": 0.8265241555248803, "base_policy_logprob": -130.27124383861806, "target_policy_logprobs": {"pi_extreme": -180.27124383861806}}
+{"prompt": "Extreme test 8", "response": "Response 8", "reward": 1.0, "base_policy_logprob": -117.38273436827079, "target_policy_logprobs": {"pi_extreme": -167.3827343682708}}
+{"prompt": "Extreme test 9", "response": "Response 9", "reward": 0.42850453264623667, "base_policy_logprob": -102.13993802871899, "target_policy_logprobs": {"pi_extreme": -52.13993802871899}}

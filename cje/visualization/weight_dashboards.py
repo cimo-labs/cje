@@ -839,14 +839,9 @@ def _plot_single_policy_weight_smoothing(
     # Set log scale for y-axis only
     ax.set_yscale("log")
 
-    # Compute variance ratio for annotation
-    var_ratio_actual = np.var(W_cal_actual) / np.var(W_raw) if np.var(W_raw) > 0 else 0
-
-    # Title with comprehensive diagnostics
+    # Title with ESS diagnostics
     ax.set_title(
-        f"{policy}\n"
-        f"ESS: {ess_raw:.0f}→{ess_cal:.0f} ({uplift:.1f}×), "
-        f"Var ratio: {var_ratio_actual:.2f}",
+        f"{policy}\n" f"ESS: {ess_raw:.0f}→{ess_cal:.0f} ({uplift:.1f}×)",
         fontsize=10,
     )
     ax.set_xlabel(index_label, fontsize=9)

@@ -30,6 +30,10 @@ The visualization module provides comprehensive diagnostic plots for understandi
 - You have oracle ground truth for validation
 - You need publication-ready forest plots
 
+> **Note:** For transportability diagnostics, use `cje.diagnostics`:
+> - `diag.plot()` for single-policy decile bars
+> - `plot_transport_comparison(results_dict)` for multi-policy forest plot
+
 ## File Structure
 
 ```
@@ -89,7 +93,7 @@ from cje.visualization import (
     plot_weight_dashboard_detailed,
     plot_dr_dashboard,
     plot_calibration_comparison,
-    plot_policy_estimates
+    plot_policy_estimates,
 )
 
 # Weight diagnostics - summary dashboard (6 panels)
@@ -136,6 +140,17 @@ fig = result.plot_estimates(
     base_policy_stats={"mean": 0.72, "se": 0.01},
     save_path="estimates.png"
 )
+
+# Transportability diagnostics (from cje.diagnostics, not visualization)
+from cje.diagnostics import audit_transportability, plot_transport_comparison
+
+results = {}
+for policy in ["clone", "premium"]:
+    probe = load_probe(policy)  # List[dict] with judge_score, oracle_label
+    results[policy] = audit_transportability(calibrator, probe, group_label=policy)
+
+fig = plot_transport_comparison(results)  # Forest plot
+results["clone"].plot()  # Single-policy decile bars
 ```
 
 **Jupyter notebooks:** `EstimationResult` objects automatically display as formatted HTML tables when evaluated in a cell.

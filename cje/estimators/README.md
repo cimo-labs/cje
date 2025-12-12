@@ -105,7 +105,11 @@ influence = result.influence_functions # For inference
 
 ## Default Recommendation
 
-**Use StackedDREstimator** - Combines multiple DR methods (DR-CPO, TMLE, MRDR, OC-DR-CPO, TR-CPO-E) via optimal weighting to minimize variance. Requires fresh draws. Provides modest improvements (1-5% SE reduction) over best single method.
+**Use StackedDREstimator** - Combines multiple DR methods via optimal weighting to minimize variance. Requires fresh draws. Provides modest improvements (1-5% SE reduction) over best single method.
+
+**Default estimators**: DR-CPO, TMLE, MRDR (3 core methods)
+
+**Optional additions**: OC-DR-CPO, TR-CPO-E (can be added via `estimators` parameter)
 
 ## Diagnostic Warnings & Quality Detection
 

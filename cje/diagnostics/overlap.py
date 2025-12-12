@@ -400,3 +400,311 @@ def diagnose_overlap_problems(
         print(explanation)
 
     return should_proceed, explanation
+
+
+# =============================================================================
+# TTC and CLE Diagnostics
+# =============================================================================
+
+
+def compute_ttc(
+    base_logprobs: np.ndarray,
+    target_logprobs: np.ndarray,
+    target_typical_mass: float = 0.8,
+) -> float:
+    """
+    Compute Target-Typicality Coverage (TTC).
+
+    From the CJE paper:
+    > TTC (Target-Typicality Coverage) = β̂ = logger coverage of target-typical regions.
+    > If TTC < 0.7, logs-only IPS will fail; prefer Direct or DR methods.
+
+    TTC measures how well the logging policy covers the regions where the target
+    policy concentrates. It is computed as:
+
+    1. Define T = target-typical region containing target_typical_mass of target mass
+       (found via target surprisal threshold)
+    2. TTC = β = P_π₀(T) = logger mass on T = fraction of samples in T
+
+    Low TTC means the logger rarely generates what the target wants,
+    setting a hard precision floor that logs-only methods cannot beat.
+
+    Note: TTC is distinct from Bhattacharyya affinity (hellinger_affinity).
+    TTC measures coverage in action space (does logger cover target-typical regions?);
+    Bhattacharyya measures shape mismatch in surrogate space (how concentrated are weights?).
+    Both are CLE diagnostics but for different components of the bound.
+
+    Args:
+        base_logprobs: Log probabilities under logging policy, log π₀(a|x)
+        target_logprobs: Log probabilities under target policy, log π'(a|x)
+        target_typical_mass: Fraction of target mass to define T.
+            Default 0.8 means T contains 80% of target probability mass.
+
+    Returns:
+        TTC ∈ (0, 1] where:
+        - TTC > 0.7: Good coverage, IPS may work
+        - TTC ∈ [0.3, 0.7]: Marginal, consider DR
+        - TTC < 0.3: Poor coverage, IPS will fail regardless of ESS
+    """
+    from scipy.special import logsumexp
+
+    base_logprobs = np.asarray(base_logprobs)
+    target_logprobs = np.asarray(target_logprobs)
+    n = len(base_logprobs)
+
+    if n == 0:
+        return 0.0
+
+    # Compute importance weights to get target distribution
+    log_weights = target_logprobs - base_logprobs
+    normalized_log_weights = log_weights - logsumexp(log_weights)
+    target_weights = np.exp(normalized_log_weights)
+
+    # Define T = target-typical region containing target_typical_mass
+    # Use target surprisal to find where target concentrates
+    target_surprisal = -target_logprobs
+
+    # Sort by target surprisal, find threshold for target_typical_mass
+    sorted_idx = np.argsort(target_surprisal)
+    cumulative = np.cumsum(target_weights[sorted_idx])
+    idx = np.searchsorted(cumulative, target_typical_mass)
+    threshold = target_surprisal[sorted_idx[min(idx, n - 1)]]
+
+    # T = samples with target surprisal <= threshold (where target concentrates)
+    in_T = target_surprisal <= threshold
+
+    # TTC = β = logger mass on T (fraction of samples, since samples are from logger)
+    ttc = float(np.mean(in_T))
+
+    return ttc
+
+
+@dataclass
+class CLEDiagnostics:
+    """
+    Coverage-Limited Efficiency (CLE) diagnostics.
+
+    The CLE bound explains why IPS can fail even with high ESS:
+
+        SE(Ψ̂) ≥ (σ_T · α) / √(β·n) · √(1 + χ²_T)
+
+    Where:
+    - T = target-typical region (defined via target surprisal threshold)
+    - α = P_π'(T) = target mass on T (≈ target_typical_mass by construction)
+    - β = P_π₀(T) = logger mass on T = TTC (the key diagnostic!)
+    - σ_T = outcome noise in T
+    - χ²_T = chi-squared divergence **inside T** (shape mismatch where it matters)
+
+    The bound has three multiplicative factors:
+    1. Coverage penalty (α/√β): Explodes when logger rarely visits target-typical regions
+    2. Shape mismatch √(1+χ²_T): Inflates floor even with good coverage
+    3. Noise term (σ_T/√n): Standard sampling noise
+
+    **Key insight**: TTC = β, not α!
+    - TTC measures: "How well does the logger cover where the target concentrates?"
+    - Low TTC means logger rarely generates what target wants → IPS fails
+
+    **TTC vs Bhattacharyya**:
+    - TTC (β): Coverage in **action space** - logger coverage of target-typical regions
+    - Bhattacharyya (E[√w]): Shape mismatch in **surrogate space** - weight concentration
+
+    Attributes:
+        ttc: Target-Typicality Coverage = β = logger mass on T
+        bhattacharyya: Bhattacharyya coefficient = E[√w] (surrogate space shape)
+        alpha: Target mass on T (≈ target_typical_mass by construction)
+        beta: Same as TTC (alias for clarity in CLE bound)
+        coverage_penalty: α/√β (the CLE coverage factor)
+        chi_squared_T: Var(w) **inside T only** (shape mismatch where it matters)
+        shape_mismatch: √(1 + χ²_T)
+        cle_factor: Combined CLE inflation = coverage_penalty × shape_mismatch
+        ess_fraction: Effective sample size as fraction of n
+        n_samples: Number of samples used
+    """
+
+    ttc: float  # β = logger mass on T (the key diagnostic!)
+    bhattacharyya: float  # E[√w] (surrogate space shape)
+    alpha: float  # Target mass on T (≈0.8 by construction)
+    beta: float  # Alias for ttc
+    coverage_penalty: float
+    chi_squared_T: float  # Computed inside T only
+    shape_mismatch: float
+    cle_factor: float
+    ess_fraction: float
+    n_samples: int
+
+    def summary(self) -> str:
+        """Human-readable summary."""
+        if self.ttc >= 0.7:
+            status = "GOOD"
+            msg = "IPS may work"
+        elif self.ttc >= 0.3:
+            status = "MARGINAL"
+            msg = "consider DR"
+        else:
+            status = "POOR"
+            msg = "IPS will fail"
+
+        return (
+            f"CLE: {status} | TTC={self.ttc:.1%} ({msg}) | "
+            f"BC={self.bhattacharyya:.1%} | "
+            f"coverage_penalty={self.coverage_penalty:.2f} | "
+            f"shape_mismatch={self.shape_mismatch:.1f} | "
+            f"cle_factor={self.cle_factor:.1f}x"
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "ttc": self.ttc,
+            "bhattacharyya": self.bhattacharyya,
+            "alpha": self.alpha,
+            "beta": self.beta,
+            "coverage_penalty": self.coverage_penalty,
+            "chi_squared_T": self.chi_squared_T,
+            "shape_mismatch": self.shape_mismatch,
+            "cle_factor": self.cle_factor,
+            "ess_fraction": self.ess_fraction,
+            "n_samples": self.n_samples,
+        }
+
+
+def compute_cle_diagnostics(
+    base_logprobs: np.ndarray,
+    target_logprobs: np.ndarray,
+    target_typical_mass: float = 0.8,
+) -> CLEDiagnostics:
+    """
+    Compute Coverage-Limited Efficiency (CLE) diagnostics.
+
+    These diagnostics explain why IPS can fail even with high ESS by decomposing
+    the efficiency loss into coverage penalty and shape mismatch components.
+
+    The CLE bound is:
+        SE(Ψ̂) ≥ (σ_T · α) / √(β·n) · √(1 + χ²_T)
+
+    Where:
+    - T = target-typical region (containing target_typical_mass of target mass)
+    - α = target mass on T (≈ target_typical_mass by construction)
+    - β = logger mass on T = TTC (the key diagnostic!)
+    - χ²_T = weight variance inside T
+
+    **Key insight**: TTC = β (logger coverage), not α!
+    - Low TTC means logger rarely covers where target concentrates → IPS fails
+
+    Args:
+        base_logprobs: Log probabilities under logging policy, log π₀(a|x)
+        target_logprobs: Log probabilities under target policy, log π'(a|x)
+        target_typical_mass: Fraction of target mass to define T.
+            Default 0.8 means T contains 80% of target probability mass.
+
+    Returns:
+        CLEDiagnostics with all CLE bound components
+
+    Example:
+        >>> cle = compute_cle_diagnostics(base_lp, target_lp)
+        >>> print(cle.summary())
+        CLE: POOR | TTC=12.5% (IPS will fail) | BC=8.3% | coverage_penalty=2.31 | ...
+
+        >>> if cle.ttc < 0.7:
+        ...     print("Use Direct or DR methods instead of IPS")
+    """
+    from scipy.special import logsumexp
+
+    base_logprobs = np.asarray(base_logprobs)
+    target_logprobs = np.asarray(target_logprobs)
+    n = len(base_logprobs)
+
+    if n == 0:
+        return CLEDiagnostics(
+            ttc=0.0,
+            bhattacharyya=0.0,
+            alpha=0.0,
+            beta=0.0,
+            coverage_penalty=np.inf,
+            chi_squared_T=np.inf,
+            shape_mismatch=np.inf,
+            cle_factor=np.inf,
+            ess_fraction=0.0,
+            n_samples=0,
+        )
+
+    # Compute importance weights
+    log_weights = target_logprobs - base_logprobs
+    weights = np.exp(log_weights - np.max(log_weights))  # Numerical stability
+    weights = weights / np.mean(weights)  # Normalize to mean 1
+
+    # --- Bhattacharyya coefficient (surrogate space) ---
+    # E[√w] under base distribution
+    bhattacharyya = float(np.mean(np.sqrt(np.maximum(weights, 1e-10))))
+    bhattacharyya = min(bhattacharyya, 1.0)
+
+    # --- ESS fraction ---
+    ess = (np.sum(weights) ** 2) / np.sum(weights**2)
+    ess_fraction = ess / n
+
+    # --- Define T = target-typical region ---
+    # T contains target_typical_mass of target mass
+    # Use target surprisal to find where target concentrates
+    normalized_log_weights = log_weights - logsumexp(log_weights)
+    target_weights = np.exp(normalized_log_weights)
+    target_surprisal = -target_logprobs
+
+    # Sort by target surprisal, find threshold for target_typical_mass
+    sorted_idx = np.argsort(target_surprisal)
+    cumulative = np.cumsum(target_weights[sorted_idx])
+    idx = np.searchsorted(cumulative, target_typical_mass)
+    threshold = target_surprisal[sorted_idx[min(idx, n - 1)]]
+
+    # T = samples with target surprisal <= threshold (where target concentrates)
+    in_T = target_surprisal <= threshold
+
+    # --- α = target mass on T ---
+    alpha = float(np.sum(target_weights[in_T]))
+
+    # --- β = TTC = logger mass on T ---
+    # Since samples are from logger, β = fraction of samples in T
+    beta = float(np.mean(in_T))
+    ttc = beta  # TTC = β = logger coverage of target-typical region
+
+    # --- χ²_T = Var(w) inside T only ---
+    if np.sum(in_T) > 0:
+        weights_in_T = weights[in_T]
+        # Normalize to mean 1 within T
+        mean_w_T = np.mean(weights_in_T)
+        if mean_w_T > 1e-10:
+            mean_one_in_T = weights_in_T / mean_w_T
+            chi_squared_T = float(np.var(mean_one_in_T))
+        else:
+            chi_squared_T = np.inf
+    else:
+        chi_squared_T = np.inf
+
+    # --- Shape mismatch ---
+    shape_mismatch = (
+        np.sqrt(1 + chi_squared_T) if np.isfinite(chi_squared_T) else np.inf
+    )
+
+    # --- Coverage penalty = α / √β ---
+    if beta > 1e-10:
+        coverage_penalty = alpha / np.sqrt(beta)
+    else:
+        coverage_penalty = np.inf
+
+    # --- Combined CLE factor ---
+    if np.isfinite(coverage_penalty) and np.isfinite(shape_mismatch):
+        cle_factor = coverage_penalty * shape_mismatch
+    else:
+        cle_factor = np.inf
+
+    return CLEDiagnostics(
+        ttc=ttc,
+        bhattacharyya=bhattacharyya,
+        alpha=alpha,
+        beta=beta,
+        coverage_penalty=coverage_penalty,
+        chi_squared_T=chi_squared_T,
+        shape_mismatch=shape_mismatch,
+        cle_factor=cle_factor,
+        ess_fraction=ess_fraction,
+        n_samples=n,
+    )

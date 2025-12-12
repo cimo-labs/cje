@@ -4,241 +4,246 @@
 
 # CJE - Causal Judge Evaluation
 
+**Stop guessing. Start measuring.**
+
 [![Docs](https://img.shields.io/badge/docs-cimolabs.com-blue)](https://cimolabs.com/cje)
 [![Python](https://img.shields.io/badge/python-3.9%E2%80%933.12-blue)](https://www.python.org/downloads/)
 [![Tests](https://img.shields.io/badge/tests-passing-green)](https://github.com/cimo-labs/cje/actions)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/cje-eval?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/cje-eval)
 
-**Turn noisy LLM-judge scores into precise, unbiased estimates of the outcomes you care about.**
+**Turn noisy, biased LLM-judge scores into precise, unbiased estimates of the outcomes you actually care about.**
 
-CJE calibrates judge scores using a small oracle slice (5-10% coverage), then delivers statistically rigorous estimates.
+---
 
-## How It Works
+## The Problem: Your Judge Is Lying
 
-CJE follows a simple three-step workflow:
+You are likely using an LLM (like GPT-4o) to judge your system's outputs. You take the average score and call it "quality."
+
+**This is statistically invalid.**
+
+Raw judge scores are **surrogates (S)**, not **outcomes (Y)**. They suffer from:
+
+1. **Preference Inversion:** A higher judge score often predicts *lower* real-world quality (due to verbosity bias or sycophancy).
+2. **Invalid Confidence Intervals:** Standard error bars assume the judge is perfect. In reality, uncalibrated judges yield **0% coverage**—your "95% confidence interval" almost never captures the truth.
+3. **Scale Arbitrariness:** Is a "4.2" actually 5% better than a "4.0"? Or is it just noise?
+
+## The Solution: Calibration via AutoCal-R
+
+CJE fixes this by treating the judge as a **programmable sensor** that must be calibrated.
 
 ```
 ┌─────────────────────────────────┐
 │           Data                  │
 │  LLM-judge scores +             │
-│  oracle slice (5-50%)           │
+│  oracle slice (5-25%)           │
 └─────────────────────────────────┘
               ↓
 ┌─────────────────────────────────┐
 │         Calibrate               │
-│  Learn judge → oracle mapping   │
+│  Learn f(S, X) → Y mapping      │
 └─────────────────────────────────┘
               ↓
 ┌─────────────────────────────────┐
 │          Estimate               │
-│  Estimates with honest          │
-│  uncertainty                    │
+│  Valid 95% CIs accounting for   │
+│  calibration uncertainty        │
 └─────────────────────────────────┘
 ```
 
 **Key benefits:**
-- **Small label budget**: 5-10% oracle coverage often sufficient
-- **Unbiased estimates**: Judge scores (+ optional covariates) mapped to oracle scale
-- **Rigorous inference**: CIs account for both sampling and calibration uncertainty
 
-See [`cje/calibration/README.md`](cje/calibration/README.md#why-isotonic-regression-for-reward-calibration) for technical details.
+- **Small label budget**: 5-25% oracle coverage is often sufficient.
+- **Unbiased estimates**: Judge scores (+ optional covariates) mapped to the oracle scale.
+- **Rigorous inference**: Confidence Intervals (CIs) account for both sampling error *and* calibration uncertainty (via OUA Jackknife).
 
-## 📊 Performance
+---
 
-**[Arena Experiment: 5k Real Evaluations](https://cimolabs.com/blog/arena-experiment)** - Comprehensive benchmarking on ChatBot Arena data:
-- **94% pairwise ranking accuracy** with Direct Model + covariates
-- **158× ESS improvement** with SIMCal-W vs raw SNIPS
-- **Kendall τ = 0.837** vs -0.235 for uncalibrated methods
-- Validates AutoCal-R calibration and doubly-robust estimation on real data
+## 📊 The Proof: The Arena Experiment
+
+*Does this actually work?*
+
+We benchmarked 14 estimators on **5,000 real user prompts** from Chatbot Arena, using GPT-5 as the oracle.
 
 <div align="center">
   <img src="forest_plot_n1000_oracle25.png" alt="CJE Calibration Accuracy" width="80%">
 </div>
 
-<sub>*Calibration accuracy on Arena data: Blue dots show CJE estimates (with 95% CIs), red dots show ground truth oracle scores. AutoCal-R learned from 25% oracle slice in base policy, then applied across all policies. Close alignment demonstrates unbiased calibration. N=1000 prompts from [LMSYS Chatbot Arena](https://huggingface.co/datasets/lmsys/chatbot_arena_conversations).*</sub>
+### The Failure of Standard Methods
 
-**Reproduction code:** Full experimental pipeline available at [cje-arena-experiments](https://github.com/cimo-labs/cje-arena-experiments)
+- **Raw Judges (Naive):** **0% CI coverage**. The error bars were mathematical lies.
+- **Standard IPS:** Failed to rank policies better than random chance due to poor overlap.
 
-## Calibration Methods
+### The CJE Result
 
-CJE provides two calibration modes for mapping judge scores to oracle outcomes (i.e., the KPI you care about):
+- **94% Ranking Accuracy** against GPT-5 ground truth: Direct Method + Two-Stage Calibration correctly ranked subtle policy differences.
+- **Valid 95% CIs:** Our intervals captured the true GPT-5 score **95% of the time**.
+- **16x Cost Reduction:** Achieved GPT-5 level accuracy using GPT-4-nano judges + a small GPT-5 slice.
 
-### Monotone
-Standard isotonic regression enforces: *higher judge score → no worse expected outcome*.
+[**Read the full Arena Experiment Report**](https://cimolabs.com/blog/arena-experiment)
 
-**Why isotonic?** It's the right structural prior—assumes only monotonicity (which you actually believe), preserves oracle KPI levels by construction (mean-preserving by KKT conditions), and is highly efficient with small label budgets. See [technical rationale](cje/calibration/README.md#why-isotonic-regression-for-reward-calibration).
+---
 
-Simple, stable, works well when the judge-oracle relationship is already monotone.
-
-### Two-Stage (Default with Covariates)
-Learns smooth transformation g(S, X) → rank → isotonic. Handles non-monotone patterns and incorporates additional covariates (e.g., response length, domain metadata) while maintaining final monotonicity guarantee.
-
-<div align="center">
-  <img src="two_stage_comparison.png" alt="Two-Stage Calibration with Covariates" width="100%">
-</div>
-
-<sub>*Two-stage calibration learns flexible relationships between covariates (judge score, response length) and oracle outcomes in Stage 1, then enforces monotonicity via isotonic regression in Stage 2. **Left/Middle:** Partial dependence plots show how each covariate relates to oracle score while holding others at mean values. **Right:** Final monotone mapping from Stage 1 risk index to calibrated oracle score. Full benchmarking results: [Arena Experiment](https://www.cimolabs.com/blog/arena-experiment). Data from [LMSYS Chatbot Arena](https://huggingface.co/datasets/lmsys/chatbot_arena_conversations).*</sub>
-
-**When to use two-stage:**
-- **You have covariates** (response length, domain, etc.) → two-stage is default and recommended
-- Judge shows non-monotone empirical E[Oracle|Judge] relationship
-- Regional miscalibration (monotone works well at low/high but poorly at mid-range)
-- Length bias (judge gives different scores to same-quality responses based on length)
-
-**Auto mode:**
-- **With covariates:** Two-stage is automatically used (can incorporate additional features)
-- **Judge score only:** CJE automatically selects monotone vs two-stage via cross-validation (1-SE rule)
-
-```python
-# Default: Judge score only (no covariates, auto-selects monotone/two-stage via CV)
-result = analyze_dataset(fresh_draws_dir="responses/")
-
-# Include response_length covariate for two-stage calibration
-result = analyze_dataset(
-    fresh_draws_dir="responses/",
-    include_response_length=True
-)
-
-# Add domain as additional covariate (combine with response_length)
-result = analyze_dataset(
-    fresh_draws_dir="responses/",
-    include_response_length=True,
-    calibration_covariates=["domain"]
-)
-
-# Force a specific mode
-result = analyze_dataset(
-    fresh_draws_dir="responses/",
-    calibration_mode="monotone"  # or "two_stage"
-)
-```
-
-## Installation
+## 🚀 Quick Start
 
 ```bash
 pip install cje-eval
 ```
 
-## 🚀 Try it Now - Interactive Demos
+## The Workflow
 
-**Quick Start (5 minutes):**
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_tutorial.ipynb)
+CJE is a loop: **Calibrate → Estimate → Test Transportability → Inspect Residuals → Iterate**
 
-Learn Direct Mode - the simplest way to compare policies (no logprobs needed!)
+### 1. Calibrate Cheap Scores to Expensive Labels
 
-**Advanced Tutorial:**
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_advanced.ipynb)
-
-Learn IPS and DR modes for off-policy (counterfactual) evaluation
-
-## Quick Start
-
-### Minimal Example
+Your cheap judge (S) needs calibration against expensive oracle labels (Y). CJE learns the S→Y mapping automatically.
 
 ```python
 from cje import analyze_dataset
 
-# Compare policies on an eval set
-result = analyze_dataset(fresh_draws_dir="responses/")
+# Point to directory with {policy}_responses.jsonl files
+# Each file has judge_score for all samples, oracle_label for 5-25%
+results = analyze_dataset(fresh_draws_dir="data/responses/")
+```
 
-# Get estimates with confidence intervals
+**Data format** (one JSONL file per policy):
+```json
+{"prompt_id": "1", "judge_score": 0.85, "oracle_label": 0.9}
+{"prompt_id": "2", "judge_score": 0.72}
+```
+
+### 2. Get Estimates with Valid Uncertainty
+
+CJE provides confidence intervals that account for both sampling error AND calibration uncertainty:
+
+```python
 for policy, est, se in zip(
-    result.metadata["target_policies"],
-    result.estimates,
-    result.standard_errors
+    results.metadata["target_policies"],
+    results.estimates,
+    results.standard_errors
 ):
     print(f"{policy}: {est:.3f} ± {1.96*se:.3f}")
+
+# Forest plot for comparison
+results.plot_estimates(save_path="ranking.png")
 ```
 
-### Data Format
+### 3. Test Transportability
 
-**Directory structure:** One JSONL file per policy
-```
-responses/
-├── model_a_responses.jsonl
-└── model_b_responses.jsonl
-```
-
-**Minimal record** (inside each file):
-```json
-{"prompt_id": "eval_0", "judge_score": 0.85}
-{"prompt_id": "eval_1", "judge_score": 0.72}
-```
-
-**With calibration** (add oracle labels to 5-10% of samples):
-```json
-{"prompt_id": "eval_0", "judge_score": 0.85, "oracle_label": 0.86}
-{"prompt_id": "eval_1", "judge_score": 0.72}
-```
-
-CJE automatically:
-- Discovers policies from filenames (`model_a_responses.jsonl` → policy `"model_a"`)
-- Applies AutoCal-R when oracle labels are present
-- Returns unbiased estimates with valid 95% CIs
-
-## Beyond Direct Mode
-
-CJE also supports **IPS** (counterfactual inference from logs) and **DR** (doubly robust with fresh draws). These require log probabilities from your models.
+Before trusting calibration on a new policy, verify it transfers with a small probe (50 oracle labels):
 
 ```python
-# IPS: Estimate "what if we deployed policy X?" from existing logs
-result = analyze_dataset(logged_data_path="logs.jsonl")
+import json
+from sklearn.isotonic import IsotonicRegression
+from cje.diagnostics import audit_transportability
 
-# DR: Combine logged data + fresh draws for maximum accuracy
-result = analyze_dataset(
-    logged_data_path="logs.jsonl",
-    fresh_draws_dir="responses/"
-)
+# Train calibrator on base policy (or extract from results.calibrator if available)
+base = [json.loads(l) for l in open("data/responses/base_responses.jsonl")]
+base_oracle = [r for r in base if r.get("oracle_label")]
+calibrator = IsotonicRegression(out_of_bounds="clip")
+calibrator.fit([r["judge_score"] for r in base_oracle], [r["oracle_label"] for r in base_oracle])
+
+# Test on new policy with 50 probe samples
+probe = [json.loads(l) for l in open("new_policy_probe.jsonl")]
+diag = audit_transportability(calibrator, probe, group_label="policy:new")
+print(diag.summary())
+# Transport: PASS | N=50 | δ̂: +0.012 (CI: [-0.03, +0.05])
+
+diag.plot()  # Visualize decile-level residuals
 ```
 
-**For IPS/DR data formats and API details:** Run `help(analyze_dataset)` or see [`cje/interface/`](cje/interface/) module docs.
+<div align="center">
+  <img src="transportability_audit.png" alt="Transportability Audit" width="70%">
+</div>
 
-## Visualization
+<sub>*Transportability audit on Arena data. Clone and parallel_universe_prompt **PASS** (CI includes 0). The adversarial "unhelpful" policy **FAILS** — the calibrator systematically overestimates its quality by 0.28 points.*</sub>
 
-CJE provides diagnostic plots for understanding and validating results:
+### 4. Inspect Residuals and Iterate
+
+When transportability fails, inspect WHY the judge is being fooled:
 
 ```python
-from cje import analyze_dataset, plot_policy_estimates
+import pandas as pd
 
-# Run analysis
-result = analyze_dataset(fresh_draws_dir="responses/")
+# Compute residuals for probe samples
+probe_df = pd.DataFrame(probe)
+probe_df["calibrated"] = calibrator.predict(probe_df["judge_score"])
+probe_df["residual"] = probe_df["oracle_label"] - probe_df["calibrated"]
 
-# Quick plot with convenience method
-result.plot_estimates(save_path="estimates.png")
-
-# Or use visualization functions directly for more control
-plot_policy_estimates(
-    estimates={"policy_a": 0.75, "policy_b": 0.68},
-    standard_errors={"policy_a": 0.02, "policy_b": 0.03},
-    oracle_values={"policy_a": 0.74, "policy_b": 0.69}  # Optional
-)
+# Find samples where calibrator overestimates quality (negative residual)
+worst = probe_df.nsmallest(5, "residual")
+for _, row in worst.iterrows():
+    print(f"Judge: {row['judge_score']:.2f} → Calibrated: {row['calibrated']:.2f} → Oracle: {row['oracle_label']:.2f}")
+    print(f"Response: {row['response'][:200]}...\n")
 ```
 
-**Available visualizations:**
-- `plot_policy_estimates` - Forest plots with confidence intervals
-- `plot_calibration_comparison` - Judge→oracle calibration curves
-- `plot_weight_dashboard_summary` - Weight diagnostics for IPS/DR
-- `plot_weight_dashboard_detailed` - Per-policy weight analysis
-- `plot_dr_dashboard` - Doubly robust diagnostics
+**Common failure patterns:**
+- **Length bias** → add `include_response_length=True` to `analyze_dataset()`
+- **Domain shift** → collect domain-specific oracle labels and refit
+- **Confident nonsense** → improve judge prompt to catch semantic failures
 
-**Jupyter notebooks:** Results automatically display as formatted tables when evaluated in a cell.
+<div align="center">
+  <img src="transportability_fail_detail.png" alt="Transportability Failure Detail" width="80%">
+</div>
 
-See [`cje/visualization/README.md`](cje/visualization/README.md) for complete guide.
+<sub>*Decile-level residuals for the "unhelpful" policy. Every decile shows negative residuals (overestimation). The judge gives high scores to confident-sounding nonsense; the oracle sees through it.*</sub>
+
+### 5. Tutorials
+
+- [**Core Demo**](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb): Full workflow from first principles + library usage
+- [**Advanced (IPS/DR)**](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_advanced.ipynb): Off-policy evaluation with logged data
+
+---
+
+## Evaluation Modes
+
+CJE automatically selects the most rigorous estimator based on your data.
+
+| Mode | Data Required | Use Case | Why use it? |
+|:-----|:--------------|:---------|:------------|
+| **Direct** | Fresh responses | **A/B Testing** | **Most Robust.** No complex math. Just compares Policy A vs B on the same prompts. |
+| **IPS** | Logs + Logprobs | **Historical Analysis** | **Fastest.** Re-weighs old logs to estimate new policy value without running inference. |
+| **DR** | Logs + Fresh | **Production Deploy** | **Most Accurate.** Doubly Robust. Combines logs and fresh draws for minimum variance. |
+
+---
+
+## Under the Hood: Calibration Methods
+
+CJE provides two calibration modes for mapping judge scores (S) to oracle outcomes (Y):
+
+### 1. Monotone (Isotonic Regression)
+
+Standard isotonic regression enforces: *higher judge score → no worse expected outcome*.
+
+- **Why:** It assumes only monotonicity (which you actually believe), preserves oracle KPI levels by construction, and is highly efficient with small label budgets.
+
+### 2. Two-Stage (Default with Covariates)
+
+Learns a smooth transformation g(S, X) → rank → isotonic.
+
+- **Why:** Handles non-monotone patterns and incorporates additional covariates (e.g., **Response Length**) to fix judge biases (like favoring verbosity).
+
+<div align="center">
+  <img src="two_stage_comparison.png" alt="Two-Stage Calibration with Covariates" width="100%">
+</div>
+
+<sub>*Two-stage calibration corrects for length bias. **Left/Middle:** Partial dependence plots show how the judge rewards verbosity even when quality plateaus. **Right:** Final monotone mapping corrects this bias.*</sub>
+
+---
 
 ## Documentation
 
-📚 **Getting Started**
-- [Quick Start Tutorial](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_tutorial.ipynb) - Direct Mode (5 minutes)
-- [Advanced Tutorial](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_advanced.ipynb) - IPS & DR modes
-- [Examples](examples/) - Working code samples
+🔧 **Technical Guides**
 
-🔧 **For Engineers**
 - [Calibration Methods](cje/calibration/README.md) - AutoCal-R, isotonic regression, two-stage fallback
 - [Diagnostics System](cje/diagnostics/README.md) - Uncertainty quantification, OUA, transportability tests
 - [Estimators](cje/estimators/README.md) - Direct, IPS, DR implementations
-- [Interface/API](cje/interface/README.md) - `analyze_dataset` implementation and mode selection
+- [Interface/API](cje/interface/README.md) - `analyze_dataset` implementation
 
+📚 **Examples & Data**
+
+- [Examples Folder](examples/) - Working code samples
+- [Arena Sample Data](examples/arena_sample/README.md) - Real-world test data
 
 ## Development
 

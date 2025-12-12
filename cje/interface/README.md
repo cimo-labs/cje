@@ -483,48 +483,48 @@ results = analyze_dataset(
 Test if a calibrator fitted on one policy/era can safely transport to another using a cheap probe protocol (40-60 oracle labels):
 
 ```python
-from cje.calibration import calibrate_dataset
-from cje.diagnostics import audit_transportability
-from cje.visualization import plot_transport_audit
-from cje.data import load_samples
+import json
+from sklearn.isotonic import IsotonicRegression
+from cje.diagnostics import audit_transportability, plot_transport_comparison
 
-# Fit calibrator on source policy
-source_dataset = load_samples("source_policy_logs.jsonl")
-calibrated, cal_result = calibrate_dataset(
-    source_dataset,
-    judge_field="judge_score",
-    oracle_field="oracle_label"
+# Fit calibrator on source policy (base with oracle labels)
+base_records = [json.loads(line) for line in open("base_responses.jsonl")]
+base_with_oracle = [r for r in base_records if r.get("oracle_label") is not None]
+calibrator = IsotonicRegression(out_of_bounds="clip")
+calibrator.fit(
+    [r["judge_score"] for r in base_with_oracle],
+    [r["oracle_label"] for r in base_with_oracle]
 )
-calibrator = cal_result.calibrator
 
 # Test transport to new policy with 50-sample probe
-probe = load_samples("target_policy_probe.jsonl")  # 50 samples with oracle labels
+# Just load as list of dicts - no special wrapper needed!
+probe = [json.loads(line) for line in open("target_policy_probe.jsonl")]
 diag = audit_transportability(
     calibrator,
-    probe,
+    probe,  # List[dict] with judge_score and oracle_label
     group_label="policy:gpt-4-mini"
 )
 
 # Check result
 print(diag.summary())
-# Transport Diagnostic: PASS | Group: policy:gpt-4-mini | N=50 |
-# Mean shift: +0.012 (95% CI: [-0.008, +0.032]) | Coverage: 96.0% |
-# Action: none | Worst decile residual: 0.043
+# Transport: PASS | Group: policy:gpt-4-mini | N=50 | δ̂: +0.012 (CI: [-0.008, +0.032])
 
-# Visualize
-plot_transport_audit(diag, save_path="transport_audit.png")
+# Visualize single policy
+diag.plot()  # Shows decile-level residuals
+
+# Compare multiple policies
+results = {}
+for policy in ["clone", "premium", "unhelpful"]:
+    probe = [json.loads(line) for line in open(f"{policy}_probe.jsonl")]
+    results[policy] = audit_transportability(calibrator, probe, group_label=f"policy:{policy}")
+
+fig = plot_transport_comparison(results, title="Transportability Audit")
 
 # Handle failures
 if diag.status == "FAIL":
-    if diag.recommended_action == "mean_anchor":
-        # Pure mean shift - apply simple correction
-        corrected_calibrator = calibrator.with_group_anchor(probe, group_label="gpt-4-mini")
-    elif diag.recommended_action == "refit_two_stage":
+    if diag.recommended_action == "refit_two_stage":
         # Regional miscalibration - need full refit
         print("⚠️ Calibrator does not transport. Collect more oracle labels and refit.")
-    elif "boundary" in diag.recommended_action:
-        # Poor coverage - calibrator extrapolating
-        print("⚠️ Add oracle labels at distribution boundaries")
 ```
 
 **When to audit transport:**

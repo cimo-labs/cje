@@ -1,0 +1,15 @@
+{"prompt": "Test prompt 0", "response": "Test response 0", "reward": 0.8743724267099553, "base_policy_logprob": null, "target_policy_logprobs": {"pi_a": null, "pi_b": null}}
+{"prompt": "Test prompt 1", "response": "Test response 1", "reward": 0.6351106587909665, "base_policy_logprob": -53.11394119428985, "target_policy_logprobs": {"pi_a": -54.22010047592191, "pi_b": -55.09692763408316}}
+{"prompt": "Test prompt 2", "response": "Test response 2", "reward": 0.8547467240279112, "base_policy_logprob": -37.06949396911505, "target_policy_logprobs": {"pi_a": -36.94535198159191, "pi_b": -46.03502211180546}}
+{"prompt": "Test prompt 3", "response": "Test response 3", "reward": 0.6691035887777532, "base_policy_logprob": null, "target_policy_logprobs": {"pi_a": -37.037482255786905, "pi_b": -40.41617051387146}}
+{"prompt": "Test prompt 4", "response": "Test response 4", "reward": 0.642987766018951, "base_policy_logprob": -57.904968981529194, "target_policy_logprobs": {"pi_a": null, "pi_b": -64.9719137811164}}
+{"prompt": "Test prompt 5", "response": "Test response 5", "reward": 0.6515100781445529, "base_policy_logprob": -44.71269581504684, "target_policy_logprobs": {"pi_a": -43.936033562345344, "pi_b": null}}
+{"prompt": "Test prompt 6", "response": "Test response 6", "reward": 0.596289839097672, "base_policy_logprob": null, "target_policy_logprobs": {"pi_a": -65.27659278230185, "pi_b": -65.47367441963816}}
+{"prompt": "Test prompt 7", "response": "Test response 7", "reward": 0.4014827641193619, "base_policy_logprob": -35.30067582212418, "target_policy_logprobs": {"pi_a": -34.1199851923011, "pi_b": -28.91094948466832}}
+{"prompt": "Test prompt 8", "response": "Test response 8", "reward": 0.6955508198867054, "base_policy_logprob": -35.42280869904314, "target_policy_logprobs": {"pi_a": null, "pi_b": -37.19989463325981}}
+{"prompt": "Test prompt 9", "response": "Test response 9", "reward": 0.5930576460589513, "base_policy_logprob": null, "target_policy_logprobs": {"pi_a": -39.69691852999521, "pi_b": -34.76241597359155}}
+{"prompt": "Test prompt 10", "response": "Test response 10", "reward": 0.7503866065373548, "base_policy_logprob": -37.170665378686444, "target_policy_logprobs": {"pi_a": -38.576148908735526, "pi_b": null}}
+{"prompt": "Test prompt 11", "response": "Test response 11", "reward": 0.8768031437865356, "base_policy_logprob": -43.004029981854174, "target_policy_logprobs": {"pi_a": -40.24345870045336, "pi_b": -37.432663104424236}}
+{"prompt": "Test prompt 12", "response": "Test response 12", "reward": 0.5013135035593347, "base_policy_logprob": null, "target_policy_logprobs": {"pi_a": null, "pi_b": -33.98754544546711}}
+{"prompt": "Test prompt 13", "response": "Test response 13", "reward": 0.6199302730175282, "base_policy_logprob": -36.651456852860456, "target_policy_logprobs": {"pi_a": -37.16188381520905, "pi_b": -42.30344714605886}}
+{"prompt": "Test prompt 14", "response": "Test response 14", "reward": 0.6137125949612054, "base_policy_logprob": -43.28899473238154, "target_policy_logprobs": {"pi_a": -40.679986635235345, "pi_b": -47.03306752616537}}

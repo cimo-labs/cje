@@ -11,14 +11,14 @@ The diagnostics system is now consolidated into a single cohesive module at `cje
 ```
 cje/diagnostics/
 ├── __init__.py          # Public API exports
-├── models.py            # Data models (IPSDiagnostics, DRDiagnostics, Status, GateState)
+├── models.py            # Data models (IPSDiagnostics, DRDiagnostics, CJEDiagnostics, Status, GateState)
 ├── weights.py           # Weight diagnostic computations (ESS, Hill, etc.)
 ├── overlap.py           # Overlap metrics (Hellinger affinity, auto-tuning, σ(S) floors)
 ├── dr.py                # DR-specific diagnostics
-├── stability.py         # Stability and drift detection
+├── transport.py         # Transportability auditing
 ├── display.py           # Display and formatting utilities
 ├── robust_inference.py  # Robust standard errors and inference
-└── README.md           # This documentation
+└── README.md            # This documentation
 ```
 
 ### Three-Layer Architecture
@@ -30,7 +30,7 @@ cje/diagnostics/
 └────────┬────────┘
          │
 ┌────────▼────────┐
-│  Computation    │  weights.py, dr.py, stability.py:
+│  Computation    │  weights.py, dr.py, overlap.py, transport.py:
 │                 │  Pure functions for metric computation
 └────────┬────────┘
          │
@@ -89,6 +89,44 @@ Extends IPSDiagnostics with doubly robust specific metrics:
 **Decompositions**: `dr_diagnostics_per_policy`, `dm_ips_decompositions`
 **Orthogonality**: `orthogonality_scores`
 
+### CJEDiagnostics
+
+Unified diagnostics for paper-ready reporting. Simplifies IPSDiagnostics and DRDiagnostics into a single class focused on two key questions:
+
+1. **Can we make level claims?** (identification/coverage risk)
+2. **Are CIs honest?** (sampling/variance risk)
+
+**Key fields**:
+- `coverage_risk`: "low", "medium", "high", or "critical"
+- `variance_risk`: "low", "medium", "high", or "critical"
+- `refuse_level_claims`: Boolean gate for point estimates
+- `refuse_inference`: Boolean gate for CI reliability
+
+**Key properties**:
+- `can_make_level_claims` - Whether point estimates are reliable
+- `has_honest_inference` - Whether confidence intervals are reliable
+- `overall_risk` - Combined risk assessment
+
+**Factory methods**:
+```python
+from cje.diagnostics import CJEDiagnostics, IPSDiagnostics, DRDiagnostics
+
+# Convert from IPS diagnostics
+unified = CJEDiagnostics.from_ips_diagnostics(ips_diag)
+
+# Convert from DR diagnostics
+unified = CJEDiagnostics.from_dr_diagnostics(dr_diag)
+
+# Check risk levels
+print(unified.summary())
+# Output: "CalibratedIPS (calibrated) | N=950/1000 | Coverage: low | Variance: medium | ESS=45.2%"
+
+if unified.can_make_level_claims:
+    print("Safe to compare policy levels")
+if unified.has_honest_inference:
+    print("Confidence intervals are reliable")
+```
+
 
 ## Status System
 
@@ -125,11 +163,47 @@ Gate criteria use combinations of ESS, weight concentration, and coefficient of 
 ### Hellinger Affinity (Bhattacharyya Coefficient)
 Measures structural overlap between policies. **Cannot be improved by calibration.**
 - **Affinity > 50%**: Good overlap
-- **Affinity 35-50%**: Marginal overlap  
+- **Affinity 35-50%**: Marginal overlap
 - **Affinity 20-35%**: Poor overlap (calibration might help)
 - **Affinity < 20%**: Catastrophic mismatch (refuse estimation)
 
 Key insight: Hellinger tells us whether to give up, ESS tells us how hard to try.
+
+### TTC (Target-Typicality Coverage)
+TTC = Hellinger affinity = E[√w]. Measures what fraction of the target distribution's mass falls in regions where the logger has meaningful coverage.
+
+**Decision rule:** If TTC < 0.7, logs-only IPS will fail regardless of weight stabilization.
+- **TTC > 0.7**: Good overlap, IPS may work
+- **TTC 0.3-0.7**: Marginal, consider DR methods
+- **TTC < 0.3**: Poor overlap, IPS will fail
+
+```python
+from cje.diagnostics import compute_ttc, compute_cle_diagnostics
+
+# Quick TTC check
+ttc = compute_ttc(importance_weights)
+if ttc < 0.7:
+    print("Use Direct or DR methods instead of IPS")
+
+# Full CLE diagnostics
+cle = compute_cle_diagnostics(weights, target_logprobs)
+print(cle.summary())
+# CLE: POOR | TTC=12.5% (IPS will fail) | coverage_penalty=2.31 | shape_mismatch=25.4 | cle_factor=58.7x
+```
+
+### CLE (Coverage-Limited Efficiency) Diagnostics
+The CLE bound explains why IPS can fail even with high ESS:
+
+```
+SE(Ψ̂) ≥ (σ_T · α) / √(β·n) · √(1 + χ²)
+```
+
+Components:
+- **α** = target mass on target-typical region T
+- **β** = logger mass on T (logger coverage)
+- **Coverage penalty α/√β**: Explodes when logger rarely visits target-typical regions
+- **Shape mismatch √(1+χ²)**: Inflates variance even with good coverage
+- **CLE factor**: Combined inflation = coverage_penalty × shape_mismatch
 
 ### Effective Sample Size (ESS)
 Measures how many "effective" samples remain after weighting. **Can be improved by calibration.**
@@ -343,27 +417,26 @@ for policy, ifs in results.influence_functions.items():
 **Basic Usage:**
 
 ```python
-from cje.calibration import calibrate_dataset
-from cje.diagnostics import audit_transportability
-from cje.visualization import plot_transport_audit
-from cje.data import load_samples
+import json
+from sklearn.isotonic import IsotonicRegression
+from cje.diagnostics import audit_transportability, plot_transport_comparison
 
-# Step 1: Fit calibrator on source (e.g., GPT-4 or Q1 logs)
-source_data = load_samples("gpt4_logs.jsonl")
-calibrated, cal_result = calibrate_dataset(
-    source_data,
-    judge_field="judge_score",
-    oracle_field="oracle_label"
+# Step 1: Fit calibrator on source (e.g., base policy with oracle labels)
+source_records = [json.loads(line) for line in open("base_responses.jsonl")]
+source_with_oracle = [r for r in source_records if r.get("oracle_label") is not None]
+calibrator = IsotonicRegression(out_of_bounds="clip")
+calibrator.fit(
+    [r["judge_score"] for r in source_with_oracle],
+    [r["oracle_label"] for r in source_with_oracle]
 )
-calibrator = cal_result.calibrator
 
-# Step 2: Collect 40-60 probe samples on target (e.g., GPT-4-mini)
-probe = load_samples("gpt4_mini_probe.jsonl")  # 50 samples with oracle labels
+# Step 2: Load 40-60 probe samples on target (just dicts with judge_score + oracle_label)
+probe = [json.loads(line) for line in open("gpt4_mini_probe.jsonl")]
 
 # Step 3: Test transportability
 diag = audit_transportability(
     calibrator,
-    probe,
+    probe,  # List[dict] - no wrapper needed!
     group_label="policy:gpt-4-mini"
 )
 
@@ -372,7 +445,11 @@ print(diag.summary())
 # Output: "Transport: PASS | Group: policy:gpt-4-mini | N=50 | δ̂: +0.012 (CI: [-0.008, +0.032])"
 
 # Step 5: Visualize
-plot_transport_audit(diag, save_path="transport_audit.png")
+diag.plot()  # Decile-level residuals
+
+# Or compare multiple policies at once:
+# results = {"clone": diag_clone, "premium": diag_premium}
+# fig = plot_transport_comparison(results)
 
 # Step 6: Take action
 if diag.status == "PASS":
@@ -389,14 +466,7 @@ elif diag.status == "FAIL":
     # |δ̂| ≥ 0.05 → clear systematic bias
     print(f"🔴 Clear drift detected: δ̂={diag.delta_hat:+.3f}")
     print(f"Action: {diag.recommended_action}")  # "refit_two_stage"
-
-    # Refit with pooled data
-    combined = source_data.samples + probe
-    new_calibrator = calibrate_dataset(
-        Dataset(samples=combined, target_policies=source_data.target_policies),
-        judge_field="judge_score",
-        oracle_field="oracle_label"
-    )
+    # Collect more oracle labels on target and refit calibrator
 ```
 
 **Status Classification:**
@@ -437,13 +507,18 @@ probe = stratified_sample(
 **Example: Cross-Era Transport**
 
 ```python
+import json
+from sklearn.isotonic import IsotonicRegression
+from cje.diagnostics import audit_transportability
+
 # Fit on Q1 data
-q1_data = load_samples("q1_logs.jsonl")
-calibrated, cal_result = calibrate_dataset(q1_data, ...)
-calibrator = cal_result.calibrator
+q1_records = [json.loads(line) for line in open("q1_logs.jsonl")]
+q1_with_oracle = [r for r in q1_records if r.get("oracle_label") is not None]
+calibrator = IsotonicRegression(out_of_bounds="clip")
+calibrator.fit([r["judge_score"] for r in q1_with_oracle], [r["oracle_label"] for r in q1_with_oracle])
 
 # Test on Q2 with 50 probe labels
-q2_probe = load_samples("q2_probe.jsonl")
+q2_probe = [json.loads(line) for line in open("q2_probe.jsonl")]
 diag = audit_transportability(calibrator, q2_probe, group_label="era:Q2-2025")
 
 print(diag.summary())

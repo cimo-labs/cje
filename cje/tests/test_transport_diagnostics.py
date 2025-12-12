@@ -574,5 +574,121 @@ def test_transport_monotone_uses_quantile_binning() -> None:
     )
 
 
+@pytest.mark.unit
+def test_transport_dict_input() -> None:
+    """Test audit_transportability accepts List[dict] input (zero-boilerplate interface)."""
+    from sklearn.isotonic import IsotonicRegression
+
+    np.random.seed(42)
+
+    # Create calibrator
+    n_train = 100
+    train_scores = np.random.uniform(0.2, 0.8, n_train)
+    train_labels = 0.3 + 0.5 * train_scores + np.random.normal(0, 0.05, n_train)
+    train_labels = np.clip(train_labels, 0, 1)
+
+    calibrator = IsotonicRegression(out_of_bounds="clip")
+    calibrator.fit(train_scores, train_labels)
+
+    # Create probe as List[dict] (not List[Sample])
+    n_probe = 50
+    probe_scores = np.random.uniform(0.2, 0.8, n_probe)
+    probe_labels = 0.3 + 0.5 * probe_scores + np.random.normal(0, 0.05, n_probe)
+    probe_labels = np.clip(probe_labels, 0, 1)
+
+    probe_dicts = [
+        {"judge_score": float(s), "oracle_label": float(y)}
+        for s, y in zip(probe_scores, probe_labels)
+    ]
+
+    # Run audit with dict input
+    diag = audit_transportability(calibrator, probe_dicts, group_label="dict_test")
+
+    # Validate results
+    assert diag.status in ["PASS", "WARN", "FAIL"]
+    assert diag.n_probe == n_probe
+    assert diag.group_label == "dict_test"
+    assert abs(diag.delta_hat) < 0.1  # Same distribution, should be small
+
+
+@pytest.mark.unit
+def test_transport_diagnostics_plot() -> None:
+    """Test TransportDiagnostics.plot() method creates a figure."""
+    import matplotlib
+
+    matplotlib.use("Agg")  # Non-interactive backend for testing
+    import matplotlib.pyplot as plt
+
+    diag = TransportDiagnostics(
+        status="FAIL",
+        delta_hat=-0.15,
+        delta_ci=(-0.20, -0.10),
+        delta_se=0.025,
+        decile_residuals=[-0.12, -0.18, -0.15, -0.14, -0.16],
+        decile_counts=[10, 10, 10, 10, 10],
+        coverage=1.0,
+        recommended_action="refit_two_stage",
+        n_probe=50,
+        group_label="test_policy",
+    )
+
+    # Should not raise
+    fig = diag.plot(figsize=(8, 4))
+
+    # Validate figure
+    assert fig is not None
+    assert isinstance(fig, plt.Figure)
+
+    plt.close(fig)
+
+
+@pytest.mark.unit
+def test_plot_transport_comparison() -> None:
+    """Test plot_transport_comparison creates a forest plot."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from cje.diagnostics import plot_transport_comparison
+
+    # Create multiple diagnostics
+    diag_pass = TransportDiagnostics(
+        status="PASS",
+        delta_hat=0.01,
+        delta_ci=(-0.03, 0.05),
+        delta_se=0.02,
+        decile_residuals=[0.0, 0.01, -0.01, 0.02, 0.0],
+        decile_counts=[10, 10, 10, 10, 10],
+        coverage=1.0,
+        recommended_action="none",
+        n_probe=50,
+        group_label="clone",
+    )
+
+    diag_fail = TransportDiagnostics(
+        status="FAIL",
+        delta_hat=-0.25,
+        delta_ci=(-0.30, -0.20),
+        delta_se=0.025,
+        decile_residuals=[-0.20, -0.25, -0.28, -0.24, -0.26],
+        decile_counts=[10, 10, 10, 10, 10],
+        coverage=1.0,
+        recommended_action="refit_two_stage",
+        n_probe=50,
+        group_label="unhelpful",
+    )
+
+    results = {"clone": diag_pass, "unhelpful": diag_fail}
+
+    # Should not raise
+    fig = plot_transport_comparison(results, title="Test Comparison")
+
+    # Validate figure
+    assert fig is not None
+    assert isinstance(fig, plt.Figure)
+
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

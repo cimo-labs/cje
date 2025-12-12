@@ -73,6 +73,102 @@ class TransportDiagnostics:
             "group_label": self.group_label,
         }
 
+    def plot(self, ax: Optional[Any] = None, figsize: tuple = (10, 5)) -> Any:
+        """Plot transportability diagnostics.
+
+        Shows decile-level residuals with overall mean and CI.
+
+        Args:
+            ax: Optional matplotlib axes. If None, creates new figure.
+            figsize: Figure size if creating new figure.
+
+        Returns:
+            matplotlib figure object
+        """
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            raise ImportError(
+                "matplotlib required for plotting. Install with: pip install matplotlib"
+            )
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize)
+        else:
+            fig = ax.get_figure()
+
+        n_bins = len(self.decile_residuals)
+        x = np.arange(n_bins)
+
+        # Filter out NaN values for plotting
+        residuals = np.array(self.decile_residuals)
+        counts = np.array(self.decile_counts)
+        valid_mask = ~np.isnan(residuals)
+
+        # Color by sign (green=good, red=bad)
+        colors = ["#d62728" if r < 0 else "#2ca02c" for r in residuals[valid_mask]]
+
+        # Plot decile bars
+        bars = ax.bar(
+            x[valid_mask],
+            residuals[valid_mask],
+            color=colors,
+            alpha=0.7,
+            edgecolor="black",
+            linewidth=0.5,
+        )
+
+        # Add overall mean line with CI band
+        ax.axhline(
+            y=self.delta_hat,
+            color="black",
+            linewidth=2,
+            linestyle="-",
+            label=f"Mean δ̂={self.delta_hat:+.3f}",
+        )
+        ax.axhspan(
+            self.delta_ci[0],
+            self.delta_ci[1],
+            alpha=0.2,
+            color="gray",
+            label=f"95% CI [{self.delta_ci[0]:+.3f}, {self.delta_ci[1]:+.3f}]",
+        )
+
+        # Zero line
+        ax.axhline(y=0, color="black", linewidth=1, linestyle="--", alpha=0.5)
+
+        # Labels
+        title = f"Transportability: {self.status}"
+        if self.group_label:
+            title += f" ({self.group_label})"
+        ax.set_title(title, fontsize=12, fontweight="bold")
+        ax.set_xlabel("Score Decile", fontsize=10)
+        ax.set_ylabel("Mean Residual (Y - Ŷ)", fontsize=10)
+        ax.set_xticks(x)
+        ax.set_xticklabels(
+            [f"D{i+1}\n(n={c})" for i, c in enumerate(counts)], fontsize=8
+        )
+
+        # Add status indicator
+        status_colors = {"PASS": "green", "WARN": "orange", "FAIL": "red"}
+        status_color = status_colors.get(self.status, "gray")
+        ax.text(
+            0.02,
+            0.98,
+            self.status,
+            transform=ax.transAxes,
+            fontsize=14,
+            fontweight="bold",
+            color=status_color,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        )
+
+        ax.legend(loc="upper right", fontsize=9)
+        plt.tight_layout()
+
+        return fig
+
 
 def audit_transportability(
     calibrator: Any,
@@ -180,29 +276,41 @@ def audit_transportability(
 
 
 def _extract_scores_labels(samples: List[Any]) -> tuple[List[float], List[float]]:
-    """Extract judge scores and oracle labels from samples."""
+    """Extract judge scores and oracle labels from samples.
+
+    Accepts either:
+    - List[Sample]: CJE Sample objects
+    - List[dict]: Dicts with 'judge_score' and 'oracle_label' keys
+    """
     from ..data.models import Sample
 
     scores = []
     labels = []
 
-    for sample in samples:
-        if not isinstance(sample, Sample):
-            raise TypeError(f"Expected Sample, got {type(sample)}")
+    for i, sample in enumerate(samples):
+        # Handle dict input (from fresh draws JSONLs, DataFrames, etc.)
+        if isinstance(sample, dict):
+            judge_score = sample.get("judge_score")
+            oracle_label = sample.get("oracle_label")
+            sample_id = sample.get("prompt_id", f"sample_{i}")
+        # Handle Sample objects
+        elif isinstance(sample, Sample):
+            judge_score = sample.judge_score
+            if judge_score is None and sample.metadata:
+                judge_score = sample.metadata.get("judge_score")
+            oracle_label = sample.oracle_label
+            sample_id = sample.prompt_id
+        else:
+            raise TypeError(f"Expected dict or Sample, got {type(sample)}")
 
-        # Get judge score
-        judge_score = sample.judge_score
-        if judge_score is None and sample.metadata:
-            judge_score = sample.metadata.get("judge_score")
+        # Validate
         if judge_score is None:
-            raise ValueError(f"Sample {sample.prompt_id} missing judge_score")
+            raise ValueError(f"Sample {sample_id} missing judge_score")
+        if oracle_label is None:
+            raise ValueError(f"Sample {sample_id} missing oracle_label")
 
-        # Get oracle label
-        if sample.oracle_label is None:
-            raise ValueError(f"Sample {sample.prompt_id} missing oracle_label")
-
-        scores.append(judge_score)
-        labels.append(sample.oracle_label)
+        scores.append(float(judge_score))
+        labels.append(float(oracle_label))
 
     return scores, labels
 
@@ -234,3 +342,97 @@ def _classify_status(
         return "WARN", "monitor"
     else:
         return "FAIL", "refit_two_stage"
+
+
+def plot_transport_comparison(
+    diagnostics: Dict[str, TransportDiagnostics],
+    figsize: tuple = (10, 6),
+    title: str = "Transportability Audit",
+) -> Any:
+    """Plot multiple transport diagnostics as a forest plot.
+
+    Args:
+        diagnostics: Dict mapping labels to TransportDiagnostics objects
+        figsize: Figure size
+        title: Plot title
+
+    Returns:
+        matplotlib figure object
+
+    Example:
+        >>> diag_clone = audit_transportability(calibrator, clone_probe, group_label="clone")
+        >>> diag_unhelpful = audit_transportability(calibrator, unhelpful_probe, group_label="unhelpful")
+        >>> fig = plot_transport_comparison({"clone": diag_clone, "unhelpful": diag_unhelpful})
+        >>> plt.show()
+    """
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Patch
+    except ImportError:
+        raise ImportError(
+            "matplotlib required for plotting. Install with: pip install matplotlib"
+        )
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Sort by mean residual
+    sorted_items = sorted(diagnostics.items(), key=lambda x: x[1].delta_hat)
+    labels = [k for k, _ in sorted_items]
+    diags = [v for _, v in sorted_items]
+
+    y_pos = np.arange(len(labels))
+
+    # Extract data
+    means = [d.delta_hat for d in diags]
+    ci_lowers = [d.delta_ci[0] for d in diags]
+    ci_uppers = [d.delta_ci[1] for d in diags]
+    statuses = [d.status for d in diags]
+
+    # Calculate error bars
+    errors = [
+        [m - ci_l for m, ci_l in zip(means, ci_lowers)],
+        [ci_u - m for m, ci_u in zip(means, ci_uppers)],
+    ]
+
+    # Color by status
+    status_colors = {"PASS": "#2ca02c", "WARN": "#ff7f0e", "FAIL": "#d62728"}
+    colors = [status_colors.get(s, "gray") for s in statuses]
+
+    # Plot
+    ax.barh(
+        y_pos,
+        means,
+        xerr=errors,
+        color=colors,
+        alpha=0.7,
+        capsize=5,
+        edgecolor="black",
+        linewidth=0.5,
+    )
+    ax.axvline(x=0, color="black", linestyle="--", linewidth=2, alpha=0.7)
+
+    # Labels
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(
+        [f"{label}\n(n={diags[i].n_probe})" for i, label in enumerate(labels)]
+    )
+    ax.set_xlabel("Mean Residual δ̂ (Y - Ŷ)", fontsize=11)
+    ax.set_title(title, fontsize=13, fontweight="bold")
+
+    # Add status text on bars
+    for i, (mean, status) in enumerate(zip(means, statuses)):
+        x_offset = max(abs(ci_lowers[i]), abs(ci_uppers[i])) * 0.1
+        x_pos = mean + x_offset if mean >= 0 else mean - x_offset
+        ha = "left" if mean >= 0 else "right"
+        ax.text(x_pos, i, status, va="center", ha=ha, fontsize=9, fontweight="bold")
+
+    # Legend
+    legend_elements = [
+        Patch(facecolor="#2ca02c", alpha=0.7, label="PASS (CI includes 0)"),
+        Patch(facecolor="#ff7f0e", alpha=0.7, label="WARN (small bias)"),
+        Patch(facecolor="#d62728", alpha=0.7, label="FAIL (significant bias)"),
+    ]
+    ax.legend(handles=legend_elements, loc="lower right", fontsize=9)
+
+    plt.tight_layout()
+    return fig

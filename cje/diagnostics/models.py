@@ -1,8 +1,12 @@
 """
 Diagnostic data models for CJE.
 
-This module contains the data structures for diagnostics.
-Computation logic is in utils/diagnostics/.
+This module contains the data structures for diagnostics:
+- IPSDiagnostics: Base diagnostics for importance sampling estimators
+- DRDiagnostics: Extended diagnostics for doubly robust estimators
+- CJEDiagnostics: Unified diagnostics for paper-ready reporting
+
+Computation logic is in the sibling modules (weights.py, dr.py, overlap.py, etc.).
 """
 
 from dataclasses import dataclass, field

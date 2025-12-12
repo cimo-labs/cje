@@ -2,19 +2,23 @@
 
 Two interactive notebooks to get started with CJE:
 
-## 🚀 Quick Start Tutorial (Recommended for Beginners)
+## 🎯 Core Demo: Understanding CJE from First Principles
 
-**Try CJE in your browser - no installation required:**
+**Learn why calibration matters and how to detect drift:**
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_tutorial.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb)
 
-**Get started in 5 minutes** with [`cje_tutorial.ipynb`](cje_tutorial.ipynb):
-- **Direct Mode**: Simplest policy comparison (no logprobs needed!)
-- **AutoCal-R**: Calibrate judge scores to oracle labels
-- **Policy Selection**: Find the best policy with statistical tests
-- **Visualization**: Forest plots with confidence intervals
+**The complete CJE workflow** with [`cje_core_demo.ipynb`](cje_core_demo.ipynb):
+- **The Problem**: See why naive S (judge) scores don't match Y (oracle) outcomes
+- **Calibration**: Build an isotonic S→Y mapping from scratch
+- **Transportability**: Test if calibration transfers to new policies
+- **Residual Analysis**: Find samples where calibration fails (and why)
+- **Drift Detection**: Simulate and detect temporal drift in production
+- **Library Usage**: Use `cje-eval` for production with forest plots and statistical tests
 
-**Perfect for**: Quick comparisons, A/B testing, leaderboards, closed-source APIs
+**Perfect for**: Understanding the concepts, building intuition, production monitoring
+
+---
 
 ## 📚 Advanced Tutorial (Off-Policy Evaluation)
 
@@ -85,5 +89,5 @@ pip install cje-eval
 python examples/quickstart.py
 
 # Or open the notebook in Jupyter
-jupyter notebook examples/cje_tutorial.ipynb
+jupyter notebook examples/cje_core_demo.ipynb
 ```

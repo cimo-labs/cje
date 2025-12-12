@@ -24,7 +24,9 @@ Utility functions for export and analysis in CJE. This module provides practical
 utils/
 ├── __init__.py                  # Re-exports and backward compatibility
 ├── export.py                    # JSON/CSV export functions
-└── extreme_weights_analysis.py # Weight debugging and reporting
+├── extreme_weights_analysis.py  # Weight debugging and reporting
+├── aggregate_diagnostics.py     # CLI: Aggregate multiple result JSONs to CSV
+└── analyze_diagnostics.py       # CLI: Statistical analysis of aggregated results
 ```
 
 ## Core Concepts
@@ -41,6 +43,18 @@ Deep dive into importance weight behavior:
 - Tracks consistently extreme samples across policies
 - Computes ESS and weight statistics
 - Generates both JSON and text reports
+
+### 3. Diagnostics Aggregation (CLI)
+Aggregate multiple CJE result JSON files into a single CSV for cross-experiment analysis:
+- Extracts core fields (policy, estimate, SE, CI bounds)
+- Extracts diagnostics (ESS, tail indices, Hellinger affinity)
+- Best-effort parsing - continues on malformed files
+
+### 4. Diagnostics Analysis (CLI)
+Statistical analysis of aggregated diagnostics:
+- Correlation analysis across diagnostic fields
+- Identifies quality issues using heuristics
+- Outputs correlation matrix as CSV
 
 
 ## Common Interface
@@ -87,6 +101,22 @@ json_report, text_report = analyze_extreme_weights(
 # Reports saved to diagnostics/extreme_weights_analysis.{json,txt}
 print(text_report)  # Human-readable summary
 ```
+
+
+### CLI Tools
+
+```bash
+# Aggregate multiple result JSONs into a single CSV
+python -m cje.utils.aggregate_diagnostics --input results_dir/ --output aggregated.csv
+
+# Analyze correlations across aggregated diagnostics
+python -m cje.utils.analyze_diagnostics --input aggregated.csv --corr correlation_matrix.csv
+```
+
+The aggregation workflow is useful for:
+- Comparing results across multiple experiments
+- Identifying patterns in diagnostic metrics
+- Building dashboards from multiple runs
 
 
 ## Key Design Decisions

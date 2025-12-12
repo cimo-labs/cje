@@ -1,286 +1,237 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# C extensions
-*.so
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-docs/.cache/
-api/generated/
-_generated/
-
-# Playbook web HTML (pre-rendered by CI, committed for easy sync)
+!cje/experiments/arena_10k_simplified/data/*.csv
+!cje/experiments/arena_10k_simplified/data/*.jsonl
+!cje/tests/data/
 !docs/playbook/build/
 !docs/playbook/build/web/
 !docs/playbook/build/web/*.html
+!docs/playbook/build/web/*.jpg
 !docs/playbook/build/web/*.json
 !docs/playbook/build/web/*.png
-!docs/playbook/build/web/*.jpg
 !docs/playbook/build/web/figs/
-
-# PyBuilder
-.pybuilder/
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
-
-# pipenv
 #   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
+#   For a library or package, you might want to ignore these files since the code is
 #   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
-
-# UV
+#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
+#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
 #   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
 #   This is especially recommended for binary packages to ensure reproducibility, and is more
 #   commonly ignored for libraries.
-#uv.lock
-
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-#poetry.lock
-
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#pdm.lock
-#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
-#   in version control.
+#   having no cross-platform support, pipenv may install dependencies that don't work, or not
 #   https://pdm.fming.dev/latest/usage/project/#working-with-version-control
-.pdm.toml
-.pdm-python
-.pdm-build/
-
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# PyCharm
+#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
+#   in version control.
+#   install all needed dependencies.
+#   intended to run in multiple environments; otherwise, check them in:
+#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
+#  Usually these files are written by a python script from a template
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
+#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
-
-# Ruff stuff:
-.ruff_cache/
-
-# PyPI configuration file
-.pypirc
-pip.conf
-
-# Personal configuration files
-scripts/load_my_secrets.py
-scripts/personal_notes.md
-
+# .python-version
+# API keys and credentials
 # AWS API key retrieval scripts (security - don't expose in public repo)
-get_api_keys.sh
-get_api_keys_simple.sh
-API_KEYS_README.md
-set_secrets.sh
-
+# Ablation caches and results
+# But keep the arena dataset files
+# Byte-compiled / optimized / DLL files
+# C extensions
+# CJE experiment outputs
+# CJE test outputs (from e2e pipeline tests)
+# Celery stuff
+# Claude Code specific
+# Concatenation scripts and outputs (local utilities)
+# Cython debug symbols
+# Data files - ignore all JSONL/CSV except in the arena dataset
+# Development and helper files
+# Distribution / packaging
+# Django stuff:
+# Environments
+# Flask stuff:
+# Generated table outputs
 # IDE and editor files
-.idea/
-.vscode/
-*.swp
+# IPython
+# Installer logs
+# Jupyter Notebook
+# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
+# Personal configuration files
+# Playbook web HTML (pre-rendered by CI, committed for easy sync)
+# PyBuilder
+# PyCharm
+# PyInstaller
+# PyPI configuration file
+# Pyre type checker
+# Research/experimental files that shouldn't be public
+# Rope project settings
+# Ruff stuff:
+# SageMath parsed files
+# Scrapy stuff:
+# Sphinx documentation
+# Spyder project settings
+# Temporary files
+# Test data - explicitly include for version control
+# Translations
+# UV
+# Unit test / coverage reports
+# mkdocs documentation
+# mypy
+# pdm
+# pipenv
+# poetry
+# pyenv
+# pytype static type analyzer
+#.idea/
+#Pipfile.lock
+#pdm.lock
+#poetry.lock
+#uv.lock
+*$py.class
+*.bak
+*.cover
+*.csv
+*.draft.*
+*.egg
+*.egg-info/
+*.jsonl
+!examples/arena_sample/**/*.jsonl
+!cje/tests/data/**/*.jsonl
+*.key
+*.log
+*.manifest
+*.mo
+*.pem
+*.pot
+*.py,cover
+*.py[cod]
+*.sage.py
+*.so
+*.spec
 *.swo
+*.swp
+*.tmp
+*_checkpoint.jsonl
 *~
 .DS_Store
-
-# Claude Code specific
-CLAUDE.md
+.Python
+.ablation_cache/
+.cache
+.claude/
+.coverage
+.coverage.*
+.dmypy.json
+.eggs/
+.env
+.hypothesis/
+.idea/
+.installed.cfg
+.ipynb_checkpoints
+.mypy_cache/
+.nox/
+.pdm-build/
+.pdm-python
+.pdm.toml
+.pybuilder/
+.pypirc
+.pyre/
+.pytest_cache/
+.pytype/
+.ropeproject
+.ruff_cache/
+.scrapy
+.spyderproject
+.spyproject
+.tox/
+.venv
+.vscode/
+.webassets-cache
+/site
 AGENTS.md
+ALL_READMES.md
+API_KEYS_README.md
+CLAUDE.md
+ENV/
+MANIFEST
+__pycache__/
+__pypackages__/
+_generated/
 _last_work_dir.txt
-
-# CJE experiment outputs
-cje/experiments/
-outputs/
-target_samples.jsonl
-*_checkpoint.jsonl
-pi0_data*.jsonl
-
-# Test data - explicitly include for version control
-!cje/tests/data/
-!cje/tests/data/**/*.jsonl
-
-# API keys and credentials
-*.key
-*.pem
-secrets.yaml
-credentials.json
-
-# Temporary files
-tmp/
-temp/
+ablation_results/
+all_readmes.txt
+api/generated/
+build/
 cache/
-*.tmp
-*.bak
-
-# Concatenation scripts and outputs (local utilities)
-concat_for_chat.py
-concat_cje.sh
-concat_*.sh
-concat_*.py
-concat_*.txt
-cje_for_chatbot.txt
-concat_all.txt
-concat_output.txt
-concat.config
-cje_core.config
-cje_chatbot.config
-
-# Research/experimental files that shouldn't be public
-scratch/
-experiments/*/outputs/
-experiments/*/results/
-experiments/*/.cache/
-research_notes/
-*.draft.*
-
-# CJE test outputs (from e2e pipeline tests)
+celerybeat-schedule
+celerybeat.pid
+cje/experiments/
+cje/experiments/arena_10k_simplified/ablations/tables/
+cje/experiments/arena_10k_simplified/test_e2e_data/*.jsonl
 cje/experiments/arena_10k_simplified/test_e2e_data/ablation_data/
 cje/experiments/arena_10k_simplified/test_e2e_data/ablation_results/
-cje/experiments/arena_10k_simplified/test_e2e_data/*.jsonl
 cje/experiments/arena_10k_simplified/test_e2e_data/logprobs/
-
-# Data files - ignore all JSONL/CSV except in the arena dataset
-*.jsonl
-*.csv
-# But keep the arena dataset files
-!cje/experiments/arena_10k_simplified/data/*.jsonl
-!cje/experiments/arena_10k_simplified/data/*.csv
-
-# Ablation caches and results
-.ablation_cache/
-ablation_results/
-*.log
-
-# Generated table outputs
-cje/experiments/arena_10k_simplified/ablations/tables/
-
-# Development and helper files
-concat_readmes.sh
-concat_py_files.sh
-cje_python_code.txt
-cje_all_readmes.txt
 cje_all_readmes.md
-all_readmes.txt
-ALL_READMES.md
-.claude/
+cje_all_readmes.txt
+cje_chatbot.config
+cje_core.config
+cje_for_chatbot.txt
+cje_python_code.txt
+concat.config
+concat_*.py
+concat_*.sh
+concat_*.txt
+concat_all.txt
+concat_cje.sh
+concat_for_chat.py
+concat_output.txt
+concat_py_files.sh
+concat_readmes.sh
+cover/
+coverage.xml
+credentials.json
+cython_debug/
+db.sqlite3
+db.sqlite3-journal
+develop-eggs/
+dist/
+dmypy.json
+docs/.cache/
+docs/_build/
+downloads/
+eggs/
+env.bak/
+env/
+experiments/*/.cache/
+experiments/*/outputs/
+experiments/*/results/
+get_api_keys.sh
+get_api_keys_simple.sh
+htmlcov/
+instance/
+ipython_config.py
+lib/
+lib64/
+local_settings.py
+nosetests.xml
+outputs/
+parts/
+pi0_data*.jsonl
+pip-delete-this-directory.txt
+pip-log.txt
+pip.conf
+profile_default/
+regenerate_all_readmes.sh
+research_notes/
+scratch/
+scripts/load_my_secrets.py
+scripts/personal_notes.md
+sdist/
+secrets.yaml
+set_secrets.sh
+share/python-wheels/
+target/
+target_samples.jsonl
+temp/
+tmp/
+var/
+venv.bak/
+venv/
+wheels/

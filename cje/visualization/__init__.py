@@ -25,12 +25,6 @@ try:
     # Import DR dashboards
     from .dr_dashboards import plot_dr_dashboard
 
-    # Import transport diagnostics
-    from .transport import (
-        plot_transport_audit,
-        plot_transport_comparison,
-    )
-
     __all__ = [
         # Calibration
         "plot_calibration_comparison",
@@ -41,9 +35,6 @@ try:
         "plot_weight_dashboard_detailed",
         # DR dashboards
         "plot_dr_dashboard",
-        # Transport
-        "plot_transport_audit",
-        "plot_transport_comparison",
     ]
 
 except ImportError as e:

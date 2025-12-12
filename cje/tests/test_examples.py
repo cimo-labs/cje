@@ -283,7 +283,7 @@ class TestNotebookExecution:
 
         # Find the notebook
         notebook_path = (
-            Path(__file__).parent.parent.parent / "examples" / "cje_tutorial.ipynb"
+            Path(__file__).parent.parent.parent / "examples" / "cje_core_demo.ipynb"
         )
         assert notebook_path.exists(), f"Notebook not found at {notebook_path}"
 
