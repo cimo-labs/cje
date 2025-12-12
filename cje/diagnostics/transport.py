@@ -436,8 +436,11 @@ def plot_transport_comparison(
     # X-axis
     ax.set_xlabel("Mean Residual δ (Y − Ŷ)", fontsize=11, color="#374151")
 
-    # Status labels on right
-    x_max = max(abs(min(ci_lowers)), abs(max(ci_uppers))) * 1.15
+    # Status labels on right (outside axes)
+    if ci_lowers and ci_uppers:
+        x_max = max(abs(min(ci_lowers)), abs(max(ci_uppers))) * 1.15
+    else:
+        x_max = 0.1
     for i, (y, status) in enumerate(zip(y_pos, statuses)):
         color = status_colors.get(status, "#6b7280")
         ax.text(
@@ -449,6 +452,7 @@ def plot_transport_comparison(
             fontsize=10,
             color=color,
             fontweight="bold",
+            clip_on=False,
         )
 
     # Clean up spines

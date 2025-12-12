@@ -134,9 +134,18 @@ def plot_policy_estimates(
                 color="#6b7280",
             )
 
-    # Status labels on right
+    # Clean up spines
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_visible(False)
+    ax.tick_params(left=False)
+
+    # Status labels on right (after spines so xlim is stable)
     x_min, x_max = ax.get_xlim()
-    label_x = x_max + (x_max - x_min) * 0.02
+    x_padding = (x_max - x_min) * 0.08
+    ax.set_xlim(x_min, x_max + x_padding)  # Extend first
+
+    label_x = x_max + x_padding * 0.3
     for i, policy in enumerate(policies):
         y = y_positions[i]
         if policy == best_policy:
@@ -149,16 +158,8 @@ def plot_policy_estimates(
                 fontsize=9,
                 color=color_best,
                 fontweight="bold",
+                clip_on=False,
             )
-
-    # Clean up spines
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_visible(False)
-    ax.tick_params(left=False)
-
-    # Extend xlim for labels
-    ax.set_xlim(x_min, label_x + (x_max - x_min) * 0.1)
 
     plt.tight_layout()
 
