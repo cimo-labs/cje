@@ -419,11 +419,16 @@ def plot_transport_comparison(
     ax.set_xlabel("Mean Residual δ̂ (Y - Ŷ)", fontsize=11)
     ax.set_title(title, fontsize=13, fontweight="bold")
 
-    # Add status text on bars
+    # Add status text on bars (position at CI edge, outside the bar)
     for i, (mean, status) in enumerate(zip(means, statuses)):
-        x_offset = max(abs(ci_lowers[i]), abs(ci_uppers[i])) * 0.1
-        x_pos = mean + x_offset if mean >= 0 else mean - x_offset
-        ha = "left" if mean >= 0 else "right"
+        x_range = max(abs(min(ci_lowers)), abs(max(ci_uppers)), 0.05)
+        x_offset = x_range * 0.05
+        if mean >= 0:
+            x_pos = ci_uppers[i] + x_offset
+            ha = "left"
+        else:
+            x_pos = ci_lowers[i] - x_offset
+            ha = "right"
         ax.text(x_pos, i, status, va="center", ha=ha, fontsize=9, fontweight="bold")
 
     # Legend
