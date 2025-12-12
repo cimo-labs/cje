@@ -69,9 +69,11 @@ We benchmarked 14 estimators on 5,000 real Chatbot Arena prompts using GPT-5 as 
 | Method | Result |
 |:-------|:-------|
 | Raw Judges | **0% CI coverage** — error bars were mathematical lies |
-| CJE (Direct + Two-Stage) | **94% ranking accuracy**, valid 95% CIs, **16x cost reduction** |
+| CJE (Direct + Two-Stage) | **99% ranking accuracy** with just **5% oracle labels** |
 
-[**Read the full Arena Experiment →**](https://cimolabs.com/blog/arena-experiment)
+**Cost savings**: CJE achieves oracle-quality rankings at **14× lower cost** by calibrating a cheap judge (~250 labels) instead of labeling everything.
+
+[**Read the full Arena Experiment →**](https://www.cimolabs.com/research/arena-experiment) ・ [**Paper (Zenodo)**](https://zenodo.org/records/17903629)
 
 ---
 
