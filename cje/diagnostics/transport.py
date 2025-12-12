@@ -367,7 +367,6 @@ def plot_transport_comparison(
     """
     try:
         import matplotlib.pyplot as plt
-        from matplotlib.patches import Patch
     except ImportError:
         raise ImportError(
             "matplotlib required for plotting. Install with: pip install matplotlib"
@@ -375,12 +374,14 @@ def plot_transport_comparison(
 
     fig, ax = plt.subplots(figsize=figsize)
 
-    # Sort by mean residual
-    sorted_items = sorted(diagnostics.items(), key=lambda x: x[1].delta_hat)
+    # Sort by mean residual (most negative at bottom)
+    sorted_items = sorted(
+        diagnostics.items(), key=lambda x: x[1].delta_hat, reverse=True
+    )
     labels = [k for k, _ in sorted_items]
     diags = [v for _, v in sorted_items]
 
-    y_pos = np.arange(len(labels))
+    y_pos = list(range(len(labels)))
 
     # Extract data
     means = [d.delta_hat for d in diags]
@@ -388,56 +389,67 @@ def plot_transport_comparison(
     ci_uppers = [d.delta_ci[1] for d in diags]
     statuses = [d.status for d in diags]
 
-    # Calculate error bars
-    errors = [
-        [m - ci_l for m, ci_l in zip(means, ci_lowers)],
-        [ci_u - m for m, ci_u in zip(means, ci_uppers)],
-    ]
+    # Modern color palette
+    status_colors = {"PASS": "#10b981", "WARN": "#f59e0b", "FAIL": "#ef4444"}
 
-    # Color by status
-    status_colors = {"PASS": "#2ca02c", "WARN": "#ff7f0e", "FAIL": "#d62728"}
-    colors = [status_colors.get(s, "gray") for s in statuses]
+    # Plot CI lines and point estimates
+    for i, (y, diag) in enumerate(zip(y_pos, diags)):
+        color = status_colors.get(diag.status, "#6b7280")
 
-    # Plot
-    ax.barh(
-        y_pos,
-        means,
-        xerr=errors,
-        color=colors,
-        alpha=0.7,
-        capsize=5,
-        edgecolor="black",
-        linewidth=0.5,
-    )
-    ax.axvline(x=0, color="black", linestyle="--", linewidth=2, alpha=0.7)
+        # CI line
+        ax.plot(
+            [ci_lowers[i], ci_uppers[i]],
+            [y, y],
+            color=color,
+            linewidth=2.5,
+            solid_capstyle="round",
+        )
 
-    # Labels
+        # Point estimate
+        ax.scatter(
+            [means[i]],
+            [y],
+            color=color,
+            s=80,
+            zorder=5,
+            edgecolors="white",
+            linewidth=1.5,
+        )
+
+    # Zero reference line
+    ax.axvline(x=0, color="#9ca3af", linestyle="--", linewidth=1.5, zorder=0)
+
+    # Y-axis labels
     ax.set_yticks(y_pos)
-    ax.set_yticklabels(
-        [f"{label}\n(n={diags[i].n_probe})" for i, label in enumerate(labels)]
-    )
-    ax.set_xlabel("Mean Residual δ̂ (Y - Ŷ)", fontsize=11)
-    ax.set_title(title, fontsize=13, fontweight="bold")
+    ax.set_yticklabels(labels, fontsize=11)
 
-    # Add status text on bars (position past error bar caps)
-    for i, (mean, status) in enumerate(zip(means, statuses)):
-        x_range = max(abs(min(ci_lowers)), abs(max(ci_uppers)), 0.05)
-        x_offset = x_range * 0.15  # Larger offset to clear error bar caps
-        if mean >= 0:
-            x_pos = ci_uppers[i] + x_offset
-            ha = "left"
-        else:
-            x_pos = ci_lowers[i] - x_offset
-            ha = "right"
-        ax.text(x_pos, i, status, va="center", ha=ha, fontsize=9, fontweight="bold")
+    # X-axis
+    ax.set_xlabel("Mean Residual δ (Y − Ŷ)", fontsize=11, color="#374151")
 
-    # Legend
-    legend_elements = [
-        Patch(facecolor="#2ca02c", alpha=0.7, label="PASS (CI includes 0)"),
-        Patch(facecolor="#ff7f0e", alpha=0.7, label="WARN (small bias)"),
-        Patch(facecolor="#d62728", alpha=0.7, label="FAIL (significant bias)"),
-    ]
-    ax.legend(handles=legend_elements, loc="lower right", fontsize=9)
+    # Status labels on right
+    x_max = max(abs(min(ci_lowers)), abs(max(ci_uppers))) * 1.15
+    for i, (y, status) in enumerate(zip(y_pos, statuses)):
+        color = status_colors.get(status, "#6b7280")
+        ax.text(
+            x_max,
+            y,
+            status,
+            ha="left",
+            va="center",
+            fontsize=10,
+            color=color,
+            fontweight="bold",
+        )
+
+    # Clean up spines
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_visible(False)
+    ax.tick_params(left=False)
+
+    # Set x limits with padding for status labels
+    x_min = min(ci_lowers) - abs(min(ci_lowers)) * 0.1
+    ax.set_xlim(x_min, x_max + x_max * 0.3)
 
     plt.tight_layout()
     return fig
