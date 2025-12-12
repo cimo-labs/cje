@@ -81,18 +81,6 @@ We benchmarked 14 estimators on 5,000 real Chatbot Arena prompts using GPT-5 as 
 
 ---
 
-## Evaluation Modes
-
-CJE automatically selects the right estimator based on your data:
-
-| Mode | Data Required | Use Case |
-|:-----|:--------------|:---------|
-| **Direct** | Fresh responses | A/B testing — compare policies on the same prompts |
-| **IPS** | Logs + logprobs | Historical analysis — reweight old logs without new inference |
-| **DR** | Logs + fresh draws | Production deploy — doubly robust for minimum variance |
-
----
-
 ## Monitoring Calibration Over Time
 
 Calibration can drift. Periodically verify it still holds with a small probe:
