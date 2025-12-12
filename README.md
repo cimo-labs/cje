@@ -32,24 +32,9 @@ Raw judge scores are **surrogates (S)**, not **outcomes (Y)**. They suffer from:
 
 CJE fixes this by treating the judge as a **programmable sensor** that must be calibrated.
 
-```
-┌─────────────────────────────────┐
-│           Data                  │
-│  LLM-judge scores +             │
-│  oracle slice (5-25%)           │
-└─────────────────────────────────┘
-              ↓
-┌─────────────────────────────────┐
-│         Calibrate               │
-│  Learn f(S, X) → Y mapping      │
-└─────────────────────────────────┘
-              ↓
-┌─────────────────────────────────┐
-│          Estimate               │
-│  Valid 95% CIs accounting for   │
-│  calibration uncertainty        │
-└─────────────────────────────────┘
-```
+<div align="center">
+  <img src="cje_pipeline.jpg" alt="CJE Pipeline" width="85%">
+</div>
 
 **Key benefits:**
 
