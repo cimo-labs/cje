@@ -6,11 +6,10 @@
 
 **Your LLM judge scores are lying. CJE calibrates them to what actually matters.**
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb)
 [![Docs](https://img.shields.io/badge/docs-cimolabs.com-blue)](https://cimolabs.com/cje)
 [![Python](https://img.shields.io/badge/python-3.9%E2%80%933.12-blue)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-passing-green)](https://github.com/cimo-labs/cje/actions)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![PyPI Downloads](https://static.pepy.tech/personalized-badge/cje-eval?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/cje-eval)
 
 <div align="center">
   <img src="cje_pipeline.jpg" alt="CJE Pipeline" width="85%">
@@ -102,10 +101,11 @@ PASS means your calibration is still valid. FAIL means something changed — inv
 
 ---
 
-## Tutorials
+## Try It Now
 
-- [**Core Demo**](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb) — Full workflow from first principles
-- [**Advanced (IPS/DR)**](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_advanced.ipynb) — Off-policy evaluation with logged data
+**[Open the interactive tutorial in Google Colab →](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb)**
+
+Walk through a complete example: calibrate a judge on real Chatbot Arena data, compare prompt variants, and verify your calibration holds over time. No setup required.
 
 ---
 
