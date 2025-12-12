@@ -87,26 +87,24 @@ CJE automatically selects the right estimator based on your data:
 
 ---
 
-## Verifying Calibration Transfers
+## Monitoring Calibration Over Time
 
-Before trusting calibration on a new policy, verify it transfers:
+Calibration can drift. Periodically verify it still holds with a small probe:
 
 ```python
 from cje.diagnostics import audit_transportability
 
-# Test with a small probe (50 oracle labels)
-probe = [{"judge_score": 0.8, "oracle_label": 0.75}, ...]
-diag = audit_transportability(calibrator, probe, group_label="new_policy")
-
+# Check if last month's calibration still works on this week's data
+diag = audit_transportability(calibrator, this_week_samples)
 print(diag.summary())
-# Transport: PASS | N=50 | δ̂: +0.012 (CI: [-0.03, +0.05])
-
-diag.plot()  # Visualize decile-level residuals
+# Transport: PASS | N=48 | δ̂: +0.007 (CI: [-0.05, +0.06])
 ```
 
 <div align="center">
-  <img src="transportability_audit.png" alt="Transportability Audit" width="70%">
+  <img src="transportability_audit.png" alt="Temporal Monitoring" width="70%">
 </div>
+
+PASS means your calibration is still valid. FAIL means something changed — investigate or recalibrate.
 
 ---
 
