@@ -31,7 +31,10 @@ from cje import analyze_dataset
 results = analyze_dataset(fresh_draws_dir="data/responses/")
 
 # Get calibrated estimates with valid confidence intervals
-results.plot_estimates(save_path="ranking.png")
+results.plot_estimates(
+    policy_labels={"prompt_v1": "Conversational tone", ...},
+    save_path="ranking.png"
+)
 ```
 
 **Data format** (one JSONL file per policy):
@@ -64,6 +67,7 @@ We benchmarked 14 estimators on 5,000 real Chatbot Arena prompts using GPT-5 as 
 
 <div align="center">
   <img src="forest_plot_n1000_oracle25.png" alt="CJE Calibration Accuracy" width="80%">
+  <br><em>Illustrative output comparing prompt variants</em>
 </div>
 
 | Method | Result |

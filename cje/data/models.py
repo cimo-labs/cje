@@ -379,6 +379,7 @@ class EstimationResult(BaseModel):
         self,
         base_policy_stats: Optional[Dict[str, float]] = None,
         oracle_values: Optional[Dict[str, float]] = None,
+        policy_labels: Optional[Dict[str, str]] = None,
         save_path: Optional[str] = None,
         **kwargs: Any,
     ) -> Any:
@@ -392,6 +393,8 @@ class EstimationResult(BaseModel):
                 Example: {"mean": 0.72, "se": 0.01}
             oracle_values: Optional dict of oracle values for comparison.
                 Example: {"policy_a": 0.75, "policy_b": 0.68}
+            policy_labels: Optional dict mapping policy names to display labels.
+                Example: {"prompt_v1": "Conversational tone"}
             save_path: Optional path to save plot (e.g., "results/estimates.png")
             **kwargs: Additional arguments passed to plot_policy_estimates()
                 (e.g., figsize=(10, 6), title="My Results")
@@ -402,7 +405,7 @@ class EstimationResult(BaseModel):
         Example:
             >>> result = analyze_dataset("data.jsonl")
             >>> result.plot_estimates(
-            ...     base_policy_stats={"mean": 0.72, "se": 0.01},
+            ...     policy_labels={"prompt_v1": "Conversational tone"},
             ...     save_path="estimates.png"
             ... )
         """
@@ -437,6 +440,7 @@ class EstimationResult(BaseModel):
             standard_errors=standard_errors,
             oracle_values=oracle_values,
             base_policy="base" if base_policy_stats else None,
+            policy_labels=policy_labels,
             save_path=Path(save_path) if save_path else None,
             **kwargs,
         )

@@ -11,6 +11,7 @@ def plot_policy_estimates(
     standard_errors: Dict[str, float],
     oracle_values: Optional[Dict[str, float]] = None,
     base_policy: Optional[str] = "base",
+    policy_labels: Optional[Dict[str, str]] = None,
     figsize: tuple = (10, 6),
     save_path: Optional[Path] = None,
 ) -> plt.Figure:
@@ -23,6 +24,8 @@ def plot_policy_estimates(
         standard_errors: Dict mapping policy names to standard errors
         oracle_values: Optional dict of oracle ground truth values
         base_policy: Name of base policy (for reference line), or None for no base
+        policy_labels: Optional dict mapping policy names to display labels.
+            Example: {"prompt_v1": "Conversational tone"}
         figsize: Figure size (width, height)
         save_path: Optional path to save figure
 
@@ -111,7 +114,9 @@ def plot_policy_estimates(
 
     # Labels and formatting
     ax.set_yticks(y_positions)
-    ax.set_yticklabels(policies, fontsize=11)
+    # Use display labels if provided, otherwise use policy names
+    display_labels = [policy_labels.get(p, p) if policy_labels else p for p in policies]
+    ax.set_yticklabels(display_labels, fontsize=11)
     ax.set_xlabel("Estimated Performance", fontsize=11, color="#374151")
 
     # Add RMSE if oracle values available
