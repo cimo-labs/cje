@@ -48,6 +48,12 @@ def plot_policy_estimates(
     else:
         best_policy = None
 
+    # Modern color palette
+    color_base = "#6b7280"  # Gray
+    color_best = "#10b981"  # Green
+    color_default = "#3b82f6"  # Blue
+    color_oracle = "#ef4444"  # Red
+
     # Plot each policy
     for i, policy in enumerate(policies):
         y = y_positions[i]
@@ -60,20 +66,25 @@ def plot_policy_estimates(
 
         # Determine color
         if policy == base_policy:
-            color = "gray"
-            marker = "s"  # Square for base
+            color = color_base
         elif policy == best_policy:
-            color = "green"
-            marker = "o"
+            color = color_best
         else:
-            color = "steelblue"
-            marker = "o"
+            color = color_default
 
         # Plot CI line
-        ax.plot([ci_lower, ci_upper], [y, y], color=color, linewidth=2, alpha=0.7)
+        ax.plot(
+            [ci_lower, ci_upper],
+            [y, y],
+            color=color,
+            linewidth=2.5,
+            solid_capstyle="round",
+        )
 
         # Plot estimate point
-        ax.scatter(est, y, color=color, s=100, marker=marker, zorder=5, label=None)
+        ax.scatter(
+            est, y, color=color, s=80, zorder=5, edgecolors="white", linewidth=1.5
+        )
 
         # Add oracle value if available
         if oracle_values and policy in oracle_values:
@@ -81,34 +92,30 @@ def plot_policy_estimates(
             ax.scatter(
                 oracle_val,
                 y,
-                color="red",
-                s=100,
+                color=color_oracle,
+                s=60,
                 marker="d",
-                alpha=0.7,
                 zorder=4,
-                label="Oracle Truth" if i == 0 else None,
+                edgecolors="white",
+                linewidth=1,
             )
 
     # Add vertical line at base estimate
     if base_policy in estimates:
         ax.axvline(
             estimates[base_policy],
-            color="gray",
-            linestyle=":",
-            alpha=0.5,
-            label=f"{base_policy} (reference)",
+            color="#9ca3af",
+            linestyle="--",
+            linewidth=1.5,
         )
 
     # Labels and formatting
     ax.set_yticks(y_positions)
-    ax.set_yticklabels(policies)
-    ax.set_xlabel("Estimated Performance")
-    ax.set_title("Policy Performance Estimates (95% CI)")
-    ax.grid(True, alpha=0.3, axis="x")
+    ax.set_yticklabels(policies, fontsize=11)
+    ax.set_xlabel("Estimated Performance", fontsize=11, color="#374151")
 
     # Add RMSE if oracle values available
     if oracle_values:
-        # Calculate RMSE vs oracle
         squared_errors = []
         for policy in policies:
             if policy in oracle_values:
@@ -117,36 +124,42 @@ def plot_policy_estimates(
         if squared_errors:
             rmse = np.sqrt(np.mean(squared_errors))
             ax.text(
-                0.02,
                 0.98,
+                0.02,
                 f"RMSE vs Oracle: {rmse:.3f}",
                 transform=ax.transAxes,
-                verticalalignment="top",
-                bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+                verticalalignment="bottom",
+                horizontalalignment="right",
+                fontsize=9,
+                color="#6b7280",
             )
 
-    # Legend
-    handles = [
-        plt.Line2D(
-            [0], [0], color="steelblue", marker="o", linestyle="", label="CJE Estimate"
-        ),
-    ]
-    if oracle_values:
-        handles.append(
-            plt.Line2D(
-                [0], [0], color="red", marker="d", linestyle="", label="Oracle Truth"
+    # Status labels on right
+    x_min, x_max = ax.get_xlim()
+    label_x = x_max + (x_max - x_min) * 0.02
+    for i, policy in enumerate(policies):
+        y = y_positions[i]
+        if policy == best_policy:
+            ax.text(
+                label_x,
+                y,
+                "BEST",
+                ha="left",
+                va="center",
+                fontsize=9,
+                color=color_best,
+                fontweight="bold",
             )
-        )
-    if best_policy:
-        handles.append(
-            plt.Line2D(
-                [0], [0], color="green", marker="o", linestyle="", label="Best Policy"
-            )
-        )
 
-    ax.legend(handles=handles, loc="lower right", fontsize=9)
+    # Clean up spines
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_visible(False)
+    ax.tick_params(left=False)
 
-    # Adjust layout
+    # Extend xlim for labels
+    ax.set_xlim(x_min, label_x + (x_max - x_min) * 0.1)
+
     plt.tight_layout()
 
     if save_path:

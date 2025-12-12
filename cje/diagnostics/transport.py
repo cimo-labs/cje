@@ -105,66 +105,76 @@ class TransportDiagnostics:
         counts = np.array(self.decile_counts)
         valid_mask = ~np.isnan(residuals)
 
-        # Color by sign (green=good, red=bad)
-        colors = ["#d62728" if r < 0 else "#2ca02c" for r in residuals[valid_mask]]
+        # Modern color palette (positive=green, negative=red)
+        colors = ["#ef4444" if r < 0 else "#10b981" for r in residuals[valid_mask]]
 
         # Plot decile bars
-        bars = ax.bar(
+        ax.bar(
             x[valid_mask],
             residuals[valid_mask],
             color=colors,
-            alpha=0.7,
-            edgecolor="black",
+            alpha=0.8,
+            edgecolor="white",
             linewidth=0.5,
         )
 
         # Add overall mean line with CI band
         ax.axhline(
             y=self.delta_hat,
-            color="black",
+            color="#374151",
             linewidth=2,
             linestyle="-",
-            label=f"Mean δ̂={self.delta_hat:+.3f}",
         )
         ax.axhspan(
             self.delta_ci[0],
             self.delta_ci[1],
-            alpha=0.2,
-            color="gray",
-            label=f"95% CI [{self.delta_ci[0]:+.3f}, {self.delta_ci[1]:+.3f}]",
+            alpha=0.15,
+            color="#6b7280",
         )
 
         # Zero line
-        ax.axhline(y=0, color="black", linewidth=1, linestyle="--", alpha=0.5)
+        ax.axhline(y=0, color="#9ca3af", linewidth=1.5, linestyle="--")
 
         # Labels
         title = f"Transportability: {self.status}"
         if self.group_label:
             title += f" ({self.group_label})"
-        ax.set_title(title, fontsize=12, fontweight="bold")
-        ax.set_xlabel("Score Decile", fontsize=10)
-        ax.set_ylabel("Mean Residual (Y - Ŷ)", fontsize=10)
+        ax.set_title(title, fontsize=12, fontweight="bold", color="#111827")
+        ax.set_xlabel("Score Decile", fontsize=10, color="#374151")
+        ax.set_ylabel("Mean Residual (Y − Ŷ)", fontsize=10, color="#374151")
         ax.set_xticks(x)
-        ax.set_xticklabels(
-            [f"D{i+1}\n(n={c})" for i, c in enumerate(counts)], fontsize=8
-        )
+        ax.set_xticklabels([f"D{i+1}" for i in range(len(counts))], fontsize=9)
 
-        # Add status indicator
-        status_colors = {"PASS": "green", "WARN": "orange", "FAIL": "red"}
-        status_color = status_colors.get(self.status, "gray")
+        # Status indicator with modern colors
+        status_colors = {"PASS": "#10b981", "WARN": "#f59e0b", "FAIL": "#ef4444"}
+        status_color = status_colors.get(self.status, "#6b7280")
         ax.text(
             0.02,
             0.98,
             self.status,
             transform=ax.transAxes,
-            fontsize=14,
+            fontsize=12,
             fontweight="bold",
             color=status_color,
             verticalalignment="top",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
         )
 
-        ax.legend(loc="upper right", fontsize=9)
+        # Stats text
+        ax.text(
+            0.98,
+            0.98,
+            f"δ̂={self.delta_hat:+.3f}  CI=[{self.delta_ci[0]:+.2f}, {self.delta_ci[1]:+.2f}]",
+            transform=ax.transAxes,
+            fontsize=9,
+            color="#6b7280",
+            verticalalignment="top",
+            horizontalalignment="right",
+        )
+
+        # Clean up spines
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
         plt.tight_layout()
 
         return fig
