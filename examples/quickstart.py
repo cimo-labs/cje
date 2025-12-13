@@ -49,5 +49,5 @@ print(f"Oracle coverage: {results.metadata.get('oracle_coverage', 0):.0%}")
 # - Add include_response_length=True for two-stage calibration
 # - Try estimator="stacked-dr" for ensemble DR methods
 # - Check diagnostics: results.diagnostics.weight_ess for overlap quality
-# - See cje_tutorial.ipynb for Direct mode basics (5 minutes)
+# - See cje_core_demo.ipynb for the interactive tutorial
 # - See cje_advanced.ipynb for IPS/DR deep dive

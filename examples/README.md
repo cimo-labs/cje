@@ -6,10 +6,10 @@
 
 **Start here:** [`cje_core_demo.ipynb`](cje_core_demo.ipynb) walks through the complete workflow:
 
-1. **The Problem** — Why raw judge scores lie (and how to see it)
-2. **Calibration** — Build a judge→oracle mapping from scratch
-3. **Compare Prompts** — Rank prompt variants with valid confidence intervals
-4. **Monitor Drift** — Detect when calibration breaks down over time
+1. **Compare Prompt Variants** — One-line analysis with `analyze_dataset()`
+2. **Check If Calibration Transfers** — Test on held-out data with `audit_transportability()`
+3. **Inspect What's Fooling the Judge** — Dig into worst residuals with `compute_residuals()`
+4. **Monitor Calibration Over Time** — Detect drift before it breaks your metrics
 
 No setup required — runs entirely in Google Colab with real Chatbot Arena data.
 

@@ -91,7 +91,7 @@ Before you start, verify you have:
 
 | Tutorial | Time | What You'll Learn |
 |:---------|:-----|:------------------|
-| [**Quick Start**](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_tutorial.ipynb) | 5 min | Direct Mode basics |
+| [**Core Demo**](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb) | 10 min | Compare prompts, check calibration, inspect failures |
 | [**Advanced**](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_advanced.ipynb) | 15 min | IPS & DR modes |
 
 ---

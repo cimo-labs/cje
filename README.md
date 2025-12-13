@@ -107,7 +107,7 @@ PASS means your calibration is still valid. FAIL means something changed — inv
 
 **[Open the interactive tutorial in Google Colab →](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb)**
 
-Walk through a complete example: calibrate a judge on real Chatbot Arena data, compare prompt variants, and verify your calibration holds over time. No setup required.
+Walk through a complete example: compare prompt variants, check if calibration transfers, inspect what's fooling the judge, and monitor drift over time. No setup required.
 
 ---
 
