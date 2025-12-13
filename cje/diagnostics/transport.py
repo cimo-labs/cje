@@ -354,6 +354,66 @@ def _classify_status(
         return "FAIL", "refit_two_stage"
 
 
+def compute_residuals(
+    calibrator: Any,
+    data: List[Dict[str, Any]],
+    sort_by: Optional[Literal["residual", "abs_residual"]] = "residual",
+) -> List[Dict[str, Any]]:
+    """Compute residuals for each sample, optionally sorted.
+
+    Useful for inspecting which samples have the worst calibration errors.
+
+    Args:
+        calibrator: Fitted calibrator with .predict() method
+        data: List of dicts with 'judge_score' and 'oracle_label' keys
+        sort_by: How to sort results:
+            - "residual": worst overestimates first (most negative)
+            - "abs_residual": biggest errors first
+            - None: preserve original order
+
+    Returns:
+        List of dicts with 'calibrated' and 'residual' fields added.
+        Original dict fields are preserved.
+
+    Example:
+        >>> from cje.diagnostics import compute_residuals
+        >>> samples = compute_residuals(calibrator, probe_data)
+        >>> # Inspect worst overestimates (judge fooled)
+        >>> for s in samples[:3]:
+        ...     print(f"Residual: {s['residual']:.2f}")
+        ...     print(f"Response: {s['response'][:100]}...")
+    """
+    results = []
+
+    for sample in data:
+        # Validate required fields
+        if "judge_score" not in sample:
+            raise ValueError("Sample missing 'judge_score' field")
+        if "oracle_label" not in sample:
+            raise ValueError("Sample missing 'oracle_label' field")
+
+        # Compute calibrated prediction and residual
+        judge_score = float(sample["judge_score"])
+        oracle_label = float(sample["oracle_label"])
+        calibrated = float(calibrator.predict([[judge_score]])[0])
+        residual = oracle_label - calibrated
+
+        # Copy original dict and add new fields
+        enriched = dict(sample)
+        enriched["calibrated"] = calibrated
+        enriched["residual"] = residual
+
+        results.append(enriched)
+
+    # Sort if requested
+    if sort_by == "residual":
+        results.sort(key=lambda x: x["residual"])
+    elif sort_by == "abs_residual":
+        results.sort(key=lambda x: abs(x["residual"]), reverse=True)
+
+    return results
+
+
 def plot_transport_comparison(
     diagnostics: Dict[str, TransportDiagnostics],
     figsize: tuple = (10, 6),

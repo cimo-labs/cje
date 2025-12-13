@@ -41,6 +41,7 @@ from .dr import (
 from .transport import (
     TransportDiagnostics,
     audit_transportability,
+    compute_residuals,
     plot_transport_comparison,
 )
 
@@ -97,6 +98,7 @@ __all__ = [
     # Transport
     "TransportDiagnostics",
     "audit_transportability",
+    "compute_residuals",
     "plot_transport_comparison",
     # Display
     "create_weight_summary_table",
