@@ -22,6 +22,21 @@ jobs:
     # Coverage is tracked internally but not reported publicly
     # Tests focus on statistical validation and real-world robustness
 
+  notebook:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    - run: pip install poetry==1.8.5
+    - run: poetry config virtualenvs.create true
+    - run: poetry install --no-interaction
+    - run: pip install nbformat nbconvert ipykernel
+    - run: python -m ipykernel install --user --name python3
+    # Execute the core demo notebook to catch broken cells
+    - run: poetry run pytest cje/tests/test_examples.py::TestNotebookExecution::test_tutorial_notebook -v
+
   lint:
     runs-on: ubuntu-latest
     steps:
