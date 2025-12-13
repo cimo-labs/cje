@@ -467,7 +467,7 @@ def compute_ttc(
     # Sort by target surprisal, find threshold for target_typical_mass
     sorted_idx = np.argsort(target_surprisal)
     cumulative = np.cumsum(target_weights[sorted_idx])
-    idx = np.searchsorted(cumulative, target_typical_mass)
+    idx = int(np.searchsorted(cumulative, target_typical_mass))
     threshold = target_surprisal[sorted_idx[min(idx, n - 1)]]
 
     # T = samples with target surprisal <= threshold (where target concentrates)
@@ -652,7 +652,7 @@ def compute_cle_diagnostics(
     # Sort by target surprisal, find threshold for target_typical_mass
     sorted_idx = np.argsort(target_surprisal)
     cumulative = np.cumsum(target_weights[sorted_idx])
-    idx = np.searchsorted(cumulative, target_typical_mass)
+    idx = int(np.searchsorted(cumulative, target_typical_mass))
     threshold = target_surprisal[sorted_idx[min(idx, n - 1)]]
 
     # T = samples with target surprisal <= threshold (where target concentrates)
