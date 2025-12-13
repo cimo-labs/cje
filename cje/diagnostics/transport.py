@@ -434,7 +434,7 @@ def plot_transport_comparison(
     ax.set_yticklabels(labels, fontsize=11)
 
     # X-axis
-    ax.set_xlabel("Mean Residual δ (Y − Ŷ)", fontsize=11, color="#374151")
+    ax.set_xlabel("Calibration Error (Y − Ŷ)", fontsize=11, color="#374151")
 
     # Status labels on right (outside axes)
     if ci_lowers and ci_uppers:
