@@ -52,6 +52,7 @@ ipykernel = "^6.29.5"
 # Documentation now hosted on cimolabs.com - Sphinx dependencies removed
 watchdog = "^6.0.0"
 pytest-xdist = "^3.7.0"
+matplotlib = "^3.8"  # Required for testing visualization code
 
 # CLI scripts can be defined here when needed
 
