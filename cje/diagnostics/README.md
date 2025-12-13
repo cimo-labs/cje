@@ -528,6 +528,29 @@ print(diag.summary())
 # Action: Collect 100-200 Q2 oracle labels and refit
 ```
 
+**Inspecting Individual Residuals:**
+
+When calibration fails, inspect which samples have the worst errors:
+
+```python
+from cje.diagnostics import compute_residuals
+
+# Compute residuals for each sample (sorted by worst overestimate first)
+samples = compute_residuals(calibrator, probe_data)
+
+# Inspect worst overestimates (where the judge was most fooled)
+for s in samples[:3]:
+    print(f"Residual: {s['residual']:.2f}")
+    print(f"  Judge: {s['judge_score']:.2f} → Calibrated: {s['calibrated']:.2f}")
+    print(f"  Oracle: {s['oracle_label']:.2f}")
+    print(f"  Response: {s['response'][:100]}...")
+```
+
+Sort options:
+- `sort_by="residual"` (default): Worst overestimates first (most negative residuals)
+- `sort_by="abs_residual"`: Biggest errors first (regardless of direction)
+- `sort_by=None`: Preserve original order
+
 ## Uncertainty Quantification: Two-Component Structure
 
 CJE's uncertainty quantification properly accounts for **two independent sources of variance**:
