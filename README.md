@@ -1,5 +1,5 @@
 <div align="left">
-  <img src="CJE_logo.jpg" alt="CJE Logo" width="250">
+  <img src="images/CJE_logo.jpg" alt="CJE Logo" width="250">
 </div>
 
 # CJE - Causal Judge Evaluation
@@ -26,23 +26,28 @@ pip install cje-eval
 ```python
 from cje import analyze_dataset
 
-# Point to your response files (one JSONL per policy)
-results = analyze_dataset(fresh_draws_dir="data/responses/")
-
-# Get calibrated estimates with valid confidence intervals
-results.plot_estimates(
-    policy_labels={"prompt_v1": "Conversational tone", ...},
-    save_path="ranking.png"
+# Your evaluation data - one list per policy variant
+results = analyze_dataset(
+    fresh_draws_data={
+        "prompt_v1": [
+            {"prompt_id": "1", "judge_score": 0.85, "oracle_label": 0.9},
+            {"prompt_id": "2", "judge_score": 0.72, "oracle_label": 0.7},
+            {"prompt_id": "3", "judge_score": 0.68},  # oracle_label optional (5-25% needed)
+        ],
+        "prompt_v2": [
+            {"prompt_id": "1", "judge_score": 0.78, "oracle_label": 0.82},
+            {"prompt_id": "2", "judge_score": 0.81, "oracle_label": 0.79},
+            {"prompt_id": "3", "judge_score": 0.75},
+        ],
+    }
 )
+
+# Or from files: analyze_dataset(fresh_draws_dir="responses/")
+
+results.plot_estimates(save_path="ranking.png")
 ```
 
-**Data format** (one JSONL file per policy):
-```json
-{"prompt_id": "1", "judge_score": 0.85, "oracle_label": 0.9}
-{"prompt_id": "2", "judge_score": 0.72}
-```
-
-Only 5-25% of samples need oracle labels. CJE learns the judge→oracle mapping and applies it everywhere.
+CJE learns the judge→oracle mapping from the labeled samples and applies it everywhere.
 
 ---
 
@@ -79,7 +84,7 @@ Label ~250 samples with your oracle (human raters, downstream KPIs, expensive mo
 **Already using an expensive model for evals?** Switch to a 10-30× cheaper judge + CJE calibration. Same accuracy, fraction of the inference cost.
 
 <div align="center">
-  <img src="forest_plot_n1000_oracle25.png" alt="CJE Output Example" width="80%">
+  <img src="images/forest_plot_n1000_oracle25.png" alt="CJE Output Example" width="80%">
   <br><em>Example output: comparing prompt variants with calibrated confidence intervals</em>
 </div>
 
@@ -105,7 +110,7 @@ print(diag.summary())
 ```
 
 <div align="center">
-  <img src="transportability_audit.png" alt="Temporal Monitoring" width="70%">
+  <img src="images/transportability_audit.png" alt="Temporal Monitoring" width="70%">
 </div>
 
 PASS means your calibration is still valid. FAIL means something changed — investigate or recalibrate.
