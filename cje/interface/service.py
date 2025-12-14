@@ -321,6 +321,10 @@ class AnalysisService:
             "reason": "Direct-only mode: Fresh draws without logged data",
         }
 
+        # Add calibrator for transportability audits
+        if calibration_result:
+            results.calibrator = calibration_result.calibrator
+
         return results
 
     def _run_direct_with_calibration(
@@ -399,6 +403,10 @@ class AnalysisService:
             "has_logged_data": True,
             "reason": "Direct mode: Using logged data for calibration, fresh draws for evaluation",
         }
+
+        # Add calibrator for transportability audits
+        if calibration_result:
+            results.calibrator = calibration_result.calibrator
 
         return results
 
@@ -635,6 +643,10 @@ class AnalysisService:
                 else f"Explicitly specified: {chosen_estimator}"
             ),
         }
+
+        # Add calibrator for transportability audits
+        if calibration_result:
+            results.calibrator = calibration_result.calibrator
 
         return results
 

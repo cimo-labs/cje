@@ -172,6 +172,12 @@ class EstimationResult(BaseModel):
         None, description="Diagnostic information (IPSDiagnostics or DRDiagnostics)"
     )
 
+    # Calibrator for transportability audits
+    calibrator: Optional[Any] = Field(
+        None,
+        description="Fitted calibrator (sklearn-compatible) for transportability audits",
+    )
+
     # Configuration and context
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
