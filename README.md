@@ -13,6 +13,8 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/cje-eval?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/cje-eval)
 
+We ran 16,000+ experiments on Chatbot Arena data. **Without calibration, 95% confidence intervals captured the true value 0% of the time.** With CJE: 94% ranking accuracy using just 5% oracle labels, at 14× lower cost.
+
 <div align="center">
   <img src="cje_pipeline.jpg" alt="CJE Pipeline" width="85%">
 </div>
@@ -50,35 +52,57 @@ Only 5-25% of samples need oracle labels. CJE learns the judge→oracle mapping 
 
 ## Why You Need This
 
-Raw LLM judge scores suffer from systematic biases that make your metrics unreliable:
+Uncalibrated LLM-as-judge evaluation has three systematic failure modes that compound in production:
 
-- **Preference inversion**: Higher scores often predict *lower* real-world quality
-- **Invalid confidence intervals**: Standard error bars yield 0% coverage
-- **Scale arbitrariness**: Is "4.2" actually better than "4.0"?
+| Failure Mode | What Happens | Evidence |
+|:-------------|:-------------|:---------|
+| **Preference inversion** | Higher scores predict *lower* actual quality | Standard methods ranked policies worse than a coin flip (38% accuracy) |
+| **Invalid confidence intervals** | Your error bars are mathematical lies | "95% confident" was actually 0% accurate |
+| **Hidden scale distortion** | Judge scores ≠ oracle scores | Calibration cut prediction error by 72% |
 
-CJE fixes this by treating your judge as a sensor that must be calibrated against ground truth.
+These aren't edge cases—they're the norm. The "You're absolutely right!" phenomenon (sycophantic responses scoring high but delivering low value) is preference inversion in production.
+
+**CJE fixes all three** by treating your judge as a sensor that must be calibrated against ground truth, then propagating calibration uncertainty into valid confidence intervals.
 
 [**Read the full explanation →**](https://cimolabs.com/blog/metrics-lying)
 
 ---
 
-## The Proof
+## The Results
 
-We benchmarked 14 estimators on 5,000 real Chatbot Arena prompts using GPT-5 as oracle:
+We tested on 5,000 Chatbot Arena prompts with GPT-5 as the oracle (ground truth) and GPT-4.1-nano as the cheap judge:
+
+| Without CJE | With CJE |
+|:------------|:---------|
+| Rankings wrong 62% of the time | Rankings correct 94% of the time |
+| Error bars contain truth 0% of the time | Error bars contain truth 87% of the time |
+| Need 100% oracle labels | Need only 5% oracle labels |
+| Full labeling cost | **14× cheaper** |
+
+Label ~250 samples with your oracle (human raters, downstream KPIs, expensive model). CJE learns the judge→oracle mapping and applies it to everything else.
+
+**Already using an expensive model for evals?** Switch to a 10-30× cheaper judge + CJE calibration. Same accuracy, fraction of the inference cost.
 
 <div align="center">
-  <img src="forest_plot_n1000_oracle25.png" alt="CJE Calibration Accuracy" width="80%">
-  <br><em>Illustrative output comparing prompt variants</em>
+  <img src="forest_plot_n1000_oracle25.png" alt="CJE Output Example" width="80%">
+  <br><em>Example output: comparing prompt variants with calibrated confidence intervals</em>
 </div>
 
-| Method | Result |
-|:-------|:-------|
-| Raw Judges | **0% CI coverage** — error bars were mathematical lies |
-| CJE (Direct + Two-Stage) | **99% ranking accuracy** with just **5% oracle labels** |
-
-**Cost savings**: CJE achieves oracle-quality rankings at **14× lower cost** by calibrating a cheap judge (~250 labels) instead of labeling everything.
-
 [**Read the full Arena Experiment →**](https://www.cimolabs.com/research/arena-experiment) ・ [**Paper (Zenodo)**](https://zenodo.org/records/17903629)
+
+---
+
+## Who Benefits
+
+| Your Situation | What CJE Gives You |
+|:---------------|:-------------------|
+| **A/B testing prompts** | Correct rankings + valid p-values (not random noise) |
+| **Comparing models** | Know which is actually better, not which scores higher |
+| **Monitoring production** | Detect calibration drift before metrics lie |
+| **Budget-constrained** | Oracle-quality decisions at judge-only cost |
+| **Reporting to stakeholders** | Confidence intervals that actually contain the truth |
+
+If you use an LLM judge to make decisions, CJE ensures those decisions are grounded in reality.
 
 ---
 
@@ -93,10 +117,10 @@ from cje.diagnostics import audit_transportability
 # results.calibrator is automatically fitted during analysis
 results = analyze_dataset(fresh_draws_dir="responses/")
 
-# Check if calibration still works on this week's data (40-60 oracle labels)
+# Check if calibration still works on this week's data (50+ oracle labels)
 diag = audit_transportability(results.calibrator, this_week_samples)
 print(diag.summary())
-# Transport: PASS | N=48 | δ̂: +0.007 (CI: [-0.05, +0.06])
+# Status: PASS | Samples: 48 | Mean error: +0.007 (CI: -0.05 to +0.06)
 ```
 
 <div align="center">
