@@ -104,13 +104,17 @@ for policy, est, se in zip(
 
 ```python
 import json
+from cje import analyze_dataset
 from cje.diagnostics import audit_transportability, plot_transport_comparison
+
+# Get calibrator from analysis
+results = analyze_dataset(fresh_draws_dir="arena_sample/fresh_draws")
 
 # Load probe as list of dicts (no wrapper needed!)
 probe = [json.loads(line) for line in open("arena_sample/probe_slice/unhelpful_probe.jsonl")]
 
 # Run canonical transportability audit
-diag = audit_transportability(calibrator, probe, group_label="policy:unhelpful")
+diag = audit_transportability(results.calibrator, probe, group_label="policy:unhelpful")
 print(diag.summary())
 # Transport: FAIL | Group: policy:unhelpful | N=50 | δ̂: -0.275 (CI: [-0.320, -0.231]) | Action: refit_two_stage
 
@@ -118,12 +122,12 @@ print(diag.summary())
 diag.plot()  # Decile-level residuals
 
 # Or compare all policies at once
-results = {}
+audits = {}
 for policy in ["clone", "parallel_universe_prompt", "unhelpful"]:
     probe = [json.loads(line) for line in open(f"arena_sample/probe_slice/{policy}_probe.jsonl")]
-    results[policy] = audit_transportability(calibrator, probe, group_label=f"policy:{policy}")
+    audits[policy] = audit_transportability(results.calibrator, probe, group_label=f"policy:{policy}")
 
-fig = plot_transport_comparison(results)
+fig = plot_transport_comparison(audits)
 ```
 
 ### IPS/DR Modes

@@ -87,10 +87,14 @@ We benchmarked 14 estimators on 5,000 real Chatbot Arena prompts using GPT-5 as 
 Calibration can drift. Periodically verify it still holds with a small probe:
 
 ```python
+from cje import analyze_dataset
 from cje.diagnostics import audit_transportability
 
-# Check if last month's calibration still works on this week's data
-diag = audit_transportability(calibrator, this_week_samples)
+# results.calibrator is automatically fitted during analysis
+results = analyze_dataset(fresh_draws_dir="responses/")
+
+# Check if calibration still works on this week's data (40-60 oracle labels)
+diag = audit_transportability(results.calibrator, this_week_samples)
 print(diag.summary())
 # Transport: PASS | N=48 | δ̂: +0.007 (CI: [-0.05, +0.06])
 ```

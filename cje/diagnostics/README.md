@@ -418,40 +418,34 @@ for policy, ifs in results.influence_functions.items():
 
 ```python
 import json
-from sklearn.isotonic import IsotonicRegression
+from cje import analyze_dataset
 from cje.diagnostics import audit_transportability, plot_transport_comparison
 
-# Step 1: Fit calibrator on source (e.g., base policy with oracle labels)
-source_records = [json.loads(line) for line in open("base_responses.jsonl")]
-source_with_oracle = [r for r in source_records if r.get("oracle_label") is not None]
-calibrator = IsotonicRegression(out_of_bounds="clip")
-calibrator.fit(
-    [r["judge_score"] for r in source_with_oracle],
-    [r["oracle_label"] for r in source_with_oracle]
-)
+# analyze_dataset automatically fits and exposes the calibrator
+results = analyze_dataset(fresh_draws_dir="responses/")
 
-# Step 2: Load 40-60 probe samples on target (just dicts with judge_score + oracle_label)
+# Load 40-60 probe samples on target (just dicts with judge_score + oracle_label)
 probe = [json.loads(line) for line in open("gpt4_mini_probe.jsonl")]
 
-# Step 3: Test transportability
+# Test transportability using the calibrator from analysis
 diag = audit_transportability(
-    calibrator,
+    results.calibrator,  # Calibrator automatically fitted during analysis
     probe,  # List[dict] - no wrapper needed!
     group_label="policy:gpt-4-mini"
 )
 
-# Step 4: Check result
+# Check result
 print(diag.summary())
 # Output: "Transport: PASS | Group: policy:gpt-4-mini | N=50 | δ̂: +0.012 (CI: [-0.008, +0.032])"
 
-# Step 5: Visualize
+# Visualize
 diag.plot()  # Decile-level residuals
 
 # Or compare multiple policies at once:
-# results = {"clone": diag_clone, "premium": diag_premium}
-# fig = plot_transport_comparison(results)
+# audits = {"clone": diag_clone, "premium": diag_premium}
+# fig = plot_transport_comparison(audits)
 
-# Step 6: Take action
+# Take action based on status
 if diag.status == "PASS":
     # δ̂ CI includes 0 → calibrator is unbiased on target
     print("✅ Calibrator transports - safe to reuse")
@@ -506,12 +500,14 @@ probe = stratified_sample(
 
 **Example: Cross-Era Transport**
 
+For time-series analysis where you have separate historical data, manually fit the calibrator:
+
 ```python
 import json
 from sklearn.isotonic import IsotonicRegression
 from cje.diagnostics import audit_transportability
 
-# Fit on Q1 data
+# Fit on Q1 data (manual fitting when you have separate historical data)
 q1_records = [json.loads(line) for line in open("q1_logs.jsonl")]
 q1_with_oracle = [r for r in q1_records if r.get("oracle_label") is not None]
 calibrator = IsotonicRegression(out_of_bounds="clip")
@@ -536,7 +532,8 @@ When calibration fails, inspect which samples have the worst errors:
 from cje.diagnostics import compute_residuals
 
 # Compute residuals for each sample (sorted by worst overestimate first)
-samples = compute_residuals(calibrator, probe_data)
+# Use results.calibrator from analyze_dataset()
+samples = compute_residuals(results.calibrator, probe_data)
 
 # Inspect worst overestimates (where the judge was most fooled)
 for s in samples[:3]:

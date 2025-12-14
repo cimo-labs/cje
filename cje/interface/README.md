@@ -484,23 +484,17 @@ Test if a calibrator fitted on one policy/era can safely transport to another us
 
 ```python
 import json
-from sklearn.isotonic import IsotonicRegression
+from cje import analyze_dataset
 from cje.diagnostics import audit_transportability, plot_transport_comparison
 
-# Fit calibrator on source policy (base with oracle labels)
-base_records = [json.loads(line) for line in open("base_responses.jsonl")]
-base_with_oracle = [r for r in base_records if r.get("oracle_label") is not None]
-calibrator = IsotonicRegression(out_of_bounds="clip")
-calibrator.fit(
-    [r["judge_score"] for r in base_with_oracle],
-    [r["oracle_label"] for r in base_with_oracle]
-)
+# analyze_dataset automatically fits and exposes the calibrator
+results = analyze_dataset(fresh_draws_dir="responses/")
 
 # Test transport to new policy with 50-sample probe
 # Just load as list of dicts - no special wrapper needed!
 probe = [json.loads(line) for line in open("target_policy_probe.jsonl")]
 diag = audit_transportability(
-    calibrator,
+    results.calibrator,  # Calibrator from analysis
     probe,  # List[dict] with judge_score and oracle_label
     group_label="policy:gpt-4-mini"
 )
@@ -513,12 +507,12 @@ print(diag.summary())
 diag.plot()  # Shows decile-level residuals
 
 # Compare multiple policies
-results = {}
+audits = {}
 for policy in ["clone", "premium", "unhelpful"]:
     probe = [json.loads(line) for line in open(f"{policy}_probe.jsonl")]
-    results[policy] = audit_transportability(calibrator, probe, group_label=f"policy:{policy}")
+    audits[policy] = audit_transportability(results.calibrator, probe, group_label=f"policy:{policy}")
 
-fig = plot_transport_comparison(results, title="Transportability Audit")
+fig = plot_transport_comparison(audits, title="Transportability Audit")
 
 # Handle failures
 if diag.status == "FAIL":
