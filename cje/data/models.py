@@ -174,7 +174,7 @@ class EstimationResult(BaseModel):
 
     # Calibrator for transportability audits
     calibrator: Optional[Any] = Field(
-        None,
+        default=None,
         description="Fitted calibrator (sklearn-compatible) for transportability audits",
     )
 
