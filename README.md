@@ -53,16 +53,17 @@ CJE learns the judge→oracle mapping from the labeled samples and applies it ev
 
 ## Why You Need This
 
-Uncalibrated LLM-as-judge evaluation has two systematic failure modes:
+**LLM-as-judge gives you rankings. CJE gives you certainty.**
 
-| Failure Mode | What Happens | Evidence |
-|:-------------|:-------------|:---------|
-| **Invalid confidence intervals** | Your error bars don't work | "95% confident" was actually 0% accurate |
-| **Hidden scale distortion** | Judge scores ≠ oracle scores | Calibration cut prediction error by 72% |
+Without calibration, you know prompt A scored higher than B—but you don't know:
+- Is the difference real or noise?
+- How big is the improvement, actually?
+- Have I tested enough samples?
+- Will this hold next week?
 
-With 0% CI coverage, you can't trust any A/B test conclusion. Rankings improve too (91% → 99%), but the uncertainty problem is universal.
+CJE answers all of these. Label 5% of samples with your oracle (human raters, expensive model, downstream metric). CJE learns the calibration and applies it everywhere—giving you trustworthy magnitudes, valid confidence intervals, and drift detection.
 
-**CJE fixes both** by treating your judge as a sensor that must be calibrated against ground truth, then propagating calibration uncertainty into valid confidence intervals.
+**The result:** Make decisions faster, spend less on labeling, and defend your conclusions with real statistics.
 
 [**Read the full explanation →**](https://cimolabs.com/blog/metrics-lying)
 
