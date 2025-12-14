@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 def analyze_dataset(
     logged_data_path: Optional[str] = None,
     fresh_draws_dir: Optional[str] = None,
+    fresh_draws_data: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     calibration_data_path: Optional[str] = None,
     combine_oracle_sources: bool = True,
     estimator: str = "auto",
@@ -48,6 +49,9 @@ def analyze_dataset(
         fresh_draws_dir: Directory containing fresh draw response files.
             Required for: DR mode, Direct mode.
             Optional for: IPS mode (ignored).
+        fresh_draws_data: In-memory alternative to fresh_draws_dir. Dict mapping policy names
+            to lists of records. Each record needs: prompt_id, judge_score. Optional: oracle_label.
+            Example: {"policy_a": [{"prompt_id": "1", "judge_score": 0.8}, ...], ...}
         calibration_data_path: Path to dedicated calibration dataset with oracle labels.
             Use this to learn judge→oracle mapping from a curated oracle set separate
             from your evaluation data. If combine_oracle_sources=True (default), will
@@ -122,15 +126,20 @@ def analyze_dataset(
         ... )
     """
     # Validate that at least one data source is provided
-    if logged_data_path is None and fresh_draws_dir is None:
+    if (
+        logged_data_path is None
+        and fresh_draws_dir is None
+        and fresh_draws_data is None
+    ):
         raise ValueError(
-            "Must provide at least one of: logged_data_path, fresh_draws_dir"
+            "Must provide at least one of: logged_data_path, fresh_draws_dir, fresh_draws_data"
         )
 
     # Delegate to the AnalysisService with typed config
     cfg = AnalysisConfig(
         logged_data_path=logged_data_path,
         fresh_draws_dir=fresh_draws_dir,
+        fresh_draws_data=fresh_draws_data,
         calibration_data_path=calibration_data_path,
         combine_oracle_sources=combine_oracle_sources,
         estimator=estimator,

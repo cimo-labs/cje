@@ -31,6 +31,11 @@ from .folds import (
     get_folds_for_dataset,
     get_folds_with_oracle_balance,
 )
+from .fresh_draws import (
+    FreshDrawSample,
+    FreshDrawDataset,
+    fresh_draws_from_dict,
+)
 
 from typing import Optional, List
 
@@ -60,6 +65,10 @@ __all__ = [
     "EstimationResult",
     "LogProbStatus",
     "LogProbResult",
+    # Fresh draws
+    "FreshDrawSample",
+    "FreshDrawDataset",
+    "fresh_draws_from_dict",
     # Utilities
     "add_rewards_to_existing_data",
     # Validation

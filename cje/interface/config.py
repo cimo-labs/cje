@@ -15,6 +15,12 @@ class AnalysisConfig(BaseModel):
     fresh_draws_dir: Optional[str] = Field(
         None, description="Directory with fresh draws from target policies"
     )
+    fresh_draws_data: Optional[Dict[str, List[Dict[str, Any]]]] = Field(
+        None,
+        description="In-memory fresh draws data. Dict mapping policy names to lists of records. "
+        "Each record needs at minimum: prompt_id, judge_score. Optional: oracle_label, response. "
+        "Alternative to fresh_draws_dir for programmatic usage.",
+    )
     calibration_data_path: Optional[str] = Field(
         None,
         description="Path to dedicated calibration dataset with oracle labels. "

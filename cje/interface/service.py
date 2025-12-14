@@ -61,8 +61,8 @@ class AnalysisService:
         chosen_estimator = config.estimator.lower() if config.estimator else "auto"
 
         # Check if we're in Direct-only mode (no logged data)
-        is_direct_only = (
-            config.logged_data_path is None and config.fresh_draws_dir is not None
+        is_direct_only = config.logged_data_path is None and (
+            config.fresh_draws_dir is not None or config.fresh_draws_data is not None
         )
 
         if is_direct_only:
@@ -82,7 +82,7 @@ class AnalysisService:
         if config.logged_data_path is None:
             raise ValueError(
                 "Must provide logged_data_path for IPS/DR modes, or "
-                "provide fresh_draws_dir for Direct mode"
+                "provide fresh_draws_dir/fresh_draws_data for Direct mode"
             )
 
         return self._run_with_logged_data(config, chosen_estimator)
@@ -94,31 +94,46 @@ class AnalysisService:
         from ..data.fresh_draws import (
             discover_policies_from_fresh_draws,
             load_fresh_draws_auto,
+            fresh_draws_from_dict,
         )
         from ..data.models import Dataset, Sample
 
         if config.verbose:
             logger.info("Direct mode: Using fresh draws only (no logged data)")
 
-        # Discover policies from fresh draws directory
-        if config.fresh_draws_dir is None:
-            raise ValueError("fresh_draws_dir is required for Direct mode")
-        target_policies = discover_policies_from_fresh_draws(
-            Path(config.fresh_draws_dir)
-        )
+        # Handle in-memory fresh_draws_data OR file-based fresh_draws_dir
+        if config.fresh_draws_data is not None:
+            # In-memory mode: convert dict to FreshDrawDataset objects
+            if config.verbose:
+                logger.info("Using in-memory fresh_draws_data")
+            fresh_draws_dict = fresh_draws_from_dict(
+                config.fresh_draws_data, verbose=config.verbose
+            )
+            target_policies = sorted(fresh_draws_dict.keys())
+        elif config.fresh_draws_dir is not None:
+            # File-based mode: discover and load from directory
+            target_policies = discover_policies_from_fresh_draws(
+                Path(config.fresh_draws_dir)
+            )
+            fresh_draws_dict = {}
+            for policy in target_policies:
+                fd = load_fresh_draws_auto(
+                    Path(config.fresh_draws_dir), policy, verbose=config.verbose
+                )
+                fresh_draws_dict[policy] = fd
+        else:
+            raise ValueError(
+                "Direct mode requires either fresh_draws_dir or fresh_draws_data"
+            )
 
         if config.verbose:
             logger.info(
-                f"Discovered {len(target_policies)} policies: {', '.join(target_policies)}"
+                f"Found {len(target_policies)} policies: {', '.join(target_policies)}"
             )
 
-        # Load all fresh draws for calibration
-        fresh_draws_dict = {}
+        # Collect all fresh draws for calibration
         all_fresh_draws = []
-        fresh_draws_path = Path(config.fresh_draws_dir)  # Already checked above
-        for policy in target_policies:
-            fd = load_fresh_draws_auto(fresh_draws_path, policy, verbose=config.verbose)
-            fresh_draws_dict[policy] = fd
+        for fd in fresh_draws_dict.values():
             all_fresh_draws.extend(fd.samples)
 
         # NEW: Handle calibration_data_path and oracle combining
@@ -259,14 +274,12 @@ class AnalysisService:
             **config.estimator_config,
         )
 
-        # Load fresh draws for each policy
-        fresh_draws_path = Path(config.fresh_draws_dir)  # Already checked above
-
+        # Add fresh draws to estimator (use already-loaded fresh_draws_dict)
         # Compute covariates for fresh draws if needed
         from ..data.fresh_draws import compute_response_covariates
 
         for policy in target_policies:
-            fd = load_fresh_draws_auto(fresh_draws_path, policy, verbose=config.verbose)
+            fd = fresh_draws_dict[policy]
 
             # Compute covariates if calibrator expects them
             if covariate_names:
@@ -280,7 +293,10 @@ class AnalysisService:
         results.metadata["mode"] = "direct"
         results.metadata["estimator"] = chosen_estimator
         results.metadata["target_policies"] = target_policies
-        results.metadata["fresh_draws_dir"] = config.fresh_draws_dir
+        if config.fresh_draws_dir:
+            results.metadata["fresh_draws_dir"] = config.fresh_draws_dir
+        if config.fresh_draws_data is not None:
+            results.metadata["fresh_draws_source"] = "in_memory"
 
         # Calibration source metadata
         if config.calibration_data_path:

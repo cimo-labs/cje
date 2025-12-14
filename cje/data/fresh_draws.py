@@ -521,6 +521,119 @@ def save_fresh_draws_to_jsonl(
     logger.info(f"Saved {total_samples} fresh draws to {path_obj}")
 
 
+def fresh_draws_from_dict(
+    data: Dict[str, List[Dict[str, Any]]],
+    verbose: bool = False,
+) -> Dict[str, FreshDrawDataset]:
+    """Convert in-memory dict to FreshDrawDataset objects.
+
+    This allows users to provide fresh draws data directly without writing to disk.
+
+    Expected format:
+        {
+            "policy_a": [
+                {"prompt_id": "1", "judge_score": 0.85, "oracle_label": 0.9},
+                {"prompt_id": "2", "judge_score": 0.72},
+                ...
+            ],
+            "policy_b": [...]
+        }
+
+    Each record must have at minimum: prompt_id, judge_score
+    Optional fields: oracle_label, response, draw_idx, metadata
+
+    Args:
+        data: Dict mapping policy names to lists of record dicts
+        verbose: Whether to log progress
+
+    Returns:
+        Dict mapping policy names to FreshDrawDataset objects
+
+    Example:
+        >>> data = {
+        ...     "policy_a": [
+        ...         {"prompt_id": "q1", "judge_score": 0.85, "oracle_label": 0.9},
+        ...         {"prompt_id": "q2", "judge_score": 0.72},
+        ...     ]
+        ... }
+        >>> datasets = fresh_draws_from_dict(data)
+        >>> datasets["policy_a"].n_samples
+        2
+    """
+    if not data:
+        raise ValueError("fresh_draws_data is empty")
+
+    result: Dict[str, FreshDrawDataset] = {}
+
+    for policy, records in data.items():
+        if not records:
+            logger.warning(f"Policy '{policy}' has no records, skipping")
+            continue
+
+        samples: List[FreshDrawSample] = []
+        prompt_draw_counts: Dict[str, int] = {}
+
+        for idx, record in enumerate(records):
+            # Validate required fields
+            prompt_id = record.get("prompt_id")
+            if prompt_id is None:
+                raise ValueError(
+                    f"Record {idx} for policy '{policy}' missing required field 'prompt_id'"
+                )
+
+            judge_score = record.get("judge_score")
+            if judge_score is None:
+                raise ValueError(
+                    f"Record {idx} for policy '{policy}' (prompt_id={prompt_id}) "
+                    f"missing required field 'judge_score'"
+                )
+
+            # Track draw_idx per prompt
+            if prompt_id not in prompt_draw_counts:
+                prompt_draw_counts[prompt_id] = 0
+            draw_idx = record.get("draw_idx", prompt_draw_counts[prompt_id])
+            prompt_draw_counts[prompt_id] += 1
+
+            sample = FreshDrawSample(
+                prompt_id=str(prompt_id),
+                target_policy=policy,
+                judge_score=float(judge_score),
+                oracle_label=(
+                    float(record["oracle_label"])
+                    if record.get("oracle_label") is not None
+                    else None
+                ),
+                response=record.get("response"),
+                draw_idx=draw_idx,
+                fold_id=record.get("fold_id"),
+                metadata=record.get("metadata", {}),
+            )
+            samples.append(sample)
+
+        # Determine draws_per_prompt (max draws for any prompt)
+        draws_per_prompt = max(prompt_draw_counts.values()) if prompt_draw_counts else 1
+
+        dataset = FreshDrawDataset(
+            target_policy=policy,
+            draws_per_prompt=draws_per_prompt,
+            samples=samples,
+        )
+        result[policy] = dataset
+
+        if verbose:
+            n_oracle = sum(1 for s in samples if s.oracle_label is not None)
+            logger.info(
+                f"Created FreshDrawDataset for '{policy}': "
+                f"{len(samples)} samples, {len(prompt_draw_counts)} prompts, "
+                f"{n_oracle} with oracle labels"
+            )
+
+    if not result:
+        raise ValueError("No valid fresh draws data found in any policy")
+
+    return result
+
+
 def discover_policies_from_fresh_draws(fresh_draws_dir: Path) -> List[str]:
     """Discover target policies from fresh draws directory.
 

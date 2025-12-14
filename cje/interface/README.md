@@ -153,8 +153,22 @@ responses/  (filenames must match keys exactly)
 ```python
 from cje import analyze_dataset
 
-# Simplest workflow - just fresh draws
+# Simplest workflow - just fresh draws from files
 results = analyze_dataset(fresh_draws_dir="responses/")
+
+# Alternative: In-memory data (no file I/O needed)
+results = analyze_dataset(
+    fresh_draws_data={
+        "policy_a": [
+            {"prompt_id": "q1", "judge_score": 0.85, "oracle_label": 0.9},
+            {"prompt_id": "q2", "judge_score": 0.72},  # oracle_label optional
+        ],
+        "policy_b": [
+            {"prompt_id": "q1", "judge_score": 0.70, "oracle_label": 0.75},
+            {"prompt_id": "q2", "judge_score": 0.82},
+        ],
+    }
+)
 
 # Get estimates for each policy
 for i, policy in enumerate(results.metadata["target_policies"]):
@@ -369,6 +383,7 @@ print(f"Logprob coverage: {n_valid}/{len(samples)} = {n_valid/len(samples):.1%}"
 def analyze_dataset(
     logged_data_path: Optional[str] = None,
     fresh_draws_dir: Optional[str] = None,
+    fresh_draws_data: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     calibration_data_path: Optional[str] = None,
     combine_oracle_sources: bool = True,
     estimator: str = "auto",
@@ -384,6 +399,7 @@ def analyze_dataset(
 **Parameters:**
 - `logged_data_path`: Path to JSONL file with logged data (optional for Direct mode)
 - `fresh_draws_dir`: Directory with fresh draw response files
+- `fresh_draws_data`: In-memory alternative to `fresh_draws_dir`. Dict mapping policy names to lists of records. Each record needs: `prompt_id`, `judge_score`. Optional: `oracle_label`, `response`. Example: `{"policy_a": [{"prompt_id": "1", "judge_score": 0.8}, ...], ...}`
 - `calibration_data_path`: Path to dedicated calibration dataset with oracle labels. Used to learn judge→oracle mapping separately from evaluation data.
 - `combine_oracle_sources`: Pool oracle labels from all sources (calibration + logged + fresh) for maximum data efficiency. Default: `True`. Set `False` to use only calibration_data_path.
 - `estimator`: Estimator name or "auto" for automatic selection
@@ -406,7 +422,7 @@ def analyze_dataset(
 - `metadata["oracle_sources"]`: Breakdown of oracle labels by source (calibration_data, logged_data, fresh_draws)
 - `metadata["oracle_sources"]["distribution_mismatch"]`: KS test results comparing calibration vs. evaluation distributions
 
-**At least one of `logged_data_path` or `fresh_draws_dir` must be provided.**
+**At least one of `logged_data_path`, `fresh_draws_dir`, or `fresh_draws_data` must be provided.**
 
 ### CLI Commands
 

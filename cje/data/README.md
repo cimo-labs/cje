@@ -26,6 +26,11 @@ The data module handles all data loading, validation, and preparation for CJE an
 - You need to organize per-policy fresh draws
 - You're using DR/TMLE estimators
 
+### Use **fresh_draws_from_dict** when:
+- You have fresh draws data in memory (dicts/lists)
+- You want to skip file I/O
+- You're building pipelines that pass data programmatically
+
 ## File Structure
 
 ```
@@ -419,7 +424,7 @@ dataset = factory.loader.load_from_source(source, target_policies=["clone", "par
 ```python
 from cje.data.fresh_draws import FreshDrawDataset, FreshDrawSample
 
-# Create fresh draws
+# Create fresh draws programmatically
 samples = [
     FreshDrawSample(
         prompt_id="arena_1",
@@ -437,6 +442,40 @@ fresh_dataset = FreshDrawDataset(
     samples=samples
 )
 ```
+
+### In-Memory Fresh Draws (No File I/O)
+```python
+from cje.data import fresh_draws_from_dict
+
+# Convert dict to FreshDrawDataset objects
+datasets = fresh_draws_from_dict({
+    "policy_a": [
+        {"prompt_id": "q1", "judge_score": 0.85, "oracle_label": 0.9},
+        {"prompt_id": "q2", "judge_score": 0.72},  # oracle_label optional
+    ],
+    "policy_b": [
+        {"prompt_id": "q1", "judge_score": 0.70, "oracle_label": 0.75},
+        {"prompt_id": "q2", "judge_score": 0.82},
+    ],
+})
+
+# Returns Dict[str, FreshDrawDataset]
+datasets["policy_a"].n_samples  # 2
+datasets["policy_a"].target_policy  # "policy_a"
+
+# Or use directly with analyze_dataset (recommended)
+from cje import analyze_dataset
+
+results = analyze_dataset(
+    fresh_draws_data={
+        "policy_a": [{"prompt_id": "q1", "judge_score": 0.85}, ...],
+        "policy_b": [{"prompt_id": "q1", "judge_score": 0.70}, ...],
+    }
+)
+```
+
+**Required fields per record:** `prompt_id`, `judge_score`
+**Optional fields:** `oracle_label`, `response`, `draw_idx`, `fold_id`, `metadata`
 
 ### Custom Validation
 ```python

@@ -8,11 +8,12 @@ import pytest
 import json
 import tempfile
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from cje.data.fresh_draws import (
     load_fresh_draws_from_jsonl,
     load_fresh_draws_auto,
+    fresh_draws_from_dict,
     FreshDrawDataset,
 )
 
@@ -243,3 +244,164 @@ class TestFreshDrawLoading:
 
         finally:
             Path(temp_path).unlink()
+
+
+class TestFreshDrawsFromDict:
+    """Test in-memory fresh_draws_from_dict function."""
+
+    def test_basic_conversion(self) -> None:
+        """Test basic dict to FreshDrawDataset conversion."""
+        data = {
+            "policy_a": [
+                {"prompt_id": "q1", "judge_score": 0.85},
+                {"prompt_id": "q2", "judge_score": 0.72},
+            ],
+            "policy_b": [
+                {"prompt_id": "q1", "judge_score": 0.70},
+                {"prompt_id": "q2", "judge_score": 0.82},
+            ],
+        }
+
+        datasets = fresh_draws_from_dict(data)
+
+        # Check both policies were converted
+        assert "policy_a" in datasets
+        assert "policy_b" in datasets
+
+        # Check structure
+        assert datasets["policy_a"].target_policy == "policy_a"
+        assert datasets["policy_a"].n_samples == 2
+        assert datasets["policy_b"].n_samples == 2
+
+        # Check sample values
+        samples_a = datasets["policy_a"].samples
+        assert samples_a[0].prompt_id == "q1"
+        assert samples_a[0].judge_score == 0.85
+        assert samples_a[0].target_policy == "policy_a"
+
+    def test_with_oracle_labels(self) -> None:
+        """Test conversion with oracle labels."""
+        data = {
+            "policy_a": [
+                {"prompt_id": "q1", "judge_score": 0.85, "oracle_label": 0.9},
+                {"prompt_id": "q2", "judge_score": 0.72, "oracle_label": 0.7},
+                {"prompt_id": "q3", "judge_score": 0.65},  # No oracle
+            ],
+        }
+
+        datasets = fresh_draws_from_dict(data)
+
+        samples = datasets["policy_a"].samples
+        assert samples[0].oracle_label == 0.9
+        assert samples[1].oracle_label == 0.7
+        assert samples[2].oracle_label is None
+
+    def test_with_response_and_metadata(self) -> None:
+        """Test conversion with response and metadata fields."""
+        data = {
+            "policy_a": [
+                {
+                    "prompt_id": "q1",
+                    "judge_score": 0.85,
+                    "response": "Test response",
+                    "metadata": {"custom_field": "value"},
+                },
+            ],
+        }
+
+        datasets = fresh_draws_from_dict(data)
+
+        sample = datasets["policy_a"].samples[0]
+        assert sample.response == "Test response"
+        assert sample.metadata.get("custom_field") == "value"
+
+    def test_auto_draw_idx(self) -> None:
+        """Test automatic draw_idx assignment for multiple draws per prompt."""
+        data = {
+            "policy_a": [
+                {"prompt_id": "q1", "judge_score": 0.85},  # draw_idx=0
+                {"prompt_id": "q1", "judge_score": 0.82},  # draw_idx=1
+                {"prompt_id": "q1", "judge_score": 0.88},  # draw_idx=2
+            ],
+        }
+
+        datasets = fresh_draws_from_dict(data)
+
+        assert datasets["policy_a"].draws_per_prompt == 3
+        samples = datasets["policy_a"].samples
+        # Note: draw_idx is auto-assigned based on order when not provided
+        assert samples[0].draw_idx == 0
+        assert samples[1].draw_idx == 1
+        assert samples[2].draw_idx == 2
+
+    def test_missing_prompt_id_raises(self) -> None:
+        """Test that missing prompt_id raises clear error."""
+        data = {
+            "policy_a": [
+                {"judge_score": 0.85},  # Missing prompt_id
+            ],
+        }
+
+        with pytest.raises(ValueError, match="missing required field 'prompt_id'"):
+            fresh_draws_from_dict(data)
+
+    def test_missing_judge_score_raises(self) -> None:
+        """Test that missing judge_score raises clear error."""
+        data = {
+            "policy_a": [
+                {"prompt_id": "q1"},  # Missing judge_score
+            ],
+        }
+
+        with pytest.raises(ValueError, match="missing required field 'judge_score'"):
+            fresh_draws_from_dict(data)
+
+    def test_empty_data_raises(self) -> None:
+        """Test that empty data raises error."""
+        with pytest.raises(ValueError, match="empty"):
+            fresh_draws_from_dict({})
+
+
+class TestAnalyzeDatasetWithFreshDrawsData:
+    """Test analyze_dataset with in-memory fresh_draws_data parameter."""
+
+    def test_analyze_with_in_memory_data(self) -> None:
+        """Test analyze_dataset works with fresh_draws_data parameter."""
+        import numpy as np
+        from cje import analyze_dataset
+
+        np.random.seed(42)
+        n_samples = 50
+
+        fresh_draws_data: Dict[str, List[Dict[str, Any]]] = {
+            "policy_a": [],
+            "policy_b": [],
+        }
+
+        for i in range(n_samples):
+            judge_a = np.clip(0.7 + np.random.randn() * 0.15, 0, 1)
+            judge_b = np.clip(0.65 + np.random.randn() * 0.15, 0, 1)
+
+            record_a = {"prompt_id": f"q{i}", "judge_score": float(judge_a)}
+            record_b = {"prompt_id": f"q{i}", "judge_score": float(judge_b)}
+
+            # Add oracle labels to enough samples for calibration
+            if i < 25:
+                record_a["oracle_label"] = float(
+                    np.clip(judge_a + np.random.randn() * 0.05, 0, 1)
+                )
+                record_b["oracle_label"] = float(
+                    np.clip(judge_b + np.random.randn() * 0.05, 0, 1)
+                )
+
+            fresh_draws_data["policy_a"].append(record_a)
+            fresh_draws_data["policy_b"].append(record_b)
+
+        results = analyze_dataset(fresh_draws_data=fresh_draws_data)
+
+        # Verify results
+        assert results.metadata.get("mode") == "direct"
+        assert results.metadata.get("fresh_draws_source") == "in_memory"
+        assert results.metadata.get("calibration") == "from_fresh_draws"
+        assert len(results.estimates) == 2  # Two policies
+        assert len(results.standard_errors) == 2
