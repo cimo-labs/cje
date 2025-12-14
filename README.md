@@ -52,17 +52,16 @@ Only 5-25% of samples need oracle labels. CJE learns the judge→oracle mapping 
 
 ## Why You Need This
 
-Uncalibrated LLM-as-judge evaluation has three systematic failure modes that compound in production:
+Uncalibrated LLM-as-judge evaluation has two systematic failure modes:
 
 | Failure Mode | What Happens | Evidence |
 |:-------------|:-------------|:---------|
-| **Preference inversion** | Higher scores predict *lower* actual quality | Standard methods ranked policies worse than a coin flip (38% accuracy) |
 | **Invalid confidence intervals** | Your error bars are mathematical lies | "95% confident" was actually 0% accurate |
 | **Hidden scale distortion** | Judge scores ≠ oracle scores | Calibration cut prediction error by 72% |
 
-These aren't edge cases—they're the norm. The "You're absolutely right!" phenomenon (sycophantic responses scoring high but delivering low value) is preference inversion in production.
+The 0% CI coverage is the killer: you can't trust any A/B test conclusion. Rankings improve too (91% → 99%), but the uncertainty problem is universal.
 
-**CJE fixes all three** by treating your judge as a sensor that must be calibrated against ground truth, then propagating calibration uncertainty into valid confidence intervals.
+**CJE fixes both** by treating your judge as a sensor that must be calibrated against ground truth, then propagating calibration uncertainty into valid confidence intervals.
 
 [**Read the full explanation →**](https://cimolabs.com/blog/metrics-lying)
 
@@ -74,7 +73,7 @@ We tested on 5,000 Chatbot Arena prompts with GPT-5 as the oracle (ground truth)
 
 | Without CJE | With CJE |
 |:------------|:---------|
-| Rankings wrong 62% of the time | Rankings correct 99% of the time |
+| Rankings correct 91% of the time | Rankings correct 99% of the time |
 | Error bars contain truth 0% of the time | Error bars contain truth 87% of the time |
 | Need 100% oracle labels | Need only 5% oracle labels |
 | Full labeling cost | **14× cheaper** |
