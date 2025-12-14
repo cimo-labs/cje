@@ -61,7 +61,7 @@ Without calibration, you know prompt A scored higher than B—but you don't know
 - Have I tested enough samples?
 - Will this hold next week?
 
-CJE answers all of these. Label 5% of samples with your oracle (human raters, expensive model, downstream metric). CJE learns the calibration and applies it everywhere—giving you trustworthy magnitudes, valid confidence intervals, and drift detection.
+CJE answers all of these. Label 5% of samples with your oracle (human raters, GPT-5, downstream metric). CJE learns the calibration and applies it everywhere—giving you trustworthy magnitudes, valid confidence intervals, and drift detection.
 
 **The result:** Make decisions faster, spend less on labeling, and defend your conclusions with real statistics.
 
