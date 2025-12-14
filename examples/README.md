@@ -13,20 +13,6 @@
 
 No setup required — runs entirely in Google Colab with real Chatbot Arena data.
 
-## Python Quickstart
-
-**Want a copy-paste script?** Use `quickstart.py`:
-
-```bash
-# From the repo root
-poetry run python examples/quickstart.py
-```
-
-15-line script showing the most common workflow:
-- Load Arena sample data (logged responses + fresh draws)
-- Run doubly robust analysis (most accurate mode)
-- Get policy estimates with 95% confidence intervals
-
 ## Dataset
 
 Examples use real data from [LMSYS Chatbot Arena](https://huggingface.co/datasets/lmsys/chatbot_arena_conversations):
