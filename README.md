@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/cje-eval?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/cje-eval)
 
-We ran 16,000+ experiments on Chatbot Arena data. **Without calibration, 95% confidence intervals captured the true value 0% of the time.** With CJE: 94% ranking accuracy using just 5% oracle labels, at 14× lower cost.
+We ran 16,000+ experiments on Chatbot Arena data. **Without calibration, 95% confidence intervals captured the true value 0% of the time.** With CJE: 99% ranking accuracy using just 5% oracle labels, at 14× lower cost.
 
 <div align="center">
   <img src="cje_pipeline.jpg" alt="CJE Pipeline" width="85%">
@@ -74,7 +74,7 @@ We tested on 5,000 Chatbot Arena prompts with GPT-5 as the oracle (ground truth)
 
 | Without CJE | With CJE |
 |:------------|:---------|
-| Rankings wrong 62% of the time | Rankings correct 94% of the time |
+| Rankings wrong 62% of the time | Rankings correct 99% of the time |
 | Error bars contain truth 0% of the time | Error bars contain truth 87% of the time |
 | Need 100% oracle labels | Need only 5% oracle labels |
 | Full labeling cost | **14× cheaper** |
