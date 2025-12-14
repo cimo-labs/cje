@@ -15,10 +15,6 @@
 
 We ran 16,000+ tests on Chatbot Arena data. **Without calibration, 95% confidence intervals captured the true value 0% of the time.** With CJE: 99% ranking accuracy using just 5% oracle labels, at 14× lower cost.
 
-<div align="center">
-  <img src="cje_pipeline.jpg" alt="CJE Pipeline" width="85%">
-</div>
-
 ---
 
 ## Quick Start
@@ -56,10 +52,10 @@ Uncalibrated LLM-as-judge evaluation has two systematic failure modes:
 
 | Failure Mode | What Happens | Evidence |
 |:-------------|:-------------|:---------|
-| **Invalid confidence intervals** | Your error bars are mathematical lies | "95% confident" was actually 0% accurate |
+| **Invalid confidence intervals** | Your error bars don't work | "95% confident" was actually 0% accurate |
 | **Hidden scale distortion** | Judge scores ≠ oracle scores | Calibration cut prediction error by 72% |
 
-The 0% CI coverage is the killer: you can't trust any A/B test conclusion. Rankings improve too (91% → 99%), but the uncertainty problem is universal.
+With 0% CI coverage, you can't trust any A/B test conclusion. Rankings improve too (91% → 99%), but the uncertainty problem is universal.
 
 **CJE fixes both** by treating your judge as a sensor that must be calibrated against ground truth, then propagating calibration uncertainty into valid confidence intervals.
 
@@ -88,20 +84,6 @@ Label ~250 samples with your oracle (human raters, downstream KPIs, expensive mo
 </div>
 
 [**Read the full Arena Experiment →**](https://www.cimolabs.com/research/arena-experiment) ・ [**Paper (Zenodo)**](https://zenodo.org/records/17903629)
-
----
-
-## Who Benefits
-
-| Your Situation | What CJE Gives You |
-|:---------------|:-------------------|
-| **A/B testing prompts** | Correct rankings + valid p-values (not random noise) |
-| **Comparing models** | Know which is actually better, not which scores higher |
-| **Monitoring production** | Detect calibration drift before metrics lie |
-| **Budget-constrained** | Oracle-quality decisions at judge-only cost |
-| **Reporting to stakeholders** | Confidence intervals that actually contain the truth |
-
-If you use an LLM judge to make decisions, CJE ensures those decisions are grounded in reality.
 
 ---
 
