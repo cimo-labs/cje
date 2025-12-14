@@ -150,7 +150,6 @@ cd cje && poetry install && make test
 ## Support
 
 - [Issues](https://github.com/cimo-labs/cje/issues)
-- [Discussions](https://github.com/cimo-labs/cje/discussions)
 
 ## License
 
