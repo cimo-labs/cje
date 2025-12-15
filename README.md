@@ -157,11 +157,14 @@ cd cje && poetry install && make test
 If you use CJE in your research, please cite:
 
 ```bibtex
-@article{landesberg2025cje,
+@misc{landesberg2025causaljudgeevaluationcalibrated,
   title={Causal Judge Evaluation: Calibrated Surrogate Metrics for LLM Systems},
-  author={Landesberg, Eddie},
-  journal={arXiv preprint arXiv:2512.11150},
-  year={2025}
+  author={Eddie Landesberg},
+  year={2025},
+  eprint={2512.11150},
+  archivePrefix={arXiv},
+  primaryClass={stat.ME},
+  url={https://arxiv.org/abs/2512.11150},
 }
 ```
 
