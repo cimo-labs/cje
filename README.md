@@ -6,6 +6,7 @@
 
 **Your LLM judge scores are lying. CJE calibrates them to what actually matters.**
 
+[![arXiv](https://img.shields.io/badge/arXiv-2512.11150-b31b1b.svg)](https://arxiv.org/abs/2512.11150)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb)
 [![Docs](https://img.shields.io/badge/docs-cimolabs.com-blue)](https://cimolabs.com/cje)
 [![Python](https://img.shields.io/badge/python-3.9%E2%80%933.12-blue)](https://www.python.org/downloads/)
@@ -89,7 +90,7 @@ Label ~250 samples with your oracle (human raters, downstream KPIs, expensive mo
   <br><em>Example output: comparing prompt variants with calibrated confidence intervals</em>
 </div>
 
-[**Read the full Arena Experiment →**](https://www.cimolabs.com/research/arena-experiment) ・ [**Paper (Zenodo)**](https://zenodo.org/records/17903629)
+[**Read the full Arena Experiment →**](https://www.cimolabs.com/research/arena-experiment)
 
 ---
 

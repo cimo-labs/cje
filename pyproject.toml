@@ -8,6 +8,7 @@ packages = [{ include = "cje" }]
 readme = "README.md"
 homepage = "https://cimolabs.com/cje"
 repository = "https://github.com/cimo-labs/cje"
+documentation = "https://arxiv.org/abs/2512.11150"
 keywords = ["evaluation", "llm", "causal-inference", "off-policy", "importance-sampling", "doubly-robust"]
 classifiers = [
     "Intended Audience :: Science/Research",
