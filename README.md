@@ -74,14 +74,9 @@ CJE answers all of these. Label 5% of samples with your oracle (human raters, la
 
 We tested on 5,000 Chatbot Arena prompts with GPT-5 as the oracle (ground truth) and GPT-4.1-nano as the cheap judge:
 
-| Without CJE | With CJE |
-|:------------|:---------|
-| Rankings correct 91% of the time | Rankings correct 99% of the time |
-| Error bars contain truth 0% of the time | Error bars contain truth 87% of the time |
-| Need 100% oracle labels | Need only 5% oracle labels |
-| Full labeling cost | **14× cheaper** |
+**CJE achieves 99% ranking accuracy using only 5% oracle labels—matching full-oracle performance at 14× lower cost.**
 
-Label ~250 samples with your oracle (human raters, downstream KPIs, expensive model). CJE learns the judge→oracle mapping and applies it to everything else.
+Label ~250 samples with your oracle (human raters, downstream KPIs, expensive model). CJE learns the judge→oracle mapping and applies it to everything else. Without calibration, error bars contained the true value 0% of the time. With CJE: 87%.
 
 **Already using an expensive model for evals?** Switch to a 10-30× cheaper judge + CJE calibration. Same accuracy, fraction of the inference cost.
 
