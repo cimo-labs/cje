@@ -152,6 +152,19 @@ cd cje && poetry install && make test
 
 - [Issues](https://github.com/cimo-labs/cje/issues)
 
+## Citation
+
+If you use CJE in your research, please cite:
+
+```bibtex
+@article{landesberg2025cje,
+  title={Causal Judge Evaluation: Calibrated Surrogate Metrics for LLM Systems},
+  author={Landesberg, Eddie},
+  journal={arXiv preprint arXiv:2512.11150},
+  year={2025}
+}
+```
+
 ## License
 
 MIT — See [LICENSE](LICENSE) for details.
