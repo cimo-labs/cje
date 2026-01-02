@@ -415,12 +415,14 @@ class TestBootstrapBehavior:
         percentile CIs would be mis-centered. We now use estimate ± z*SE for
         proper coverage.
         """
-        # Create result with bootstrap CIs in metadata (should be ignored)
+        # Create result with bootstrap CIs in metadata
         result = EstimationResult(
             estimates=np.array([0.5, 0.6]),
             standard_errors=np.array([0.02, 0.03]),
             n_samples_used={"a": 100, "b": 100},
             method="calibrated_direct_bootstrap",
+            influence_functions=None,
+            diagnostics=None,
             metadata={
                 "bootstrap_ci": {
                     "lower": [0.45, 0.54],
@@ -544,6 +546,7 @@ class TestLowOracleCoverage:
                     else None
                 ),
                 draw_idx=getattr(sample, "draw_idx", 0),
+                fold_id=getattr(sample, "fold_id", None),
             )
             masked_samples.append(masked_sample)
 
@@ -638,6 +641,7 @@ class TestLowOracleCoverage:
                     sample.oracle_label if sample.prompt_id in keep_prompt_ids else None
                 ),
                 draw_idx=getattr(sample, "draw_idx", 0),
+                fold_id=getattr(sample, "fold_id", None),
             )
             masked_samples.append(masked_sample)
 

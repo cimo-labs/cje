@@ -800,18 +800,22 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
 
         # Get the calibration mode from the fitted calibrator
         # (Fixed to full-data selection, not "auto")
+        from typing import Literal, cast
+
         if self.reward_calibrator is not None:
-            selected_mode = getattr(self.reward_calibrator, "selected_mode", None)
-            if selected_mode is None:
+            mode_str = getattr(self.reward_calibrator, "selected_mode", None)
+            if mode_str is None:
                 # Fallback to calibration_mode if selected_mode not available
-                selected_mode = getattr(
+                mode_str = getattr(
                     self.reward_calibrator, "calibration_mode", "monotone"
                 )
             # Never use "auto" in bootstrap - it should already be resolved
-            if selected_mode == "auto":
-                selected_mode = "monotone"
+            if mode_str == "auto" or mode_str not in ("monotone", "two_stage"):
+                mode_str = "monotone"
         else:
-            selected_mode = "monotone"
+            mode_str = "monotone"
+
+        selected_mode = cast(Literal["monotone", "two_stage"], mode_str)
 
         # Create calibrator factory with fixed mode
         calibrator_factory = make_calibrator_factory(
@@ -855,16 +859,14 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         estimates = bootstrap_result["estimates"]
 
         # Guardrail: detect and log estimator mismatch for diagnostics
-        estimates_logged_calibrator = []
+        estimates_logged_list: List[float] = []
         for policy in self.target_policies:
             if policy in self._policy_data:
                 pdata = self._policy_data[policy]
-                estimates_logged_calibrator.append(
-                    float(np.mean(pdata.calibrated_rewards))
-                )
+                estimates_logged_list.append(float(np.mean(pdata.calibrated_rewards)))
             else:
-                estimates_logged_calibrator.append(np.nan)
-        estimates_logged_calibrator = np.array(estimates_logged_calibrator)
+                estimates_logged_list.append(float("nan"))
+        estimates_logged_calibrator = np.array(estimates_logged_list)
 
         # Compute mismatch between the two estimators
         estimator_mismatch = estimates - estimates_logged_calibrator

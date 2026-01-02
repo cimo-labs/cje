@@ -225,8 +225,8 @@ class EstimationResult(BaseModel):
             df_info = self.metadata["degrees_of_freedom"]
             policies = self.metadata["target_policies"]
 
-            lower = []
-            upper = []
+            lower_list: List[float] = []
+            upper_list: List[float] = []
             for i, policy in enumerate(policies):
                 if policy in df_info and df_info[policy] is not None:
                     # Use t-critical value with finite DF
@@ -235,24 +235,28 @@ class EstimationResult(BaseModel):
                         t_crit = stats.t.ppf(1 - alpha / 2, df)
                         estimate = self.estimates[i]
                         se = self.standard_errors[i]
-                        lower.append(float(estimate - t_crit * se))
-                        upper.append(float(estimate + t_crit * se))
+                        lower_list.append(float(estimate - t_crit * se))
+                        upper_list.append(float(estimate + t_crit * se))
                     else:
                         # Fallback to z-critical for this policy
                         z = stats.norm.ppf(1 - alpha / 2)
-                        lower.append(
+                        lower_list.append(
                             float(self.estimates[i] - z * self.standard_errors[i])
                         )
-                        upper.append(
+                        upper_list.append(
                             float(self.estimates[i] + z * self.standard_errors[i])
                         )
                 else:
                     # Fallback to z-critical for this policy
                     z = stats.norm.ppf(1 - alpha / 2)
-                    lower.append(float(self.estimates[i] - z * self.standard_errors[i]))
-                    upper.append(float(self.estimates[i] + z * self.standard_errors[i]))
+                    lower_list.append(
+                        float(self.estimates[i] - z * self.standard_errors[i])
+                    )
+                    upper_list.append(
+                        float(self.estimates[i] + z * self.standard_errors[i])
+                    )
 
-            return np.array(lower), np.array(upper)
+            return np.array(lower_list), np.array(upper_list)
 
         # Priority 3: z-based CIs (asymptotically valid for large n)
         z = stats.norm.ppf(1 - alpha / 2)
