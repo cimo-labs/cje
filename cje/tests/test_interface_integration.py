@@ -407,12 +407,16 @@ def test_three_modes_estimate_clone_accurately() -> None:
     )
 
     # Run Direct mode (fresh draws for estimation, logged data for calibration)
+    # Use cluster_robust inference since fresh draws don't have oracle labels for bootstrap
     results_direct = analyze_dataset(
         logged_data_path=str(
             dataset_path
         ),  # Use logged data's oracle labels for calibration
         fresh_draws_dir=str(fresh_draws_dir),
         estimator="direct",  # Force direct mode (auto would select DR with both data sources)
+        estimator_config={
+            "inference_method": "cluster_robust"
+        },  # Fresh draws lack oracle
         verbose=False,
     )
 
