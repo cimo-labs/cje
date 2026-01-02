@@ -74,6 +74,11 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         paired_comparison: bool = True,
         run_diagnostics: bool = True,
         oua_jackknife: bool = True,
+        inference_method: str = "bootstrap",
+        n_bootstrap: int = 2000,
+        bootstrap_seed: int = 42,
+        calibration_data_path: Optional[str] = None,
+        use_augmented_estimator: bool = True,
         **kwargs: Any,
     ):
         # Create a minimal dummy sampler for base class compatibility
@@ -111,8 +116,16 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         )
         self.target_policies = target_policies
         self.paired_comparison = paired_comparison
+        self.inference_method = inference_method
+        self.n_bootstrap = n_bootstrap
+        self.bootstrap_seed = bootstrap_seed
+        self.calibration_data_path = calibration_data_path
+        self.use_augmented_estimator = use_augmented_estimator
         self._policy_data: Dict[str, PolicyData] = {}
         self._fresh_draws: Dict[str, Any] = {}  # Storage for fresh draws
+        self._bootstrap_result: Optional[Dict[str, Any]] = (
+            None  # Cache bootstrap results
+        )
 
     def add_fresh_draws(self, policy: str, fresh_draws: Any) -> None:
         """Add fresh draws for a target policy.
@@ -126,6 +139,96 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             f"Added fresh draws for policy '{policy}': "
             f"{len(fresh_draws.samples)} samples"
         )
+
+    def _calibration_overlaps_evaluation(self) -> Tuple[bool, int]:
+        """Check if calibration and evaluation data are coupled.
+
+        Coupling occurs when oracle labels used for calibration come from
+        prompts that are also in the evaluation set. This creates covariance
+        between calibration error and evaluation error that additive variance
+        decomposition doesn't capture.
+
+        Returns:
+            Tuple of (coupled: bool, overlap_count: int)
+            - coupled: True if there's any cluster overlap
+            - overlap_count: Number of clusters that appear in both sets
+        """
+        if self.calibration_data_path is not None:
+            # Separate calibration data provided - check if there's actual overlap
+            # (User may have provided truly independent calibration data)
+            # For now, assume separate path means no coupling
+            # TODO: Actually load and check cluster intersection
+            return False, 0
+
+        # Default case: oracle labels come from fresh draws (coupled)
+        # Collect all prompt_ids with oracle labels from fresh draws
+        cal_clusters: set = set()
+        eval_clusters: set = set()
+
+        for fd in self._fresh_draws.values():
+            for sample in fd.samples:
+                eval_clusters.add(sample.prompt_id)
+                if sample.oracle_label is not None:
+                    cal_clusters.add(sample.prompt_id)
+
+        # Compute intersection
+        overlap = cal_clusters & eval_clusters
+        coupled = len(overlap) > 0
+
+        return coupled, len(overlap)
+
+    def _should_use_bootstrap(self) -> Tuple[bool, str]:
+        """Determine if bootstrap inference should be used.
+
+        Bootstrap is preferred when:
+        1. inference_method == "bootstrap" (explicit request)
+        2. inference_method == "auto" AND:
+           - G < 20 clusters (cluster asymptotics unreliable), OR
+           - Calibration is coupled with evaluation (covariance term needed)
+
+        Returns:
+            Tuple of (use_bootstrap: bool, reason: str)
+        """
+        if self.inference_method == "bootstrap":
+            return True, "explicitly requested"
+
+        if self.inference_method == "cluster_robust":
+            return False, "cluster_robust explicitly requested"
+
+        # Auto mode: check conditions
+        if self.inference_method == "auto":
+            # Check number of clusters
+            n_clusters = len(
+                set().union(
+                    *[
+                        set(
+                            fd.prompt_ids
+                            if hasattr(fd, "prompt_ids")
+                            else [s.prompt_id for s in fd.samples]
+                        )
+                        for fd in self._fresh_draws.values()
+                    ]
+                )
+            )
+
+            if n_clusters < 20:
+                return True, f"few clusters (G={n_clusters} < 20)"
+
+            # Check coupling
+            coupled, overlap = self._calibration_overlaps_evaluation()
+            if coupled:
+                return (
+                    True,
+                    f"calibration/evaluation coupled ({overlap} overlapping clusters)",
+                )
+
+            return False, "sufficient clusters and no coupling detected"
+
+        # Unknown method - default to cluster_robust
+        logger.warning(
+            f"Unknown inference_method '{self.inference_method}', using cluster_robust"
+        )
+        return False, "unknown method, defaulting to cluster_robust"
 
     def fit(self) -> None:
         """Prepare data for each policy using fresh draws.
@@ -235,12 +338,18 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         Returns:
             EstimationResult with:
                 - estimates: Mean calibrated reward for each policy
-                - standard_errors: Including oracle uncertainty via OUA
+                - standard_errors: Including oracle uncertainty via OUA (or bootstrap)
                 - diagnostics: Simplified (no weight metrics)
                 - metadata: Mode info and caveats
         """
         self._validate_fitted()
 
+        # Check if bootstrap should be used
+        use_bootstrap, bootstrap_reason = self._should_use_bootstrap()
+        if use_bootstrap:
+            return self._estimate_with_bootstrap(bootstrap_reason)
+
+        # Standard estimation path (cluster-robust SE + OUA jackknife)
         estimates = []
         standard_errors = []
         n_samples_used = {}
@@ -653,3 +762,224 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         if not isinstance(result.metadata, dict):
             result.metadata = {}
         result.metadata["degrees_of_freedom"] = df_info
+
+    def _estimate_with_bootstrap(self, bootstrap_reason: str) -> EstimationResult:
+        """Compute estimates using cluster bootstrap with calibrator refit.
+
+        This method is used when bootstrap inference is preferred over
+        analytic cluster-robust SEs. It captures:
+        1. Prompt sampling variance
+        2. Calibrator uncertainty
+        3. Calibration/evaluation covariance (key term missing from OUA)
+
+        Args:
+            bootstrap_reason: Reason why bootstrap was selected (for metadata)
+
+        Returns:
+            EstimationResult with bootstrap-based confidence intervals
+        """
+        from ..diagnostics.robust_inference import (
+            DirectEvalTable,
+            build_direct_eval_table,
+            cluster_bootstrap_direct_with_refit,
+            make_calibrator_factory,
+        )
+
+        logger.info(f"Using cluster bootstrap inference ({bootstrap_reason})")
+
+        # Build evaluation table from fresh draws
+        eval_table = build_direct_eval_table(
+            fresh_draws_per_policy=self._fresh_draws,
+            covariate_names=(
+                self.reward_calibrator.covariate_names
+                if self.reward_calibrator
+                and hasattr(self.reward_calibrator, "covariate_names")
+                else None
+            ),
+        )
+
+        # Get the calibration mode from the fitted calibrator
+        # (Fixed to full-data selection, not "auto")
+        if self.reward_calibrator is not None:
+            selected_mode = getattr(self.reward_calibrator, "selected_mode", None)
+            if selected_mode is None:
+                # Fallback to calibration_mode if selected_mode not available
+                selected_mode = getattr(
+                    self.reward_calibrator, "calibration_mode", "monotone"
+                )
+            # Never use "auto" in bootstrap - it should already be resolved
+            if selected_mode == "auto":
+                selected_mode = "monotone"
+        else:
+            selected_mode = "monotone"
+
+        # Create calibrator factory with fixed mode
+        calibrator_factory = make_calibrator_factory(
+            mode=selected_mode,
+            covariate_names=(
+                self.reward_calibrator.covariate_names
+                if self.reward_calibrator
+                and hasattr(self.reward_calibrator, "covariate_names")
+                else None
+            ),
+            seed=self.bootstrap_seed,
+        )
+
+        # Compute adaptive min_oracle_per_replicate based on available oracle data
+        # This prevents bootstrap from failing at low oracle coverage (e.g., 5-10%)
+        n_oracle_total = int(np.sum(eval_table.oracle_mask))
+        # Use ~1/3 of total oracle as minimum, with floor of 10 and ceiling of 30
+        min_oracle_per_replicate = max(10, min(30, n_oracle_total // 3))
+        logger.info(
+            f"Bootstrap: {n_oracle_total} oracle samples, min_per_replicate={min_oracle_per_replicate}"
+        )
+
+        # Run bootstrap
+        bootstrap_result = cluster_bootstrap_direct_with_refit(
+            eval_table=eval_table,
+            calibrator_factory=calibrator_factory,
+            n_bootstrap=self.n_bootstrap,
+            min_oracle_per_replicate=min_oracle_per_replicate,
+            alpha=0.05,
+            seed=self.bootstrap_seed,
+            use_augmented_estimator=self.use_augmented_estimator,
+        )
+
+        # Cache result for pairwise comparisons
+        self._bootstrap_result = bootstrap_result
+
+        # ESTIMATOR CONSISTENCY: Use bootstrap's theta_hat as reported estimate.
+        # The bootstrap refits calibrator on fresh draws oracle, so we must use its
+        # point estimates for consistency. Using self._policy_data (logged-data calibrator)
+        # would create an estimator mismatch.
+        estimates = bootstrap_result["estimates"]
+
+        # Guardrail: detect and log estimator mismatch for diagnostics
+        estimates_logged_calibrator = []
+        for policy in self.target_policies:
+            if policy in self._policy_data:
+                pdata = self._policy_data[policy]
+                estimates_logged_calibrator.append(
+                    float(np.mean(pdata.calibrated_rewards))
+                )
+            else:
+                estimates_logged_calibrator.append(np.nan)
+        estimates_logged_calibrator = np.array(estimates_logged_calibrator)
+
+        # Compute mismatch between the two estimators
+        estimator_mismatch = estimates - estimates_logged_calibrator
+        max_mismatch = np.nanmax(np.abs(estimator_mismatch))
+        if max_mismatch > 0.01:
+            logger.warning(
+                f"Estimator mismatch detected: max|Δ| = {max_mismatch:.4f}. "
+                f"This is expected when logged-data and fresh-draws calibrators differ. "
+                f"Using bootstrap's theta_hat for consistency."
+            )
+
+        # Use bootstrap SEs (these correctly capture calibrator uncertainty)
+        standard_errors = bootstrap_result["standard_errors"]
+
+        # Build n_samples_used
+        n_samples_used = {}
+        for i, policy in enumerate(self.target_policies):
+            if policy in self._fresh_draws:
+                n_samples_used[policy] = len(self._fresh_draws[policy].samples)
+            else:
+                n_samples_used[policy] = 0
+
+        # Build influence functions (for compatibility)
+        influence_functions = {}
+        for policy in self.target_policies:
+            if policy in self._policy_data:
+                pdata = self._policy_data[policy]
+                policy_idx = self.target_policies.index(policy)
+                if not np.isnan(estimates[policy_idx]):
+                    influence_functions[policy] = (
+                        pdata.calibrated_rewards - estimates[policy_idx]
+                    )
+
+        # Build diagnostics
+        diagnostics = self._build_diagnostics(
+            list(estimates), list(standard_errors), n_samples_used
+        )
+
+        # Build metadata with comprehensive bootstrap info
+        coupled, overlap = self._calibration_overlaps_evaluation()
+        metadata = {
+            "mode": "direct",
+            "estimand": "on-policy evaluation on provided prompts",
+            "caveat": "Does not estimate counterfactual deployment value. Evaluates each policy on the evaluation set.",
+            "target_policies": list(self.target_policies),
+            "paired_comparison": self.paired_comparison,
+            "inference": {
+                "method": "cluster_bootstrap_refit",
+                "n_bootstrap_requested": self.n_bootstrap,
+                "n_bootstrap_valid": bootstrap_result["n_valid_replicates"],
+                "n_attempts": bootstrap_result["n_attempts"],
+                "skip_rate": bootstrap_result["skip_rate"],
+                "seed": self.bootstrap_seed,
+                "n_clusters": bootstrap_result["n_clusters"],
+                "cluster_id_field": "prompt_id",
+                "coupled": coupled,
+                "coupling_overlap": overlap,
+                "bootstrap_refit_mode": selected_mode,
+                "min_oracle_per_replicate": bootstrap_result[
+                    "min_oracle_per_replicate"
+                ],
+                "oracle_count_summary": bootstrap_result["oracle_count_summary"],
+                "bootstrap_reason": bootstrap_reason,
+            },
+            "bootstrap_ci": {
+                "lower": [float(x) for x in bootstrap_result["ci_lower"]],
+                "upper": [float(x) for x in bootstrap_result["ci_upper"]],
+                "method": "percentile",
+                "alpha": 0.05,
+            },
+            "se_components": {
+                "includes_oracle_uncertainty": True,  # Bootstrap captures this
+                "includes_mc_variance": False,
+                "via_bootstrap": True,
+            },
+            "estimator_consistency": {
+                "theta_hat_source": "bootstrap_refit",  # Using bootstrap's estimate for consistency
+                "theta_hat_logged_calibrator": [
+                    float(x) for x in estimates_logged_calibrator
+                ],
+                "estimator_mismatch": [float(x) for x in estimator_mismatch],
+                "max_mismatch": float(max_mismatch),
+            },
+        }
+
+        # Check if prompts are aligned across policies
+        if self.paired_comparison and len(self._policy_data) > 1:
+            prompt_sets = [set(pd.prompt_ids) for pd in self._policy_data.values()]
+            if all(ps == prompt_sets[0] for ps in prompt_sets):
+                metadata["prompts_aligned"] = True
+                metadata["n_prompts"] = len(prompt_sets[0])
+            else:
+                metadata["prompts_aligned"] = False
+
+        result = EstimationResult(
+            estimates=np.array(estimates),
+            standard_errors=np.array(standard_errors),
+            n_samples_used=n_samples_used,
+            method="calibrated_direct_bootstrap",
+            influence_functions=influence_functions,
+            diagnostics=diagnostics,
+            metadata=metadata,
+        )
+
+        # Log summary with SE-based CIs (not bootstrap percentile CIs)
+        from scipy import stats
+
+        z_crit = stats.norm.ppf(0.975)  # 1.96 for 95% CI
+        for i, policy in enumerate(self.target_policies):
+            if not np.isnan(estimates[i]):
+                ci_lower = estimates[i] - z_crit * standard_errors[i]
+                ci_upper = estimates[i] + z_crit * standard_errors[i]
+                logger.info(
+                    f"Bootstrap estimate for '{policy}': {estimates[i]:.4f} ± {standard_errors[i]:.4f} "
+                    f"(95% CI: [{ci_lower:.4f}, {ci_upper:.4f}])"
+                )
+
+        return result

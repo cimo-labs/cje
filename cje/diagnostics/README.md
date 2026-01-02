@@ -548,12 +548,43 @@ Sort options:
 - `sort_by="abs_residual"`: Biggest errors first (regardless of direction)
 - `sort_by=None`: Preserve original order
 
-## Uncertainty Quantification: Two-Component Structure
+## Uncertainty Quantification: Bootstrap with θ̂_aug
 
-CJE's uncertainty quantification properly accounts for **two independent sources of variance**:
+CJE provides **~95% coverage** for confidence intervals using bootstrap with θ̂_aug (AIPW-style debiasing).
+
+### Recommended Approach: Bootstrap + θ̂_aug
+
+The default inference method uses **cluster bootstrap with calibrator refit** and an **augmented estimator (θ̂_aug)** that corrects for calibrator bias:
+
+```
+θ̂_aug = mean(f̂_full(S)) + mean(Y - f̂_oof(S))
+       = plug-in estimate + residual correction
+```
+
+Where:
+- `f̂_full`: Calibrator fitted on ALL oracle-labeled data (lower variance)
+- `f̂_oof`: Cluster-out-of-fold predictions (unbiased residuals)
+- The residual term corrects for calibrator bias using oracle samples
+
+**Coverage comparison (from ablation study):**
+
+| Oracle | Cluster-Robust | OUA Jackknife | Bootstrap+θ̂_aug |
+|--------|----------------|---------------|------------------|
+| 5%     | 22%            | 78%           | **94%**          |
+| 10%    | 32%            | 77%           | **96%**          |
+| 25%    | 42%            | 83%           | **96%**          |
+| 50%    | 55%            | 87%           | **97%**          |
+
+**Why bootstrap wins:**
+1. **Bias correction**: θ̂_aug corrects for systematic calibrator bias using OOF residuals
+2. **Full uncertainty capture**: Refitting calibrator on each replicate captures calibration/evaluation covariance that analytic SEs miss
+
+### Two-Component Variance Structure
+
+CJE's uncertainty comes from **two independent sources**:
 
 1. **Main sampling uncertainty** (from the eval log/prompts) → cluster-robust SEs
-2. **Calibrator uncertainty** (from the oracle slice) → OUA jackknife
+2. **Calibrator uncertainty** (from the oracle slice) → captured via bootstrap refit
 
 Under the standard product-sample setup (oracle and eval datasets are independent), these components are **additive**:
 

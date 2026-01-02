@@ -77,7 +77,7 @@ We tested on 5,000 Chatbot Arena prompts with GPT-5 as the oracle (ground truth)
 
 **CJE achieves 99% ranking accuracy using only 5% oracle labels—matching full-oracle performance at 14× lower cost.**
 
-Label ~250 samples with your oracle (human raters, downstream KPIs, expensive model). CJE learns the judge→oracle mapping and applies it to everything else. Without calibration, error bars contained the true value 0% of the time. With CJE: 87%.
+Label ~250 samples with your oracle (human raters, downstream KPIs, expensive model). CJE learns the judge→oracle mapping and applies it to everything else. Without calibration, error bars contained the true value 0% of the time. With CJE: ~95%.
 
 **Already using an expensive model for evals?** Switch to a 10-30× cheaper judge + CJE calibration. Same accuracy, fraction of the inference cost.
 

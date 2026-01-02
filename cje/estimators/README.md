@@ -197,8 +197,37 @@ The degrees of freedom is determined by the limiting factor (minimum across sour
 - This is completely automatic - no user configuration needed
 
 ### Direct Mode Standard Errors
-Direct Mode automatically adapts its standard error calculation based on the data structure:
+Direct Mode automatically adapts its standard error calculation based on the data structure and inference method:
 
+**Inference Methods** (controlled via `inference_method` parameter):
+- **`bootstrap`** (default): Cluster bootstrap with calibrator refit + θ̂_aug (achieves **~95% coverage**)
+- **`cluster_robust`**: Standard cluster-robust SEs by prompt (fastest, ~22-55% coverage)
+- **`oua_jackknife`**: Adds oracle uncertainty via delete-one-fold jackknife (~77-87% coverage)
+- **`auto`**: Uses cluster_robust; switches to bootstrap when coupling detected
+
+**Bootstrap with θ̂_aug** uses an AIPW-style bias correction:
+```
+θ̂_aug = mean(f̂_full(S)) + mean(Y - f̂_oof(S))
+```
+This corrects for calibrator bias. Refitting the calibrator on each bootstrap replicate captures the calibration/evaluation covariance that analytic SEs miss.
+
+```python
+# Explicit bootstrap for small samples or coupled calibration/evaluation
+estimator = CalibratedDirectEstimator(
+    target_policies=policies,
+    reward_calibrator=calibrator,
+    inference_method="bootstrap",  # or "auto", "cluster_robust"
+    n_bootstrap=2000,              # Number of bootstrap replicates
+)
+```
+
+**When bootstrap is preferred (recommended for all cases):**
+- **Always** - bootstrap achieves ~95% coverage vs ~22-55% for cluster-robust
+- Few evaluation clusters (< 20 prompts) - asymptotic approximation unreliable
+- Calibration and evaluation data overlap (coupled) - analytic SEs miss covariance
+- Need valid confidence intervals (the default cluster_robust severely undercovers)
+
+**Standard (non-bootstrap) cluster-robust SEs:**
 ```python
 # Single policy or unpaired: Standard SE
 standard_errors = np.sqrt(variance/n)
@@ -217,6 +246,8 @@ result.metadata["n_clusters"]  # e.g., {"policy_a": 1000, ...}
 - Example: 3 policies × 1000 prompts = 3000 samples, but only 1000 independent clusters
 - Clusters by `prompt_id` to account for correlation across policies
 - Provides honest uncertainty for policy comparisons
+
+**Important:** Bootstrap inference affects only SEs and CIs, not point estimates. Point estimates always use the original calibrator for consistency.
 
 **Philosophy:** Cluster by the source of dependence. Direct Mode clusters by prompts when paired, IPS/DR cluster by cross-validation folds.
 

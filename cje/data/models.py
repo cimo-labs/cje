@@ -189,9 +189,13 @@ class EstimationResult(BaseModel):
     def confidence_interval(self, alpha: float = 0.05) -> Tuple[np.ndarray, np.ndarray]:
         """Compute confidence intervals (returns lower and upper arrays).
 
-        Uses t-based CIs by default when degrees of freedom information is available
-        in metadata (from cluster-robust SE or oracle uncertainty). Falls back to
-        z-based CIs for large-sample approximation.
+        Priority order:
+        1. Bootstrap percentile CIs if available
+        2. t-based CIs if degrees of freedom information is available
+        3. z-based CIs for large-sample approximation (fallback)
+
+        Note: For bootstrap CIs, the stored alpha is used regardless of the
+        alpha parameter (you need to re-run bootstrap with different alpha).
 
         Args:
             alpha: Significance level (default 0.05 for 95% CI)
@@ -201,7 +205,17 @@ class EstimationResult(BaseModel):
         """
         from scipy import stats
 
-        # Check if we have degrees of freedom information
+        # Priority 1: Bootstrap percentile CIs
+        # Bootstrap with θ̂_aug provides ~95% coverage via AIPW-style debiasing
+        if isinstance(self.metadata, dict) and "bootstrap_ci" in self.metadata:
+            boot_ci = self.metadata["bootstrap_ci"]
+            if boot_ci.get("method") == "percentile":
+                # Use pre-computed percentile intervals
+                lower = np.array(boot_ci["lower"])
+                upper = np.array(boot_ci["upper"])
+                return lower, upper
+
+        # Priority 2: t-based CIs with degrees of freedom
         if (
             isinstance(self.metadata, dict)
             and "degrees_of_freedom" in self.metadata
@@ -240,7 +254,7 @@ class EstimationResult(BaseModel):
 
             return np.array(lower), np.array(upper)
 
-        # Fallback: Use z-based CIs (asymptotically valid for large n)
+        # Priority 3: z-based CIs (asymptotically valid for large n)
         z = stats.norm.ppf(1 - alpha / 2)
         lower = self.estimates - z * self.standard_errors
         upper = self.estimates + z * self.standard_errors

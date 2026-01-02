@@ -25,6 +25,12 @@ results = analyze_dataset(
 print(f"Policy value: {results.estimates[0]:.3f} ± {1.96*results.standard_errors[0]:.3f}")
 ```
 
+## Which Mode Should I Use?
+
+**Use Direct mode.** It's simple, reliable, and works for the vast majority of LLM evaluation tasks.
+
+IPS and DR modes exist for counterfactual questions ("what if we had deployed a different model?") but require excellent policy overlap which is rare in practice.
+
 ## Three Analysis Modes
 
 | Mode | Data Needed | Estimand | When to Use |
@@ -616,6 +622,48 @@ results = analyze_dataset(
 
 **See also:** `cje/calibration/README.md` for details on two-stage calibration with covariates.
 
+### Direct Mode Inference Methods
+
+Direct mode supports multiple inference methods for computing standard errors:
+
+```python
+# Default: auto-selects based on sample size and coupling
+results = analyze_dataset(
+    fresh_draws_dir="responses/",
+    estimator_config={"inference_method": "auto"}
+)
+
+# Explicit bootstrap for small samples or coupled data
+results = analyze_dataset(
+    fresh_draws_dir="responses/",
+    estimator_config={
+        "inference_method": "bootstrap",
+        "n_bootstrap": 2000  # Number of replicates
+    }
+)
+
+# Cluster-robust only (fastest, for large samples)
+results = analyze_dataset(
+    fresh_draws_dir="responses/",
+    estimator_config={"inference_method": "cluster_robust"}
+)
+```
+
+**Inference methods:**
+| Method | Coverage | Description |
+|--------|----------|-------------|
+| `bootstrap` (default) | **~95%** | Cluster bootstrap with θ̂_aug + calibrator refit |
+| `oua_jackknife` | ~77-87% | Adds oracle uncertainty via delete-one-fold jackknife |
+| `cluster_robust` | ~22-55% | Standard cluster-robust SEs (fast, ignores calibration uncertainty) |
+| `auto` | varies | Uses cluster_robust; switches to bootstrap when coupling detected |
+
+**Bootstrap with θ̂_aug** is recommended for valid confidence intervals. It uses an AIPW-style bias correction (`θ̂_aug = plug-in + residual correction`) and refits the calibrator on each replicate to capture calibration/evaluation covariance.
+
+**When to use bootstrap (recommended for all cases):**
+- Always, if you need valid confidence intervals
+- Few evaluation prompts (< 20)
+- Calibration and evaluation data overlap
+
 ### Custom Configuration
 ```python
 results = analyze_dataset(
@@ -647,6 +695,7 @@ python -m cje.interface.hydra_entry \
    - Simplest setup - no logprobs needed
    - On-policy comparison: "Which policy is best on this eval set?"
    - Auto-discovers policies from filenames
+   - Supports bootstrap inference for small samples (see below)
 
 2. **IPS Mode** (`logged_data_path` only)
    - Fast counterfactual estimates from logged data
