@@ -381,6 +381,7 @@ def cluster_bootstrap_direct_with_refit(
     alpha: float = 0.05,
     seed: int = 42,
     use_augmented_estimator: bool = True,
+    calibration_policy_idx: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Cluster bootstrap with calibrator refit for Direct mode.
 
@@ -407,6 +408,10 @@ def cluster_bootstrap_direct_with_refit(
         seed: Random seed for reproducibility
         use_augmented_estimator: If True (default), use θ̂_aug (AIPW-style debiasing).
             If False, use plug-in estimator (mean of calibrated scores).
+        calibration_policy_idx: If provided, fit calibrator only on this policy's
+            oracle samples (for transport experiments). Residual corrections in θ̂_aug
+            still use all policies' oracle samples. If None, use all oracle samples
+            for both calibration and residuals (default behavior).
 
     Returns:
         Dictionary with:
@@ -436,6 +441,23 @@ def cluster_bootstrap_direct_with_refit(
     n_policies = eval_table.n_policies
     n_clusters = eval_table.n_clusters
 
+    # Compute separate masks for calibration vs residuals (transport experiments)
+    # - calibration_oracle_mask: used for fitting the calibrator
+    # - oracle_mask: used for computing residual corrections in θ̂_aug
+    if calibration_policy_idx is not None:
+        calibration_oracle_mask = oracle_mask & (
+            policy_indices == calibration_policy_idx
+        )
+        n_cal_oracle = int(np.sum(calibration_oracle_mask))
+        n_total_oracle = int(np.sum(oracle_mask))
+        logger.info(
+            f"Transport mode: calibrating on policy {calibration_policy_idx} "
+            f"({n_cal_oracle} oracle samples), residuals on all policies "
+            f"({n_total_oracle} oracle samples)"
+        )
+    else:
+        calibration_oracle_mask = oracle_mask
+
     # Compute point estimates from full data (single calibrator for all policies)
     full_estimates = np.zeros(n_policies)
     augmentation_diagnostics: Optional[Dict[str, Any]] = None
@@ -446,14 +468,19 @@ def cluster_bootstrap_direct_with_refit(
 
         # Pass prompt_id_strings for cluster-level fold assignment
         # This ensures OOF predictions use cluster-level cross-fitting
-        oracle_prompt_ids = [prompt_id_strings[i] for i in np.where(oracle_mask)[0]]
+        # Use calibration_oracle_mask (may be subset if calibration_policy_idx is set)
+        cal_oracle_prompt_ids = [
+            prompt_id_strings[i] for i in np.where(calibration_oracle_mask)[0]
+        ]
 
         calibrator.fit_cv(
-            judge_scores=judge_scores[oracle_mask],
-            oracle_labels=oracle_labels[oracle_mask],
+            judge_scores=judge_scores[calibration_oracle_mask],
+            oracle_labels=oracle_labels[calibration_oracle_mask],
             n_folds=5,
-            prompt_ids=oracle_prompt_ids,  # For cluster-level folds
-            covariates=(covariates[oracle_mask] if covariates is not None else None),
+            prompt_ids=cal_oracle_prompt_ids,  # For cluster-level folds
+            covariates=(
+                covariates[calibration_oracle_mask] if covariates is not None else None
+            ),
         )
 
         # Predict calibrated rewards for all samples (full model)
@@ -461,17 +488,35 @@ def cluster_bootstrap_direct_with_refit(
 
         if use_augmented_estimator:
             # Use θ̂_aug (AIPW-style debiasing)
-            # Get cluster-out-of-fold predictions for oracle samples
+            # Get cluster-out-of-fold predictions for CALIBRATION oracle samples
+            # (fold_ids will match calibration_oracle_mask length)
             oof_predictions = get_oof_predictions(
-                calibrator, judge_scores, oracle_mask, covariates
+                calibrator, judge_scores, calibration_oracle_mask, covariates
             )
 
-            # Compute augmented estimates
+            # For NON-CALIBRATION oracle (target policies), use full-model predictions
+            # This captures transport bias correction via the residual term
+            if calibration_policy_idx is not None:
+                non_calibration_oracle = oracle_mask & ~calibration_oracle_mask
+                if np.any(non_calibration_oracle):
+                    non_cal_indices = np.where(non_calibration_oracle)[0]
+                    non_cal_judge = judge_scores[non_calibration_oracle]
+                    non_cal_cov = (
+                        covariates[non_calibration_oracle]
+                        if covariates is not None
+                        else None
+                    )
+                    oof_predictions[non_cal_indices] = calibrator.predict(
+                        non_cal_judge, covariates=non_cal_cov
+                    )
+
+            # Compute augmented estimates using FULL oracle_mask (all policies)
+            # The residual correction will capture transport bias for target policies
             full_estimates, augmentation_diagnostics = (
                 compute_augmented_estimate_per_policy(
                     calibrated_full=calibrated_full,
                     oracle_labels=oracle_labels,
-                    oracle_mask=oracle_mask,
+                    oracle_mask=oracle_mask,  # All policies for residuals
                     oof_predictions=oof_predictions,
                     policy_indices=policy_indices,
                     n_policies=n_policies,
@@ -525,25 +570,29 @@ def cluster_bootstrap_direct_with_refit(
             covariates[bootstrap_rows_arr] if covariates is not None else None
         )
 
-        # 4. Check oracle count - retry if too few
-        n_oracle_boot = int(np.sum(boot_oracle_mask))
-        if n_oracle_boot < min_oracle_per_replicate:
+        # 3b. Compute bootstrap calibration mask (subset if calibration_policy_idx set)
+        boot_calibration_mask = calibration_oracle_mask[bootstrap_rows_arr]
+
+        # 4. Check CALIBRATION oracle count - retry if too few
+        # (we need enough calibration oracle for the calibrator to fit)
+        n_cal_oracle_boot = int(np.sum(boot_calibration_mask))
+        if n_cal_oracle_boot < min_oracle_per_replicate:
             continue
 
-        # 5. Refit calibrator on bootstrap oracle subset (mode is fixed, not "auto")
+        # 5. Refit calibrator on bootstrap CALIBRATION oracle subset
         try:
             boot_calibrator = calibrator_factory()
-            boot_oracle_prompt_ids = [
-                boot_prompt_ids[i] for i in np.where(boot_oracle_mask)[0]
+            boot_cal_oracle_prompt_ids = [
+                boot_prompt_ids[i] for i in np.where(boot_calibration_mask)[0]
             ]
 
             boot_calibrator.fit_cv(
-                judge_scores=boot_judge[boot_oracle_mask],
-                oracle_labels=boot_oracle[boot_oracle_mask],
-                n_folds=min(5, n_oracle_boot // 4),  # Reduce folds if low oracle count
-                prompt_ids=boot_oracle_prompt_ids,  # For cluster-level folds
+                judge_scores=boot_judge[boot_calibration_mask],
+                oracle_labels=boot_oracle[boot_calibration_mask],
+                n_folds=min(5, n_cal_oracle_boot // 4),  # Reduce folds if low oracle
+                prompt_ids=boot_cal_oracle_prompt_ids,  # For cluster-level folds
                 covariates=(
-                    boot_covariates[boot_oracle_mask]
+                    boot_covariates[boot_calibration_mask]
                     if boot_covariates is not None
                     else None
                 ),
@@ -564,13 +613,31 @@ def cluster_bootstrap_direct_with_refit(
         # 7. Compute policy estimates (augmented or plug-in)
         if use_augmented_estimator:
             # Use θ̂_aug for bootstrap replicate
+            # Get OOF predictions for CALIBRATION oracle (fold_ids will match)
             boot_oof_preds = get_oof_predictions(
-                boot_calibrator, boot_judge, boot_oracle_mask, boot_covariates
+                boot_calibrator, boot_judge, boot_calibration_mask, boot_covariates
             )
+
+            # For NON-CALIBRATION oracle, use full-model predictions
+            if calibration_policy_idx is not None:
+                boot_non_cal_mask = boot_oracle_mask & ~boot_calibration_mask
+                if np.any(boot_non_cal_mask):
+                    boot_non_cal_indices = np.where(boot_non_cal_mask)[0]
+                    boot_non_cal_judge = boot_judge[boot_non_cal_mask]
+                    boot_non_cal_cov = (
+                        boot_covariates[boot_non_cal_mask]
+                        if boot_covariates is not None
+                        else None
+                    )
+                    boot_oof_preds[boot_non_cal_indices] = boot_calibrator.predict(
+                        boot_non_cal_judge, covariates=boot_non_cal_cov
+                    )
+
+            # Compute augmented estimates using FULL boot_oracle_mask
             means_p, _ = compute_augmented_estimate_per_policy(
                 calibrated_full=boot_rewards,
                 oracle_labels=boot_oracle,
-                oracle_mask=boot_oracle_mask,
+                oracle_mask=boot_oracle_mask,  # All policies for residuals
                 oof_predictions=boot_oof_preds,
                 policy_indices=boot_policy,
                 n_policies=n_policies,
@@ -585,7 +652,7 @@ def cluster_bootstrap_direct_with_refit(
                 means_p = np.where(cnt_p > 0, sum_p / cnt_p, np.nan)
 
         bootstrap_matrix[valid_count, :] = means_p
-        oracle_counts.append(n_oracle_boot)
+        oracle_counts.append(n_cal_oracle_boot)  # Track calibration oracle count
         valid_count += 1
 
     # Check if we got enough valid replicates
@@ -640,6 +707,7 @@ def cluster_bootstrap_direct_with_refit(
         "min_oracle_per_replicate": min_oracle_per_replicate,
         "use_augmented_estimator": use_augmented_estimator,
         "augmentation_diagnostics": augmentation_diagnostics,
+        "calibration_policy_idx": calibration_policy_idx,  # For transport experiments
     }
 
 

@@ -808,6 +808,69 @@ for policy, est in result.estimates.items():
     print(f"{policy}: {est:.3f} [{ci_lower:.3f}, {ci_upper:.3f}]")
 ```
 
+### Transport-Aware Bootstrap (calibration_policy_idx)
+
+When calibration is learned on a **base policy** but applied to different **target policies**, the standard θ̂_aug may underestimate bias if the calibrator doesn't transport well. The `calibration_policy_idx` parameter enables **transport-aware bootstrap** that separates:
+
+1. **Calibration oracle**: Only base policy samples (for fitting the calibrator)
+2. **Residual oracle**: All policies (for computing transport bias corrections)
+
+**Why this matters:**
+
+When `calibration_policy_idx` is set:
+- The calibrator is fitted only on the base policy's oracle samples
+- The residual correction `mean(Y - f̂(S))` uses ALL policies' oracle samples
+- Target policies get full-model predictions (not OOF) since they weren't in calibration
+- This captures transport bias: if f̂ learned on base doesn't fit target, the residual term corrects it
+
+**Usage:**
+
+```python
+from cje.diagnostics import cluster_bootstrap_direct_with_refit, make_calibrator_factory
+
+# calibration_policy_idx=0 means: fit calibrator only on policy 0 (base)
+result = cluster_bootstrap_direct_with_refit(
+    eval_table=eval_table,
+    calibrator_factory=make_calibrator_factory("monotone"),
+    n_bootstrap=2000,
+    min_oracle_per_replicate=30,
+    calibration_policy_idx=0,  # Base policy only for calibration
+    use_augmented_estimator=True,
+)
+
+# Check residual corrections in diagnostics
+aug_diag = result.get("augmentation_diagnostics", {})
+residual_corrections = aug_diag.get("residual_corrections", [])
+
+# Base policy: small residual (calibrator fits well)
+# Target policy: larger residual (captures transport bias)
+print(f"Base residual: {residual_corrections[0]:.3f}")
+print(f"Target residual: {residual_corrections[1]:.3f}")
+```
+
+**Through CalibratedDirectEstimator:**
+
+```python
+from cje.estimators import CalibratedDirectEstimator
+
+estimator = CalibratedDirectEstimator(
+    target_policies=["base", "verbose", "contrarian"],
+    calibration_policy="base",  # Calibrate only on base
+    inference_method="bootstrap",
+    use_augmented_estimator=True,
+)
+```
+
+**Expected behavior:**
+
+| Policy | Residual Correction | Explanation |
+|--------|---------------------|-------------|
+| base | ~0 | Calibrator fits well (trained on this) |
+| verbose | ~+0.03 | Small transport bias |
+| contrarian | ~+0.12 | Large transport bias (calibrator backfires) |
+
+The final estimate for each policy is: `mean(f̂(S)) + residual_correction`, which corrects for transport failures automatically.
+
 ### Common Pitfalls
 
 **❌ Using i.i.d. SEs with clustered data**

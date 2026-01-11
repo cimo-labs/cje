@@ -52,9 +52,26 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
 
     Args:
         target_policies: List of policy names to evaluate
-        reward_calibrator: Optional calibrator to map judge scores to rewards
+        reward_calibrator: Optional calibrator to map judge scores to rewards.
+            If None, uses raw judge scores (uncalibrated "naive" mode).
         paired_comparison: If True, use within-prompt differences when possible
         run_diagnostics: Whether to compute diagnostics
+        oua_jackknife: Whether to use oracle uncertainty augmentation
+        inference_method: How to compute standard errors. One of:
+            - "bootstrap": Cluster bootstrap with calibrator refit (default when
+              reward_calibrator is provided)
+            - "cluster_robust": Cluster-robust SEs without bootstrap
+            - "auto": Choose based on data characteristics
+            Note: When reward_calibrator=None, defaults to "cluster_robust" since
+            bootstrap would create a new calibrator, defeating uncalibrated mode.
+        n_bootstrap: Number of bootstrap replicates (default 2000)
+        bootstrap_seed: Random seed for bootstrap reproducibility
+        use_augmented_estimator: If True, use AIPW-style debiasing in bootstrap
+        calibration_policy: If provided, fit calibrator only on this policy's oracle
+            samples (for transport experiments). Residual corrections in θ̂_aug
+            still use all policies' oracle samples, enabling bias correction for
+            policies where the calibrator doesn't transport. If None, use all
+            oracle samples for both calibration and residuals (default).
 
     Example:
         >>> # Fresh draws from multiple policies
@@ -79,6 +96,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         bootstrap_seed: int = 42,
         calibration_data_path: Optional[str] = None,
         use_augmented_estimator: bool = True,
+        calibration_policy: Optional[str] = None,
         **kwargs: Any,
     ):
         # Create a minimal dummy sampler for base class compatibility
@@ -116,11 +134,25 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         )
         self.target_policies = target_policies
         self.paired_comparison = paired_comparison
+
+        # Auto-detect: when reward_calibrator=None, bootstrap would create a new
+        # calibrator internally, defeating "naive" (uncalibrated) mode.
+        # Default to cluster_robust in this case.
+        if reward_calibrator is None and inference_method == "bootstrap":
+            logger.info(
+                "reward_calibrator=None with inference_method='bootstrap' would create "
+                "a calibrator during bootstrap. Defaulting to 'cluster_robust' for "
+                "uncalibrated estimation. Pass inference_method='cluster_robust' explicitly "
+                "to silence this message."
+            )
+            inference_method = "cluster_robust"
+
         self.inference_method = inference_method
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
         self.calibration_data_path = calibration_data_path
         self.use_augmented_estimator = use_augmented_estimator
+        self.calibration_policy = calibration_policy  # For transport experiments
         self._policy_data: Dict[str, PolicyData] = {}
         self._fresh_draws: Dict[str, Any] = {}  # Storage for fresh draws
         self._bootstrap_result: Optional[Dict[str, Any]] = (
@@ -838,6 +870,24 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             f"Bootstrap: {n_oracle_total} oracle samples, min_per_replicate={min_oracle_per_replicate}"
         )
 
+        # Compute calibration_policy_idx for transport experiments
+        # This separates calibration oracle (single policy) from residual oracle (all policies)
+        calibration_policy_idx = None
+        if self.calibration_policy:
+            try:
+                calibration_policy_idx = eval_table.policy_names.index(
+                    self.calibration_policy
+                )
+                logger.info(
+                    f"Transport mode: calibrating on policy '{self.calibration_policy}' "
+                    f"(idx={calibration_policy_idx})"
+                )
+            except ValueError:
+                logger.warning(
+                    f"calibration_policy '{self.calibration_policy}' not in policy_names "
+                    f"{eval_table.policy_names}, using all oracle for calibration"
+                )
+
         # Run bootstrap
         bootstrap_result = cluster_bootstrap_direct_with_refit(
             eval_table=eval_table,
@@ -847,6 +897,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             alpha=0.05,
             seed=self.bootstrap_seed,
             use_augmented_estimator=self.use_augmented_estimator,
+            calibration_policy_idx=calibration_policy_idx,
         )
 
         # Cache result for pairwise comparisons

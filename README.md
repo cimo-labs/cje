@@ -125,6 +125,10 @@ Walk through a complete example: compare prompt variants, check if calibration t
 
 ## Documentation
 
+**Video Walkthroughs**
+- [CJE Technical Walkthrough](https://youtu.be/r0dinGsPuqY) — Pipeline deep dive: calibration, evaluation, and transport auditing
+- [CJE in 3 Minutes](https://youtu.be/VbSYrby8iaQ) — Quick intro: why raw judge scores mislead and how CJE fixes it
+
 **Technical Guides**
 - [Calibration Methods](cje/calibration/README.md) — AutoCal-R, isotonic regression, two-stage
 - [Diagnostics System](cje/diagnostics/README.md) — Uncertainty quantification, transportability

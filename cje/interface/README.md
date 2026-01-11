@@ -664,6 +664,21 @@ results = analyze_dataset(
 - Few evaluation prompts (< 20)
 - Calibration and evaluation data overlap
 
+**Transport-aware bootstrap** (`calibration_policy` option):
+When evaluating multiple policies where calibration was learned on one base policy, use `calibration_policy` to enable transport-aware bias correction:
+
+```python
+results = analyze_dataset(
+    fresh_draws_dir="responses/",
+    estimator_config={
+        "inference_method": "bootstrap",
+        "calibration_policy": "base",  # Fit calibrator only on base policy
+    }
+)
+```
+
+This separates calibration (base policy only) from residual corrections (all policies). When the calibrator doesn't transport to target policies, the residual term in θ̂_aug captures the bias. See `diagnostics/README.md` for details.
+
 ### Custom Configuration
 ```python
 results = analyze_dataset(

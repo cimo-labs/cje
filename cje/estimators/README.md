@@ -249,6 +249,24 @@ result.metadata["n_clusters"]  # e.g., {"policy_a": 1000, ...}
 
 **Important:** Bootstrap inference affects only SEs and CIs, not point estimates. Point estimates always use the original calibrator for consistency.
 
+**Transport-Aware Bootstrap** (`calibration_policy` parameter):
+When evaluating multiple policies where calibration was learned on a base policy, use `calibration_policy` to enable transport-aware bias correction:
+
+```python
+estimator = CalibratedDirectEstimator(
+    target_policies=["base", "verbose", "contrarian"],
+    reward_calibrator=calibrator,
+    inference_method="bootstrap",
+    calibration_policy="base",  # Fit calibrator only on base policy
+)
+```
+
+This separates:
+- **Calibration oracle**: Only base policy samples (for fitting the calibrator)
+- **Residual oracle**: All policies (for computing transport bias corrections in θ̂_aug)
+
+When the calibrator doesn't transport to target policies, the residual correction `mean(Y - f̂(S))` captures this bias. See `diagnostics/README.md` for details.
+
 **Philosophy:** Cluster by the source of dependence. Direct Mode clusters by prompts when paired, IPS/DR cluster by cross-validation folds.
 
 ### IPS Standard Errors
