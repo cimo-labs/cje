@@ -6,7 +6,7 @@ on:
   workflow_dispatch:  # Allow manual trigger
 
 permissions:
-  contents: read
+  contents: write  # Required for creating releases
   id-token: write  # Required for OIDC
 
 jobs:
@@ -38,3 +38,23 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           print-hash: true
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(poetry version -s)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          body: |
+            ## Installation
+            ```bash
+            pip install cje-eval==${{ steps.version.outputs.version }}
+            ```
+
+            See [CHANGELOG](https://github.com/cimo-labs/cje/blob/main/CHANGELOG.md) for details.
+          generate_release_notes: true
