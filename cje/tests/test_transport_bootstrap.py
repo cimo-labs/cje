@@ -69,6 +69,8 @@ def create_transport_test_data(
             judge_score=float(base_judge[i]),
             oracle_label=float(base_oracle[i]) if oracle_mask[i] else None,
             draw_idx=0,
+            response="",
+            fold_id=None,
         )
         base_samples.append(sample)
 
@@ -81,6 +83,8 @@ def create_transport_test_data(
             judge_score=float(target_judge[i]),
             oracle_label=float(target_oracle[i]) if oracle_mask[i] else None,
             draw_idx=0,
+            response="",
+            fold_id=None,
         )
         target_samples.append(sample)
 
@@ -332,6 +336,8 @@ class TestBootstrapWithCalibrationPolicyIdx:
                     judge_score=np.random.uniform(0.3, 0.7),
                     oracle_label=np.random.uniform(0.3, 0.7) if has_oracle else None,
                     draw_idx=0,
+                    response="",
+                    fold_id=None,
                 )
             )
 
@@ -346,6 +352,8 @@ class TestBootstrapWithCalibrationPolicyIdx:
                     judge_score=np.random.uniform(0.3, 0.7),
                     oracle_label=np.random.uniform(0.3, 0.7) if has_oracle else None,
                     draw_idx=0,
+                    response="",
+                    fold_id=None,
                 )
             )
 
