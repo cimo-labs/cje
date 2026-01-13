@@ -422,6 +422,8 @@ def analyze_dataset(
   - `.estimates`: Policy value estimates (numpy array)
   - `.standard_errors`: Standard errors for each estimate
   - `.diagnostics`: Diagnostic metrics (ESS, overlap quality, etc.)
+  - `.calibrator`: Fitted calibrator for transportability audits
+  - `.plan_allocation(budget)`: Plan optimal oracle/surrogate allocation for production
   - `.metadata`: Mode, estimator, data sources (see additional fields below)
 
 **Additional metadata fields** (when using calibration_data_path):
