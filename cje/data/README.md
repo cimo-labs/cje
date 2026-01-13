@@ -119,6 +119,11 @@ print(f"Difference: {comparison['difference']:.3f} (p={comparison['p_value']:.3f
 
 # Export
 result_dict = result.to_dict()  # Full export with CIs, diagnostics
+
+# Plan budget allocation for production (after pilot)
+allocation = result.plan_allocation(budget=5000)
+print(allocation.summary())
+# Optimal allocation: n=4,800, m=12 (0.3% oracle)
 ```
 
 **New visualization features:**

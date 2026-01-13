@@ -469,6 +469,44 @@ class EstimationResult(BaseModel):
             **kwargs,
         )
 
+    def plan_allocation(
+        self,
+        budget: float,
+        cost_model: Optional[Any] = None,
+    ) -> Any:
+        """Plan optimal oracle/surrogate allocation via Square Root Allocation Law.
+
+        Uses variance components from this EstimationResult to compute optimal
+        allocation of budget between evaluation samples (n) and oracle labels (m).
+
+        Args:
+            budget: Total budget in cost units (e.g., dollars)
+            cost_model: CostModel instance. If None, uses defaults (surrogate=1.0, oracle=16.0)
+
+        Returns:
+            BudgetAllocation with optimal n*, m* and diagnostic information.
+            Call .summary() for human-readable output, .to_dict() for serialization.
+
+        Example:
+            >>> result = analyze_dataset(fresh_draws_dir="responses/")
+            >>> allocation = result.plan_allocation(budget=5000)
+            >>> print(allocation.summary())
+            Optimal allocation: n=4,800, m=12 (0.3% oracle)
+            Expected SE: 0.0142 | Calibration share: 2.1%
+            Total cost: $4,992.00
+        """
+        from ..diagnostics.planning import (
+            estimate_variance_components,
+            compute_optimal_allocation,
+            CostModel,
+        )
+
+        if cost_model is None:
+            cost_model = CostModel()
+
+        sigma2_eval, sigma2_cal = estimate_variance_components(self)
+        return compute_optimal_allocation(budget, cost_model, sigma2_eval, sigma2_cal)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         ci_lower, ci_upper = self.confidence_interval()

@@ -18,6 +18,7 @@ cje/diagnostics/
 ├── transport.py         # Transportability auditing
 ├── display.py           # Display and formatting utilities
 ├── robust_inference.py  # Robust standard errors and inference
+├── planning.py          # Budget optimization (Square Root Allocation Law)
 └── README.md            # This documentation
 ```
 
@@ -888,6 +889,114 @@ The final estimate for each policy is: `mean(f̂(S)) + residual_correction`, whi
 **❌ Mixing cluster levels (e.g., clustering by session but pairing by user)**
 - Result: Incorrect variance, wrong CIs
 - Fix: Match cluster definition to the dependence structure; for nested clusters, use the coarsest level
+
+## Budget Planning (Sample Size Optimization)
+
+CJE includes tools for optimal allocation of budget between surrogate scores and oracle labels, based on the **Square Root Allocation Law** from CJE paper Appendix F.
+
+### The Problem
+
+Total variance decomposes into two independent components:
+```
+V_total(n, m) = σ²_eval/n + σ²_cal/m
+```
+
+Where:
+- `n` = number of evaluation samples (scored by surrogate)
+- `m` = number of oracle labels (for calibration)
+- `σ²_eval` = intrinsic evaluation variance
+- `σ²_cal` = intrinsic calibration variance
+
+### The Solution: Square Root Law
+
+Given budget `B = c_S·n + c_Y·m`, the optimal allocation is:
+```
+m*/n* = √(c_S/c_Y) · √(σ²_cal/σ²_eval)
+```
+
+### Basic Usage
+
+**Simplest approach** - use the convenience method on EstimationResult:
+
+```python
+from cje import analyze_dataset
+
+# Run a pilot
+result = analyze_dataset(fresh_draws_dir="pilot_responses/")
+
+# Plan optimal allocation for production
+allocation = result.plan_allocation(budget=5000)
+print(allocation.summary())
+# Optimal allocation: n=4,800, m=12 (0.3% oracle)
+# Expected SE: 0.0142 | Calibration share: 2.1%
+# Total cost: $4,992.00
+```
+
+**With custom cost model:**
+
+```python
+from cje import CostModel
+
+# Custom costs (e.g., GPT-4 oracle is 32× more expensive)
+allocation = result.plan_allocation(
+    budget=5000,
+    cost_model=CostModel(surrogate_cost=1.0, oracle_cost=32.0)
+)
+```
+
+### Lower-Level API
+
+For more control, use the functions directly:
+
+```python
+from cje.diagnostics import (
+    estimate_variance_components,
+    compute_optimal_allocation,
+    diagnose_allocation_efficiency,
+    compute_mde_contours,
+    CostModel,
+)
+
+# Extract variance components from pilot
+sigma2_eval, sigma2_cal = estimate_variance_components(result)
+
+# Compute optimal allocation
+allocation = compute_optimal_allocation(
+    budget=5000,
+    cost_model=CostModel(oracle_cost=16.0),
+    sigma2_eval=sigma2_eval,
+    sigma2_cal=sigma2_cal,
+)
+
+# Diagnose current allocation efficiency
+diag = diagnose_allocation_efficiency(result, CostModel())
+print(diag["status"])  # "UNDER_LABELED", "OVER_LABELED", or "BALANCED"
+print(diag["recommendation"])
+```
+
+### MDE Contours for Power Analysis
+
+Compute minimum detectable effect (MDE) grids for sample size planning:
+
+```python
+mde_grid = compute_mde_contours(
+    n_range=[500, 1000, 2000, 5000],
+    oracle_fractions=[0.05, 0.10, 0.25],
+    sigma2_eval=sigma2_eval,
+    sigma2_cal=sigma2_cal,
+    power=0.8,
+    alpha=0.05,
+)
+print(f"Best achievable MDE: {mde_grid.min():.4f}")
+```
+
+### Spend-Balance Diagnostic
+
+The efficiency diagnostic uses the **Spend-Balance Rule**: at the optimum, the fraction of variance from calibration (`ω`) should equal the fraction of budget spent on oracle labels.
+
+- `ω > spend_fraction` → **UNDER_LABELED**: Collect more oracle labels
+- `ω < spend_fraction` → **OVER_LABELED**: Evaluate more prompts
+- `ω ≈ spend_fraction` → **BALANCED**: Allocation is near-optimal
 
 ## References
 

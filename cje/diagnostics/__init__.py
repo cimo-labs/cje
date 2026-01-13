@@ -75,6 +75,16 @@ from .overlap import (
     diagnose_overlap_problems,
 )
 
+# Budget optimization / Planning
+from .planning import (
+    CostModel,
+    BudgetAllocation,
+    estimate_variance_components,
+    compute_optimal_allocation,
+    diagnose_allocation_efficiency,
+    compute_mde_contours,
+)
+
 __all__ = [
     # Data models
     "IPSDiagnostics",
@@ -121,4 +131,11 @@ __all__ = [
     "compute_overlap_metrics",
     "compute_cle_diagnostics",
     "diagnose_overlap_problems",
+    # Budget optimization / Planning
+    "CostModel",
+    "BudgetAllocation",
+    "estimate_variance_components",
+    "compute_optimal_allocation",
+    "diagnose_allocation_efficiency",
+    "compute_mde_contours",
 ]

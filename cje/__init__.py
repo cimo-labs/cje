@@ -23,6 +23,9 @@ from .data import Dataset, Sample, EstimationResult
 # Simple data loading
 from .data import load_dataset_from_jsonl
 
+# Budget planning (for custom cost models)
+from .diagnostics.planning import CostModel, BudgetAllocation
+
 # Visualization functions (optional - requires matplotlib)
 try:
     from .visualization import (
@@ -46,6 +49,9 @@ __all__ = [
     "EstimationResult",
     # Data loading
     "load_dataset_from_jsonl",
+    # Budget planning
+    "CostModel",
+    "BudgetAllocation",
 ]
 
 # Add visualization functions to __all__ if available
