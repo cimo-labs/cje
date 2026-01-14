@@ -118,6 +118,366 @@ def compute_augmented_estimate_per_policy(
     return augmented_estimates, diagnostics
 
 
+# ========== Multi-Policy EIF with Density Ratio Weighting ==========
+
+
+def compute_density_ratios(
+    calibration_index: np.ndarray,
+    policy_indices: np.ndarray,
+    oracle_mask: np.ndarray,
+    n_policies: int,
+    n_bins: int = 20,
+    min_density: float = 1e-6,
+    max_ratio: Optional[float] = None,
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Compute density ratios w_p(z) = f_p(z) / g(z) for multi-policy EIF.
+
+    When oracle labels come from multiple policies with a SHARED calibration
+    curve μ(z) = E[Y|Z=z], the efficient influence function pools ALL oracle
+    labels, weighted by the density ratio f_p(z) / g(z) where:
+        - f_p(z) = density of calibration index z under policy p
+        - g(z) = Σ_q ρ_q e_q(z) f_q(z) = labeled-mixture density
+
+    IMPORTANT ASSUMPTIONS:
+    - This assumes a SHARED calibration curve μ(z) across policies, which is
+      STRONGER than mean transport. Only use when E[Y|Z=z] is the same for
+      all policies, not just E[Y|P=p].
+    - For a single policy with oracle selection probability e(z), the weight
+      reduces to w(z) = 1/e(z), NOT ~1. This correctly upweights rare samples.
+
+    TRUNCATION WARNING:
+    If max_ratio is set, this becomes a TRUNCATED/STABILIZED estimator, not
+    the true EIF. In multi-policy settings with P policies and oracle fraction
+    e, legitimate weights can be as large as P/e. For example:
+    - 4 policies, 5% oracle → weights up to ~80
+    - 10 policies, 5% oracle → weights up to ~200
+    Setting max_ratio=20 clips these, introducing bias-variance tradeoff.
+
+    Args:
+        calibration_index: (n,) the calibration index Z used in μ(Z).
+            In monotone mode, this equals the judge score.
+            In two-stage mode, this is ECDF(g(S,X)).
+            Should be in [0, 1] range; out-of-range values are clamped.
+        policy_indices: (n,) policy index for each sample
+        oracle_mask: (n,) boolean, True if sample has oracle label
+        n_policies: Number of policies
+        n_bins: Number of histogram bins (default 20)
+        min_density: Minimum density floor to avoid division by zero
+        max_ratio: Maximum density ratio for truncation. Default None = no
+            truncation (true EIF). If set, this is a TRUNCATED estimator.
+            Suggested: max_ratio >= n_policies / oracle_fraction.
+
+    Returns:
+        Tuple of:
+        - density_ratios: (n_policies, n_oracle) array where density_ratios[p, i]
+          is w_p(z_i) for oracle sample i and target policy p
+        - diagnostics: Dict with density estimation diagnostics including
+          per-policy clipping statistics and effective sample size
+    """
+    # Validate calibration_index - NaNs would silently corrupt density estimates
+    # (histograms drop NaNs, but policy_counts still counts them in denominator)
+    if not np.all(np.isfinite(calibration_index)):
+        n_nan = np.sum(~np.isfinite(calibration_index))
+        raise ValueError(
+            f"calibration_index contains {n_nan} non-finite values (NaN or inf). "
+            "This would corrupt density ratio estimation. Check that all samples "
+            "have valid judge scores (monotone mode) or calibration indices (two-stage)."
+        )
+
+    # Get oracle sample info
+    oracle_indices = np.where(oracle_mask)[0]
+    n_oracle = len(oracle_indices)
+    n_total = len(calibration_index)
+
+    if n_oracle == 0:
+        return np.zeros((n_policies, 0)), {"error": "no oracle samples"}
+
+    # Clamp calibration index to [0, 1] to handle out-of-range values safely
+    z_clamped = np.clip(calibration_index, 0.0, 1.0)
+    oracle_z = z_clamped[oracle_mask]
+
+    # Create bin edges for [0, 1] bounded calibration index
+    bin_edges = np.linspace(0, 1, n_bins + 1)
+    bin_width = 1.0 / n_bins
+
+    # Compute per-policy densities f_p(z)
+    policy_densities = np.zeros((n_policies, n_bins))
+    policy_counts = np.zeros(n_policies)
+
+    for p in range(n_policies):
+        p_mask = policy_indices == p
+        p_z = z_clamped[p_mask]
+        policy_counts[p] = len(p_z)
+
+        if policy_counts[p] > 0:
+            counts, _ = np.histogram(p_z, bins=bin_edges)
+            # Density = count / (n * bin_width)
+            policy_densities[p] = counts / (policy_counts[p] * bin_width)
+
+    # Compute oracle selection probabilities e_p(z) per policy per bin
+    # e_p(z) = P(L=1 | P=p, Z=z)
+    oracle_selection = np.zeros((n_policies, n_bins))
+
+    for p in range(n_policies):
+        p_mask = policy_indices == p
+        p_oracle_mask = p_mask & oracle_mask
+
+        for b in range(n_bins):
+            bin_low, bin_high = bin_edges[b], bin_edges[b + 1]
+            if b == n_bins - 1:
+                # Include right edge for last bin
+                bin_mask = (z_clamped >= bin_low) & (z_clamped <= bin_high)
+            else:
+                bin_mask = (z_clamped >= bin_low) & (z_clamped < bin_high)
+
+            n_in_bin = np.sum(p_mask & bin_mask)
+            n_oracle_in_bin = np.sum(p_oracle_mask & bin_mask)
+
+            if n_in_bin > 0:
+                oracle_selection[p, b] = n_oracle_in_bin / n_in_bin
+
+    # Compute mixture density g(z) = Σ_q ρ_q e_q(z) f_q(z)
+    # ρ_q = P(P=q) = n_q / N
+    rho = policy_counts / n_total
+
+    mixture_density = np.zeros(n_bins)
+    for q in range(n_policies):
+        mixture_density += rho[q] * oracle_selection[q] * policy_densities[q]
+
+    # Floor mixture density to avoid division by zero
+    mixture_density = np.maximum(mixture_density, min_density)
+
+    # Compute density ratios w_p(z) = f_p(z) / g(z) for each oracle sample
+    density_ratios = np.zeros((n_policies, n_oracle))
+
+    # Use searchsorted for proper bin assignment (handles edge cases correctly)
+    # bin_edges has n_bins+1 edges: [0, 1/n_bins, 2/n_bins, ..., 1]
+    # searchsorted(side="right") - 1 gives the bin index
+    oracle_bins = np.searchsorted(bin_edges, oracle_z, side="right") - 1
+    oracle_bins = np.clip(oracle_bins, 0, n_bins - 1)
+
+    for i, b in enumerate(oracle_bins):
+        for p in range(n_policies):
+            density_ratios[p, i] = policy_densities[p, b] / mixture_density[b]
+
+    # Track clipping statistics per policy (before clipping)
+    n_clipped_per_policy = []
+    ess_per_policy = []  # Effective sample size: (sum(w))^2 / sum(w^2)
+
+    for p in range(n_policies):
+        w_p = density_ratios[p]
+        if max_ratio is not None:
+            n_clipped_p = int(np.sum(w_p > max_ratio))
+        else:
+            n_clipped_p = 0
+        n_clipped_per_policy.append(n_clipped_p)
+
+        # ESS before clipping (reflects true overlap)
+        sum_w = np.sum(w_p)
+        sum_w2 = np.sum(w_p**2)
+        if sum_w2 > 0:
+            ess_p = (sum_w**2) / sum_w2
+        else:
+            ess_p = 0.0
+        ess_per_policy.append(float(ess_p))
+
+    # Track total clipped (across all policies)
+    if max_ratio is not None:
+        n_clipped_total = int(np.sum(density_ratios > max_ratio))
+        # Clip density ratios to prevent extreme weights
+        density_ratios = np.clip(density_ratios, 0, max_ratio)
+    else:
+        n_clipped_total = 0
+        # No clipping - this is the true EIF
+
+    diagnostics = {
+        "n_bins": n_bins,
+        "n_oracle": n_oracle,
+        "n_clipped_total": n_clipped_total,
+        "n_clipped_per_policy": n_clipped_per_policy,
+        "clipping_rate_per_policy": [
+            n / n_oracle if n_oracle > 0 else 0.0 for n in n_clipped_per_policy
+        ],
+        "ess_per_policy": ess_per_policy,
+        "max_ratio": max_ratio,
+        "truncation_active": max_ratio is not None,
+        "policy_counts": policy_counts.tolist(),
+        "rho": rho.tolist(),
+        "mixture_density": mixture_density.copy(),  # Full array for testing/debugging
+        "mixture_density_range": (
+            float(mixture_density.min()),
+            float(mixture_density.max()),
+        ),
+        "density_ratio_range_per_policy": [
+            (float(density_ratios[p].min()), float(density_ratios[p].max()))
+            for p in range(n_policies)
+        ],
+        "density_ratio_mean_per_policy": [
+            float(density_ratios[p].mean()) for p in range(n_policies)
+        ],
+    }
+
+    return density_ratios, diagnostics
+
+
+def compute_augmented_estimate_multipolicy(
+    calibrated_full: np.ndarray,
+    oracle_labels: np.ndarray,
+    oracle_mask: np.ndarray,
+    oof_predictions: np.ndarray,
+    calibration_index: np.ndarray,
+    policy_indices: np.ndarray,
+    n_policies: int,
+    n_bins: int = 20,
+    max_ratio: Optional[float] = None,
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Compute multi-policy EIF augmented estimates with pooled oracle labels.
+
+    Instead of using only each policy's own oracle labels for residual correction,
+    this pools ALL oracle labels across policies with density ratio weighting:
+
+        θ̂_p = (1/n_p) Σ_{i:P_i=p} f̂(Z_i) + (1/N) Σ_{i:L_i=1} w_p(Z_i) × (Y_i - f̂_oof(Z_i))
+
+    where w_p(z) = f_p(z) / g(z) weights oracle labels by how representative
+    their calibration index values are for the target policy p.
+
+    IMPORTANT ASSUMPTION: This assumes a SHARED calibration curve μ(z) = E[Y|Z=z]
+    across all policies. This is STRONGER than mean transport. Only use when you
+    have evidence that E[Y|Z=z] is the same for all policies, not just E[Y|P=p].
+
+    This is more efficient than per-policy residuals when:
+    1. The calibration curve μ(z) = E[Y|Z=z] is shared across policies
+    2. Oracle labels exist for multiple policies
+
+    Args:
+        calibrated_full: (n,) calibrated scores using full model
+        oracle_labels: (n,) oracle labels (NaN for unlabeled)
+        oracle_mask: (n,) boolean, True if sample has oracle label
+        oof_predictions: (n,) OOF predictions for ALL samples (NaN for non-oracle).
+            Must be same length as calibrated_full. OOF predictions should be
+            from a cross-fitted calibrator to avoid overfitting bias.
+        calibration_index: (n,) the calibration index Z used in μ(Z).
+            In monotone mode, this equals the judge score.
+            In two-stage mode, this is ECDF(g(S,X)).
+            Should be in [0, 1] range.
+        policy_indices: (n,) which policy each sample belongs to
+        n_policies: Number of policies
+        n_bins: Number of histogram bins for density estimation
+        max_ratio: Maximum density ratio for truncation. Default None = no
+            truncation (true EIF). See compute_density_ratios for details.
+
+    Returns:
+        Tuple of:
+        - augmented_estimates: (P,) augmented estimates per policy
+        - diagnostics: Dict with per-policy diagnostics and density info
+
+    Raises:
+        ValueError: If input arrays have inconsistent shapes
+    """
+    n_total = len(calibrated_full)
+
+    # Shape assertions - all arrays must have consistent length
+    if len(oracle_labels) != n_total:
+        raise ValueError(
+            f"oracle_labels length ({len(oracle_labels)}) != "
+            f"calibrated_full length ({n_total})"
+        )
+    if len(oracle_mask) != n_total:
+        raise ValueError(
+            f"oracle_mask length ({len(oracle_mask)}) != "
+            f"calibrated_full length ({n_total})"
+        )
+    if len(oof_predictions) != n_total:
+        raise ValueError(
+            f"oof_predictions length ({len(oof_predictions)}) != "
+            f"calibrated_full length ({n_total}). "
+            "oof_predictions must be length n_total with NaN for non-oracle samples."
+        )
+    if len(calibration_index) != n_total:
+        raise ValueError(
+            f"calibration_index length ({len(calibration_index)}) != "
+            f"calibrated_full length ({n_total})"
+        )
+    if len(policy_indices) != n_total:
+        raise ValueError(
+            f"policy_indices length ({len(policy_indices)}) != "
+            f"calibrated_full length ({n_total})"
+        )
+
+    # Compute density ratios
+    density_ratios, density_diag = compute_density_ratios(
+        calibration_index=calibration_index,
+        policy_indices=policy_indices,
+        oracle_mask=oracle_mask,
+        n_policies=n_policies,
+        n_bins=n_bins,
+        max_ratio=max_ratio,
+    )
+
+    # Get oracle samples
+    oracle_indices = np.where(oracle_mask)[0]
+    n_oracle = len(oracle_indices)
+
+    if n_oracle == 0:
+        return np.full(n_policies, np.nan), {"error": "no oracle samples"}
+
+    # Compute residuals for ALL oracle samples
+    residuals = oracle_labels[oracle_mask] - oof_predictions[oracle_mask]
+
+    augmented_estimates = np.zeros(n_policies)
+    diagnostics: Dict[str, Any] = {
+        "plug_in_estimates": [],
+        "residual_corrections": [],
+        "residual_corrections_perpolicy": [],  # For comparison
+        "oracle_fractions": [],
+        "density_diagnostics": density_diag,
+    }
+
+    for p in range(n_policies):
+        p_mask = policy_indices == p
+        n_p = np.sum(p_mask)
+
+        if n_p == 0:
+            augmented_estimates[p] = np.nan
+            diagnostics["plug_in_estimates"].append(np.nan)
+            diagnostics["residual_corrections"].append(np.nan)
+            diagnostics["residual_corrections_perpolicy"].append(np.nan)
+            diagnostics["oracle_fractions"].append(0.0)
+            continue
+
+        # Plug-in: mean of full-model predictions for policy p
+        plug_in = np.mean(calibrated_full[p_mask])
+
+        # Multi-policy residual correction: weighted sum over ALL oracle samples
+        # θ̂_p = plug_in + (1/N) Σ_{i:L_i=1} w_p(Z_i) × residual_i
+        w_p = density_ratios[p]  # (n_oracle,) weights for policy p
+        residual_correction = np.sum(w_p * residuals) / n_total
+
+        # For comparison: what the per-policy correction would be
+        p_oracle_mask = p_mask & oracle_mask
+        n_oracle_p = np.sum(p_oracle_mask)
+        if n_oracle_p > 0:
+            perpolicy_residuals = (
+                oracle_labels[p_oracle_mask] - oof_predictions[p_oracle_mask]
+            )
+            perpolicy_correction = np.mean(perpolicy_residuals)
+        else:
+            perpolicy_correction = 0.0
+
+        # Augmented estimate
+        augmented_estimates[p] = plug_in + residual_correction
+
+        # Diagnostics
+        diagnostics["plug_in_estimates"].append(float(plug_in))
+        diagnostics["residual_corrections"].append(float(residual_correction))
+        diagnostics["residual_corrections_perpolicy"].append(
+            float(perpolicy_correction)
+        )
+        diagnostics["oracle_fractions"].append(float(n_oracle_p / n_p))
+
+    return augmented_estimates, diagnostics
+
+
 def get_oof_predictions(
     calibrator: Any,
     judge_scores: np.ndarray,
@@ -310,9 +670,15 @@ def build_direct_eval_table(
 
     # Convert to numpy arrays
     prompt_id_strings = all_prompt_ids
-    # Hash prompt_ids to integers for efficient comparison
+    # Map prompt_ids to sequential integers (deterministic factorization)
+    # Using dict-based factorization instead of hash() because:
+    #   1. hash() is non-deterministic across Python processes (PYTHONHASHSEED)
+    #   2. hash() % N can have collisions, incorrectly merging clusters
+    # This approach guarantees zero collisions and deterministic mapping.
+    unique_prompts = list(dict.fromkeys(all_prompt_ids))  # Preserves order
+    prompt_to_idx = {pid: idx for idx, pid in enumerate(unique_prompts)}
     prompt_ids = np.array(
-        [hash(pid) % (2**31) for pid in all_prompt_ids], dtype=np.int64
+        [prompt_to_idx[pid] for pid in all_prompt_ids], dtype=np.int64
     )
     policy_indices = np.array(all_policy_indices, dtype=np.int32)
     judge_scores = np.array(all_judge_scores, dtype=np.float64)
@@ -382,6 +748,7 @@ def cluster_bootstrap_direct_with_refit(
     seed: int = 42,
     use_augmented_estimator: bool = True,
     calibration_policy_idx: Optional[int] = None,
+    use_multipolicy_eif: bool = False,
 ) -> Dict[str, Any]:
     """Cluster bootstrap with calibrator refit for Direct mode.
 
@@ -398,6 +765,11 @@ def cluster_bootstrap_direct_with_refit(
         θ̂_aug = mean(f̂_full(S)) + mean(Y - f̂_oof(S))
     This corrects for calibrator bias while maintaining valid bootstrap inference.
 
+    When use_multipolicy_eif=True, uses the multi-policy efficient influence
+    function which pools ALL oracle labels across policies with density ratio
+    weighting. This is more efficient when oracle labels exist for multiple
+    policies and the calibration curve is shared.
+
     Args:
         eval_table: DirectEvalTable from build_direct_eval_table()
         calibrator_factory: Factory that creates fresh JudgeCalibrator instances
@@ -412,6 +784,9 @@ def cluster_bootstrap_direct_with_refit(
             oracle samples (for transport experiments). Residual corrections in θ̂_aug
             still use all policies' oracle samples. If None, use all oracle samples
             for both calibration and residuals (default behavior).
+        use_multipolicy_eif: If True, use multi-policy EIF which pools oracle labels
+            across all policies with density ratio weighting f_p(z)/g(z). More
+            efficient when multiple policies have oracle labels. Default False.
 
     Returns:
         Dictionary with:
@@ -483,6 +858,24 @@ def cluster_bootstrap_direct_with_refit(
             ),
         )
 
+        # Check calibration mode compatibility with multi-policy EIF
+        # Multi-policy EIF uses density ratios over the calibration index Z.
+        # In monotone mode: Z = judge_scores (correct)
+        # In two_stage mode: Z = ECDF(g(S, X)) which differs from judge_scores
+        # Passing judge_scores when using two_stage would compute weights over
+        # the wrong variable, breaking the identifying assumption.
+        if use_multipolicy_eif:
+            calibrator_mode = getattr(calibrator, "selected_mode", None)
+            if calibrator_mode == "two_stage":
+                raise ValueError(
+                    "Multi-policy EIF (use_multipolicy_eif=True) is not supported with "
+                    "two_stage calibration mode. In two_stage mode, the calibration "
+                    "index Z = ECDF(g(S, X)) differs from judge_scores, so density "
+                    "ratios would be computed over the wrong variable. Either:\n"
+                    "  1. Use calibration_mode='monotone' for multi-policy EIF, or\n"
+                    "  2. Use use_multipolicy_eif=False (per-policy residual correction)"
+                )
+
         # Predict calibrated rewards for all samples (full model)
         calibrated_full = calibrator.predict(judge_scores, covariates=covariates)
 
@@ -512,20 +905,40 @@ def cluster_bootstrap_direct_with_refit(
 
             # Compute augmented estimates using FULL oracle_mask (all policies)
             # The residual correction will capture transport bias for target policies
-            full_estimates, augmentation_diagnostics = (
-                compute_augmented_estimate_per_policy(
-                    calibrated_full=calibrated_full,
-                    oracle_labels=oracle_labels,
-                    oracle_mask=oracle_mask,  # All policies for residuals
-                    oof_predictions=oof_predictions,
-                    policy_indices=policy_indices,
-                    n_policies=n_policies,
+            if use_multipolicy_eif:
+                # Multi-policy EIF: pool oracle labels with density ratio weighting
+                # In monotone mode: calibration_index = judge_scores (verified above)
+                full_estimates, augmentation_diagnostics = (
+                    compute_augmented_estimate_multipolicy(
+                        calibrated_full=calibrated_full,
+                        oracle_labels=oracle_labels,
+                        oracle_mask=oracle_mask,
+                        oof_predictions=oof_predictions,
+                        calibration_index=judge_scores,
+                        policy_indices=policy_indices,
+                        n_policies=n_policies,
+                    )
                 )
-            )
-            logger.info(
-                f"Using augmented estimator: residual corrections = "
-                f"{augmentation_diagnostics['residual_corrections']}"
-            )
+                logger.info(
+                    f"Using multi-policy EIF: residual corrections = "
+                    f"{augmentation_diagnostics['residual_corrections']}"
+                )
+            else:
+                # Standard per-policy residual correction
+                full_estimates, augmentation_diagnostics = (
+                    compute_augmented_estimate_per_policy(
+                        calibrated_full=calibrated_full,
+                        oracle_labels=oracle_labels,
+                        oracle_mask=oracle_mask,  # All policies for residuals
+                        oof_predictions=oof_predictions,
+                        policy_indices=policy_indices,
+                        n_policies=n_policies,
+                    )
+                )
+                logger.info(
+                    f"Using augmented estimator: residual corrections = "
+                    f"{augmentation_diagnostics['residual_corrections']}"
+                )
         else:
             # Use plug-in estimator (mean of calibrated scores)
             for p in range(n_policies):
@@ -634,14 +1047,29 @@ def cluster_bootstrap_direct_with_refit(
                     )
 
             # Compute augmented estimates using FULL boot_oracle_mask
-            means_p, _ = compute_augmented_estimate_per_policy(
-                calibrated_full=boot_rewards,
-                oracle_labels=boot_oracle,
-                oracle_mask=boot_oracle_mask,  # All policies for residuals
-                oof_predictions=boot_oof_preds,
-                policy_indices=boot_policy,
-                n_policies=n_policies,
-            )
+            if use_multipolicy_eif:
+                # Multi-policy EIF: pool oracle labels with density ratio weighting
+                # Calibration mode was validated at start (two_stage not supported)
+                # In monotone mode: calibration_index = boot_judge (correct)
+                means_p, _ = compute_augmented_estimate_multipolicy(
+                    calibrated_full=boot_rewards,
+                    oracle_labels=boot_oracle,
+                    oracle_mask=boot_oracle_mask,
+                    oof_predictions=boot_oof_preds,
+                    calibration_index=boot_judge,
+                    policy_indices=boot_policy,
+                    n_policies=n_policies,
+                )
+            else:
+                # Standard per-policy residual correction
+                means_p, _ = compute_augmented_estimate_per_policy(
+                    calibrated_full=boot_rewards,
+                    oracle_labels=boot_oracle,
+                    oracle_mask=boot_oracle_mask,  # All policies for residuals
+                    oof_predictions=boot_oof_preds,
+                    policy_indices=boot_policy,
+                    n_policies=n_policies,
+                )
         else:
             # Plug-in estimator via bincount (efficient)
             sum_p = np.bincount(boot_policy, weights=boot_rewards, minlength=n_policies)

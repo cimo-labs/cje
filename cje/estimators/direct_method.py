@@ -72,6 +72,9 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             still use all policies' oracle samples, enabling bias correction for
             policies where the calibrator doesn't transport. If None, use all
             oracle samples for both calibration and residuals (default).
+        use_multipolicy_eif: If True, use multi-policy EIF which pools oracle labels
+            across all policies with density ratio weighting f_p(z)/g(z). More
+            efficient when multiple policies have oracle labels. Default False.
 
     Example:
         >>> # Fresh draws from multiple policies
@@ -97,6 +100,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         calibration_data_path: Optional[str] = None,
         use_augmented_estimator: bool = True,
         calibration_policy: Optional[str] = None,
+        use_multipolicy_eif: bool = False,
         **kwargs: Any,
     ):
         # Create a minimal dummy sampler for base class compatibility
@@ -153,6 +157,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         self.calibration_data_path = calibration_data_path
         self.use_augmented_estimator = use_augmented_estimator
         self.calibration_policy = calibration_policy  # For transport experiments
+        self.use_multipolicy_eif = use_multipolicy_eif
         self._policy_data: Dict[str, PolicyData] = {}
         self._fresh_draws: Dict[str, Any] = {}  # Storage for fresh draws
         self._bootstrap_result: Optional[Dict[str, Any]] = (
@@ -898,6 +903,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             seed=self.bootstrap_seed,
             use_augmented_estimator=self.use_augmented_estimator,
             calibration_policy_idx=calibration_policy_idx,
+            use_multipolicy_eif=self.use_multipolicy_eif,
         )
 
         # Cache result for pairwise comparisons
