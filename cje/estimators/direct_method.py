@@ -73,8 +73,22 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             policies where the calibrator doesn't transport. If None, use all
             oracle samples for both calibration and residuals (default).
         use_multipolicy_eif: If True, use multi-policy EIF which pools oracle labels
-            across all policies with density ratio weighting f_p(z)/g(z). More
-            efficient when multiple policies have oracle labels. Default False.
+            across all policies with density ratio weighting w_p(z) = f_p(z)/g(z).
+            This can yield ~50% RMSE reduction at 5-10% oracle coverage when
+            multiple policies share the same calibration curve.
+
+            **Requirement**: Shared calibration assumption - E[Y|Z=z, P=p] = E[Y|Z=z]
+            for all policies p. This is STRONGER than mean transport (which only
+            requires E[Y - f(Z)] = 0 per policy). Test with binned residual analysis
+            before enabling.
+
+            **Caveats**:
+            - Only supported with calibration_mode='monotone' (not two_stage)
+            - If a policy fails the shared calibration assumption, it will bias
+              estimates for ALL policies (unlike per-policy residuals which isolate)
+            - Diminishing returns at high oracle coverage (>25%)
+
+            Default False (conservative - uses per-policy residual correction).
 
     Example:
         >>> # Fresh draws from multiple policies
