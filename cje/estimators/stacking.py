@@ -784,17 +784,11 @@ class StackedDREstimator(BaseCJEEstimator):
         from cje.estimators.dr_base import DRCPOEstimator
         from cje.estimators.tmle import TMLEEstimator
         from cje.estimators.mrdr import MRDREstimator
-        from cje.estimators.orthogonalized_calibrated_dr import (
-            OrthogonalizedCalibratedDRCPO,
-        )
-        from cje.estimators.tr_cpo import TRCPOEstimator
 
         estimator_map = {
             "dr-cpo": DRCPOEstimator,
             "tmle": TMLEEstimator,
             "mrdr": MRDREstimator,
-            "oc-dr-cpo": OrthogonalizedCalibratedDRCPO,
-            "tr-cpo-e": TRCPOEstimator,  # efficient TR-CPO (m̂(S))
         }
 
         if est_name not in estimator_map:
@@ -803,17 +797,7 @@ class StackedDREstimator(BaseCJEEstimator):
         EstimatorClass = estimator_map[est_name]
 
         # Create estimator with shared configuration
-        # TR-CPO has different constructor (doesn't accept use_calibrated_weights)
-        if est_name == "tr-cpo-e":
-            estimator = EstimatorClass(
-                sampler=self.sampler,
-                reward_calibrator=self.reward_calibrator,
-                n_folds=self.n_folds,
-                weight_mode=self.weight_mode,  # TR-CPO does accept weight_mode
-                oua_jackknife=self.oua_jackknife,
-                use_efficient_tr=True,  # Ensure we're using the efficient version
-            )
-        elif est_name == "mrdr":
+        if est_name == "mrdr":
             # MRDR has omega_mode parameter but also accepts standard DR parameters
             estimator = EstimatorClass(
                 sampler=self.sampler,
@@ -825,7 +809,7 @@ class StackedDREstimator(BaseCJEEstimator):
                 # MRDR doesn't take oua_jackknife
             )
         else:
-            # DR-CPO, TMLE, OC-DR-CPO all accept these parameters
+            # DR-CPO, TMLE all accept these parameters
             estimator = EstimatorClass(
                 sampler=self.sampler,
                 reward_calibrator=self.reward_calibrator,

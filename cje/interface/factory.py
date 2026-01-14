@@ -10,9 +10,7 @@ import logging
 from ..data.precomputed_sampler import PrecomputedSampler
 from ..estimators.calibrated_ips import CalibratedIPS
 from ..estimators.direct_method import CalibratedDirectEstimator
-from ..estimators.orthogonalized_ips import OrthogonalizedCalibratedIPS
 from ..estimators.dr_base import DRCPOEstimator
-from ..estimators.orthogonalized_calibrated_dr import OrthogonalizedCalibratedDRCPO
 from ..estimators.mrdr import MRDREstimator
 from ..estimators.tmle import TMLEEstimator
 from ..estimators.stacking import StackedDREstimator
@@ -25,9 +23,7 @@ BuilderFn = Callable[
     Union[
         CalibratedDirectEstimator,
         CalibratedIPS,
-        OrthogonalizedCalibratedIPS,
         DRCPOEstimator,
-        OrthogonalizedCalibratedDRCPO,
         MRDREstimator,
         TMLEEstimator,
         StackedDREstimator,
@@ -78,22 +74,6 @@ def _build_raw_ips(
     return CalibratedIPS(sampler, calibrate_weights=False, clip_weight=clip_weight)
 
 
-def _build_orthogonalized_ips(
-    sampler: PrecomputedSampler,
-    config: Dict[str, Any],
-    calibration_result: Optional[Any],
-    verbose: bool,
-) -> OrthogonalizedCalibratedIPS:
-    cfg = dict(config)
-    # Remove n_folds if present (not used by IPS estimators)
-    cfg.pop("n_folds", None)
-    if calibration_result and getattr(calibration_result, "calibrator", None):
-        cfg.setdefault("reward_calibrator", calibration_result.calibrator)
-        if verbose:
-            logger.info("Using reward_calibrator for OC-IPS orthogonalization")
-    return OrthogonalizedCalibratedIPS(sampler, **cfg)
-
-
 def _build_dr_cpo(
     sampler: PrecomputedSampler,
     config: Dict[str, Any],
@@ -108,22 +88,6 @@ def _build_dr_cpo(
             sampler, n_folds=n_folds, reward_calibrator=calibration_result.calibrator
         )
     return DRCPOEstimator(sampler, n_folds=n_folds)
-
-
-def _build_oc_dr_cpo(
-    sampler: PrecomputedSampler,
-    config: Dict[str, Any],
-    calibration_result: Optional[Any],
-    verbose: bool,
-) -> OrthogonalizedCalibratedDRCPO:
-    n_folds = config.get("n_folds", 5)
-    if calibration_result and getattr(calibration_result, "calibrator", None):
-        if verbose:
-            logger.info("Using calibration models for OC-DR-CPO")
-        return OrthogonalizedCalibratedDRCPO(
-            sampler, n_folds=n_folds, reward_calibrator=calibration_result.calibrator
-        )
-    return OrthogonalizedCalibratedDRCPO(sampler, n_folds=n_folds)
 
 
 def _build_mrdr(
@@ -166,35 +130,6 @@ def _build_tmle(
     return TMLEEstimator(sampler, n_folds=n_folds, link=link)
 
 
-def _build_tr_cpo(
-    sampler: PrecomputedSampler,
-    config: Dict[str, Any],
-    calibration_result: Optional[Any],
-    verbose: bool,
-) -> Any:
-    from ..estimators.tr_cpo import TRCPOEstimator
-
-    n_folds = config.get("n_folds", 5)
-    weight_mode = config.get("weight_mode", "hajek")
-    use_efficient_tr = config.get("use_efficient_tr", True)
-    if calibration_result and getattr(calibration_result, "calibrator", None):
-        if verbose:
-            logger.info("Using calibration models for TR-CPO")
-        return TRCPOEstimator(
-            sampler,
-            n_folds=n_folds,
-            weight_mode=weight_mode,
-            use_efficient_tr=use_efficient_tr,
-            reward_calibrator=calibration_result.calibrator,
-        )
-    return TRCPOEstimator(
-        sampler,
-        n_folds=n_folds,
-        weight_mode=weight_mode,
-        use_efficient_tr=use_efficient_tr,
-    )
-
-
 def _build_stacked_dr(
     sampler: PrecomputedSampler,
     config: Dict[str, Any],
@@ -232,17 +167,8 @@ REGISTRY: Dict[str, BuilderFn] = {
     "calibrated-ips": _build_calibrated_ips,
     "calibrated-direct": _build_calibrated_direct,
     "direct": _build_calibrated_direct,  # Alias
-    "orthogonalized-ips": _build_orthogonalized_ips,
     "raw-ips": _build_raw_ips,
     "dr-cpo": _build_dr_cpo,
-    "oc-dr-cpo": _build_oc_dr_cpo,
-    # Raw variant (use_efficient_tr=False) and efficient variant (default)
-    "tr-cpo": lambda s, c, r, v: _build_tr_cpo(
-        s, {**c, "use_efficient_tr": False}, r, v
-    ),
-    "tr-cpo-e": lambda s, c, r, v: _build_tr_cpo(
-        s, {**c, "use_efficient_tr": True}, r, v
-    ),
     "mrdr": _build_mrdr,
     "tmle": _build_tmle,
     "stacked-dr": _build_stacked_dr,

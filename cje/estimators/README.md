@@ -10,14 +10,11 @@ Causal inference methods for unbiased off-policy evaluation of LLMs, transformin
 BaseCJEEstimator (abstract)
 ├── CalibratedDirectEstimator  # Direct (on-policy) evaluation with fresh draws
 ├── CalibratedIPS              # IPS with optional SIMCal weight calibration
-│   └── OrthogonalizedCalibratedIPS  # OC-IPS with robustness to calibration errors
 ├── StackedDREstimator         # Optimal stacking of DR estimators
 └── DREstimator                # Doubly robust base (abstract)
     ├── DRCPOEstimator         # Basic DR with CPO
-    ├── OrthogonalizedCalibratedDRCPO  # OC-DR-CPO with first-order insensitivity
     ├── MRDREstimator          # Multiple robust DR
-    ├── TMLEEstimator          # Targeted maximum likelihood
-    └── TRCPOEstimator         # Triply robust CPO
+    └── TMLEEstimator          # Targeted maximum likelihood
 ```
 
 ## Core Concepts
@@ -43,29 +40,18 @@ Optimally combines outcome models and importance weights through targeted fluctu
 ### 7. Estimator Stacking
 Forms optimal convex combination of DR estimators by minimizing combined influence function variance. Uses oracle IC approach (w₀ᵀφ(Z)) with ridge regularization for numerical stability.
 
-### 8. Orthogonalized Estimators
-Achieve first-order insensitivity to nuisance estimation errors:
-- **OC-IPS**: Robust to errors in f̂(S) and m̂(S)
-- **OC-DR-CPO**: Additionally robust to q̂(X,A) errors
-
-### 9. Triply Robust (TR-CPO)
-Robust to weight calibration, reward calibration, and outcome model errors simultaneously. TR-CPO-E variant (recommended) uses m̂(S)=E[W|S] for variance reduction.
-
 ## File Structure
 
 ```
 estimators/
-├── base_estimator.py               # Abstract base
-├── direct_method.py               # Direct (on-policy) estimator
-├── calibrated_ips.py              # IPS with optional SIMCal
-├── orthogonalized_ips.py          # OC-IPS
-├── stacking.py                    # Optimal stacking
-├── dr_base.py                     # DR base + DRCPOEstimator
-├── orthogonalized_calibrated_dr.py # OC-DR-CPO
-├── mrdr.py                        # Multiple robust DR
-├── tmle.py                        # TMLE
-├── tr_cpo.py                      # Triply robust CPO
-└── outcome_models.py              # Outcome models
+├── base_estimator.py       # Abstract base
+├── direct_method.py        # Direct (on-policy) estimator
+├── calibrated_ips.py       # IPS with optional SIMCal
+├── stacking.py             # Optimal stacking of DR estimators
+├── dr_base.py              # DR base + DRCPOEstimator
+├── mrdr.py                 # Multiple robust DR
+├── tmle.py                 # TMLE
+└── outcome_models.py       # Outcome models
 ```
 
 ## Common Interface

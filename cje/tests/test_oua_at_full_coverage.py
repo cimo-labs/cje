@@ -18,7 +18,6 @@ from cje.estimators import (
     CalibratedIPS,
     DRCPOEstimator,
     StackedDREstimator,
-    OrthogonalizedCalibratedIPS,
     TMLEEstimator,
     MRDREstimator,
 )
@@ -183,12 +182,9 @@ def test_multiple_estimators_at_full_coverage() -> None:
 
     sampler = PrecomputedSampler(dataset)
 
-    # Test different estimators
+    # Test CalibratedIPS (the primary IPS estimator)
     estimators_to_test = [
         CalibratedIPS(sampler, oua_jackknife=True, calibrate_weights=False),
-        OrthogonalizedCalibratedIPS(
-            sampler, oua_jackknife=True, calibrate_weights=False
-        ),
     ]
 
     for estimator in estimators_to_test:

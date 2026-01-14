@@ -9,8 +9,6 @@ This module contains:
 from .base_estimator import BaseCJEEstimator
 from .calibrated_ips import CalibratedIPS
 from .direct_method import CalibratedDirectEstimator
-from .orthogonalized_ips import OrthogonalizedCalibratedIPS
-from .orthogonalized_calibrated_dr import OrthogonalizedCalibratedDRCPO
 from .stacking import StackedDREstimator
 from ..data.models import (
     Sample,
@@ -25,7 +23,6 @@ try:
     from .dr_base import DRCPOEstimator
     from .tmle import TMLEEstimator
     from .mrdr import MRDREstimator
-    from .tr_cpo import TRCPOEstimator
 
     _dr_available = True
 except ImportError:
@@ -36,8 +33,6 @@ __all__ = [
     "BaseCJEEstimator",
     "CalibratedIPS",
     "CalibratedDirectEstimator",
-    "OrthogonalizedCalibratedIPS",
-    "OrthogonalizedCalibratedDRCPO",
     "StackedDREstimator",
     # Data models
     "Sample",
@@ -49,6 +44,4 @@ __all__ = [
 ]
 
 if _dr_available:
-    __all__.extend(
-        ["DRCPOEstimator", "TMLEEstimator", "MRDREstimator", "TRCPOEstimator"]
-    )
+    __all__.extend(["DRCPOEstimator", "TMLEEstimator", "MRDREstimator"])
