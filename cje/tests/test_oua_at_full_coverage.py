@@ -231,12 +231,12 @@ def test_direct_method_skips_oua_at_full_coverage() -> None:
     fresh_draw_samples = [
         FreshDrawSample(
             prompt_id=f"p{i}",
-            prompt="test prompt",
-            response="test response",
             judge_score=float(judge_scores[i % n_samples]),
             oracle_label=float(oracle_labels[i % n_samples]),
             target_policy="policy_a",
             draw_idx=0,
+            response=None,
+            fold_id=None,
             metadata={},
         )
         for i in range(50)
