@@ -178,10 +178,27 @@ class BaseCJEEstimator(ABC):
 
         # Skip OUA at 100% oracle coverage (no oracle uncertainty)
         try:
-            if (
-                hasattr(self.sampler, "oracle_coverage")
-                and self.sampler.oracle_coverage == 1.0
-            ):
+            # Check sampler first (for IPS/DR methods)
+            sampler_coverage = (
+                getattr(self.sampler, "oracle_coverage", None)
+                if hasattr(self, "sampler")
+                else None
+            )
+            # Also check calibrator (for direct method)
+            calibrator_coverage = (
+                getattr(self.reward_calibrator, "oracle_coverage", None)
+                if self.reward_calibrator
+                else None
+            )
+
+            # Use whichever is available
+            coverage = (
+                sampler_coverage
+                if sampler_coverage is not None
+                else calibrator_coverage
+            )
+
+            if coverage is not None and coverage >= 1.0:
                 if isinstance(result.metadata, dict):
                     result.metadata.setdefault("se_components", {})
                     result.metadata["se_components"][

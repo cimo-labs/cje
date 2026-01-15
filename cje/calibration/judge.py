@@ -99,6 +99,9 @@ class JudgeCalibrator:
         self._prompt_ids: Optional[List[str]] = (
             None  # Store prompt_ids for fold assignment
         )
+        self.oracle_coverage: Optional[float] = (
+            None  # Fraction of samples with oracle labels
+        )
 
     def fit_transform(
         self,
@@ -185,6 +188,7 @@ class JudgeCalibrator:
             )
 
         n_oracle = len(oracle_y)
+        self.oracle_coverage = n_oracle / n_total  # Store for OUA skip check
 
         if n_oracle < 10:
             raise ValueError(f"Too few oracle samples ({n_oracle}). Need at least 10.")
@@ -372,6 +376,8 @@ class JudgeCalibrator:
             )
 
         n_oracle = len(oracle_y)
+        self.oracle_coverage = n_oracle / n_total  # Store for OUA skip check
+
         if n_oracle < n_folds * 2:
             raise ValueError(
                 f"Too few oracle samples ({n_oracle}) for {n_folds}-fold CV. "

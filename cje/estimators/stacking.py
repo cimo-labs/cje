@@ -201,10 +201,27 @@ class StackedDREstimator(BaseCJEEstimator):
         """
         # Skip OUA when we have 100% oracle coverage (no oracle uncertainty)
         try:
-            if (
-                hasattr(self.sampler, "oracle_coverage")
-                and self.sampler.oracle_coverage == 1.0
-            ):
+            # Check sampler first (for IPS/DR methods)
+            sampler_coverage = (
+                getattr(self.sampler, "oracle_coverage", None)
+                if hasattr(self, "sampler")
+                else None
+            )
+            # Also check calibrator (for direct method)
+            calibrator_coverage = (
+                getattr(self.reward_calibrator, "oracle_coverage", None)
+                if self.reward_calibrator
+                else None
+            )
+
+            # Use whichever is available
+            coverage = (
+                sampler_coverage
+                if sampler_coverage is not None
+                else calibrator_coverage
+            )
+
+            if coverage is not None and coverage >= 1.0:
                 # At 100% coverage, we use raw oracle labels, so no oracle uncertainty
                 if result.metadata is None:
                     result.metadata = {}
