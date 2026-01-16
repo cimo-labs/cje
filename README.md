@@ -115,23 +115,6 @@ PASS means your calibration is still valid. FAIL means something changed — inv
 
 ---
 
-## Budget Planning for Production
-
-After a pilot run, plan optimal oracle/surrogate allocation for scaling up:
-
-```python
-result = analyze_dataset(fresh_draws_dir="pilot_responses/")
-allocation = result.plan_allocation(budget=5000)
-print(allocation.summary())
-# Optimal allocation: n=4,800, m=12 (0.3% oracle)
-# Expected SE: 0.0142 | Calibration share: 2.1%
-# Total cost: $4,992.00
-```
-
-Uses the [Square Root Allocation Law](cje/diagnostics/README.md#budget-planning-sample-size-optimization) to minimize variance given your cost constraints.
-
----
-
 ## Try It Now
 
 **[Open the interactive tutorial in Google Colab →](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb)**
@@ -148,7 +131,7 @@ Walk through a complete example: compare prompt variants, check if calibration t
 
 **Technical Guides**
 - [Calibration Methods](cje/calibration/README.md) — AutoCal-R, isotonic regression, two-stage
-- [Diagnostics System](cje/diagnostics/README.md) — Uncertainty quantification, transportability, budget optimization
+- [Diagnostics System](cje/diagnostics/README.md) — Uncertainty quantification, transportability
 - [Estimators](cje/estimators/README.md) — Direct, IPS, DR implementations
 - [Interface/API](cje/interface/README.md) — `analyze_dataset` implementation
 
