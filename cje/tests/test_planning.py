@@ -57,9 +57,12 @@ class TestPlanningWorkflow:
             p: load_fresh_draws_auto(fresh_draws_dir, p) for p in policies
         }
 
-        # Use convenience method
+        # Use convenience method (cost_model is required)
+        from cje import CostModel as TopLevelCostModel
+
         allocation = result.plan_allocation(
             budget=5000,
+            cost_model=TopLevelCostModel(oracle_cost=16.0),
             fresh_draws_dict=fresh_draws_dict,
             verbose=False,
         )
@@ -70,9 +73,7 @@ class TestPlanningWorkflow:
         assert allocation.se_level > 0
         assert "Evaluation Plan" in allocation.summary()
 
-        # Test with custom cost model (import from top-level to verify export)
-        from cje import CostModel as TopLevelCostModel
-
+        # Test with different cost model
         allocation_custom = result.plan_allocation(
             budget=5000,
             cost_model=TopLevelCostModel(oracle_cost=32.0),  # More expensive oracle
@@ -435,6 +436,22 @@ class TestCostModelUnit:
         cost = CostModel(surrogate_cost=1.0, oracle_cost=16.0)
         assert cost.cost_ratio == pytest.approx(1 / 16)
 
+    def test_validates_positive_surrogate_cost(self) -> None:
+        """CostModel rejects non-positive surrogate_cost."""
+        with pytest.raises(ValueError, match="surrogate_cost must be positive"):
+            CostModel(surrogate_cost=0.0, oracle_cost=16.0)
+
+        with pytest.raises(ValueError, match="surrogate_cost must be positive"):
+            CostModel(surrogate_cost=-1.0, oracle_cost=16.0)
+
+    def test_validates_positive_oracle_cost(self) -> None:
+        """CostModel rejects non-positive oracle_cost."""
+        with pytest.raises(ValueError, match="oracle_cost must be positive"):
+            CostModel(surrogate_cost=1.0, oracle_cost=0.0)
+
+        with pytest.raises(ValueError, match="oracle_cost must be positive"):
+            CostModel(surrogate_cost=1.0, oracle_cost=-5.0)
+
 
 class TestEmpiricalVarianceMeasurement:
     """Tests for empirical variance measurement utilities."""
@@ -650,6 +667,7 @@ class TestEvaluationPlanAPI:
             plan_evaluation,
             FittedVarianceModel,
             EvaluationPlan,
+            CostModel,
         )
 
         model = FittedVarianceModel(
@@ -658,8 +676,9 @@ class TestEvaluationPlanAPI:
             r_squared=0.95,
             n_measurements=12,
         )
+        cost_model = CostModel(oracle_cost=16.0)
 
-        plan = plan_evaluation(budget=5000, variance_model=model)
+        plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
 
         # Should return EvaluationPlan
         assert isinstance(plan, EvaluationPlan)
@@ -684,14 +703,23 @@ class TestEvaluationPlanAPI:
 
     def test_plan_evaluation_custom_power(self) -> None:
         """plan_evaluation respects power and alpha parameters."""
-        from cje.diagnostics.planning import plan_evaluation, FittedVarianceModel
+        from cje.diagnostics.planning import (
+            plan_evaluation,
+            FittedVarianceModel,
+            CostModel,
+        )
 
         model = FittedVarianceModel(
             sigma2_eval=0.008, sigma2_cal=0.004, r_squared=0.95, n_measurements=12
         )
+        cost_model = CostModel(oracle_cost=16.0)
 
-        plan_80 = plan_evaluation(budget=5000, variance_model=model, power=0.8)
-        plan_90 = plan_evaluation(budget=5000, variance_model=model, power=0.9)
+        plan_80 = plan_evaluation(
+            budget=5000, variance_model=model, cost_model=cost_model, power=0.8
+        )
+        plan_90 = plan_evaluation(
+            budget=5000, variance_model=model, cost_model=cost_model, power=0.9
+        )
 
         # Same allocation (budget determines allocation, not power)
         assert plan_80.n_samples == plan_90.n_samples
@@ -702,14 +730,21 @@ class TestEvaluationPlanAPI:
 
     def test_plan_for_mde_basic(self) -> None:
         """plan_for_mde finds budget needed for target MDE."""
-        from cje.diagnostics.planning import plan_for_mde, FittedVarianceModel
+        from cje.diagnostics.planning import (
+            plan_for_mde,
+            FittedVarianceModel,
+            CostModel,
+        )
 
         model = FittedVarianceModel(
             sigma2_eval=0.008, sigma2_cal=0.004, r_squared=0.95, n_measurements=12
         )
+        cost_model = CostModel(oracle_cost=16.0)
 
         # Target 2% MDE
-        plan = plan_for_mde(target_mde=0.02, variance_model=model)
+        plan = plan_for_mde(
+            target_mde=0.02, variance_model=model, cost_model=cost_model
+        )
 
         # Should achieve close to target MDE
         assert plan.mde <= 0.021  # Allow small tolerance
@@ -721,15 +756,26 @@ class TestEvaluationPlanAPI:
 
     def test_plan_for_mde_smaller_target_needs_more_budget(self) -> None:
         """Smaller MDE target requires larger budget."""
-        from cje.diagnostics.planning import plan_for_mde, FittedVarianceModel
+        from cje.diagnostics.planning import (
+            plan_for_mde,
+            FittedVarianceModel,
+            CostModel,
+        )
 
         model = FittedVarianceModel(
             sigma2_eval=0.008, sigma2_cal=0.004, r_squared=0.95, n_measurements=12
         )
+        cost_model = CostModel(oracle_cost=16.0)
 
-        plan_5pct = plan_for_mde(target_mde=0.05, variance_model=model)
-        plan_2pct = plan_for_mde(target_mde=0.02, variance_model=model)
-        plan_1pct = plan_for_mde(target_mde=0.01, variance_model=model)
+        plan_5pct = plan_for_mde(
+            target_mde=0.05, variance_model=model, cost_model=cost_model
+        )
+        plan_2pct = plan_for_mde(
+            target_mde=0.02, variance_model=model, cost_model=cost_model
+        )
+        plan_1pct = plan_for_mde(
+            target_mde=0.01, variance_model=model, cost_model=cost_model
+        )
 
         # Smaller MDE → more samples → higher cost
         assert plan_1pct.total_cost > plan_2pct.total_cost
@@ -737,13 +783,20 @@ class TestEvaluationPlanAPI:
 
     def test_evaluation_plan_mde_at_power(self) -> None:
         """EvaluationPlan.mde_at_power computes MDE at different power levels."""
-        from cje.diagnostics.planning import plan_evaluation, FittedVarianceModel
+        from cje.diagnostics.planning import (
+            plan_evaluation,
+            FittedVarianceModel,
+            CostModel,
+        )
 
         model = FittedVarianceModel(
             sigma2_eval=0.008, sigma2_cal=0.004, r_squared=0.95, n_measurements=12
         )
+        cost_model = CostModel(oracle_cost=16.0)
 
-        plan = plan_evaluation(budget=5000, variance_model=model, power=0.8)
+        plan = plan_evaluation(
+            budget=5000, variance_model=model, cost_model=cost_model, power=0.8
+        )
 
         # mde_at_power(0.8) should match plan.mde
         assert plan.mde_at_power(0.8) == pytest.approx(plan.mde, rel=1e-6)
@@ -758,13 +811,20 @@ class TestEvaluationPlanAPI:
 
     def test_evaluation_plan_power_to_detect(self) -> None:
         """EvaluationPlan.power_to_detect computes power for effect sizes."""
-        from cje.diagnostics.planning import plan_evaluation, FittedVarianceModel
+        from cje.diagnostics.planning import (
+            plan_evaluation,
+            FittedVarianceModel,
+            CostModel,
+        )
 
         model = FittedVarianceModel(
             sigma2_eval=0.008, sigma2_cal=0.004, r_squared=0.95, n_measurements=12
         )
+        cost_model = CostModel(oracle_cost=16.0)
 
-        plan = plan_evaluation(budget=5000, variance_model=model, power=0.8)
+        plan = plan_evaluation(
+            budget=5000, variance_model=model, cost_model=cost_model, power=0.8
+        )
 
         # At the MDE, power should be ~0.8
         power_at_mde = plan.power_to_detect(plan.mde)
@@ -784,13 +844,18 @@ class TestEvaluationPlanAPI:
 
     def test_evaluation_plan_summary(self) -> None:
         """EvaluationPlan.summary() returns readable string."""
-        from cje.diagnostics.planning import plan_evaluation, FittedVarianceModel
+        from cje.diagnostics.planning import (
+            plan_evaluation,
+            FittedVarianceModel,
+            CostModel,
+        )
 
         model = FittedVarianceModel(
             sigma2_eval=0.008, sigma2_cal=0.004, r_squared=0.95, n_measurements=12
         )
+        cost_model = CostModel(oracle_cost=16.0)
 
-        plan = plan_evaluation(budget=5000, variance_model=model)
+        plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
         summary = plan.summary()
 
         # Should contain key information
@@ -802,14 +867,19 @@ class TestEvaluationPlanAPI:
 
     def test_evaluation_plan_to_dict(self) -> None:
         """EvaluationPlan.to_dict() returns serializable dict."""
-        from cje.diagnostics.planning import plan_evaluation, FittedVarianceModel
+        from cje.diagnostics.planning import (
+            plan_evaluation,
+            FittedVarianceModel,
+            CostModel,
+        )
         import json
 
         model = FittedVarianceModel(
             sigma2_eval=0.008, sigma2_cal=0.004, r_squared=0.95, n_measurements=12
         )
+        cost_model = CostModel(oracle_cost=16.0)
 
-        plan = plan_evaluation(budget=5000, variance_model=model)
+        plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
         d = plan.to_dict()
 
         # Should be JSON serializable
@@ -826,14 +896,23 @@ class TestEvaluationPlanAPI:
     def test_mde_formula_correctness(self) -> None:
         """Verify MDE = (z_alpha + z_beta) * sqrt(2) * SE."""
         from scipy import stats
-        from cje.diagnostics.planning import plan_evaluation, FittedVarianceModel
+        from cje.diagnostics.planning import (
+            plan_evaluation,
+            FittedVarianceModel,
+            CostModel,
+        )
 
         model = FittedVarianceModel(
             sigma2_eval=0.01, sigma2_cal=0.005, r_squared=0.95, n_measurements=12
         )
+        cost_model = CostModel(oracle_cost=16.0)
 
         plan = plan_evaluation(
-            budget=10000, variance_model=model, power=0.8, alpha=0.05
+            budget=10000,
+            variance_model=model,
+            cost_model=cost_model,
+            power=0.8,
+            alpha=0.05,
         )
 
         # Manual calculation
@@ -850,11 +929,13 @@ class TestEvaluationPlanAPI:
             plan_evaluation,
             FittedVarianceModel,
             EvaluationPlan,
+            CostModel,
         )
 
         # Should be callable
         model = FittedVarianceModel(
             sigma2_eval=0.01, sigma2_cal=0.005, r_squared=0.95, n_measurements=12
         )
-        plan = plan_evaluation(budget=5000, variance_model=model)
+        cost_model = CostModel(oracle_cost=16.0)
+        plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
         assert isinstance(plan, EvaluationPlan)

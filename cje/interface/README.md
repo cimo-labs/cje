@@ -423,7 +423,7 @@ def analyze_dataset(
   - `.standard_errors`: Standard errors for each estimate
   - `.diagnostics`: Diagnostic metrics (ESS, overlap quality, etc.)
   - `.calibrator`: Fitted calibrator for transportability audits
-  - `.plan_allocation(budget)`: Plan optimal oracle/surrogate allocation for production
+  - `.plan_allocation(budget, cost_model)`: Plan optimal oracle/surrogate allocation for production
   - `.metadata`: Mode, estimator, data sources (see additional fields below)
 
 **Additional metadata fields** (when using calibration_data_path):

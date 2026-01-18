@@ -58,26 +58,61 @@ CJE learns the judge→oracle mapping from the labeled samples and applies it ev
 Before collecting data, figure out how many samples you need:
 
 ```python
-from cje import fit_variance_model, plan_evaluation, plan_for_mde
+from cje import fit_variance_model, plan_evaluation, plan_for_mde, CostModel
 
 # Run a small pilot (100-500 samples with ~20% oracle labels)
 model = fit_variance_model({"base": pilot_data})
 
+# Specify your cost model - THIS IS CRITICAL
+# The optimal oracle/surrogate split depends entirely on relative costs.
+# Example: GPT-4o-mini surrogate ($0.01) vs GPT-4o oracle ($0.16) → 16× ratio
+cost_model = CostModel(oracle_cost=16.0)
+
 # "I have $5000, what can I detect?"
-plan = plan_evaluation(budget=5000, variance_model=model)
+plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
 print(plan.summary())
 # MDE (80% power): 2.4%
 # → Can detect 2.4% difference between policies
 
 # "I need to detect 1% differences"
-plan = plan_for_mde(target_mde=0.01, variance_model=model)
+plan = plan_for_mde(target_mde=0.01, variance_model=model, cost_model=cost_model)
 print(f"Required budget: ${plan.total_cost:,.0f}")
+```
+
+> **Why is `cost_model` required?** The Square Root Allocation Law says optimal allocation is `m*/n* = √(cost_ratio) × √(σ²_cal/σ²_eval)`. Different cost ratios → completely different recommendations. There's no sensible default.
+
+**Interpreting the plan:**
+```python
+plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
+print(plan.summary())
+# Evaluation Plan
+#   Allocation: n=4,200 prompts, m=80 oracle labels (1.9%)
+#   Cost: $5,000
+#   MDE (80% power): 2.4%
+```
+
+This tells you: **Collect 4,200 responses scored by your surrogate judge. Randomly select 80 of those for oracle labels.** With this data, you can detect a 2.4% difference between policies with 80% power.
+
+**Deciding if MDE is acceptable:**
+- MDE = smallest effect you can reliably detect
+- If policies differ by less than MDE, you won't have statistical power to detect it
+- Rule of thumb: target MDE should be smaller than differences you care about
+
+**The decision loop:**
+```python
+# Option A: "I have a budget, what can I detect?"
+plan = plan_evaluation(budget=5000, ...)  # → MDE = 2.4%
+
+# Option B: "I need to detect X%, what does it cost?"
+plan = plan_for_mde(target_mde=0.01, ...)  # → budget = $47,000
+
+# Iterate until budget and MDE are both acceptable
 ```
 
 **The workflow:**
 1. Run small pilot → fit variance model
-2. Plan sample size for target MDE
-3. Collect production data
+2. Plan sample size for target MDE (iterate budget ↔ MDE)
+3. Collect production data: `n_samples` responses, `m_oracle` random oracle labels
 4. Analyze with `analyze_dataset`
 5. Monitor with `audit_transportability`
 

@@ -56,20 +56,39 @@ logger = logging.getLogger(__name__)
 class CostModel:
     """Cost parameters for budget optimization.
 
+    The optimal oracle/surrogate allocation depends critically on relative costs.
+    You must specify costs that reflect your actual setup - there's no universal default.
+
+    The key parameter is the cost RATIO (oracle_cost / surrogate_cost). Only the ratio
+    matters for allocation, so you can use normalized costs (surrogate=1.0) or actual
+    dollar amounts.
+
     Attributes:
-        surrogate_cost: Cost per surrogate (judge) score (c_S). Default 1.0.
-        oracle_cost: Cost per oracle label (c_Y). Default 16.0 (paper's Arena benchmark).
+        surrogate_cost: Cost per surrogate (judge) score (c_S).
+        oracle_cost: Cost per oracle label (c_Y).
 
     Example:
-        # GPT-4o-mini judge vs GPT-5 oracle (approximately 16× cost ratio)
+        # GPT-4o-mini surrogate ($0.01) vs GPT-4o oracle ($0.16) → 16× ratio
         cost_model = CostModel(surrogate_cost=1.0, oracle_cost=16.0)
 
-        # Custom costs in dollars
-        cost_model = CostModel(surrogate_cost=0.001, oracle_cost=0.50)
+        # Or use actual dollar costs (same ratio, same allocation)
+        cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
+
+        # Human oracle is much more expensive → higher ratio
+        cost_model = CostModel(surrogate_cost=1.0, oracle_cost=100.0)
     """
 
     surrogate_cost: float = 1.0
     oracle_cost: float = 16.0
+
+    def __post_init__(self) -> None:
+        """Validate cost parameters."""
+        if self.surrogate_cost <= 0:
+            raise ValueError(
+                f"surrogate_cost must be positive, got {self.surrogate_cost}"
+            )
+        if self.oracle_cost <= 0:
+            raise ValueError(f"oracle_cost must be positive, got {self.oracle_cost}")
 
     @property
     def cost_ratio(self) -> float:
@@ -423,7 +442,7 @@ def fit_variance_model(
 def plan_evaluation(
     budget: float,
     variance_model: FittedVarianceModel,
-    cost_model: Optional[CostModel] = None,
+    cost_model: CostModel,
     m_min: int = 30,
     power: float = 0.8,
     alpha: float = 0.05,
@@ -436,7 +455,7 @@ def plan_evaluation(
     Args:
         budget: Total budget in cost units (e.g., dollars).
         variance_model: FittedVarianceModel from fit_variance_model().
-        cost_model: Cost parameters. Default: CostModel(oracle_cost=16.0).
+        cost_model: Cost parameters (required - no default).
         m_min: Minimum oracle labels (default 30, needed for calibration).
         power: Statistical power for MDE (default 0.8 = 80%).
         alpha: Significance level (default 0.05 = 95% CI).
@@ -445,12 +464,13 @@ def plan_evaluation(
         EvaluationPlan with allocation and achievable MDE.
 
     Example:
-        from cje.diagnostics import fit_variance_model, plan_evaluation
+        from cje.diagnostics import fit_variance_model, plan_evaluation, CostModel
 
         model = fit_variance_model({"base": pilot_data})
+        cost_model = CostModel(oracle_cost=16.0)  # Specify your costs
 
         # "I have $5000, what can I detect?"
-        plan = plan_evaluation(budget=5000, variance_model=model)
+        plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
         print(plan.summary())
         # Evaluation Plan
         #   Allocation: n=4,200, m=80 (1.9% oracle)
@@ -464,8 +484,6 @@ def plan_evaluation(
         - Actual MDE may be better due to correlation (same calibrator, same prompts)
         - Use plan.power_to_detect(effect) to check power for specific effects
     """
-    if cost_model is None:
-        cost_model = CostModel()
 
     c_S = cost_model.surrogate_cost
     c_Y = cost_model.oracle_cost
@@ -527,7 +545,7 @@ def plan_evaluation(
 def plan_for_mde(
     target_mde: float,
     variance_model: FittedVarianceModel,
-    cost_model: Optional[CostModel] = None,
+    cost_model: CostModel,
     m_min: int = 30,
     power: float = 0.8,
     alpha: float = 0.05,
@@ -540,7 +558,7 @@ def plan_for_mde(
     Args:
         target_mde: Target minimum detectable effect (e.g., 0.01 for 1%).
         variance_model: FittedVarianceModel from fit_variance_model().
-        cost_model: Cost parameters. Default: CostModel(oracle_cost=16.0).
+        cost_model: Cost parameters (required - no default).
         m_min: Minimum oracle labels (default 30, needed for calibration).
         power: Statistical power (default 0.8 = 80%).
         alpha: Significance level (default 0.05).
@@ -549,12 +567,13 @@ def plan_for_mde(
         EvaluationPlan with required budget and allocation.
 
     Example:
-        from cje.diagnostics import fit_variance_model, plan_for_mde
+        from cje.diagnostics import fit_variance_model, plan_for_mde, CostModel
 
         model = fit_variance_model({"base": pilot_data})
+        cost_model = CostModel(oracle_cost=16.0)  # Specify your costs
 
         # "I need to detect 1% differences"
-        plan = plan_for_mde(target_mde=0.01, variance_model=model)
+        plan = plan_for_mde(target_mde=0.01, variance_model=model, cost_model=cost_model)
         print(f"Required budget: ${plan.total_cost:,.0f}")
         print(plan.summary())
 
@@ -563,8 +582,6 @@ def plan_for_mde(
         - Returns optimal allocation at the minimum required budget
         - Enforces m_min constraint (may result in slightly lower MDE)
     """
-    if cost_model is None:
-        cost_model = CostModel()
 
     # Work backwards from MDE to required SE
     # MDE = (z_α/2 + z_β) × √2 × SE_level

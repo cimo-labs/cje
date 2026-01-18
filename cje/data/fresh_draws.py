@@ -368,6 +368,9 @@ def load_fresh_draws_auto(
     Raises:
         FileNotFoundError: If no fresh draw file found
     """
+    # Convert to Path if string
+    data_dir = Path(data_dir)
+
     # Standard file patterns to check
     possible_files = [
         data_dir / f"{policy}_responses.jsonl",

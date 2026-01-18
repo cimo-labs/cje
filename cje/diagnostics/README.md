@@ -925,8 +925,14 @@ from cje.diagnostics import fit_variance_model, plan_evaluation, plan_for_mde, C
 model = fit_variance_model({"base": pilot_data}, verbose=True)
 # σ²_eval = 0.008, σ²_cal = 0.004, R² = 0.94
 
-# 2a. "I have $5000, what can I detect?"
-plan = plan_evaluation(budget=5000, variance_model=model)
+# 2. Specify your cost model
+# The optimal allocation depends entirely on relative costs - there's no sensible default.
+# Calculate your actual cost ratio: oracle_cost / surrogate_cost
+# Example: GPT-4o ($0.16/call) vs GPT-4o-mini ($0.01/call) → ratio = 16
+cost_model = CostModel(oracle_cost=16.0)
+
+# 3a. "I have $5000, what can I detect?"
+plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
 print(plan.summary())
 # Evaluation Plan
 #   Allocation: n=4,200, m=80 (1.9% oracle)
@@ -935,10 +941,12 @@ print(plan.summary())
 #   MDE (80% power): 2.4%
 #   → Can detect 2.4% difference between policies
 
-# 2b. "I need to detect 1% differences"
-plan = plan_for_mde(target_mde=0.01, variance_model=model)
+# 3b. "I need to detect 1% differences"
+plan = plan_for_mde(target_mde=0.01, variance_model=model, cost_model=cost_model)
 print(f"Required budget: ${plan.total_cost:,.0f}")
 ```
+
+> **Why no defaults?** The Square Root Allocation Law gives optimal split as `m*/n* = √(c_S/c_Y) × √(σ²_cal/σ²_eval)`. A 4× cost ratio vs 64× cost ratio produces completely different allocations. Using the wrong ratio wastes budget or underestimates MDE.
 
 ### EvaluationPlan Features
 
@@ -957,6 +965,44 @@ plan.mde_at_power(0.9)        # MDE at 90% power
 plan.power_to_detect(0.02)    # Power to detect 2% effect
 plan.summary()                # Human-readable summary
 ```
+
+### Acting on the Plan
+
+The plan output tells you exactly what to collect:
+
+```python
+plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
+
+# WHAT TO COLLECT:
+print(f"Collect {plan.n_samples} responses scored by surrogate judge")
+print(f"Randomly select {plan.m_oracle} for oracle labels")
+print(f"Oracle fraction: {plan.m_oracle/plan.n_samples:.1%}")
+
+# WHAT YOU CAN DETECT:
+print(f"MDE: {plan.mde:.1%} difference between policies (80% power)")
+```
+
+**Critical: oracle labels must be randomly selected** from the evaluation set. If you only label "interesting" or "hard" examples, the calibration will be biased.
+
+### The Budget ↔ MDE Decision Loop
+
+Most users iterate between two questions:
+
+```python
+# "I have $10K, what can I detect?"
+plan = plan_evaluation(budget=10000, variance_model=model, cost_model=cost_model)
+print(f"MDE = {plan.mde:.1%}")  # Maybe 1.5%
+
+# "That's not sensitive enough. What if I need 1%?"
+plan = plan_for_mde(target_mde=0.01, variance_model=model, cost_model=cost_model)
+print(f"Budget needed: ${plan.total_cost:,.0f}")  # Maybe $22K
+
+# "Too expensive. What about 1.2%?"
+plan = plan_for_mde(target_mde=0.012, variance_model=model, cost_model=cost_model)
+print(f"Budget needed: ${plan.total_cost:,.0f}")  # Maybe $15K - acceptable
+```
+
+**Rule of thumb**: Target MDE should be 2-3× smaller than differences you care about. If you care about 5% differences, aim for MDE ≤ 2%.
 
 ### MDE Assumptions
 

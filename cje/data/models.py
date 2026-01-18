@@ -472,7 +472,7 @@ class EstimationResult(BaseModel):
     def plan_allocation(
         self,
         budget: float,
-        cost_model: Optional[Any] = None,
+        cost_model: Any,
         fresh_draws_dict: Optional[Dict[str, Any]] = None,
         verbose: bool = True,
     ) -> Any:
@@ -484,7 +484,7 @@ class EstimationResult(BaseModel):
 
         Args:
             budget: Total budget in cost units (e.g., dollars)
-            cost_model: CostModel instance. If None, uses defaults (surrogate=1.0, oracle=16.0)
+            cost_model: CostModel instance (required - no default).
             fresh_draws_dict: Fresh draws data for empirical variance fitting.
                 Required for accurate variance estimation. Format: {policy_name: FreshDrawDataset}
             verbose: Print progress during variance model fitting
@@ -494,12 +494,14 @@ class EstimationResult(BaseModel):
             Call .summary() for human-readable output.
 
         Example:
+            >>> from cje import CostModel
             >>> from cje.data.fresh_draws import load_fresh_draws_auto, discover_policies_from_fresh_draws
             >>> fresh_draws_dir = "responses/"
             >>> policies = discover_policies_from_fresh_draws(fresh_draws_dir)
             >>> fresh_draws_dict = {p: load_fresh_draws_auto(fresh_draws_dir, p) for p in policies}
             >>> result = analyze_dataset(fresh_draws_dir=fresh_draws_dir)
-            >>> plan = result.plan_allocation(budget=5000, fresh_draws_dict=fresh_draws_dict)
+            >>> cost_model = CostModel(oracle_cost=16.0)  # Specify your costs
+            >>> plan = result.plan_allocation(budget=5000, cost_model=cost_model, fresh_draws_dict=fresh_draws_dict)
             >>> print(plan.summary())
 
         Raises:
@@ -507,32 +509,32 @@ class EstimationResult(BaseModel):
 
         Note:
             For simpler usage, consider the top-level planning API:
-                from cje import fit_variance_model, plan_evaluation
+                from cje import fit_variance_model, plan_evaluation, CostModel
                 model = fit_variance_model(fresh_draws_dict)
-                plan = plan_evaluation(budget=5000, variance_model=model)
+                cost_model = CostModel(oracle_cost=16.0)
+                plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
         """
         from ..diagnostics.planning import (
             fit_variance_model,
             plan_evaluation,
-            CostModel,
         )
 
         if fresh_draws_dict is None:
             raise ValueError(
                 "fresh_draws_dict is required for budget planning. "
                 "Load your fresh draws data and pass it to plan_allocation():\n\n"
+                "  from cje import CostModel\n"
                 "  from cje.data.fresh_draws import load_fresh_draws_auto, discover_policies_from_fresh_draws\n"
                 "  policies = discover_policies_from_fresh_draws(fresh_draws_dir)\n"
                 "  fresh_draws_dict = {p: load_fresh_draws_auto(fresh_draws_dir, p) for p in policies}\n"
-                "  plan = result.plan_allocation(budget=5000, fresh_draws_dict=fresh_draws_dict)\n\n"
+                "  cost_model = CostModel(oracle_cost=16.0)\n"
+                "  plan = result.plan_allocation(budget=5000, cost_model=cost_model, fresh_draws_dict=fresh_draws_dict)\n\n"
                 "Or use the simpler top-level API:\n"
-                "  from cje import fit_variance_model, plan_evaluation\n"
+                "  from cje import fit_variance_model, plan_evaluation, CostModel\n"
                 "  model = fit_variance_model(fresh_draws_dict)\n"
-                "  plan = plan_evaluation(budget=5000, variance_model=model)"
+                "  cost_model = CostModel(oracle_cost=16.0)\n"
+                "  plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)"
             )
-
-        if cost_model is None:
-            cost_model = CostModel()
 
         # Fit variance model from empirical measurements
         variance_model = fit_variance_model(fresh_draws_dict, verbose=verbose)

@@ -25,6 +25,15 @@ try:
     # Import DR dashboards
     from .dr_dashboards import plot_dr_dashboard
 
+    # Import planning visualizations
+    from .planning import (
+        plot_planning_dashboard,
+        plot_variance_model_fit,
+        plot_oracle_sensitivity,
+        plot_optimality_proof,
+        generate_canonical_planning_figures,
+    )
+
     __all__ = [
         # Calibration
         "plot_calibration_comparison",
@@ -35,6 +44,12 @@ try:
         "plot_weight_dashboard_detailed",
         # DR dashboards
         "plot_dr_dashboard",
+        # Planning
+        "plot_planning_dashboard",
+        "plot_variance_model_fit",
+        "plot_oracle_sensitivity",
+        "plot_optimality_proof",
+        "generate_canonical_planning_figures",
     ]
 
 except ImportError:
