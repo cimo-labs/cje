@@ -715,7 +715,6 @@ class AnalysisService:
             Tuple of (combined_dataset, oracle_sources_metadata)
         """
         from ..data.models import Sample
-        import numpy as np
 
         # Track oracle samples by prompt_id: {prompt_id: (oracle, source, judge_score)}
         oracle_map: Dict[str, tuple[float, str, float]] = {}

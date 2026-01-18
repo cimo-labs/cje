@@ -830,7 +830,6 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             EstimationResult with bootstrap-based confidence intervals
         """
         from ..diagnostics.robust_inference import (
-            DirectEvalTable,
             build_direct_eval_table,
             cluster_bootstrap_direct_with_refit,
             make_calibrator_factory,
@@ -1012,6 +1011,10 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
                 "includes_oracle_uncertainty": True,  # Bootstrap captures this
                 "includes_mc_variance": False,
                 "via_bootstrap": True,
+                # Variance decomposition for budget planning (from dual-estimate bootstrap)
+                "oracle_variance_per_policy": bootstrap_result.get(
+                    "variance_decomposition", {}
+                ).get("var_cal_per_policy", {}),
             },
             "estimator_consistency": {
                 "theta_hat_source": "bootstrap_refit",  # Using bootstrap's estimate for consistency

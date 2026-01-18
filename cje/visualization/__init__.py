@@ -37,7 +37,7 @@ try:
         "plot_dr_dashboard",
     ]
 
-except ImportError as e:
+except ImportError:
     import warnings
 
     warnings.warn(

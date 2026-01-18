@@ -53,6 +53,36 @@ CJE learns the judge→oracle mapping from the labeled samples and applies it ev
 
 ---
 
+## Planning Your Evaluation
+
+Before collecting data, figure out how many samples you need:
+
+```python
+from cje import fit_variance_model, plan_evaluation, plan_for_mde
+
+# Run a small pilot (100-500 samples with ~20% oracle labels)
+model = fit_variance_model({"base": pilot_data})
+
+# "I have $5000, what can I detect?"
+plan = plan_evaluation(budget=5000, variance_model=model)
+print(plan.summary())
+# MDE (80% power): 2.4%
+# → Can detect 2.4% difference between policies
+
+# "I need to detect 1% differences"
+plan = plan_for_mde(target_mde=0.01, variance_model=model)
+print(f"Required budget: ${plan.total_cost:,.0f}")
+```
+
+**The workflow:**
+1. Run small pilot → fit variance model
+2. Plan sample size for target MDE
+3. Collect production data
+4. Analyze with `analyze_dataset`
+5. Monitor with `audit_transportability`
+
+---
+
 ## Why You Need This
 
 **LLM-as-judge gives you rankings. CJE gives you certainty.**

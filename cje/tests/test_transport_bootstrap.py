@@ -10,13 +10,12 @@ should capture the transport bias and correct the estimates.
 
 import numpy as np
 import pytest
-from typing import Dict, List
+from typing import Dict
 
 from cje.diagnostics.robust_inference import (
     cluster_bootstrap_direct_with_refit,
     build_direct_eval_table,
     make_calibrator_factory,
-    DirectEvalTable,
 )
 from cje.data.fresh_draws import FreshDrawDataset, FreshDrawSample
 

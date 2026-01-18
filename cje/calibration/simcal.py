@@ -12,10 +12,9 @@ The stacking approach:
 """
 
 from dataclasses import dataclass
-from typing import Tuple, Dict, Any, Optional, List, cast
+from typing import Tuple, Dict, Any, Optional, cast
 import numpy as np
 from sklearn.isotonic import IsotonicRegression
-from sklearn.model_selection import KFold
 import warnings
 
 

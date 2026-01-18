@@ -8,7 +8,7 @@ All cross-validation in CJE MUST use these functions.
 
 import hashlib
 import numpy as np
-from typing import List, Optional, TYPE_CHECKING
+from typing import List, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .models import Dataset

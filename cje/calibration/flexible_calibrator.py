@@ -5,12 +5,11 @@ through flexible shape fitting while maintaining cross-fitting support.
 """
 
 import numpy as np
-from typing import Optional, Tuple, Dict, Any, Literal, Callable, List
+from typing import Optional, Dict, Any, Literal, Callable, List
 from sklearn.isotonic import IsotonicRegression
 from sklearn.preprocessing import SplineTransformer
 from sklearn.linear_model import RidgeCV
 from sklearn.pipeline import make_pipeline
-from scipy import stats
 import logging
 
 logger = logging.getLogger(__name__)
@@ -565,7 +564,7 @@ class FlexibleCalibrator:
         se_mse = np.std(residuals_mono**2, ddof=1) / np.sqrt(n) if n > 1 else 0.0
         se_rmse = se_mse / (2.0 * max(rmse_mono, 1e-12))
 
-        logger.info(f"Calibration mode selection:")
+        logger.info("Calibration mode selection:")
         logger.info(
             f"  Overall RMSE - Monotone: {rmse_mono:.4f}, Two-stage: {rmse_two_stage:.4f}"
         )
@@ -585,7 +584,7 @@ class FlexibleCalibrator:
             logger.info(f"  → Selected: two_stage (better in {better_count}/3 regions)")
             return "two_stage"
         else:
-            logger.info(f"  → Selected: monotone (simpler model preferred)")
+            logger.info("  → Selected: monotone (simpler model preferred)")
             return "monotone"
 
     def index(

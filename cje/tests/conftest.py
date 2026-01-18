@@ -11,14 +11,12 @@ Key fixtures:
 
 import pytest
 import numpy as np
-from typing import List, Dict, Any
+from typing import Dict, Any
 from pathlib import Path
 
-from cje.data.models import Sample, Dataset, EstimationResult
+from cje.data.models import Dataset, EstimationResult
 from cje.data.fresh_draws import (
-    FreshDrawSample,
     FreshDrawDataset,
-    load_fresh_draws_from_jsonl,
 )
 from cje.data.precomputed_sampler import PrecomputedSampler
 from cje import load_dataset_from_jsonl

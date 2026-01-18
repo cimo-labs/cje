@@ -502,11 +502,7 @@ class PrecomputedSampler:
                 logger.info(
                     f"Clipped {n_clipped}/{len(weights_array)} weights for {target_policy} "
                     f"to {clip_weight} (max was {max_weight:.2f})"
-                    + (
-                        f", re-normalized to restore mean-one"
-                        if mode == "hajek"
-                        else ""
-                    )
+                    + (", re-normalized to restore mean-one" if mode == "hajek" else "")
                 )
 
         # Log statistics

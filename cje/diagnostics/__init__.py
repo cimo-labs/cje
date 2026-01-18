@@ -78,11 +78,24 @@ from .overlap import (
 # Budget optimization / Planning
 from .planning import (
     CostModel,
+    FittedVarianceModel,
+    EvaluationPlan,
+    fit_variance_model,
+    plan_evaluation,
+    plan_for_mde,
+    check_labeling_ignorability,
+    # Deprecated - kept for backward compatibility
     BudgetAllocation,
-    estimate_variance_components,
+    VarianceModelComparison,
+    fit_variance_model_from_pilot,
+    fit_variance_model_with_floor,
     compute_optimal_allocation,
     diagnose_allocation_efficiency,
     compute_mde_contours,
+    measure_variance_at_allocation,
+    measure_variance_grid,
+    measure_variance_direct,
+    run_variance_validation_experiment,
 )
 
 __all__ = [
@@ -131,11 +144,24 @@ __all__ = [
     "compute_overlap_metrics",
     "compute_cle_diagnostics",
     "diagnose_overlap_problems",
-    # Budget optimization / Planning
+    # Budget optimization / Planning (new interface)
     "CostModel",
+    "FittedVarianceModel",
+    "EvaluationPlan",
+    "fit_variance_model",
+    "plan_evaluation",
+    "plan_for_mde",
+    "check_labeling_ignorability",
+    # Budget optimization / Planning (deprecated)
     "BudgetAllocation",
-    "estimate_variance_components",
+    "VarianceModelComparison",
+    "fit_variance_model_from_pilot",
+    "fit_variance_model_with_floor",
     "compute_optimal_allocation",
     "diagnose_allocation_efficiency",
     "compute_mde_contours",
+    "measure_variance_at_allocation",
+    "measure_variance_grid",
+    "measure_variance_direct",
+    "run_variance_validation_experiment",
 ]

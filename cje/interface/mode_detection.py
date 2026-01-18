@@ -89,13 +89,13 @@ def detect_analysis_mode(
     # Error if no valid logprobs and no fresh draws
     if logprob_coverage == 0 and not has_fresh_draws:
         raise ValueError(
-            f"Insufficient data: No samples have complete logprobs "
-            f"and no fresh draws provided. Cannot proceed with any analysis mode.\n\n"
-            f"To fix, choose one:\n"
-            f"  1. Ensure samples have base_policy_logprob and target_policy_logprobs → enables IPS/DR mode\n"
-            f"     (see cje/teacher_forcing/ for teacher-forced logprob computation)\n"
-            f"  2. Provide fresh draws (--fresh-draws-dir) → enables Direct mode\n"
-            f"     (on-policy evaluation without counterfactual inference)\n"
+            "Insufficient data: No samples have complete logprobs "
+            "and no fresh draws provided. Cannot proceed with any analysis mode.\n\n"
+            "To fix, choose one:\n"
+            "  1. Ensure samples have base_policy_logprob and target_policy_logprobs → enables IPS/DR mode\n"
+            "     (see cje/teacher_forcing/ for teacher-forced logprob computation)\n"
+            "  2. Provide fresh draws (--fresh-draws-dir) → enables Direct mode\n"
+            "     (on-policy evaluation without counterfactual inference)\n"
         )
 
     # Simplified mode routing based on data availability

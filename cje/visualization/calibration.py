@@ -210,7 +210,6 @@ def plot_calibration_comparison(
     binned_counts_valid = np.array(binned_counts)[valid_bins]
 
     # Plot smoothed empirical relationship using local polynomial regression (LOWESS)
-    from scipy.signal import savgol_filter
     from scipy.interpolate import interp1d
 
     if len(bin_centers_valid) > 3:

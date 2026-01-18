@@ -1,10 +1,8 @@
 """Fireworks API template configuration with auto-detection."""
 
 import os
-import json
 import logging
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
 
 from .base import ChatTemplateConfig
 

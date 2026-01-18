@@ -13,7 +13,6 @@ from typing import Dict
 from cje.data.fresh_draws import FreshDrawDataset
 from cje.data.models import EstimationResult
 from cje.diagnostics.robust_inference import (
-    DirectEvalTable,
     build_direct_eval_table,
     cluster_bootstrap_direct_with_refit,
     make_calibrator_factory,

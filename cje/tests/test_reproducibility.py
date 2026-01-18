@@ -6,7 +6,6 @@ These tests verify that:
 """
 
 import numpy as np
-import pytest
 from cje.calibration.simcal import SIMCalibrator, SimcalConfig
 from cje.calibration.judge import JudgeCalibrator
 from cje.data.folds import get_fold

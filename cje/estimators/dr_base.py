@@ -5,9 +5,8 @@ to achieve better bias-variance tradeoffs and double robustness properties.
 """
 
 import numpy as np
-from typing import Dict, List, Optional, Any, Union, cast
+from typing import Dict, List, Optional, Any, cast
 import logging
-import dataclasses
 from pathlib import Path
 
 from .calibrated_ips import CalibratedIPS
@@ -563,8 +562,8 @@ class DREstimator(BaseCJEEstimator):
                     )
             else:
                 raise ValueError(
-                    f"No fold assignments available for DR estimation. "
-                    f"Ensure calibration was done with enable_cross_fit=True."
+                    "No fold assignments available for DR estimation. "
+                    "Ensure calibration was done with enable_cross_fit=True."
                 )
             valid_fold_ids = np.array(valid_fold_ids_list)
 

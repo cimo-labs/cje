@@ -13,7 +13,6 @@ from typing import (
     Optional,
     Any,
     Callable,
-    Union,
     TYPE_CHECKING,
     Literal,
 )
@@ -1080,6 +1079,7 @@ def cluster_bootstrap_direct_with_refit(
                 means_p = np.where(cnt_p > 0, sum_p / cnt_p, np.nan)
 
         bootstrap_matrix[valid_count, :] = means_p
+
         oracle_counts.append(n_cal_oracle_boot)  # Track calibration oracle count
         valid_count += 1
 
@@ -1117,6 +1117,8 @@ def cluster_bootstrap_direct_with_refit(
     # Use simple percentile intervals (BCa removed - negligible benefit, expensive)
     # The ~95% coverage comes from θ̂_aug + bootstrap refit, not BCa corrections
 
+    policy_names = eval_table.policy_names
+
     return {
         "bootstrap_matrix": bootstrap_matrix,
         "estimates": full_estimates,
@@ -1127,7 +1129,7 @@ def cluster_bootstrap_direct_with_refit(
         "n_attempts": attempt,
         "skip_rate": float(skip_rate),
         "oracle_count_summary": oracle_summary,
-        "policy_names": eval_table.policy_names,
+        "policy_names": policy_names,
         "n_clusters": n_clusters,
         "n_policies": n_policies,
         "alpha": alpha,

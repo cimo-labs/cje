@@ -9,7 +9,6 @@ import json
 import tempfile
 from pathlib import Path
 
-import pytest
 
 from cje import analyze_dataset
 

@@ -8,7 +8,6 @@ import pytest
 import numpy as np
 from typing import Any
 
-from cje import analyze_dataset
 
 # Mark all tests in this file as E2E tests
 pytestmark = [pytest.mark.e2e, pytest.mark.uses_arena_sample]
