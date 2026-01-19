@@ -231,7 +231,7 @@ def plot_planning_dashboard(
         base_cost * 2,
         base_cost * 4,
     ]
-    colors_cost = plt.cm.plasma(np.linspace(0.15, 0.85, len(oracle_costs)))
+    colors_cost = plt.get_cmap("plasma")(np.linspace(0.15, 0.85, len(oracle_costs)))
 
     for i, oc in enumerate(oracle_costs):
         cm = CostModel(surrogate_cost=cost_model.surrogate_cost, oracle_cost=oc)
@@ -442,7 +442,7 @@ def plot_oracle_sensitivity(
 
     fig, ax = plt.subplots(figsize=figsize)
 
-    colors = plt.cm.viridis(np.linspace(0.2, 0.8, len(budgets)))
+    colors = plt.get_cmap("viridis")(np.linspace(0.2, 0.8, len(budgets)))
 
     # Compute optimal fraction to set x-axis range
     plan_ref = plan_evaluation(
@@ -638,10 +638,14 @@ def plot_optimality_proof(
     m_values = np.linspace(m_min_plot, m_max_plot, 100)
     oracle_fracs_shown = m_values / n_fixed
 
-    marginal_n = variance_model.sigma2_eval / (n_fixed**2) / cost_model.surrogate_cost
-    marginal_m = variance_model.sigma2_cal / (m_values**2) / cost_model.oracle_cost
+    marginal_n_fixed = (
+        variance_model.sigma2_eval / (n_fixed**2) / cost_model.surrogate_cost
+    )
+    marginal_m_curve = (
+        variance_model.sigma2_cal / (m_values**2) / cost_model.oracle_cost
+    )
 
-    scale = 1 / marginal_n  # Normalize so marginal_n = 1
+    scale = 1 / marginal_n_fixed  # Normalize so marginal_n = 1
     ax.plot(
         oracle_fracs_shown * 100,
         np.ones_like(m_values),
@@ -651,7 +655,7 @@ def plot_optimality_proof(
     )
     ax.plot(
         oracle_fracs_shown * 100,
-        marginal_m * scale,
+        marginal_m_curve * scale,
         "r-",
         linewidth=2.5,
         label="∂Var/∂$ on m (varies)",
@@ -682,7 +686,7 @@ def plot_optimality_proof(
     if np.any(under_opt):
         ax.fill_between(
             oracle_fracs_shown[under_opt] * 100,
-            marginal_m[under_opt] * scale,
+            marginal_m_curve[under_opt] * scale,
             1.0,
             alpha=0.2,
             color="red",
@@ -691,7 +695,7 @@ def plot_optimality_proof(
         ax.fill_between(
             oracle_fracs_shown[over_opt] * 100,
             1.0,
-            marginal_m[over_opt] * scale,
+            marginal_m_curve[over_opt] * scale,
             alpha=0.2,
             color="blue",
         )
