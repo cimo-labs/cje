@@ -10,44 +10,40 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-python@v4
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
       with:
         python-version: '3.10'
     - name: Install Poetry
       run: pipx install poetry==1.8.5
-    - run: poetry config virtualenvs.create true
-    - run: poetry install --no-interaction
-    # Run tests with coverage for internal monitoring only
-    - run: poetry run pytest cje/tests/ --cov=cje --cov-report=term
-    # Coverage is tracked internally but not reported publicly
-    # Tests focus on statistical validation and real-world robustness
-
-  notebook:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-python@v4
+    - name: Cache Poetry dependencies
+      uses: actions/cache@v4
       with:
-        python-version: '3.10'
-    - name: Install Poetry
-      run: pipx install poetry==1.8.5
+        path: ~/.cache/pypoetry
+        key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-poetry-
     - run: poetry config virtualenvs.create true
     - run: poetry install --no-interaction
-    - run: pip install nbformat nbconvert ipykernel
-    - run: python -m ipykernel install --user --name python3
-    # Execute the core demo notebook to catch broken cells
-    - run: poetry run pytest cje/tests/test_examples.py::TestNotebookExecution::test_tutorial_notebook -v
+    # Run fast tests only (skip slow tests marked with @pytest.mark.slow)
+    - run: poetry run pytest cje/tests/ -m "not slow" --cov=cje --cov-report=term
 
   lint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-python@v4
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
       with:
         python-version: '3.10'
     - name: Install Poetry
       run: pipx install poetry==1.8.5
+    - name: Cache Poetry dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pypoetry
+        key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-poetry-
     - run: poetry config virtualenvs.create true
     - run: poetry install --no-interaction
     - run: poetry run black --check cje

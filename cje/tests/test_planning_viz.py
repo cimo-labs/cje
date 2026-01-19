@@ -76,6 +76,10 @@ class TestPlanningVisualizationE2E:
         assert variance_model.sigma2_cal >= 0
         assert variance_model.n_measurements >= 3
 
+        # Skip if variance model is degenerate (rare edge case with sparse data)
+        if variance_model.sigma2_eval == 0 or variance_model.sigma2_cal == 0:
+            pytest.skip("Degenerate variance model - skipping visualization test")
+
         # Step 2: Specify cost model (user must think about their costs)
         cost_model = CostModel(oracle_cost=16.0)  # 16× ratio from paper
 

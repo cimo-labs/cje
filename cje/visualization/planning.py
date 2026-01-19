@@ -645,6 +645,31 @@ def plot_optimality_proof(
         variance_model.sigma2_cal / (m_values**2) / cost_model.oracle_cost
     )
 
+    # Guard against degenerate case where sigma2_eval=0
+    if marginal_n_fixed == 0:
+        # Skip optimality proof visualization when eval variance is zero
+        # This is a degenerate case (no evaluation variance to reduce)
+        ax.text(
+            0.5,
+            0.5,
+            "Optimality proof not available\n(σ²_eval = 0)",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+            fontsize=12,
+            color="gray",
+        )
+        ax.set_xlabel("Oracle Fraction (m/n) %", fontsize=11)
+        ax.set_ylabel("Marginal Variance Reduction per $ (normalized)", fontsize=11)
+        ax.set_title(
+            "Marginal Curves (degenerate case)", fontsize=12, fontweight="bold"
+        )
+
+        plt.tight_layout()
+        if save_path:
+            fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="white")
+        return fig
+
     scale = 1 / marginal_n_fixed  # Normalize so marginal_n = 1
     ax.plot(
         oracle_fracs_shown * 100,
