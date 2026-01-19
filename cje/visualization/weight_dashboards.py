@@ -551,7 +551,7 @@ def _plot_sample_efficiency(ax: Any, metrics: Dict, policies: List[str]) -> None
     bars1 = ax.bar(
         x,
         [d[0] for d in data],
-        label=f"Samples carrying 50% of weight",
+        label="Samples carrying 50% of weight",
         color=colors(3),
         alpha=0.8,
     )

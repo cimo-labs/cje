@@ -7,7 +7,6 @@ following the Single Responsibility Principle.
 import json
 import logging
 from typing import List, Dict, Any, Optional, Protocol
-from abc import ABC, abstractmethod
 from collections import defaultdict
 from pathlib import Path
 

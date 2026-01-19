@@ -9,8 +9,6 @@ import sys
 import argparse
 import json
 import logging
-from pathlib import Path
-from typing import Optional, Dict, Any
 
 # Set up logging
 logging.basicConfig(
@@ -279,7 +277,7 @@ def validate_data(args: argparse.Namespace) -> int:
                 print(f"  Mean: {np.mean(oracle_labels):.3f}")
 
             # Valid samples per policy
-            print(f"\nValid samples per policy:")
+            print("\nValid samples per policy:")
             for policy in dataset.target_policies:
                 n_valid = sum(
                     1

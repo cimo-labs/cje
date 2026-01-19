@@ -13,11 +13,9 @@ import tempfile
 from pathlib import Path
 
 import pytest
-import numpy as np
 
 from cje import analyze_dataset
 from cje.calibration import calibrate_dataset
-from cje.data import load_dataset_from_jsonl
 from cje.data.models import Dataset
 
 
@@ -29,9 +27,9 @@ def test_include_response_length_flag(tmp_path: Path) -> None:
     for i in range(50):
         # Vary response length: short (3 words) and long (10 words)
         response = (
-            f"short answer here"
+            "short answer here"
             if i % 2 == 0
-            else f"this is a much longer response with many more words here"
+            else "this is a much longer response with many more words here"
         )
 
         data.append(
@@ -149,7 +147,7 @@ def test_combined_manual_and_auto_covariates(tmp_path: Path) -> None:
     # Create data with both response lengths and custom covariates
     data = []
     for i in range(50):
-        response = f"short" if i % 2 == 0 else f"this is a longer response"
+        response = "short" if i % 2 == 0 else "this is a longer response"
 
         data.append(
             {
@@ -239,7 +237,7 @@ def test_covariates_in_direct_mode(tmp_path: Path) -> None:
     # Create fresh draw responses with varying lengths
     fresh_draws = []
     for i in range(30):
-        response = f"short" if i % 2 == 0 else f"this is a much longer response here"
+        response = "short" if i % 2 == 0 else "this is a much longer response here"
 
         fresh_draws.append(
             {
@@ -277,9 +275,7 @@ def test_covariates_in_dr_mode(tmp_path: Path) -> None:
     logged_data = []
     for i in range(30):
         response = (
-            f"short answer"
-            if i % 2 == 0
-            else f"this is a longer answer with more words"
+            "short answer" if i % 2 == 0 else "this is a longer answer with more words"
         )
 
         logged_data.append(
@@ -305,7 +301,7 @@ def test_covariates_in_dr_mode(tmp_path: Path) -> None:
 
     fresh_draws = []
     for i in range(30):  # Match all 30 logged prompts
-        response = f"fresh short" if i % 2 == 0 else f"fresh longer response here"
+        response = "fresh short" if i % 2 == 0 else "fresh longer response here"
 
         fresh_draws.append(
             {

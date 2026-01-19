@@ -1,11 +1,11 @@
 """Base class for CJE estimators."""
 
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, Union, Tuple, List
+from typing import Optional, Dict, Any
 import numpy as np
 import logging
 
-from ..data.models import Dataset, EstimationResult
+from ..data.models import EstimationResult
 from ..data.precomputed_sampler import PrecomputedSampler
 
 logger = logging.getLogger(__name__)

@@ -121,7 +121,9 @@ print(f"Difference: {comparison['difference']:.3f} (p={comparison['p_value']:.3f
 result_dict = result.to_dict()  # Full export with CIs, diagnostics
 
 # Plan budget allocation for production (after pilot)
-allocation = result.plan_allocation(budget=5000)
+from cje import CostModel
+cost_model = CostModel(oracle_cost=16.0)  # Specify your costs
+allocation = result.plan_allocation(budget=5000, cost_model=cost_model, fresh_draws_dict=fresh_draws_dict)
 print(allocation.summary())
 # Optimal allocation: n=4,800, m=12 (0.3% oracle)
 ```

@@ -4,7 +4,7 @@ Display and formatting utilities for diagnostics.
 Updated to work with both new diagnostic objects and legacy dictionaries.
 """
 
-from typing import Dict, Any, Union, Optional, TYPE_CHECKING, List
+from typing import Dict, Any, Union, TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:

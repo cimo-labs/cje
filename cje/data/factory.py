@@ -4,11 +4,10 @@ This module follows SOLID principles by using dependency injection
 and separating concerns into focused classes.
 """
 
-from typing import List, Dict, Any, Optional, Tuple
-import numpy as np
+from typing import List, Dict, Any, Optional
 
 from .models import Dataset
-from .loaders import DatasetLoader, DataSource, JsonlDataSource, InMemoryDataSource
+from .loaders import DatasetLoader, JsonlDataSource, InMemoryDataSource
 
 
 class DatasetFactory:

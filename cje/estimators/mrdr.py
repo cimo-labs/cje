@@ -7,7 +7,7 @@ while supporting policy-specific weighted outcome models.
 """
 
 from __future__ import annotations
-from typing import Dict, Optional, Any, List, cast
+from typing import Dict, Optional, Any, List
 import logging
 import numpy as np
 from sklearn.isotonic import IsotonicRegression
@@ -16,7 +16,6 @@ from .dr_base import DREstimator
 from .outcome_models import BaseOutcomeModel
 from ..data.precomputed_sampler import PrecomputedSampler
 from ..data.models import EstimationResult
-from ..data.fresh_draws import FreshDrawDataset
 
 logger = logging.getLogger(__name__)
 
@@ -614,7 +613,6 @@ class MRDREstimator(DREstimator):
             )
 
         # Build DR diagnostics using stored components
-        from ..diagnostics.dr import compute_dr_policy_diagnostics
 
         dr_diagnostics_per_policy: Dict[str, Dict[str, Any]] = {}
         for idx, policy in enumerate(self.sampler.target_policies):

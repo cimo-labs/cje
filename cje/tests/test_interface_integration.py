@@ -4,7 +4,6 @@ These tests validate that the public interface chooses sensible defaults
 and runs end-to-end on real arena sample data.
 """
 
-import os
 from pathlib import Path
 
 import pytest

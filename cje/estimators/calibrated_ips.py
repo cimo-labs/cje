@@ -7,7 +7,7 @@ variance, then blends toward uniform to meet variance/ESS constraints.
 """
 
 import numpy as np
-from typing import Dict, Optional, Set, Any, List, cast, Tuple
+from typing import Dict, Optional, Set, Any, List, Tuple
 import logging
 
 from .base_estimator import BaseCJEEstimator

@@ -221,7 +221,6 @@ def audit_transportability(
         >>> print(diag.summary())
         >>> # Output: "Transport: PASS | N=200 | δ̂: -0.012 (CI: [-0.039, +0.014])"
     """
-    from ..data.models import Sample
 
     # Extract probe data
     probe_scores, probe_labels = _extract_scores_labels(probe_samples)

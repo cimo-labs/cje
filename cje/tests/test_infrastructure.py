@@ -7,7 +7,7 @@ that E2E tests might miss.
 
 import pytest
 import numpy as np
-from typing import List, Dict, Optional
+from typing import Dict, Optional
 
 from cje.data.models import Sample, Dataset
 from cje.data.folds import get_fold

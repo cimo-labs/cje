@@ -914,89 +914,166 @@ Given budget `B = c_S·n + c_Y·m`, the optimal allocation is:
 m*/n* = √(c_S/c_Y) · √(σ²_cal/σ²_eval)
 ```
 
-### Basic Usage
+### MDE-Centric Workflow
 
-**Simplest approach** - use the convenience method on EstimationResult:
+The planning API is centered around **MDE (Minimum Detectable Effect)** - the smallest difference between policies you can reliably detect:
+
+```python
+from cje.diagnostics import fit_variance_model, plan_evaluation, plan_for_mde, CostModel
+
+# 1. Fit variance model from pilot data (use base policy for ignorable labeling)
+model = fit_variance_model({"base": pilot_data}, verbose=True)
+# σ²_eval = 0.008, σ²_cal = 0.004, R² = 0.94
+
+# 2. Specify your cost model
+# The optimal allocation depends entirely on relative costs - there's no sensible default.
+# Calculate your actual cost ratio: oracle_cost / surrogate_cost
+# Example: GPT-4o ($0.16/call) vs GPT-4o-mini ($0.01/call) → ratio = 16
+cost_model = CostModel(oracle_cost=16.0)
+
+# 3a. "I have $5000, what can I detect?"
+plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
+print(plan.summary())
+# Evaluation Plan
+#   Allocation: n=4,200, m=80 (1.9% oracle)
+#   Cost: $5,000
+#   Single-policy SE: 0.0086
+#   MDE (80% power): 2.4%
+#   → Can detect 2.4% difference between policies
+
+# 3b. "I need to detect 1% differences"
+plan = plan_for_mde(target_mde=0.01, variance_model=model, cost_model=cost_model)
+print(f"Required budget: ${plan.total_cost:,.0f}")
+```
+
+> **Why no defaults?** The Square Root Allocation Law gives optimal split as `m*/n* = √(c_S/c_Y) × √(σ²_cal/σ²_eval)`. A 4× cost ratio vs 64× cost ratio produces completely different allocations. Using the wrong ratio wastes budget or underestimates MDE.
+
+### EvaluationPlan Features
+
+The `EvaluationPlan` returned by `plan_evaluation()` and `plan_for_mde()` includes:
+
+```python
+# Core outputs
+plan.n_samples        # Optimal number of prompts
+plan.m_oracle         # Optimal number of oracle labels
+plan.total_cost       # Total cost at this allocation
+plan.mde              # MDE at 80% power for pairwise comparisons
+plan.se_level         # SE for single policy estimate
+
+# Utilities
+plan.mde_at_power(0.9)        # MDE at 90% power
+plan.power_to_detect(0.02)    # Power to detect 2% effect
+plan.summary()                # Human-readable summary
+```
+
+### Acting on the Plan
+
+The plan output tells you exactly what to collect:
+
+```python
+plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
+
+# WHAT TO COLLECT:
+print(f"Collect {plan.n_samples} responses scored by surrogate judge")
+print(f"Randomly select {plan.m_oracle} for oracle labels")
+print(f"Oracle fraction: {plan.m_oracle/plan.n_samples:.1%}")
+
+# WHAT YOU CAN DETECT:
+print(f"MDE: {plan.mde:.1%} difference between policies (80% power)")
+```
+
+**Critical: oracle labels must be randomly selected** from the evaluation set. If you only label "interesting" or "hard" examples, the calibration will be biased.
+
+### The Budget ↔ MDE Decision Loop
+
+Most users iterate between two questions:
+
+```python
+# "I have $10K, what can I detect?"
+plan = plan_evaluation(budget=10000, variance_model=model, cost_model=cost_model)
+print(f"MDE = {plan.mde:.1%}")  # Maybe 1.5%
+
+# "That's not sensitive enough. What if I need 1%?"
+plan = plan_for_mde(target_mde=0.01, variance_model=model, cost_model=cost_model)
+print(f"Budget needed: ${plan.total_cost:,.0f}")  # Maybe $22K
+
+# "Too expensive. What about 1.2%?"
+plan = plan_for_mde(target_mde=0.012, variance_model=model, cost_model=cost_model)
+print(f"Budget needed: ${plan.total_cost:,.0f}")  # Maybe $15K - acceptable
+```
+
+**Rule of thumb**: Target MDE should be 2-3× smaller than differences you care about. If you care about 5% differences, aim for MDE ≤ 2%.
+
+### MDE Assumptions
+
+The MDE calculation uses **conservative assumptions**:
+
+- **√2 factor**: Assumes independent samples for pairwise comparison `Var(Δ̂) = 2 × Var(θ̂)`
+- **Actual MDE may be better** due to correlation (same calibrator, same prompts)
+- **Transportability assumed**: Calibrator transfers across policies (verify post-hoc with `audit_transportability()`)
+
+Formula: `MDE = (z_{α/2} + z_β) × √2 × SE(θ̂)` ≈ `2.8 × √2 × SE` for 80% power, α=0.05
+
+### Variance Model Fitting
+
+The key to accurate planning is fitting the variance model correctly:
+
+```python
+from cje.diagnostics import fit_variance_model, check_labeling_ignorability
+
+# Check labeling is ignorable (random within policy)
+ignorability = check_labeling_ignorability({"base": pilot_data})
+if not ignorability["is_ignorable"]:
+    print(f"Warning: {ignorability['recommendation']}")
+
+# Fit model - uses direct Var(θ̂) measurement (not bootstrap SE²)
+model = fit_variance_model(
+    {"base": pilot_data},  # Single policy for ignorable labeling
+    n_replicates=150,      # Replicates per grid point
+    verbose=True,
+)
+print(model.summary())
+# FittedVarianceModel (R²=0.955, n=12 measurements)
+#   σ²_eval = 0.008432
+#   σ²_cal  = 0.004156
+```
+
+**Key insight**: The variance model achieves R² > 0.9 when:
+1. Labeling is ignorable (random within policy)
+2. We measure Var(θ̂) directly across replicates (not bootstrap SE²)
+
+### Post-Hoc Transportability Check
+
+After collecting production data, verify the calibrator transfers:
 
 ```python
 from cje import analyze_dataset
+from cje.diagnostics import audit_transportability
 
-# Run a pilot
-result = analyze_dataset(fresh_draws_dir="pilot_responses/")
+# Analyze production data
+result = analyze_dataset(fresh_draws_dir="production_data/")
 
-# Plan optimal allocation for production
-allocation = result.plan_allocation(budget=5000)
-print(allocation.summary())
-# Optimal allocation: n=4,800, m=12 (0.3% oracle)
-# Expected SE: 0.0142 | Calibration share: 2.1%
-# Total cost: $4,992.00
+# Check if calibrator transports to each target policy
+for policy_name, probe_data in target_probes.items():
+    diag = audit_transportability(result.calibrator, probe_data, group_label=policy_name)
+    if diag.status == "FAIL":
+        print(f"Warning: calibrator may not transfer to {policy_name}")
+        print(f"  δ̂ = {diag.delta_hat:+.3f} (CI: [{diag.ci_lower:+.3f}, {diag.ci_upper:+.3f}])")
 ```
 
-**With custom cost model:**
+### Legacy API
 
-```python
-from cje import CostModel
+The older functions are still available but the new API above is recommended:
 
-# Custom costs (e.g., GPT-4 oracle is 32× more expensive)
-allocation = result.plan_allocation(
-    budget=5000,
-    cost_model=CostModel(surrogate_cost=1.0, oracle_cost=32.0)
-)
-```
+| Old Function | New Alternative | Notes |
+|-------------|-----------------|-------|
+| `fit_variance_model_from_pilot()` | `fit_variance_model()` | New version uses direct Var(θ̂), achieves R² > 0.9 |
+| `compute_optimal_allocation()` | `plan_evaluation()` | New version returns `EvaluationPlan` with MDE |
+| `BudgetAllocation` | `EvaluationPlan` | New class includes MDE, power utilities |
 
-### Lower-Level API
-
-For more control, use the functions directly:
-
-```python
-from cje.diagnostics import (
-    estimate_variance_components,
-    compute_optimal_allocation,
-    diagnose_allocation_efficiency,
-    compute_mde_contours,
-    CostModel,
-)
-
-# Extract variance components from pilot
-sigma2_eval, sigma2_cal = estimate_variance_components(result)
-
-# Compute optimal allocation
-allocation = compute_optimal_allocation(
-    budget=5000,
-    cost_model=CostModel(oracle_cost=16.0),
-    sigma2_eval=sigma2_eval,
-    sigma2_cal=sigma2_cal,
-)
-
-# Diagnose current allocation efficiency
-diag = diagnose_allocation_efficiency(result, CostModel())
-print(diag["status"])  # "UNDER_LABELED", "OVER_LABELED", or "BALANCED"
-print(diag["recommendation"])
-```
-
-### MDE Contours for Power Analysis
-
-Compute minimum detectable effect (MDE) grids for sample size planning:
-
-```python
-mde_grid = compute_mde_contours(
-    n_range=[500, 1000, 2000, 5000],
-    oracle_fractions=[0.05, 0.10, 0.25],
-    sigma2_eval=sigma2_eval,
-    sigma2_cal=sigma2_cal,
-    power=0.8,
-    alpha=0.05,
-)
-print(f"Best achievable MDE: {mde_grid.min():.4f}")
-```
-
-### Spend-Balance Diagnostic
-
-The efficiency diagnostic uses the **Spend-Balance Rule**: at the optimum, the fraction of variance from calibration (`ω`) should equal the fraction of budget spent on oracle labels.
-
-- `ω > spend_fraction` → **UNDER_LABELED**: Collect more oracle labels
-- `ω < spend_fraction` → **OVER_LABELED**: Evaluate more prompts
-- `ω ≈ spend_fraction` → **BALANCED**: Allocation is near-optimal
+Still useful:
+- `compute_mde_contours()` - Generate MDE grids for visualization
+- `diagnose_allocation_efficiency()` - Check if current allocation is optimal
 
 ## References
 

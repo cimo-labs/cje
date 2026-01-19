@@ -1,12 +1,6 @@
 """Test Monte Carlo variance computation utilities."""
 
-import pytest
-import numpy as np
-from typing import List
-
-from cje.data.models import Sample, Dataset
 from cje.data.fresh_draws import FreshDrawDataset, FreshDrawSample
-from cje.data.precomputed_sampler import PrecomputedSampler
 from cje.data.fresh_draw_utils import compute_fresh_draw_prompt_stats
 
 

@@ -23,8 +23,15 @@ from .data import Dataset, Sample, EstimationResult
 # Simple data loading
 from .data import load_dataset_from_jsonl
 
-# Budget planning (for custom cost models)
-from .diagnostics.planning import CostModel, BudgetAllocation
+# Budget planning
+from .diagnostics.planning import (
+    CostModel,
+    FittedVarianceModel,
+    EvaluationPlan,
+    fit_variance_model,
+    plan_evaluation,
+    plan_for_mde,
+)
 
 # Visualization functions (optional - requires matplotlib)
 try:
@@ -51,7 +58,11 @@ __all__ = [
     "load_dataset_from_jsonl",
     # Budget planning
     "CostModel",
-    "BudgetAllocation",
+    "FittedVarianceModel",
+    "EvaluationPlan",
+    "fit_variance_model",
+    "plan_evaluation",
+    "plan_for_mde",
 ]
 
 # Add visualization functions to __all__ if available

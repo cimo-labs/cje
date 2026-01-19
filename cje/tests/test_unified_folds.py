@@ -3,7 +3,6 @@
 import numpy as np
 import pytest
 import time
-from typing import List
 
 from cje.data import Dataset, Sample
 from cje.data.folds import (

@@ -10,7 +10,6 @@ Features:
 - No distribution bias (unlike delimiter methods)
 """
 
-import os
 import logging
 from typing import Optional, Tuple, Dict, Any
 from fireworks.client import Fireworks

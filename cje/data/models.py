@@ -1,6 +1,6 @@
 """Data models for CJE using Pydantic."""
 
-from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING, ForwardRef, Union
+from typing import Dict, List, Optional, Any, Tuple, Union
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator
 import numpy as np
@@ -472,40 +472,74 @@ class EstimationResult(BaseModel):
     def plan_allocation(
         self,
         budget: float,
-        cost_model: Optional[Any] = None,
+        cost_model: Any,
+        fresh_draws_dict: Optional[Dict[str, Any]] = None,
+        verbose: bool = True,
     ) -> Any:
         """Plan optimal oracle/surrogate allocation via Square Root Allocation Law.
 
-        Uses variance components from this EstimationResult to compute optimal
-        allocation of budget between evaluation samples (n) and oracle labels (m).
+        Uses empirically-fitted variance model to compute optimal allocation of
+        budget between evaluation samples (n) and oracle labels (m), and computes
+        the achievable MDE (Minimum Detectable Effect) for pairwise comparisons.
 
         Args:
             budget: Total budget in cost units (e.g., dollars)
-            cost_model: CostModel instance. If None, uses defaults (surrogate=1.0, oracle=16.0)
+            cost_model: CostModel instance (required - no default).
+            fresh_draws_dict: Fresh draws data for empirical variance fitting.
+                Required for accurate variance estimation. Format: {policy_name: FreshDrawDataset}
+            verbose: Print progress during variance model fitting
 
         Returns:
-            BudgetAllocation with optimal n*, m* and diagnostic information.
-            Call .summary() for human-readable output, .to_dict() for serialization.
+            EvaluationPlan with optimal n*, m*, achievable MDE, and diagnostic info.
+            Call .summary() for human-readable output.
 
         Example:
-            >>> result = analyze_dataset(fresh_draws_dir="responses/")
-            >>> allocation = result.plan_allocation(budget=5000)
-            >>> print(allocation.summary())
-            Optimal allocation: n=4,800, m=12 (0.3% oracle)
-            Expected SE: 0.0142 | Calibration share: 2.1%
-            Total cost: $4,992.00
+            >>> from cje import CostModel
+            >>> from cje.data.fresh_draws import load_fresh_draws_auto, discover_policies_from_fresh_draws
+            >>> fresh_draws_dir = "responses/"
+            >>> policies = discover_policies_from_fresh_draws(fresh_draws_dir)
+            >>> fresh_draws_dict = {p: load_fresh_draws_auto(fresh_draws_dir, p) for p in policies}
+            >>> result = analyze_dataset(fresh_draws_dir=fresh_draws_dir)
+            >>> cost_model = CostModel(oracle_cost=16.0)  # Specify your costs
+            >>> plan = result.plan_allocation(budget=5000, cost_model=cost_model, fresh_draws_dict=fresh_draws_dict)
+            >>> print(plan.summary())
+
+        Raises:
+            ValueError: If fresh_draws_dict is not provided.
+
+        Note:
+            For simpler usage, consider the top-level planning API:
+                from cje import fit_variance_model, plan_evaluation, CostModel
+                model = fit_variance_model(fresh_draws_dict)
+                cost_model = CostModel(oracle_cost=16.0)
+                plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
         """
         from ..diagnostics.planning import (
-            estimate_variance_components,
-            compute_optimal_allocation,
-            CostModel,
+            fit_variance_model,
+            plan_evaluation,
         )
 
-        if cost_model is None:
-            cost_model = CostModel()
+        if fresh_draws_dict is None:
+            raise ValueError(
+                "fresh_draws_dict is required for budget planning. "
+                "Load your fresh draws data and pass it to plan_allocation():\n\n"
+                "  from cje import CostModel\n"
+                "  from cje.data.fresh_draws import load_fresh_draws_auto, discover_policies_from_fresh_draws\n"
+                "  policies = discover_policies_from_fresh_draws(fresh_draws_dir)\n"
+                "  fresh_draws_dict = {p: load_fresh_draws_auto(fresh_draws_dir, p) for p in policies}\n"
+                "  cost_model = CostModel(oracle_cost=16.0)\n"
+                "  plan = result.plan_allocation(budget=5000, cost_model=cost_model, fresh_draws_dict=fresh_draws_dict)\n\n"
+                "Or use the simpler top-level API:\n"
+                "  from cje import fit_variance_model, plan_evaluation, CostModel\n"
+                "  model = fit_variance_model(fresh_draws_dict)\n"
+                "  cost_model = CostModel(oracle_cost=16.0)\n"
+                "  plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)"
+            )
 
-        sigma2_eval, sigma2_cal = estimate_variance_components(self)
-        return compute_optimal_allocation(budget, cost_model, sigma2_eval, sigma2_cal)
+        # Fit variance model from empirical measurements
+        variance_model = fit_variance_model(fresh_draws_dict, verbose=verbose)
+
+        return plan_evaluation(budget, variance_model, cost_model=cost_model)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""

@@ -7,7 +7,7 @@ and ensuring consistent diagnostics with other DR methods.
 """
 
 from __future__ import annotations
-from typing import Dict, Optional, Any, List, Tuple, Union, cast
+from typing import Dict, Optional, Any, List, Tuple
 import logging
 import numpy as np
 
@@ -15,7 +15,6 @@ from .dr_base import DREstimator
 from .outcome_models import IsotonicOutcomeModel
 from ..data.precomputed_sampler import PrecomputedSampler
 from ..data.models import EstimationResult
-from ..data.fresh_draws import FreshDrawDataset
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +317,6 @@ class TMLEEstimator(DREstimator):
         n_samples_used: Dict[str, int],
     ) -> EstimationResult:
         """Create base result with DR diagnostics computed on ORIGINAL predictions."""
-        from ..diagnostics.dr import compute_dr_policy_diagnostics
 
         dr_diagnostics_per_policy = {}
         dr_calibration_data = {}

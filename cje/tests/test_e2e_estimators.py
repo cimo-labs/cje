@@ -6,11 +6,8 @@ and diagnostics using the 100-sample arena dataset.
 
 import pytest
 import numpy as np
-from pathlib import Path
 from typing import Any
 
-from cje import load_dataset_from_jsonl
-from cje.data.models import Dataset
 
 # Mark all tests in this file as E2E tests
 pytestmark = [pytest.mark.e2e, pytest.mark.uses_arena_sample]
