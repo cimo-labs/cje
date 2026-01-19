@@ -64,9 +64,9 @@ from cje import fit_variance_model, plan_evaluation, plan_for_mde, CostModel
 model = fit_variance_model({"base": pilot_data})
 
 # Specify your cost model - THIS IS CRITICAL
-# The optimal oracle/surrogate split depends entirely on relative costs.
-# Example: GPT-4o-mini surrogate ($0.01) vs GPT-4o oracle ($0.16) → 16× ratio
-cost_model = CostModel(oracle_cost=16.0)
+# Use actual costs per call so budget is in real dollars
+# Example: GPT-4o-mini ($0.01/call) vs GPT-4o ($0.16/call)
+cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
 
 # "I have $5000, what can I detect?"
 plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)

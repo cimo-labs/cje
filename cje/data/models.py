@@ -500,7 +500,7 @@ class EstimationResult(BaseModel):
             >>> policies = discover_policies_from_fresh_draws(fresh_draws_dir)
             >>> fresh_draws_dict = {p: load_fresh_draws_auto(fresh_draws_dir, p) for p in policies}
             >>> result = analyze_dataset(fresh_draws_dir=fresh_draws_dir)
-            >>> cost_model = CostModel(oracle_cost=16.0)  # Specify your costs
+            >>> cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)  # Actual dollar costs
             >>> plan = result.plan_allocation(budget=5000, cost_model=cost_model, fresh_draws_dict=fresh_draws_dict)
             >>> print(plan.summary())
 
@@ -511,7 +511,7 @@ class EstimationResult(BaseModel):
             For simpler usage, consider the top-level planning API:
                 from cje import fit_variance_model, plan_evaluation, CostModel
                 model = fit_variance_model(fresh_draws_dict)
-                cost_model = CostModel(oracle_cost=16.0)
+                cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)  # Actual dollar costs
                 plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
         """
         from ..diagnostics.planning import (
@@ -527,12 +527,12 @@ class EstimationResult(BaseModel):
                 "  from cje.data.fresh_draws import load_fresh_draws_auto, discover_policies_from_fresh_draws\n"
                 "  policies = discover_policies_from_fresh_draws(fresh_draws_dir)\n"
                 "  fresh_draws_dict = {p: load_fresh_draws_auto(fresh_draws_dir, p) for p in policies}\n"
-                "  cost_model = CostModel(oracle_cost=16.0)\n"
+                "  cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)  # Actual dollar costs\n"
                 "  plan = result.plan_allocation(budget=5000, cost_model=cost_model, fresh_draws_dict=fresh_draws_dict)\n\n"
                 "Or use the simpler top-level API:\n"
                 "  from cje import fit_variance_model, plan_evaluation, CostModel\n"
                 "  model = fit_variance_model(fresh_draws_dict)\n"
-                "  cost_model = CostModel(oracle_cost=16.0)\n"
+                "  cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)  # Actual dollar costs\n"
                 "  plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)"
             )
 

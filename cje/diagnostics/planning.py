@@ -31,9 +31,10 @@ Usage:
     print(f"R² = {variance_model.r_squared:.3f}")
 
     # Plan optimal allocation for production
-    cost_model = CostModel(oracle_cost=16.0)  # 16× cost ratio
+    # Use actual dollar costs so budget clearly means real dollars
+    cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)  # GPT-4o-mini vs GPT-4o
     allocation = compute_optimal_allocation(
-        budget=1000.0,
+        budget=50.0,  # $50 budget
         cost_model=cost_model,
         variance_model=variance_model,
     )
@@ -59,23 +60,22 @@ class CostModel:
     The optimal oracle/surrogate allocation depends critically on relative costs.
     You must specify costs that reflect your actual setup - there's no universal default.
 
-    The key parameter is the cost RATIO (oracle_cost / surrogate_cost). Only the ratio
-    matters for allocation, so you can use normalized costs (surrogate=1.0) or actual
-    dollar amounts.
+    **Recommendation: Use actual dollar costs** so that budget values clearly represent
+    real dollars. While only the cost ratio matters for allocation, using actual costs
+    makes budget interpretation unambiguous. For example, with surrogate_cost=0.01 and
+    oracle_cost=0.16, a budget of 50.0 clearly means $50.
 
     Attributes:
-        surrogate_cost: Cost per surrogate (judge) score (c_S).
-        oracle_cost: Cost per oracle label (c_Y).
+        surrogate_cost: Cost per surrogate (judge) score in dollars (c_S).
+        oracle_cost: Cost per oracle label in dollars (c_Y).
 
     Example:
-        # GPT-4o-mini surrogate ($0.01) vs GPT-4o oracle ($0.16) → 16× ratio
-        cost_model = CostModel(surrogate_cost=1.0, oracle_cost=16.0)
-
-        # Or use actual dollar costs (same ratio, same allocation)
+        # GPT-4o-mini surrogate ($0.01) vs GPT-4o oracle ($0.16)
+        # Use actual dollar costs so budget clearly means real dollars
         cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
 
-        # Human oracle is much more expensive → higher ratio
-        cost_model = CostModel(surrogate_cost=1.0, oracle_cost=100.0)
+        # Human oracle is much more expensive
+        cost_model = CostModel(surrogate_cost=0.01, oracle_cost=1.00)  # $1 per human label
     """
 
     surrogate_cost: float = 1.0
@@ -467,14 +467,15 @@ def plan_evaluation(
         from cje.diagnostics import fit_variance_model, plan_evaluation, CostModel
 
         model = fit_variance_model({"base": pilot_data})
-        cost_model = CostModel(oracle_cost=16.0)  # Specify your costs
+        # Use actual dollar costs so budget clearly means real dollars
+        cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)  # GPT-4o-mini vs GPT-4o
 
-        # "I have $5000, what can I detect?"
-        plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
+        # "I have $50, what can I detect?"
+        plan = plan_evaluation(budget=50.0, variance_model=model, cost_model=cost_model)
         print(plan.summary())
         # Evaluation Plan
         #   Allocation: n=4,200, m=80 (1.9% oracle)
-        #   Cost: $5,000
+        #   Cost: $50
         #   Single-policy SE: 0.0086
         #   MDE (80% power): 2.4%
         #   → Can detect 2.4% difference between policies
@@ -570,7 +571,8 @@ def plan_for_mde(
         from cje.diagnostics import fit_variance_model, plan_for_mde, CostModel
 
         model = fit_variance_model({"base": pilot_data})
-        cost_model = CostModel(oracle_cost=16.0)  # Specify your costs
+        # Use actual dollar costs so budget clearly means real dollars
+        cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)  # GPT-4o-mini vs GPT-4o
 
         # "I need to detect 1% differences"
         plan = plan_for_mde(target_mde=0.01, variance_model=model, cost_model=cost_model)
@@ -840,9 +842,10 @@ def compute_optimal_allocation(
     Example:
         # Recommended: Use empirically-fitted model
         model = fit_variance_model_from_pilot(fresh_draws_dict)
+        # Use actual dollar costs so budget clearly means real dollars
         allocation = compute_optimal_allocation(
-            budget=5000.0,
-            cost_model=CostModel(oracle_cost=16.0),
+            budget=50.0,  # $50 budget
+            cost_model=CostModel(surrogate_cost=0.01, oracle_cost=0.16),  # GPT-4o-mini vs GPT-4o
             variance_model=model,
         )
         print(allocation.summary())

@@ -926,10 +926,9 @@ model = fit_variance_model({"base": pilot_data}, verbose=True)
 # σ²_eval = 0.008, σ²_cal = 0.004, R² = 0.94
 
 # 2. Specify your cost model
-# The optimal allocation depends entirely on relative costs - there's no sensible default.
-# Calculate your actual cost ratio: oracle_cost / surrogate_cost
-# Example: GPT-4o ($0.16/call) vs GPT-4o-mini ($0.01/call) → ratio = 16
-cost_model = CostModel(oracle_cost=16.0)
+# Use actual costs per call so budget is in real dollars
+# Example: GPT-4o-mini surrogate ($0.01/call) vs GPT-4o oracle ($0.16/call)
+cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
 
 # 3a. "I have $5000, what can I detect?"
 plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)

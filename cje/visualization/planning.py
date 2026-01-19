@@ -106,7 +106,7 @@ def plot_planning_dashboard(
     Example:
         >>> from cje.diagnostics.planning import FittedVarianceModel, CostModel
         >>> model = FittedVarianceModel(sigma2_eval=0.008, sigma2_cal=0.004, r_squared=0.95, n_measurements=12)
-        >>> cost = CostModel(oracle_cost=16.0)  # Your actual cost ratio
+        >>> cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)  # Actual dollar costs
         >>> fig = plot_planning_dashboard(model, cost)
         >>> fig.savefig("planning_dashboard.png")
     """
