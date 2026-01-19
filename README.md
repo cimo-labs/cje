@@ -53,71 +53,6 @@ CJE learns the judge→oracle mapping from the labeled samples and applies it ev
 
 ---
 
-## Planning Your Evaluation
-
-Before collecting data, figure out how many samples you need:
-
-```python
-from cje import fit_variance_model, plan_evaluation, plan_for_mde, CostModel
-
-# Run a small pilot (100-500 samples with ~20% oracle labels)
-model = fit_variance_model({"base": pilot_data})
-
-# Specify your cost model - THIS IS CRITICAL
-# Use actual costs per call so budget is in real dollars
-# Example: GPT-4o-mini ($0.01/call) vs GPT-4o ($0.16/call)
-cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-
-# "I have $5000, what can I detect?"
-plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
-print(plan.summary())
-# MDE (80% power): 2.4%
-# → Can detect 2.4% difference between policies
-
-# "I need to detect 1% differences"
-plan = plan_for_mde(target_mde=0.01, variance_model=model, cost_model=cost_model)
-print(f"Required budget: ${plan.total_cost:,.0f}")
-```
-
-> **Why is `cost_model` required?** The Square Root Allocation Law says optimal allocation is `m*/n* = √(cost_ratio) × √(σ²_cal/σ²_eval)`. Different cost ratios → completely different recommendations. There's no sensible default.
-
-**Interpreting the plan:**
-```python
-plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
-print(plan.summary())
-# Evaluation Plan
-#   Allocation: n=4,200 prompts, m=80 oracle labels (1.9%)
-#   Cost: $5,000
-#   MDE (80% power): 2.4%
-```
-
-This tells you: **Collect 4,200 responses scored by your surrogate judge. Randomly select 80 of those for oracle labels.** With this data, you can detect a 2.4% difference between policies with 80% power.
-
-**Deciding if MDE is acceptable:**
-- MDE = smallest effect you can reliably detect
-- If policies differ by less than MDE, you won't have statistical power to detect it
-- Rule of thumb: target MDE should be smaller than differences you care about
-
-**The decision loop:**
-```python
-# Option A: "I have a budget, what can I detect?"
-plan = plan_evaluation(budget=5000, ...)  # → MDE = 2.4%
-
-# Option B: "I need to detect X%, what does it cost?"
-plan = plan_for_mde(target_mde=0.01, ...)  # → budget = $47,000
-
-# Iterate until budget and MDE are both acceptable
-```
-
-**The workflow:**
-1. Run small pilot → fit variance model
-2. Plan sample size for target MDE (iterate budget ↔ MDE)
-3. Collect production data: `n_samples` responses, `m_oracle` random oracle labels
-4. Analyze with `analyze_dataset`
-5. Monitor with `audit_transportability`
-
----
-
 ## Why You Need This
 
 **LLM-as-judge gives you rankings. CJE gives you certainty.**
@@ -189,6 +124,8 @@ Walk through a complete example: compare prompt variants, check if calibration t
 ---
 
 ## Documentation
+
+**Planning sample sizes?** Once you have pilot data, CJE can optimize your oracle/surrogate budget allocation. The [tutorial notebook](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb) walks through budget planning using Arena data as a reference.
 
 **Video Walkthroughs**
 - [CJE Technical Walkthrough](https://youtu.be/r0dinGsPuqY) — Pipeline deep dive: calibration, evaluation, and transport auditing
