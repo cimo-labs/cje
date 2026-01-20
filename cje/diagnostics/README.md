@@ -1060,20 +1060,6 @@ for policy_name, probe_data in target_probes.items():
         print(f"  δ̂ = {diag.delta_hat:+.3f} (CI: [{diag.ci_lower:+.3f}, {diag.ci_upper:+.3f}])")
 ```
 
-### Legacy API
-
-The older functions are still available but the new API above is recommended:
-
-| Old Function | New Alternative | Notes |
-|-------------|-----------------|-------|
-| `fit_variance_model_from_pilot()` | `fit_variance_model()` | New version uses direct Var(θ̂), achieves R² > 0.9 |
-| `compute_optimal_allocation()` | `plan_evaluation()` | New version returns `EvaluationPlan` with MDE |
-| `BudgetAllocation` | `EvaluationPlan` | New class includes MDE, power utilities |
-
-Still useful:
-- `compute_mde_contours()` - Generate MDE grids for visualization
-- `diagnose_allocation_efficiency()` - Check if current allocation is optimal
-
 ## References
 
 - **ESS**: Effective Sample Size in Importance Sampling (Kong, 1992)

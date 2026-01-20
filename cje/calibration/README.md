@@ -34,7 +34,7 @@ calibration/
 ├── flexible_calibrator.py # Flexible calibration for non-monotone relationships
 ├── isotonic.py          # Core isotonic regression and variance control
 ├── judge.py             # Judge score calibration to oracle labels
-├── oracle_slice.py      # Oracle slice configuration (deprecated)
+├── oracle_slice.py      # Oracle slice configuration
 └── simcal.py            # Stacked SIMCal implementation
 ```
 

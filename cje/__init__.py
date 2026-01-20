@@ -12,7 +12,7 @@ Example:
     print(results.summary())
 """
 
-__version__ = "0.2.5"
+__version__ = "0.2.16"
 
 # Simple API - what 90% of users need
 from .interface import analyze_dataset
