@@ -89,7 +89,7 @@ Label ~250 samples with your oracle (human raters, downstream KPIs, expensive mo
 
 <div align="center">
   <img src="images/forest_plot_n1000_oracle25.png" alt="CJE Output Example" width="80%">
-  <br><em>Example output: comparing policies with calibrated confidence intervals</em>
+  <br><em>Example output with simulated data (not real model benchmarks)</em>
 </div>
 
 [**Read the full Arena Experiment →**](https://www.cimolabs.com/research/arena-experiment)
