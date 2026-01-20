@@ -30,6 +30,12 @@ The visualization module provides comprehensive diagnostic plots for understandi
 - You have oracle ground truth for validation
 - You need publication-ready forest plots
 
+### Use **Planning Dashboard** when:
+- You need to determine budget for target MDE
+- You want to visualize cost-sensitivity tradeoffs
+- You're planning sample sizes before running experiments
+- You need to communicate budget/precision tradeoffs
+
 > **Note:** For transportability diagnostics, use `cje.diagnostics`:
 > - `diag.plot()` for single-policy decile bars
 > - `plot_transport_comparison(results_dict)` for multi-policy forest plot
@@ -42,6 +48,7 @@ visualization/
 ├── calibration.py           # Calibration transformation and reliability plots
 ├── dr_dashboards.py         # Doubly robust diagnostic visualizations
 ├── estimates.py             # Policy performance forest plots
+├── planning.py              # Budget planning dashboard (MDE vs budget)
 └── weight_dashboards.py     # Weight diagnostic dashboards (summary & detailed)
 ```
 
@@ -73,6 +80,12 @@ Clear presentation of final results:
 - **Policy comparison**: Visual ranking and uncertainty
 - **Oracle validation**: Compare estimates to ground truth when available
 
+### 5. Planning Dashboard
+Budget optimization visualization (3 panels):
+- **MDE vs Budget**: What precision can you achieve at each budget level
+- **Power Curve**: Statistical power to detect various effect sizes
+- **Cost Sensitivity**: How oracle cost ratio affects optimal allocation
+
 ## Common Interface
 
 All visualization functions follow consistent patterns and are available in two ways:
@@ -94,6 +107,7 @@ from cje.visualization import (
     plot_dr_dashboard,
     plot_calibration_comparison,
     plot_policy_estimates,
+    plot_planning_dashboard,
 )
 
 # Weight diagnostics - summary dashboard (6 panels)
@@ -140,6 +154,19 @@ fig = result.plot_estimates(
     base_policy_stats={"mean": 0.72, "se": 0.01},
     save_path="estimates.png"
 )
+
+# Planning dashboard (budget optimization)
+from cje.visualization import plot_planning_dashboard
+from cje.diagnostics import fit_variance_model, CostModel
+
+# Fit variance model from pilot data
+variance_model = fit_variance_model({"base": pilot_data})
+
+# Specify your actual costs
+cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
+
+# Generate 3-panel dashboard: MDE vs Budget, Power Curve, Cost Sensitivity
+fig = plot_planning_dashboard(variance_model, cost_model)
 
 # Transportability diagnostics (from cje.diagnostics, not visualization)
 from cje.diagnostics import audit_transportability, plot_transport_comparison
