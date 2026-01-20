@@ -11,6 +11,7 @@ def plot_policy_estimates(
     standard_errors: Dict[str, float],
     oracle_values: Optional[Dict[str, float]] = None,
     policy_labels: Optional[Dict[str, str]] = None,
+    title: Optional[str] = None,
     sort_by: Literal["estimate", "name", "none"] = "estimate",
     figsize: tuple = (12, None),
     save_path: Optional[Path] = None,
@@ -26,6 +27,7 @@ def plot_policy_estimates(
         oracle_values: Optional dict of oracle ground truth values
         policy_labels: Optional dict mapping policy names to display labels.
             Example: {"prompt_v1": "Conversational tone"}
+        title: Optional plot title.
         sort_by: How to order policies. "estimate" (best at top, default),
             "name" (alphabetical), or "none" (preserve input order)
         figsize: Figure size (width, height). Height auto-calculated if None.
@@ -180,6 +182,10 @@ def plot_policy_estimates(
                 color="#6b7280",
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8),
             )
+
+    # Title
+    if title:
+        ax.set_title(title, fontsize=12, fontweight="bold", color="#1f2937", pad=12)
 
     plt.tight_layout()
 
