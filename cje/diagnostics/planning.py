@@ -616,6 +616,7 @@ def measure_variance_direct(
                                 oracle_label=None,
                                 response=s.response,
                                 draw_idx=s.draw_idx,
+                                fold_id=s.fold_id,
                                 metadata=s.metadata,
                             )
                         )
