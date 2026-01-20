@@ -12,11 +12,12 @@ from cje import analyze_dataset
 
 from cje.diagnostics.planning import (
     CostModel,
-    compute_optimal_allocation,
-    diagnose_allocation_efficiency,
-    compute_mde_contours,
     FittedVarianceModel,
-    fit_variance_model_from_pilot,
+    EvaluationPlan,
+    fit_variance_model,
+    plan_evaluation,
+    plan_for_mde,
+    measure_variance_direct,
 )
 
 # Mark all tests in this file as E2E tests
@@ -87,7 +88,7 @@ class TestPlanningWorkflow:
     def test_empirical_variance_model_returns_positive_components(self) -> None:
         """Empirically-fitted variance model should have positive components.
 
-        Tests that fit_variance_model_from_pilot produces a model with
+        Tests that fit_variance_model produces a model with
         non-negative variance components that sum to a positive total.
         """
         from cje.data.fresh_draws import (
@@ -106,12 +107,11 @@ class TestPlanningWorkflow:
             fresh_draws_dict[policy] = load_fresh_draws_auto(fresh_draws_dir, policy)
 
         # Fit variance model (small grid for speed)
-        model = fit_variance_model_from_pilot(
+        model = fit_variance_model(
             fresh_draws_dict,
             n_grid=[100, 200],
             oracle_fraction_grid=[0.25, 0.50],
-            n_replicates=5,
-            n_bootstrap=50,
+            n_replicates=50,
             verbose=False,
         )
 
@@ -131,7 +131,7 @@ class TestPlanningWorkflow:
         """Test: pilot analysis → fit variance model → plan production allocation.
 
         This is the primary user workflow for budget optimization.
-        Uses analyze_dataset() + fit_variance_model_from_pilot().
+        Uses analyze_dataset() + fit_variance_model().
         """
         from cje.data.fresh_draws import (
             load_fresh_draws_auto,
@@ -158,12 +158,11 @@ class TestPlanningWorkflow:
             p: load_fresh_draws_auto(fresh_draws_dir, p) for p in policies
         }
 
-        variance_model = fit_variance_model_from_pilot(
+        variance_model = fit_variance_model(
             fresh_draws_dict,
             n_grid=[100, 200],
             oracle_fraction_grid=[0.25, 0.50],
-            n_replicates=5,
-            n_bootstrap=50,
+            n_replicates=50,
             verbose=False,
         )
 
@@ -175,34 +174,27 @@ class TestPlanningWorkflow:
             variance_model.sigma2_cal >= 0
         ), "Calibration variance should be non-negative"
 
-        # Skip allocation test if variance model is degenerate (sigma2_eval=0)
-        # This happens rarely with sparse pilot data and prevents meaningful optimization
-        if variance_model.sigma2_eval == 0:
-            pytest.skip(
-                "Degenerate variance model (sigma2_eval=0) - cannot test allocation"
-            )
-
         # Step 3: Plan optimal allocation for production
         cost_model = CostModel(oracle_cost=16.0)  # Paper's 16× cost ratio
-        allocation = compute_optimal_allocation(
+        plan = plan_evaluation(
             budget=5000.0,
             cost_model=cost_model,
             variance_model=variance_model,
         )
 
         # Validate allocation makes sense
-        assert allocation.n_samples > 0
-        assert allocation.m_oracle > 0
-        assert allocation.m_oracle <= allocation.n_samples
-        assert 0 < allocation.oracle_fraction <= 1
-        assert allocation.expected_se > 0
+        assert plan.n_samples > 0
+        assert plan.m_oracle > 0
+        assert plan.m_oracle <= plan.n_samples
+        assert 0 < plan.oracle_fraction <= 1
+        assert plan.se_level > 0
         # Allow 10% tolerance for rounding when variance components are very small
-        assert allocation.total_cost <= 5000.0 * 1.10  # Budget respected
+        assert plan.total_cost <= 5000.0 * 1.10  # Budget respected
 
         # Summary should be readable
-        summary = allocation.summary()
-        assert "Optimal allocation" in summary
-        assert "Expected SE" in summary
+        summary = plan.summary()
+        assert "Evaluation Plan" in summary
+        assert "MDE" in summary
 
     @pytest.mark.slow
     def test_dr_mode_pilot_to_production(self) -> None:
@@ -239,91 +231,25 @@ class TestPlanningWorkflow:
             p: load_fresh_draws_auto(fresh_draws_dir, p) for p in policies
         }
 
-        variance_model = fit_variance_model_from_pilot(
+        variance_model = fit_variance_model(
             fresh_draws_dict,
             n_grid=[100, 200],
             oracle_fraction_grid=[0.25, 0.50],
-            n_replicates=5,
-            n_bootstrap=50,
+            n_replicates=50,
             verbose=False,
         )
 
         # Plan production run
-        allocation = compute_optimal_allocation(
+        plan = plan_evaluation(
             budget=10000.0,
             cost_model=CostModel(oracle_cost=16.0),
             variance_model=variance_model,
         )
 
         # Should produce sensible allocation
-        assert allocation.n_samples > 0
-        assert allocation.m_oracle > 0
-        assert allocation.expected_se > 0
-
-    def test_efficiency_diagnostic_workflow(self) -> None:
-        """Test: run analysis → diagnose allocation efficiency → get recommendation."""
-        fresh_draws_dir = ARENA_SAMPLE_DIR / "fresh_draws"
-        if not fresh_draws_dir.exists():
-            pytest.skip(f"Fresh draws not found at {fresh_draws_dir}")
-
-        # Run analysis
-        result = analyze_dataset(
-            fresh_draws_dir=str(fresh_draws_dir),
-            verbose=False,
-        )
-
-        # Diagnose allocation efficiency
-        cost_model = CostModel(oracle_cost=16.0)
-        diag = diagnose_allocation_efficiency(result, cost_model)
-
-        # Should return valid diagnostic
-        assert "status" in diag
-        assert diag["status"] in ["UNDER_LABELED", "OVER_LABELED", "BALANCED"]
-        assert "recommendation" in diag
-        assert "imbalance" in diag
-        assert diag["imbalance"] is not None
-
-        # Diagnostic values should be floats
-        assert isinstance(diag["calibration_uncertainty_share"], float)
-        assert isinstance(diag["oracle_spend_fraction"], float)
-
-
-class TestMDEPlanning:
-    """Test MDE contour computation for sample size planning."""
-
-    def test_mde_contours_synthetic(self) -> None:
-        """Test MDE grid computation with synthetic variance values."""
-        # Use realistic synthetic variance values
-        sigma2_eval = 1.0
-        sigma2_cal = 0.5
-
-        # Compute MDE grid for sample size planning
-        n_range = [500, 1000, 2000, 5000]
-        oracle_fractions = [0.05, 0.10, 0.25]
-
-        mde_grid = compute_mde_contours(
-            n_range=n_range,
-            oracle_fractions=oracle_fractions,
-            sigma2_eval=sigma2_eval,
-            sigma2_cal=sigma2_cal,
-            power=0.8,
-            alpha=0.05,
-        )
-
-        # Validate grid shape
-        assert mde_grid.shape == (len(n_range), len(oracle_fractions))
-
-        # MDE should decrease with larger n
-        for j in range(len(oracle_fractions)):
-            for i in range(1, len(n_range)):
-                assert mde_grid[i, j] < mde_grid[i - 1, j], (
-                    f"MDE should decrease with n: "
-                    f"MDE[n={n_range[i]}] >= MDE[n={n_range[i-1]}]"
-                )
-
-        # All MDE values should be positive and reasonable
-        assert np.all(mde_grid > 0)
-        assert np.all(mde_grid < 10)  # Sanity check
+        assert plan.n_samples > 0
+        assert plan.m_oracle > 0
+        assert plan.se_level > 0
 
 
 class TestSquareRootLawProperties:
@@ -342,13 +268,13 @@ class TestSquareRootLawProperties:
         # Test with various budgets (start at 500 to avoid edge cases
         # where minimum m_oracle=1 dominates the budget)
         for budget in [500, 1000, 10000]:
-            allocation = compute_optimal_allocation(
+            plan = plan_evaluation(
                 budget=budget,
                 cost_model=CostModel(oracle_cost=16.0),
                 variance_model=model,
             )
             # Allow small tolerance for integer rounding
-            assert allocation.total_cost <= budget * 1.05
+            assert plan.total_cost <= budget * 1.05
 
     def test_m_leq_n_constraint(self) -> None:
         """Oracle samples cannot exceed total samples (m ≤ n)."""
@@ -362,12 +288,12 @@ class TestSquareRootLawProperties:
         )
 
         # Test with cheap oracle
-        allocation = compute_optimal_allocation(
+        plan = plan_evaluation(
             budget=1000,
             cost_model=CostModel(surrogate_cost=1.0, oracle_cost=0.1),
             variance_model=model,
         )
-        assert allocation.m_oracle <= allocation.n_samples
+        assert plan.m_oracle <= plan.n_samples
 
 
 class TestCostModelIntegration:
@@ -385,20 +311,20 @@ class TestCostModelIntegration:
 
         # Compare allocations with different cost ratios
         # Use higher budget to avoid m_min constraint dominating
-        alloc_cheap = compute_optimal_allocation(
+        plan_cheap = plan_evaluation(
             budget=10000,
             cost_model=CostModel(oracle_cost=2.0),  # Cheap oracle
             variance_model=model,
         )
 
-        alloc_expensive = compute_optimal_allocation(
+        plan_expensive = plan_evaluation(
             budget=10000,
             cost_model=CostModel(oracle_cost=32.0),  # Expensive oracle
             variance_model=model,
         )
 
         # More expensive oracle → lower oracle fraction
-        assert alloc_expensive.oracle_fraction <= alloc_cheap.oracle_fraction
+        assert plan_expensive.oracle_fraction <= plan_cheap.oracle_fraction
 
     def test_to_dict_serialization(self) -> None:
         """Allocation can be serialized for logging/storage."""
@@ -412,14 +338,14 @@ class TestCostModelIntegration:
             n_measurements=9,
         )
 
-        allocation = compute_optimal_allocation(
+        plan = plan_evaluation(
             budget=1000,
             cost_model=CostModel(),
             variance_model=model,
         )
 
         # Should be JSON-serializable
-        d = allocation.to_dict()
+        d = plan.to_dict()
         json_str = json.dumps(d)
         assert len(json_str) > 0
 
@@ -464,13 +390,12 @@ class TestCostModelUnit:
 class TestEmpiricalVarianceMeasurement:
     """Tests for empirical variance measurement utilities."""
 
-    def test_measure_variance_at_allocation_basic(self) -> None:
-        """Basic test that measure_variance_at_allocation runs without error."""
+    def test_measure_variance_direct_basic(self) -> None:
+        """Basic test that measure_variance_direct runs without error."""
         from cje.data.fresh_draws import (
             load_fresh_draws_auto,
             discover_policies_from_fresh_draws,
         )
-        from cje.diagnostics.planning import measure_variance_at_allocation
 
         fresh_draws_dir = ARENA_SAMPLE_DIR / "fresh_draws"
         if not fresh_draws_dir.exists():
@@ -483,23 +408,22 @@ class TestEmpiricalVarianceMeasurement:
             fresh_draws_dict[policy] = load_fresh_draws_auto(fresh_draws_dir, policy)
 
         # Measure variance at a single allocation
-        result = measure_variance_at_allocation(
+        result = measure_variance_direct(
             fresh_draws_dict,
             n_prompts=100,
             oracle_fraction=0.20,
-            n_replicates=5,
-            n_bootstrap=50,
+            n_replicates=50,
         )
 
         # Should return valid results
-        assert "mean_se" in result
+        assert "se" in result
         assert "variance" in result
         assert result["n_actual"] == 100
         assert result["m_actual"] == 20
 
         # SE should be positive and finite
-        if not np.isnan(result["mean_se"]):
-            assert result["mean_se"] > 0
+        if not np.isnan(result["se"]):
+            assert result["se"] > 0
             assert result["variance"] > 0
 
 
@@ -509,7 +433,7 @@ class TestFittedVarianceModel:
     def test_fit_variance_model_synthetic(self) -> None:
         """Fit model to synthetic data with known parameters."""
         from cje.diagnostics.planning import (
-            _fit_variance_model_from_measurements as fit_variance_model,
+            _fit_variance_model_from_measurements,
         )
 
         # Generate synthetic measurements from known model
@@ -525,7 +449,7 @@ class TestFittedVarianceModel:
                 noisy_var = true_var * (1 + np.random.normal(0, 0.05))
                 measurements.append((n, m, noisy_var))
 
-        model = fit_variance_model(measurements)
+        model = _fit_variance_model_from_measurements(measurements)
 
         # Fitted parameters should be close to true values
         assert (
@@ -539,7 +463,7 @@ class TestFittedVarianceModel:
     def test_fit_variance_model_prediction(self) -> None:
         """Model should predict variance correctly."""
         from cje.diagnostics.planning import (
-            _fit_variance_model_from_measurements as fit_variance_model,
+            _fit_variance_model_from_measurements,
         )
 
         # Simple exact measurements (no noise)
@@ -549,7 +473,7 @@ class TestFittedVarianceModel:
             (400, 200, 1.0 / 400 + 0.5 / 200),  # 0.005
         ]
 
-        model = fit_variance_model(measurements)
+        model = _fit_variance_model_from_measurements(measurements)
 
         # Predictions should match the formula
         predicted = model.predict_variance(100, 50)
@@ -562,7 +486,7 @@ class TestFittedVarianceModel:
     def test_fit_variance_model_extrapolation(self) -> None:
         """Model should extrapolate to larger n than training data."""
         from cje.diagnostics.planning import (
-            _fit_variance_model_from_measurements as fit_variance_model,
+            _fit_variance_model_from_measurements,
         )
 
         # Fit on small n values
@@ -573,7 +497,7 @@ class TestFittedVarianceModel:
             (200, 100, 0.010),
         ]
 
-        model = fit_variance_model(measurements)
+        model = _fit_variance_model_from_measurements(measurements)
 
         # Extrapolate to much larger n
         var_1000 = model.predict_variance(1000, 250)
@@ -590,20 +514,14 @@ class TestFittedVarianceModel:
     def test_fit_variance_model_requires_min_measurements(self) -> None:
         """Should raise error with fewer than 3 measurements."""
         from cje.diagnostics.planning import (
-            _fit_variance_model_from_measurements as fit_variance_model,
+            _fit_variance_model_from_measurements,
         )
 
         with pytest.raises(ValueError, match="at least 3"):
-            fit_variance_model([(100, 25, 0.01), (200, 50, 0.005)])
+            _fit_variance_model_from_measurements([(100, 25, 0.01), (200, 50, 0.005)])
 
-    def test_compute_optimal_allocation_with_model(self) -> None:
-        """compute_optimal_allocation should work with FittedVarianceModel."""
-        from cje.diagnostics.planning import (
-            FittedVarianceModel,
-            compute_optimal_allocation,
-            CostModel,
-        )
-
+    def test_plan_evaluation_with_model(self) -> None:
+        """plan_evaluation should work with FittedVarianceModel."""
         model = FittedVarianceModel(
             sigma2_eval=1.0,
             sigma2_cal=0.5,
@@ -611,26 +529,25 @@ class TestFittedVarianceModel:
             n_measurements=9,
         )
 
-        allocation = compute_optimal_allocation(
+        plan = plan_evaluation(
             budget=1000.0,
             cost_model=CostModel(oracle_cost=16.0),
             variance_model=model,
         )
 
         # Should return valid allocation
-        assert allocation.n_samples > 0
-        assert allocation.m_oracle > 0
-        assert allocation.m_oracle <= allocation.n_samples
-        assert allocation.total_cost <= 1000.0 * 1.05  # Allow small rounding
+        assert plan.n_samples > 0
+        assert plan.m_oracle > 0
+        assert plan.m_oracle <= plan.n_samples
+        assert plan.total_cost <= 1000.0 * 1.05  # Allow small rounding
 
     @pytest.mark.slow
-    def test_fit_variance_model_from_pilot(self) -> None:
+    def test_fit_variance_model_real_data(self) -> None:
         """Fit model from real pilot data."""
         from cje.data.fresh_draws import (
             load_fresh_draws_auto,
             discover_policies_from_fresh_draws,
         )
-        from cje.diagnostics.planning import fit_variance_model_from_pilot
 
         fresh_draws_dir = ARENA_SAMPLE_DIR / "fresh_draws"
         if not fresh_draws_dir.exists():
@@ -643,12 +560,11 @@ class TestFittedVarianceModel:
             fresh_draws_dict[policy] = load_fresh_draws_auto(fresh_draws_dir, policy)
 
         # Fit model with small grid for speed
-        model = fit_variance_model_from_pilot(
+        model = fit_variance_model(
             fresh_draws_dict,
             n_grid=[100, 200],
             oracle_fraction_grid=[0.25, 0.50],
-            n_replicates=5,
-            n_bootstrap=50,
+            n_replicates=50,
             verbose=False,
         )
 
@@ -671,13 +587,6 @@ class TestEvaluationPlanAPI:
 
     def test_plan_evaluation_basic(self) -> None:
         """plan_evaluation returns valid EvaluationPlan with MDE."""
-        from cje.diagnostics.planning import (
-            plan_evaluation,
-            FittedVarianceModel,
-            EvaluationPlan,
-            CostModel,
-        )
-
         model = FittedVarianceModel(
             sigma2_eval=0.008,
             sigma2_cal=0.004,
@@ -711,12 +620,6 @@ class TestEvaluationPlanAPI:
 
     def test_plan_evaluation_custom_power(self) -> None:
         """plan_evaluation respects power and alpha parameters."""
-        from cje.diagnostics.planning import (
-            plan_evaluation,
-            FittedVarianceModel,
-            CostModel,
-        )
-
         model = FittedVarianceModel(
             sigma2_eval=0.008, sigma2_cal=0.004, r_squared=0.95, n_measurements=12
         )
@@ -738,12 +641,6 @@ class TestEvaluationPlanAPI:
 
     def test_plan_for_mde_basic(self) -> None:
         """plan_for_mde finds budget needed for target MDE."""
-        from cje.diagnostics.planning import (
-            plan_for_mde,
-            FittedVarianceModel,
-            CostModel,
-        )
-
         model = FittedVarianceModel(
             sigma2_eval=0.008, sigma2_cal=0.004, r_squared=0.95, n_measurements=12
         )
@@ -764,12 +661,6 @@ class TestEvaluationPlanAPI:
 
     def test_plan_for_mde_smaller_target_needs_more_budget(self) -> None:
         """Smaller MDE target requires larger budget."""
-        from cje.diagnostics.planning import (
-            plan_for_mde,
-            FittedVarianceModel,
-            CostModel,
-        )
-
         model = FittedVarianceModel(
             sigma2_eval=0.008, sigma2_cal=0.004, r_squared=0.95, n_measurements=12
         )
@@ -791,12 +682,6 @@ class TestEvaluationPlanAPI:
 
     def test_evaluation_plan_mde_at_power(self) -> None:
         """EvaluationPlan.mde_at_power computes MDE at different power levels."""
-        from cje.diagnostics.planning import (
-            plan_evaluation,
-            FittedVarianceModel,
-            CostModel,
-        )
-
         model = FittedVarianceModel(
             sigma2_eval=0.008, sigma2_cal=0.004, r_squared=0.95, n_measurements=12
         )
@@ -819,12 +704,6 @@ class TestEvaluationPlanAPI:
 
     def test_evaluation_plan_power_to_detect(self) -> None:
         """EvaluationPlan.power_to_detect computes power for effect sizes."""
-        from cje.diagnostics.planning import (
-            plan_evaluation,
-            FittedVarianceModel,
-            CostModel,
-        )
-
         model = FittedVarianceModel(
             sigma2_eval=0.008, sigma2_cal=0.004, r_squared=0.95, n_measurements=12
         )
@@ -852,12 +731,6 @@ class TestEvaluationPlanAPI:
 
     def test_evaluation_plan_summary(self) -> None:
         """EvaluationPlan.summary() returns readable string."""
-        from cje.diagnostics.planning import (
-            plan_evaluation,
-            FittedVarianceModel,
-            CostModel,
-        )
-
         model = FittedVarianceModel(
             sigma2_eval=0.008, sigma2_cal=0.004, r_squared=0.95, n_measurements=12
         )
@@ -875,11 +748,6 @@ class TestEvaluationPlanAPI:
 
     def test_evaluation_plan_to_dict(self) -> None:
         """EvaluationPlan.to_dict() returns serializable dict."""
-        from cje.diagnostics.planning import (
-            plan_evaluation,
-            FittedVarianceModel,
-            CostModel,
-        )
         import json
 
         model = FittedVarianceModel(
@@ -904,11 +772,6 @@ class TestEvaluationPlanAPI:
     def test_mde_formula_correctness(self) -> None:
         """Verify MDE = (z_alpha + z_beta) * sqrt(2) * SE."""
         from scipy import stats
-        from cje.diagnostics.planning import (
-            plan_evaluation,
-            FittedVarianceModel,
-            CostModel,
-        )
 
         model = FittedVarianceModel(
             sigma2_eval=0.01, sigma2_cal=0.005, r_squared=0.95, n_measurements=12

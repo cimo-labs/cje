@@ -84,18 +84,7 @@ from .planning import (
     plan_evaluation,
     plan_for_mde,
     check_labeling_ignorability,
-    # Deprecated - kept for backward compatibility
-    BudgetAllocation,
-    VarianceModelComparison,
-    fit_variance_model_from_pilot,
-    fit_variance_model_with_floor,
-    compute_optimal_allocation,
-    diagnose_allocation_efficiency,
-    compute_mde_contours,
-    measure_variance_at_allocation,
-    measure_variance_grid,
     measure_variance_direct,
-    run_variance_validation_experiment,
 )
 
 __all__ = [
@@ -144,7 +133,7 @@ __all__ = [
     "compute_overlap_metrics",
     "compute_cle_diagnostics",
     "diagnose_overlap_problems",
-    # Budget optimization / Planning (new interface)
+    # Budget optimization / Planning
     "CostModel",
     "FittedVarianceModel",
     "EvaluationPlan",
@@ -152,16 +141,5 @@ __all__ = [
     "plan_evaluation",
     "plan_for_mde",
     "check_labeling_ignorability",
-    # Budget optimization / Planning (deprecated)
-    "BudgetAllocation",
-    "VarianceModelComparison",
-    "fit_variance_model_from_pilot",
-    "fit_variance_model_with_floor",
-    "compute_optimal_allocation",
-    "diagnose_allocation_efficiency",
-    "compute_mde_contours",
-    "measure_variance_at_allocation",
-    "measure_variance_grid",
     "measure_variance_direct",
-    "run_variance_validation_experiment",
 ]

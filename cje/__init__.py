@@ -41,6 +41,7 @@ try:
         plot_weight_dashboard_summary,
         plot_weight_dashboard_detailed,
         plot_dr_dashboard,
+        plot_planning_dashboard,
     )
 
     _has_visualization = True
@@ -74,5 +75,6 @@ if _has_visualization:
             "plot_weight_dashboard_summary",
             "plot_weight_dashboard_detailed",
             "plot_dr_dashboard",
+            "plot_planning_dashboard",
         ]
     )

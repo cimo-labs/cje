@@ -19,7 +19,7 @@ from cje.data.fresh_draws import FreshDrawDataset
 from cje.diagnostics.planning import (
     FittedVarianceModel,
     CostModel,
-    fit_variance_model_from_pilot,
+    fit_variance_model,
 )
 
 
@@ -43,12 +43,11 @@ class TestPlanningVisualizationE2E:
         from cje.visualization.planning import plot_planning_dashboard
 
         # Fit real variance model
-        variance_model = fit_variance_model_from_pilot(
+        variance_model = fit_variance_model(
             arena_fresh_draws,
             n_grid=[100, 200],
             oracle_fraction_grid=[0.25, 0.50],
-            n_replicates=5,
-            n_bootstrap=50,
+            n_replicates=50,  # Need enough replicates for stable variance measurement
             verbose=False,
         )
 
