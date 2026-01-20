@@ -125,13 +125,14 @@ PASS means your calibration is still valid. FAIL means something changed — inv
 
 **[Open the interactive tutorial in Google Colab →](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb)**
 
-Walk through a complete example: compare prompt variants, check if calibration transfers, inspect what's fooling the judge, and monitor drift over time. No setup required.
+Walk through a complete example: compare policies, check if calibration transfers, inspect what's fooling the judge, and monitor drift over time. No setup required.
 
 ---
 
 ## Documentation
 
-**Planning sample sizes?** Once you have pilot data, CJE can optimize your oracle/surrogate budget allocation. The [tutorial notebook](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb) walks through budget planning using Arena data as a reference.
+**Planning sample sizes?** Use pilot data to optimize your evaluation budget:
+[![Planning Notebook](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_planning.ipynb)
 
 **Video Walkthroughs**
 - [CJE Technical Walkthrough](https://youtu.be/r0dinGsPuqY) — Pipeline deep dive: calibration, evaluation, and transport auditing
