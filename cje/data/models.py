@@ -463,7 +463,6 @@ class EstimationResult(BaseModel):
             estimates=estimates,
             standard_errors=standard_errors,
             oracle_values=oracle_values,
-            base_policy="base" if base_policy_stats else None,
             policy_labels=policy_labels,
             save_path=Path(save_path) if save_path else None,
             **kwargs,
