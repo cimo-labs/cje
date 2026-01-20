@@ -309,14 +309,14 @@ class TestNotebookExecution:
 
         print("✓ Tutorial notebook executed successfully")
 
-    def test_advanced_notebook(self) -> None:
-        """Execute the advanced tutorial notebook (IPS and DR modes).
+    def test_planning_notebook(self) -> None:
+        """Execute the planning notebook (budget optimization).
 
-        Tests the advanced off-policy evaluation tutorial covering:
-        - IPS mode with logged data
-        - DR mode with logged data + fresh draws
-        - ESS diagnostics
-        - Mode comparisons
+        Tests the planning tutorial covering:
+        - Variance model fitting
+        - Budget-constrained planning
+        - MDE-constrained planning
+        - Planning dashboard visualization
         """
         pytest.importorskip("nbformat")
         pytest.importorskip("nbconvert")
@@ -327,7 +327,7 @@ class TestNotebookExecution:
 
         # Find the notebook
         notebook_path = (
-            Path(__file__).parent.parent.parent / "examples" / "cje_advanced.ipynb"
+            Path(__file__).parent.parent.parent / "examples" / "cje_planning.ipynb"
         )
         assert notebook_path.exists(), f"Notebook not found at {notebook_path}"
 
@@ -349,6 +349,6 @@ class TestNotebookExecution:
             with tempfile.TemporaryDirectory() as tmpdir:
                 ep.preprocess(nb, {"metadata": {"path": tmpdir}})
         except Exception as e:
-            pytest.fail(f"Advanced notebook execution failed: {e}")
+            pytest.fail(f"Planning notebook execution failed: {e}")
 
-        print("✓ Advanced notebook executed successfully")
+        print("✓ Planning notebook executed successfully")
