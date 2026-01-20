@@ -28,18 +28,24 @@ pip install cje-eval
 ```python
 from cje import analyze_dataset
 
-# Your evaluation data - one list per policy variant
+# Compare policies on the same evaluation prompts
+# Structure: { policy_name: [samples] }
+# Each sample needs: prompt_id, judge_score
+# Optional: oracle_label (human ground truth) on 5-25% of samples
+
 results = analyze_dataset(
     fresh_draws_data={
-        "prompt_v1": [
-            {"prompt_id": "1", "judge_score": 0.85, "oracle_label": 0.9},
-            {"prompt_id": "2", "judge_score": 0.72, "oracle_label": 0.7},
-            {"prompt_id": "3", "judge_score": 0.68},  # oracle_label optional (5-25% needed)
+        "gpt-4o": [
+            {"prompt_id": "eval_001", "judge_score": 0.85, "oracle_label": 0.9},
+            {"prompt_id": "eval_002", "judge_score": 0.72, "oracle_label": 0.7},
+            {"prompt_id": "eval_003", "judge_score": 0.68},
+            {"prompt_id": "eval_004", "judge_score": 0.79},
         ],
-        "prompt_v2": [
-            {"prompt_id": "1", "judge_score": 0.78, "oracle_label": 0.82},
-            {"prompt_id": "2", "judge_score": 0.81, "oracle_label": 0.79},
-            {"prompt_id": "3", "judge_score": 0.75},
+        "claude-sonnet": [
+            {"prompt_id": "eval_001", "judge_score": 0.78, "oracle_label": 0.82},
+            {"prompt_id": "eval_002", "judge_score": 0.81, "oracle_label": 0.79},
+            {"prompt_id": "eval_003", "judge_score": 0.75},
+            {"prompt_id": "eval_004", "judge_score": 0.83},
         ],
     }
 )
@@ -83,7 +89,7 @@ Label ~250 samples with your oracle (human raters, downstream KPIs, expensive mo
 
 <div align="center">
   <img src="images/forest_plot_n1000_oracle25.png" alt="CJE Output Example" width="80%">
-  <br><em>Example output: comparing prompt variants with calibrated confidence intervals</em>
+  <br><em>Example output: comparing policies with calibrated confidence intervals</em>
 </div>
 
 [**Read the full Arena Experiment →**](https://www.cimolabs.com/research/arena-experiment)
