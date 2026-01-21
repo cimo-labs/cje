@@ -17,7 +17,7 @@ from cje.diagnostics.planning import (
     fit_variance_model,
     plan_evaluation,
     plan_for_mde,
-    measure_variance_direct,
+    _measure_variance_direct,
 )
 
 # Mark all tests in this file as E2E tests
@@ -52,11 +52,8 @@ class TestPlanningWorkflow:
             verbose=False,
         )
 
-        # Load fresh draws for variance model fitting
-        policies = discover_policies_from_fresh_draws(fresh_draws_dir)
-        fresh_draws_dict = {
-            p: load_fresh_draws_auto(fresh_draws_dir, p) for p in policies
-        }
+        # Load fresh draws for variance model fitting (use base policy)
+        base_data = load_fresh_draws_auto(fresh_draws_dir, "base")
 
         # Use convenience method (cost_model is required)
         from cje import CostModel as TopLevelCostModel
@@ -64,7 +61,7 @@ class TestPlanningWorkflow:
         allocation = result.plan_allocation(
             budget=5000,
             cost_model=TopLevelCostModel(oracle_cost=16.0),
-            fresh_draws_dict=fresh_draws_dict,
+            fresh_draws=base_data,
             verbose=False,
         )
 
@@ -78,7 +75,7 @@ class TestPlanningWorkflow:
         allocation_custom = result.plan_allocation(
             budget=5000,
             cost_model=TopLevelCostModel(oracle_cost=32.0),  # More expensive oracle
-            fresh_draws_dict=fresh_draws_dict,
+            fresh_draws=base_data,
             verbose=False,
         )
         # More expensive oracle → fewer oracle labels
@@ -100,15 +97,12 @@ class TestPlanningWorkflow:
         if not fresh_draws_dir.exists():
             pytest.skip(f"Fresh draws not found at {fresh_draws_dir}")
 
-        # Load fresh draws
-        policies = discover_policies_from_fresh_draws(fresh_draws_dir)
-        fresh_draws_dict = {}
-        for policy in policies:
-            fresh_draws_dict[policy] = load_fresh_draws_auto(fresh_draws_dir, policy)
+        # Load fresh draws (use base policy for variance model fitting)
+        base_data = load_fresh_draws_auto(fresh_draws_dir, "base")
 
         # Fit variance model (small grid for speed)
         model = fit_variance_model(
-            fresh_draws_dict,
+            base_data,
             n_grid=[100, 200],
             oracle_fraction_grid=[0.25, 0.50],
             n_replicates=50,
@@ -152,14 +146,11 @@ class TestPlanningWorkflow:
         assert len(pilot_result.estimates) > 0
         assert all(0 <= e <= 1 for e in pilot_result.estimates)
 
-        # Step 2: Load fresh draws and fit variance model
-        policies = discover_policies_from_fresh_draws(fresh_draws_dir)
-        fresh_draws_dict = {
-            p: load_fresh_draws_auto(fresh_draws_dir, p) for p in policies
-        }
+        # Step 2: Load fresh draws and fit variance model (use base policy)
+        base_data = load_fresh_draws_auto(fresh_draws_dir, "base")
 
         variance_model = fit_variance_model(
-            fresh_draws_dict,
+            base_data,
             n_grid=[100, 200],
             oracle_fraction_grid=[0.25, 0.50],
             n_replicates=50,
@@ -225,14 +216,11 @@ class TestPlanningWorkflow:
             mode_selection.get("mode") == "dr"
         ), f"Expected DR mode, got {mode_selection}"
 
-        # Load fresh draws and fit variance model
-        policies = discover_policies_from_fresh_draws(fresh_draws_dir)
-        fresh_draws_dict = {
-            p: load_fresh_draws_auto(fresh_draws_dir, p) for p in policies
-        }
+        # Load fresh draws and fit variance model (use base policy)
+        base_data = load_fresh_draws_auto(fresh_draws_dir, "base")
 
         variance_model = fit_variance_model(
-            fresh_draws_dict,
+            base_data,
             n_grid=[100, 200],
             oracle_fraction_grid=[0.25, 0.50],
             n_replicates=50,
@@ -391,25 +379,19 @@ class TestEmpiricalVarianceMeasurement:
     """Tests for empirical variance measurement utilities."""
 
     def test_measure_variance_direct_basic(self) -> None:
-        """Basic test that measure_variance_direct runs without error."""
-        from cje.data.fresh_draws import (
-            load_fresh_draws_auto,
-            discover_policies_from_fresh_draws,
-        )
+        """Basic test that _measure_variance_direct runs without error."""
+        from cje.data.fresh_draws import load_fresh_draws_auto
 
         fresh_draws_dir = ARENA_SAMPLE_DIR / "fresh_draws"
         if not fresh_draws_dir.exists():
             pytest.skip(f"Fresh draws not found at {fresh_draws_dir}")
 
-        # Load fresh draws
-        policies = discover_policies_from_fresh_draws(fresh_draws_dir)
-        fresh_draws_dict = {}
-        for policy in policies:
-            fresh_draws_dict[policy] = load_fresh_draws_auto(fresh_draws_dir, policy)
+        # Load fresh draws (use base policy)
+        base_data = load_fresh_draws_auto(fresh_draws_dir, "base")
 
         # Measure variance at a single allocation
-        result = measure_variance_direct(
-            fresh_draws_dict,
+        result = _measure_variance_direct(
+            base_data,
             n_prompts=100,
             oracle_fraction=0.20,
             n_replicates=50,
@@ -544,24 +526,18 @@ class TestFittedVarianceModel:
     @pytest.mark.slow
     def test_fit_variance_model_real_data(self) -> None:
         """Fit model from real pilot data."""
-        from cje.data.fresh_draws import (
-            load_fresh_draws_auto,
-            discover_policies_from_fresh_draws,
-        )
+        from cje.data.fresh_draws import load_fresh_draws_auto
 
         fresh_draws_dir = ARENA_SAMPLE_DIR / "fresh_draws"
         if not fresh_draws_dir.exists():
             pytest.skip(f"Fresh draws not found at {fresh_draws_dir}")
 
-        # Load fresh draws
-        policies = discover_policies_from_fresh_draws(fresh_draws_dir)
-        fresh_draws_dict = {}
-        for policy in policies:
-            fresh_draws_dict[policy] = load_fresh_draws_auto(fresh_draws_dir, policy)
+        # Load fresh draws (use base policy)
+        base_data = load_fresh_draws_auto(fresh_draws_dir, "base")
 
         # Fit model with small grid for speed
         model = fit_variance_model(
-            fresh_draws_dict,
+            base_data,
             n_grid=[100, 200],
             oracle_fraction_grid=[0.25, 0.50],
             n_replicates=50,

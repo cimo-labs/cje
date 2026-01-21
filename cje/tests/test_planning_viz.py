@@ -42,9 +42,10 @@ class TestPlanningVisualizationE2E:
         """Dashboard plot shows sensible values with real data."""
         from cje.visualization.planning import plot_planning_dashboard
 
-        # Fit real variance model
+        # Fit real variance model (use base policy)
+        base_data = arena_fresh_draws.get("base", list(arena_fresh_draws.values())[0])
         variance_model = fit_variance_model(
-            arena_fresh_draws,
+            base_data,
             n_grid=[100, 200],
             oracle_fraction_grid=[0.25, 0.50],
             n_replicates=50,  # Need enough replicates for stable variance measurement
