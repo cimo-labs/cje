@@ -159,8 +159,8 @@ fig = result.plot_estimates(
 from cje.visualization import plot_planning_dashboard
 from cje.diagnostics import fit_variance_model, CostModel
 
-# Fit variance model from pilot data
-variance_model = fit_variance_model({"base": pilot_data})
+# Fit variance model from base policy pilot data (where calibration is learned)
+variance_model = fit_variance_model(pilot_data)
 
 # Specify your actual costs
 cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)

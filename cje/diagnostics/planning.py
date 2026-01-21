@@ -18,11 +18,11 @@ Usage:
     from cje.data.fresh_draws import load_fresh_draws_auto
     from cje.diagnostics import fit_variance_model, plan_evaluation, CostModel
 
-    # Load pilot data (use single policy for ignorable labeling)
-    base_data = load_fresh_draws_auto(pilot_dir, "base")
+    # Load pilot data
+    pilot_data = load_fresh_draws_auto(pilot_dir, "base")
 
     # Fit variance model from empirical measurements
-    variance_model = fit_variance_model({"base": base_data}, verbose=True)
+    variance_model = fit_variance_model(pilot_data, verbose=True)
     print(f"R² = {variance_model.r_squared:.3f}")
 
     # Plan optimal allocation for production
@@ -202,7 +202,7 @@ class EvaluationPlan:
 
 
 def fit_variance_model(
-    fresh_draws_dict: Dict[str, "FreshDrawDataset"],
+    fresh_draws: "FreshDrawDataset",
     n_grid: Optional[List[int]] = None,
     oracle_fraction_grid: Optional[List[float]] = None,
     n_replicates: int = 150,
@@ -214,8 +214,8 @@ def fit_variance_model(
     Uses cross-fitted (out-of-fold) predictions for unbiased residual estimation.
 
     Args:
-        fresh_draws_dict: Pilot data (policy_name -> FreshDrawDataset).
-            Use a single policy (typically "base") to ensure ignorable labeling.
+        fresh_draws: Pilot data from the base policy where calibration will be
+            learned (FreshDrawDataset with oracle labels).
         n_grid: Sample sizes to measure (default: auto from pilot size).
         oracle_fraction_grid: Oracle fractions to measure (default: [0.15, 0.25, 0.40]).
         n_replicates: Replicates per grid point for stable Var estimates.
@@ -226,20 +226,19 @@ def fit_variance_model(
         FittedVarianceModel that can predict variance at any (n, m).
 
     Example:
-        model = fit_variance_model({"base": pilot_data}, verbose=True)
+        model = fit_variance_model(pilot_data, verbose=True)
         print(f"R² = {model.r_squared:.3f}")
     """
     # Get total available prompts
     all_prompt_ids: set[str] = set()
-    for fd in fresh_draws_dict.values():
-        all_prompt_ids.update(s.prompt_id for s in fd.samples)
+    all_prompt_ids.update(s.prompt_id for s in fresh_draws.samples)
     n_total = len(all_prompt_ids)
 
     if verbose:
         print(f"Fitting variance model from pilot (n={n_total} prompts)")
 
     # Check labeling ignorability
-    ignorability = check_labeling_ignorability(fresh_draws_dict)
+    ignorability = _check_labeling_ignorability(fresh_draws)
     if verbose:
         if ignorability.get("is_ignorable"):
             print(f"  ✓ Labeling is ignorable (KS p={ignorability['ks_pvalue']:.3f})")
@@ -283,13 +282,12 @@ def fit_variance_model(
             if verbose:
                 print(f"    n={n}, m={m} ({frac:.0%})...", end="", flush=True)
 
-            result = measure_variance_direct(
-                fresh_draws_dict=fresh_draws_dict,
+            result = _measure_variance_direct(
+                fresh_draws=fresh_draws,
                 n_prompts=n,
                 oracle_fraction=frac,
                 n_replicates=n_replicates,
                 seed=seed + i * 100 + j,
-                verbose=False,
             )
 
             if not np.isnan(result["variance"]) and result["variance"] > 0:
@@ -452,10 +450,10 @@ def plan_for_mde(
 
 
 def _compute_point_estimate_single_replicate(
-    subsampled_dict: Dict[str, "FreshDrawDataset"],
+    fresh_draws: "FreshDrawDataset",
     seed: int,
     n_folds: int = 5,
-) -> Optional[np.ndarray]:
+) -> Optional[float]:
     """Compute point estimate θ̂_aug using OUT-OF-FOLD cross-fitting.
 
     This is the key fix: we use cross-fitted (out-of-fold) predictions for the
@@ -468,12 +466,13 @@ def _compute_point_estimate_single_replicate(
     where f̂_oof uses cross-fitted predictions (calibrator trained on other folds).
 
     Returns:
-        Array of point estimates per policy, or None if calibration failed.
+        Point estimate as float, or None if calibration failed.
     """
     from .robust_inference import build_direct_eval_table
     from ..calibration.judge import JudgeCalibrator
 
-    eval_table = build_direct_eval_table(subsampled_dict)
+    # Wrap single dataset as dict for build_direct_eval_table
+    eval_table = build_direct_eval_table({"_policy": fresh_draws})
 
     n_oracle = int(np.sum(eval_table.oracle_mask))
     if n_oracle < 10:
@@ -528,61 +527,43 @@ def _compute_point_estimate_single_replicate(
         )
         calibrated_full = result.calibrated_scores
 
-        # Compute θ̂_aug per policy
-        n_policies = eval_table.n_policies
-        estimates = np.zeros(n_policies)
+        # Compute θ̂_aug (single policy)
+        plug_in = np.mean(calibrated_full)
 
-        for p in range(n_policies):
-            p_mask = eval_table.policy_indices == p
-            n_p = np.sum(p_mask)
+        oracle_mask = eval_table.oracle_mask
+        n_oracle_total = np.sum(oracle_mask)
 
-            if n_p == 0:
-                estimates[p] = np.nan
-                continue
-
-            plug_in = np.mean(calibrated_full[p_mask])
-
-            p_oracle_mask = p_mask & eval_table.oracle_mask
-            n_oracle_p = np.sum(p_oracle_mask)
-
-            if n_oracle_p > 0:
-                oof_preds = calibrated_oof[p_oracle_mask]
-                oracle_vals = eval_table.oracle_labels[p_oracle_mask]
-                valid = ~np.isnan(oof_preds)
-                if np.sum(valid) > 0:
-                    residuals = oracle_vals[valid] - oof_preds[valid]
-                    residual_correction = np.mean(residuals)
-                else:
-                    residual_correction = 0.0
+        if n_oracle_total > 0:
+            oof_preds = calibrated_oof[oracle_mask]
+            oracle_vals = eval_table.oracle_labels[oracle_mask]
+            valid = ~np.isnan(oof_preds)
+            if np.sum(valid) > 0:
+                residuals = oracle_vals[valid] - oof_preds[valid]
+                residual_correction = np.mean(residuals)
             else:
                 residual_correction = 0.0
+        else:
+            residual_correction = 0.0
 
-            estimates[p] = plug_in + residual_correction
-
-        return estimates
+        return float(plug_in + residual_correction)
 
     except Exception as e:
         logger.debug(f"Point estimate failed: {e}")
         return None
 
 
-def measure_variance_direct(
-    fresh_draws_dict: Dict[str, "FreshDrawDataset"],
+def _measure_variance_direct(
+    fresh_draws: "FreshDrawDataset",
     n_prompts: int,
     oracle_fraction: float,
     n_replicates: int = 200,
     seed: int = 42,
-    verbose: bool = False,
 ) -> Dict[str, Any]:
     """Measure variance by computing Var(θ̂) across outer replicates."""
     from ..data.fresh_draws import FreshDrawDataset, FreshDrawSample
 
-    all_prompt_ids: set[str] = set()
-    for fd in fresh_draws_dict.values():
-        all_prompt_ids.update(s.prompt_id for s in fd.samples)
-
-    all_prompt_ids_list = sorted(all_prompt_ids)
-    n_available = len(all_prompt_ids_list)
+    all_prompt_ids = sorted(set(s.prompt_id for s in fresh_draws.samples))
+    n_available = len(all_prompt_ids)
 
     if n_prompts > n_available:
         n_prompts = n_available
@@ -590,49 +571,47 @@ def measure_variance_direct(
     m_oracle = max(int(n_prompts * oracle_fraction), 1)
 
     rng = np.random.default_rng(seed)
-    estimates_per_replicate: List[np.ndarray] = []
+    estimates_per_replicate: List[float] = []
 
     for rep in range(n_replicates):
-        sampled_prompts = set(
-            rng.choice(all_prompt_ids_list, size=n_prompts, replace=False)
-        )
+        sampled_prompts = set(rng.choice(all_prompt_ids, size=n_prompts, replace=False))
         oracle_prompts = set(
             rng.choice(list(sampled_prompts), size=m_oracle, replace=False)
         )
 
-        subsampled_dict: Dict[str, FreshDrawDataset] = {}
-        for policy_name, fd in fresh_draws_dict.items():
-            subsampled_samples = []
-            for s in fd.samples:
-                if s.prompt_id in sampled_prompts:
-                    if s.prompt_id in oracle_prompts:
-                        subsampled_samples.append(s)
-                    else:
-                        subsampled_samples.append(
-                            FreshDrawSample(
-                                prompt_id=s.prompt_id,
-                                target_policy=s.target_policy,
-                                judge_score=s.judge_score,
-                                oracle_label=None,
-                                response=s.response,
-                                draw_idx=s.draw_idx,
-                                fold_id=s.fold_id,
-                                metadata=s.metadata,
-                            )
+        subsampled_samples = []
+        for s in fresh_draws.samples:
+            if s.prompt_id in sampled_prompts:
+                if s.prompt_id in oracle_prompts:
+                    subsampled_samples.append(s)
+                else:
+                    subsampled_samples.append(
+                        FreshDrawSample(
+                            prompt_id=s.prompt_id,
+                            target_policy=s.target_policy,
+                            judge_score=s.judge_score,
+                            oracle_label=None,
+                            response=s.response,
+                            draw_idx=s.draw_idx,
+                            fold_id=s.fold_id,
+                            metadata=s.metadata,
                         )
+                    )
 
-            if subsampled_samples:
-                subsampled_dict[policy_name] = FreshDrawDataset(
-                    target_policy=fd.target_policy,
-                    draws_per_prompt=fd.draws_per_prompt,
-                    samples=subsampled_samples,
-                )
+        if not subsampled_samples:
+            continue
 
-        estimates = _compute_point_estimate_single_replicate(
-            subsampled_dict, seed=seed + rep
+        subsampled_data = FreshDrawDataset(
+            target_policy=fresh_draws.target_policy,
+            draws_per_prompt=fresh_draws.draws_per_prompt,
+            samples=subsampled_samples,
         )
-        if estimates is not None:
-            estimates_per_replicate.append(estimates)
+
+        estimate = _compute_point_estimate_single_replicate(
+            subsampled_data, seed=seed + rep
+        )
+        if estimate is not None:
+            estimates_per_replicate.append(estimate)
 
     if len(estimates_per_replicate) < 10:
         return {
@@ -643,13 +622,11 @@ def measure_variance_direct(
             "n_valid_replicates": len(estimates_per_replicate),
         }
 
-    estimates_array = np.array(estimates_per_replicate)
-    var_per_policy = np.nanvar(estimates_array, axis=0, ddof=1)
-    mean_variance = np.nanmean(var_per_policy)
+    variance = float(np.var(estimates_per_replicate, ddof=1))
 
     return {
-        "variance": float(mean_variance),
-        "se": float(np.sqrt(mean_variance)),
+        "variance": variance,
+        "se": float(np.sqrt(variance)),
         "n_actual": n_prompts,
         "m_actual": m_oracle,
         "n_valid_replicates": len(estimates_per_replicate),
@@ -693,20 +670,19 @@ def _fit_variance_model_from_measurements(
 # =============================================================================
 
 
-def check_labeling_ignorability(
-    fresh_draws_dict: Dict[str, "FreshDrawDataset"],
+def _check_labeling_ignorability(
+    fresh_draws: "FreshDrawDataset",
 ) -> Dict[str, Any]:
     """Check if oracle labeling appears ignorable (random within policy)."""
     labeled_scores = []
     unlabeled_scores = []
 
-    for fd in fresh_draws_dict.values():
-        for s in fd.samples:
-            if s.judge_score is not None:
-                if s.oracle_label is not None:
-                    labeled_scores.append(s.judge_score)
-                else:
-                    unlabeled_scores.append(s.judge_score)
+    for s in fresh_draws.samples:
+        if s.judge_score is not None:
+            if s.oracle_label is not None:
+                labeled_scores.append(s.judge_score)
+            else:
+                unlabeled_scores.append(s.judge_score)
 
     if len(labeled_scores) < 10 or len(unlabeled_scores) < 10:
         return {

@@ -472,7 +472,7 @@ class EstimationResult(BaseModel):
         self,
         budget: float,
         cost_model: Any,
-        fresh_draws_dict: Optional[Dict[str, Any]] = None,
+        fresh_draws: Optional[Any] = None,
         verbose: bool = True,
     ) -> Any:
         """Plan optimal oracle/surrogate allocation via Square Root Allocation Law.
@@ -484,8 +484,7 @@ class EstimationResult(BaseModel):
         Args:
             budget: Total budget in cost units (e.g., dollars)
             cost_model: CostModel instance (required - no default).
-            fresh_draws_dict: Fresh draws data for empirical variance fitting.
-                Required for accurate variance estimation. Format: {policy_name: FreshDrawDataset}
+            fresh_draws: FreshDrawDataset for empirical variance fitting.
             verbose: Print progress during variance model fitting
 
         Returns:
@@ -494,23 +493,21 @@ class EstimationResult(BaseModel):
 
         Example:
             >>> from cje import CostModel
-            >>> from cje.data.fresh_draws import load_fresh_draws_auto, discover_policies_from_fresh_draws
-            >>> fresh_draws_dir = "responses/"
-            >>> policies = discover_policies_from_fresh_draws(fresh_draws_dir)
-            >>> fresh_draws_dict = {p: load_fresh_draws_auto(fresh_draws_dir, p) for p in policies}
-            >>> result = analyze_dataset(fresh_draws_dir=fresh_draws_dir)
-            >>> cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)  # Actual dollar costs
-            >>> plan = result.plan_allocation(budget=5000, cost_model=cost_model, fresh_draws_dict=fresh_draws_dict)
+            >>> from cje.data.fresh_draws import load_fresh_draws_auto
+            >>> pilot_data = load_fresh_draws_auto("responses/", "base")
+            >>> result = analyze_dataset(fresh_draws_dir="responses/")
+            >>> cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
+            >>> plan = result.plan_allocation(budget=5000, cost_model=cost_model, fresh_draws=pilot_data)
             >>> print(plan.summary())
 
         Raises:
-            ValueError: If fresh_draws_dict is not provided.
+            ValueError: If fresh_draws is not provided.
 
         Note:
             For simpler usage, consider the top-level planning API:
                 from cje import fit_variance_model, plan_evaluation, CostModel
-                model = fit_variance_model(fresh_draws_dict)
-                cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)  # Actual dollar costs
+                model = fit_variance_model(pilot_data)
+                cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
                 plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
         """
         from ..diagnostics.planning import (
@@ -518,25 +515,24 @@ class EstimationResult(BaseModel):
             plan_evaluation,
         )
 
-        if fresh_draws_dict is None:
+        if fresh_draws is None:
             raise ValueError(
-                "fresh_draws_dict is required for budget planning. "
-                "Load your fresh draws data and pass it to plan_allocation():\n\n"
+                "fresh_draws is required for budget planning. "
+                "Load your pilot data and pass it to plan_allocation():\n\n"
                 "  from cje import CostModel\n"
-                "  from cje.data.fresh_draws import load_fresh_draws_auto, discover_policies_from_fresh_draws\n"
-                "  policies = discover_policies_from_fresh_draws(fresh_draws_dir)\n"
-                "  fresh_draws_dict = {p: load_fresh_draws_auto(fresh_draws_dir, p) for p in policies}\n"
-                "  cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)  # Actual dollar costs\n"
-                "  plan = result.plan_allocation(budget=5000, cost_model=cost_model, fresh_draws_dict=fresh_draws_dict)\n\n"
+                "  from cje.data.fresh_draws import load_fresh_draws_auto\n"
+                "  pilot_data = load_fresh_draws_auto(fresh_draws_dir, 'base')\n"
+                "  cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)\n"
+                "  plan = result.plan_allocation(budget=5000, cost_model=cost_model, fresh_draws=pilot_data)\n\n"
                 "Or use the simpler top-level API:\n"
                 "  from cje import fit_variance_model, plan_evaluation, CostModel\n"
-                "  model = fit_variance_model(fresh_draws_dict)\n"
-                "  cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)  # Actual dollar costs\n"
+                "  model = fit_variance_model(pilot_data)\n"
+                "  cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)\n"
                 "  plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)"
             )
 
         # Fit variance model from empirical measurements
-        variance_model = fit_variance_model(fresh_draws_dict, verbose=verbose)
+        variance_model = fit_variance_model(fresh_draws, verbose=verbose)
 
         return plan_evaluation(budget, variance_model, cost_model=cost_model)
 

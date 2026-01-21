@@ -83,8 +83,6 @@ from .planning import (
     fit_variance_model,
     plan_evaluation,
     plan_for_mde,
-    check_labeling_ignorability,
-    measure_variance_direct,
 )
 
 __all__ = [
@@ -140,6 +138,4 @@ __all__ = [
     "fit_variance_model",
     "plan_evaluation",
     "plan_for_mde",
-    "check_labeling_ignorability",
-    "measure_variance_direct",
 ]

@@ -921,8 +921,8 @@ The planning API is centered around **MDE (Minimum Detectable Effect)** - the sm
 ```python
 from cje.diagnostics import fit_variance_model, plan_evaluation, plan_for_mde, CostModel
 
-# 1. Fit variance model from pilot data (use base policy for ignorable labeling)
-model = fit_variance_model({"base": pilot_data}, verbose=True)
+# 1. Fit variance model from base policy pilot data (where calibration is learned)
+model = fit_variance_model(base_pilot_data, verbose=True)
 # σ²_eval = 0.008, σ²_cal = 0.004, R² = 0.94
 
 # 2. Specify your cost model
@@ -1018,17 +1018,13 @@ Formula: `MDE = (z_{α/2} + z_β) × √2 × SE(θ̂)` ≈ `2.8 × √2 × SE` f
 The key to accurate planning is fitting the variance model correctly:
 
 ```python
-from cje.diagnostics import fit_variance_model, check_labeling_ignorability
-
-# Check labeling is ignorable (random within policy)
-ignorability = check_labeling_ignorability({"base": pilot_data})
-if not ignorability["is_ignorable"]:
-    print(f"Warning: {ignorability['recommendation']}")
+from cje.diagnostics import fit_variance_model
 
 # Fit model - uses direct Var(θ̂) measurement (not bootstrap SE²)
+# Automatically checks that labeling is ignorable (random within policy)
 model = fit_variance_model(
-    {"base": pilot_data},  # Single policy for ignorable labeling
-    n_replicates=150,      # Replicates per grid point
+    base_pilot_data,   # FreshDrawDataset from base policy (where calibration is learned)
+    n_replicates=150,  # Replicates per grid point
     verbose=True,
 )
 print(model.summary())
@@ -1038,7 +1034,7 @@ print(model.summary())
 ```
 
 **Key insight**: The variance model achieves R² > 0.9 when:
-1. Labeling is ignorable (random within policy)
+1. Labeling is ignorable (random within policy) - checked automatically
 2. We measure Var(θ̂) directly across replicates (not bootstrap SE²)
 
 ### Post-Hoc Transportability Check
