@@ -123,7 +123,7 @@ result_dict = result.to_dict()  # Full export with CIs, diagnostics
 # Plan budget allocation for production (after pilot)
 from cje import CostModel
 cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)  # Real dollar costs
-allocation = result.plan_allocation(budget=5000, cost_model=cost_model, fresh_draws_dict=fresh_draws_dict)
+allocation = result.plan_allocation(budget=5000, cost_model=cost_model, fresh_draws=base_data)
 print(allocation.summary())
 # Optimal allocation: n=4,800, m=12 (0.3% oracle)
 ```
