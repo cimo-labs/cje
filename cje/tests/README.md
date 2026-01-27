@@ -2,42 +2,42 @@
 
 ## Overview
 
-The CJE test suite focuses on end-to-end testing with real data. The suite consists of 16 test files (~180 tests) providing comprehensive coverage of critical functionality.
+The CJE test suite focuses on end-to-end testing with real data. The suite consists of 20 test files providing comprehensive coverage of critical functionality.
 
 ## File Structure
 
 ```
 tests/
 ├── conftest.py                           # Shared fixtures and arena data loaders
-├── run_all_tests.py                     # Test runner script
+├── run_all_tests.py                      # Test runner script
 │
 ├── E2E Tests (User Workflows)
-│   ├── test_e2e_estimators.py           # Complete pipelines for all estimators
-│   ├── test_e2e_features.py             # SIMCal, cross-fitting, OUA
-│   ├── test_interface_integration.py    # High-level API testing
-│   └── test_examples.py                 # Tutorial notebook and quickstart validation
+│   ├── test_e2e_estimators.py            # Complete pipelines for all estimators
+│   ├── test_e2e_features.py              # SIMCal, cross-fitting, OUA
+│   ├── test_interface_integration.py     # High-level API testing
+│   └── test_examples.py                  # Tutorial notebook and quickstart validation
 │
 ├── Core Tests (Infrastructure)
-│   ├── test_infrastructure.py           # Critical infrastructure and edge cases
-│   ├── test_unified_folds.py            # Comprehensive fold management
-│   ├── test_mc_variance.py              # Monte Carlo variance testing
-│   └── test_reproducibility.py          # Determinism and seed propagation
+│   ├── test_infrastructure.py            # Critical infrastructure and edge cases
+│   ├── test_unified_folds.py             # Comprehensive fold management
+│   ├── test_multipolicy_eif.py           # Multi-policy EIF testing
+│   └── test_reproducibility.py           # Determinism and seed propagation
 │
 ├── Feature Tests
-│   ├── test_bootstrap_inference.py      # Bootstrap UQ for Direct mode
-│   ├── test_covariates.py               # Calibration covariates
-│   ├── test_data_loaders.py             # Data loading functions
-│   ├── test_normalization.py            # Auto-normalization for arbitrary scales
-│   ├── test_calibration_data_smoke.py   # calibration_data_path parameter
-│   ├── test_oua_at_full_coverage.py     # OUA skipping at 100% coverage
-│   ├── test_transport_diagnostics.py    # Transportability probe protocol
-│   └── test_cle_diagnostics.py          # CLE and TTC diagnostics
+│   ├── test_bootstrap_inference.py       # Bootstrap UQ for Direct mode
+│   ├── test_covariates.py                # Calibration covariates
+│   ├── test_data_loaders.py              # Data loading functions
+│   ├── test_normalization.py             # Auto-normalization for arbitrary scales
+│   ├── test_calibration_data_smoke.py    # calibration_data_path parameter
+│   ├── test_oua_at_full_coverage.py      # OUA skipping at 100% coverage
+│   ├── test_transport_diagnostics.py     # Transportability probe protocol
+│   ├── test_transport_bootstrap.py       # Transport bootstrap testing
+│   ├── test_cle_diagnostics.py           # CLE and TTC diagnostics
+│   ├── test_planning.py                  # Budget planning features
+│   ├── test_planning_viz.py              # Planning visualization
+│   └── test_simulation_planning.py       # Simulation-based planning
 │
-└── data/                                 # Test datasets
-    ├── arena_sample/                     # Real Arena 5K subset (1000 samples)
-    │   ├── logged_data.jsonl             # Main dataset with judge scores
-    │   └── fresh_draws/                  # Fresh draws for DR estimation
-    └── *.jsonl                           # Synthetic test data for edge cases
+└── data/                                 # Test datasets (in examples/arena_sample/)
 ```
 
 ## Core Concepts
@@ -178,7 +178,7 @@ pip install -e .
 
 - **E2E tests**: < 2 seconds each
 - **Infrastructure tests**: < 1 second each
-- **Full suite**: ~25 seconds for 111 tests
+- **Full suite**: ~60 seconds for ~180 tests
 
 Test execution tips:
 - Use `-x` to stop on first failure
@@ -189,4 +189,4 @@ Test execution tips:
 
 ## Summary
 
-The CJE test suite contains ~180 focused tests across 16 test files that validate real workflows with real data. This approach catches integration issues, runs fast, and provides comprehensive coverage of all estimators, calibration methods, diagnostic tools, bootstrap inference, covariates, data loading, auto-normalization, and reproducibility guarantees. The `test_examples.py` file ensures the tutorial notebook and quickstart script remain accurate and functional.
+The CJE test suite validates real workflows with real data across 20 test files. This approach catches integration issues, runs fast, and provides comprehensive coverage of all estimators, calibration methods, diagnostic tools, bootstrap inference, covariates, data loading, auto-normalization, planning, and reproducibility guarantees. The `test_examples.py` file ensures the tutorial notebook and quickstart script remain accurate and functional.
