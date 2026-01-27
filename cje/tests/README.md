@@ -2,7 +2,7 @@
 
 ## Overview
 
-The CJE test suite focuses on end-to-end testing with real data. The suite consists of 15 test files (~157 tests) providing comprehensive coverage of critical functionality.
+The CJE test suite focuses on end-to-end testing with real data. The suite consists of 16 test files (~180 tests) providing comprehensive coverage of critical functionality.
 
 ## File Structure
 
@@ -27,6 +27,7 @@ tests/
 │   ├── test_bootstrap_inference.py      # Bootstrap UQ for Direct mode
 │   ├── test_covariates.py               # Calibration covariates
 │   ├── test_data_loaders.py             # Data loading functions
+│   ├── test_normalization.py            # Auto-normalization for arbitrary scales
 │   ├── test_calibration_data_smoke.py   # calibration_data_path parameter
 │   ├── test_oua_at_full_coverage.py     # OUA skipping at 100% coverage
 │   ├── test_transport_diagnostics.py    # Transportability probe protocol
@@ -188,4 +189,4 @@ Test execution tips:
 
 ## Summary
 
-The CJE test suite contains ~157 focused tests across 15 test files that validate real workflows with real data. This approach catches integration issues, runs fast, and provides comprehensive coverage of all estimators, calibration methods, diagnostic tools, bootstrap inference, covariates, data loading, and reproducibility guarantees. The `test_examples.py` file ensures the tutorial notebook and quickstart script remain accurate and functional.
+The CJE test suite contains ~180 focused tests across 16 test files that validate real workflows with real data. This approach catches integration issues, runs fast, and provides comprehensive coverage of all estimators, calibration methods, diagnostic tools, bootstrap inference, covariates, data loading, auto-normalization, and reproducibility guarantees. The `test_examples.py` file ensures the tutorial notebook and quickstart script remain accurate and functional.

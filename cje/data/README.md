@@ -454,8 +454,8 @@ fresh_dataset = FreshDrawDataset(
 ```python
 from cje.data import fresh_draws_from_dict
 
-# Convert dict to FreshDrawDataset objects
-datasets = fresh_draws_from_dict({
+# Convert dict to FreshDrawDataset objects (returns tuple with normalization info)
+datasets, norm_info = fresh_draws_from_dict({
     "policy_a": [
         {"prompt_id": "q1", "judge_score": 0.85, "oracle_label": 0.9},
         {"prompt_id": "q2", "judge_score": 0.72},  # oracle_label optional
@@ -466,7 +466,7 @@ datasets = fresh_draws_from_dict({
     ],
 })
 
-# Returns Dict[str, FreshDrawDataset]
+# Returns Tuple[Dict[str, FreshDrawDataset], Optional[NormalizationInfo]]
 datasets["policy_a"].n_samples  # 2
 datasets["policy_a"].target_policy  # "policy_a"
 
@@ -483,6 +483,53 @@ results = analyze_dataset(
 
 **Required fields per record:** `prompt_id`, `judge_score`
 **Optional fields:** `oracle_label`, `response`, `draw_idx`, `fold_id`, `metadata`
+
+### Auto-Normalization (Label Scale Compatibility)
+
+CJE automatically handles different label scales (0-100, Likert 1-5, etc.) without manual preprocessing:
+
+```python
+from cje import analyze_dataset
+
+# 0-100 scale works automatically
+results = analyze_dataset(
+    fresh_draws_data={
+        "gpt-4o": [
+            {"prompt_id": "1", "judge_score": 85, "oracle_label": 78},
+            {"prompt_id": "2", "judge_score": 72, "oracle_label": 65},
+        ],
+    }
+)
+
+# Results are in the ORIGINAL oracle scale (0-100), not [0,1]
+print(results.estimates[0])  # e.g., 73.5 (not 0.735)
+
+# Normalization metadata shows what happened
+print(results.metadata.get("normalization"))
+# {'judge_score': {'original_range': (72, 85)},
+#  'oracle_label': {'original_range': (65, 78)},
+#  'results_scale': 'oracle_original'}
+```
+
+**How it works:**
+1. If ALL values are already in [0, 1] → no transformation (data assumed normalized)
+2. If ANY value is outside [0, 1] → auto-detect range, normalize internally, inverse-transform results
+
+**Supported scales:**
+- **[0, 1]** - No transformation
+- **0-100** (percentages) - Auto-normalized
+- **1-5** (Likert) - Auto-normalized
+- **Any numeric range** - Auto-scales to detected min/max (isotonic regression handles the mapping)
+
+**Edge cases:**
+- **Binary 0/1 oracle with 0-100 judge**: Each field normalized by its own range, results in oracle scale
+- **All same value**: Returns 0.5 normalized (degenerate case)
+- **Large scales** (e.g., 0-50000): Works fine - just scales to detected max
+
+To disable auto-normalization:
+```python
+datasets, _ = fresh_draws_from_dict(data, auto_normalize=False)
+```
 
 ### Custom Validation
 ```python

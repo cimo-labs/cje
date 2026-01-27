@@ -35,7 +35,9 @@ from .fresh_draws import (
     FreshDrawSample,
     FreshDrawDataset,
     fresh_draws_from_dict,
+    NormalizationInfo,
 )
+from .normalization import ScaleInfo, detect_range
 
 from typing import Optional, List
 
@@ -69,6 +71,10 @@ __all__ = [
     "FreshDrawSample",
     "FreshDrawDataset",
     "fresh_draws_from_dict",
+    "NormalizationInfo",
+    # Normalization
+    "ScaleInfo",
+    "detect_range",
     # Utilities
     "add_rewards_to_existing_data",
     # Validation

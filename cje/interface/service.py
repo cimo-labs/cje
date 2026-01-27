@@ -95,19 +95,23 @@ class AnalysisService:
             discover_policies_from_fresh_draws,
             load_fresh_draws_auto,
             fresh_draws_from_dict,
+            NormalizationInfo,
         )
         from ..data.models import Dataset, Sample
 
         if config.verbose:
             logger.info("Direct mode: Using fresh draws only (no logged data)")
 
+        # Track normalization info for inverse-transforming results
+        norm_info: Optional[NormalizationInfo] = None
+
         # Handle in-memory fresh_draws_data OR file-based fresh_draws_dir
         if config.fresh_draws_data is not None:
-            # In-memory mode: convert dict to FreshDrawDataset objects
+            # In-memory mode: convert dict to FreshDrawDataset objects with auto-normalization
             if config.verbose:
                 logger.info("Using in-memory fresh_draws_data")
-            fresh_draws_dict = fresh_draws_from_dict(
-                config.fresh_draws_data, verbose=config.verbose
+            fresh_draws_dict, norm_info = fresh_draws_from_dict(
+                config.fresh_draws_data, verbose=config.verbose, auto_normalize=True
             )
             target_policies = sorted(fresh_draws_dict.keys())
         elif config.fresh_draws_dir is not None:
@@ -288,6 +292,39 @@ class AnalysisService:
             estimator_obj.add_fresh_draws(policy, fd)
 
         results = estimator_obj.fit_and_estimate()
+
+        # Inverse-transform results back to original scale if normalization was applied
+        if norm_info and norm_info.oracle_label_scale:
+            oracle_scale = norm_info.oracle_label_scale
+            # Transform estimates and standard errors back to original scale
+            results.estimates = oracle_scale.inverse_array(results.estimates)
+            # Standard errors scale linearly with the range
+            scale_factor = oracle_scale.max_val - oracle_scale.min_val
+            results.standard_errors = results.standard_errors * scale_factor
+
+            # Add normalization metadata
+            results.metadata["normalization"] = norm_info.to_dict()
+
+            if config.verbose:
+                logger.info(
+                    f"Inverse-transformed results to original oracle scale "
+                    f"[{oracle_scale.min_val}, {oracle_scale.max_val}]"
+                )
+        elif norm_info:
+            # No oracle labels, use judge scale for inverse transform
+            judge_scale = norm_info.judge_score_scale
+            results.estimates = judge_scale.inverse_array(results.estimates)
+            scale_factor = judge_scale.max_val - judge_scale.min_val
+            results.standard_errors = results.standard_errors * scale_factor
+
+            results.metadata["normalization"] = norm_info.to_dict()
+            results.metadata["normalization"]["results_scale"] = "judge_original"
+
+            if config.verbose:
+                logger.info(
+                    f"Inverse-transformed results to original judge scale "
+                    f"[{judge_scale.min_val}, {judge_scale.max_val}] (no oracle labels)"
+                )
 
         # Add metadata
         results.metadata["mode"] = "direct"

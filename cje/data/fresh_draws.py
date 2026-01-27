@@ -2,10 +2,13 @@
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Any, TYPE_CHECKING
+from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
 import numpy as np
 from pydantic import BaseModel, Field, field_validator
+
+from .normalization import ScaleInfo, detect_range
 
 logger = logging.getLogger(__name__)
 
@@ -524,19 +527,56 @@ def save_fresh_draws_to_jsonl(
     logger.info(f"Saved {total_samples} fresh draws to {path_obj}")
 
 
+@dataclass
+class NormalizationInfo:
+    """Information about normalization applied to fresh draws data.
+
+    Stores the original scale ranges so results can be inverse-transformed
+    back to the user's original scale.
+    """
+
+    judge_score_scale: ScaleInfo
+    oracle_label_scale: Optional[ScaleInfo]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dict for serialization in metadata."""
+        result: Dict[str, Any] = {
+            "judge_score": {
+                "original_range": (
+                    self.judge_score_scale.min_val,
+                    self.judge_score_scale.max_val,
+                ),
+                "is_identity": self.judge_score_scale.is_identity(),
+            },
+        }
+        if self.oracle_label_scale:
+            result["oracle_label"] = {
+                "original_range": (
+                    self.oracle_label_scale.min_val,
+                    self.oracle_label_scale.max_val,
+                ),
+                "is_identity": self.oracle_label_scale.is_identity(),
+            }
+        result["results_scale"] = "oracle_original"
+        return result
+
+
 def fresh_draws_from_dict(
     data: Dict[str, List[Dict[str, Any]]],
     verbose: bool = False,
-) -> Dict[str, FreshDrawDataset]:
-    """Convert in-memory dict to FreshDrawDataset objects.
+    auto_normalize: bool = True,
+) -> Tuple[Dict[str, FreshDrawDataset], Optional[NormalizationInfo]]:
+    """Convert in-memory dict to FreshDrawDataset objects with auto-normalization.
 
     This allows users to provide fresh draws data directly without writing to disk.
+    Values are automatically normalized to [0,1] internally, and scale information
+    is returned for inverse-transforming results back to the original scale.
 
     Expected format:
         {
             "policy_a": [
-                {"prompt_id": "1", "judge_score": 0.85, "oracle_label": 0.9},
-                {"prompt_id": "2", "judge_score": 0.72},
+                {"prompt_id": "1", "judge_score": 85, "oracle_label": 90},  # 0-100 scale
+                {"prompt_id": "2", "judge_score": 72},
                 ...
             ],
             "policy_b": [...]
@@ -548,23 +588,86 @@ def fresh_draws_from_dict(
     Args:
         data: Dict mapping policy names to lists of record dicts
         verbose: Whether to log progress
+        auto_normalize: Whether to auto-detect scale and normalize to [0,1].
+            If False, values must already be in [0,1].
 
     Returns:
-        Dict mapping policy names to FreshDrawDataset objects
+        Tuple of (datasets_dict, normalization_info).
+        normalization_info is None if auto_normalize=False or data is already [0,1].
 
     Example:
         >>> data = {
         ...     "policy_a": [
-        ...         {"prompt_id": "q1", "judge_score": 0.85, "oracle_label": 0.9},
-        ...         {"prompt_id": "q2", "judge_score": 0.72},
+        ...         {"prompt_id": "q1", "judge_score": 85, "oracle_label": 90},
+        ...         {"prompt_id": "q2", "judge_score": 72},
         ...     ]
         ... }
-        >>> datasets = fresh_draws_from_dict(data)
+        >>> datasets, norm_info = fresh_draws_from_dict(data)
         >>> datasets["policy_a"].n_samples
         2
+        >>> norm_info.judge_score_scale.max_val
+        85.0
     """
     if not data:
         raise ValueError("fresh_draws_data is empty")
+
+    # Collect all judge_scores and oracle_labels across all policies for range detection
+    all_judge_scores: List[float] = []
+    all_oracle_labels: List[float] = []
+
+    for policy, records in data.items():
+        for record in records:
+            judge_score = record.get("judge_score")
+            if judge_score is not None:
+                all_judge_scores.append(float(judge_score))
+            oracle_label = record.get("oracle_label")
+            if oracle_label is not None:
+                all_oracle_labels.append(float(oracle_label))
+
+    if not all_judge_scores:
+        raise ValueError("No judge_score values found in data")
+
+    # Detect ranges and create scale info
+    norm_info: Optional[NormalizationInfo] = None
+    judge_scale: Optional[ScaleInfo] = None
+    oracle_scale: Optional[ScaleInfo] = None
+
+    if auto_normalize:
+        # Check if values are already in [0, 1] range
+        # If ALL values are within [0, 1], assume data is already normalized
+        judge_arr = np.array(all_judge_scores)
+        judge_in_unit_interval = np.all((judge_arr >= 0) & (judge_arr <= 1))
+
+        oracle_in_unit_interval = True
+        if all_oracle_labels:
+            oracle_arr = np.array(all_oracle_labels)
+            oracle_in_unit_interval = np.all((oracle_arr >= 0) & (oracle_arr <= 1))
+
+        # Only normalize if values are OUTSIDE [0, 1]
+        needs_normalization = not judge_in_unit_interval or not oracle_in_unit_interval
+
+        if needs_normalization:
+            # Detect judge score range
+            judge_scale = detect_range(judge_arr, field_name="judge_score")
+
+            # Detect oracle label range if any oracle labels exist
+            if all_oracle_labels:
+                oracle_scale = detect_range(
+                    np.array(all_oracle_labels), field_name="oracle_label"
+                )
+
+            norm_info = NormalizationInfo(
+                judge_score_scale=judge_scale,
+                oracle_label_scale=oracle_scale,
+            )
+            if verbose:
+                logger.info(
+                    f"Auto-normalizing: judge_score [{judge_scale.min_val}, {judge_scale.max_val}] -> [0, 1]"
+                )
+                if oracle_scale:
+                    logger.info(
+                        f"Auto-normalizing: oracle_label [{oracle_scale.min_val}, {oracle_scale.max_val}] -> [0, 1]"
+                    )
 
     result: Dict[str, FreshDrawDataset] = {}
 
@@ -591,6 +694,19 @@ def fresh_draws_from_dict(
                     f"missing required field 'judge_score'"
                 )
 
+            # Normalize values if needed
+            normalized_judge = float(judge_score)
+            normalized_oracle: Optional[float] = None
+
+            if norm_info:
+                normalized_judge = judge_scale.normalize(float(judge_score))
+                if record.get("oracle_label") is not None and oracle_scale:
+                    normalized_oracle = oracle_scale.normalize(
+                        float(record["oracle_label"])
+                    )
+            elif record.get("oracle_label") is not None:
+                normalized_oracle = float(record["oracle_label"])
+
             # Track draw_idx per prompt
             if prompt_id not in prompt_draw_counts:
                 prompt_draw_counts[prompt_id] = 0
@@ -600,12 +716,8 @@ def fresh_draws_from_dict(
             sample = FreshDrawSample(
                 prompt_id=str(prompt_id),
                 target_policy=policy,
-                judge_score=float(judge_score),
-                oracle_label=(
-                    float(record["oracle_label"])
-                    if record.get("oracle_label") is not None
-                    else None
-                ),
+                judge_score=normalized_judge,
+                oracle_label=normalized_oracle,
                 response=record.get("response"),
                 draw_idx=draw_idx,
                 fold_id=record.get("fold_id"),
@@ -634,7 +746,7 @@ def fresh_draws_from_dict(
     if not result:
         raise ValueError("No valid fresh draws data found in any policy")
 
-    return result
+    return result, norm_info
 
 
 def discover_policies_from_fresh_draws(fresh_draws_dir: Path) -> List[str]:

@@ -59,6 +59,29 @@ CJE learns the judge→oracle mapping from the labeled samples and applies it ev
 
 ---
 
+## Label Compatibility
+
+CJE automatically handles different label scales without manual preprocessing:
+
+```python
+# 0-100 scores work automatically
+results = analyze_dataset(
+    fresh_draws_data={
+        "gpt-4o": [
+            {"prompt_id": "1", "judge_score": 85, "oracle_label": 78},  # 0-100 scale
+            {"prompt_id": "2", "judge_score": 72, "oracle_label": 65},
+        ],
+    }
+)
+
+# Results are returned in YOUR scale (0-100), not [0,1]
+print(results.estimates[0])  # → 73.5 (not 0.735)
+```
+
+**Supported:** [0,1], 0-100, Likert 1-5, or any bounded range. If values are already in [0,1], no transformation is applied.
+
+---
+
 ## Why You Need This
 
 **LLM-as-judge gives you rankings. CJE gives you certainty.**

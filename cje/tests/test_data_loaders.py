@@ -262,7 +262,8 @@ class TestFreshDrawsFromDict:
             ],
         }
 
-        datasets = fresh_draws_from_dict(data)
+        # Use auto_normalize=False to test basic conversion without normalization
+        datasets, _ = fresh_draws_from_dict(data, auto_normalize=False)
 
         # Check both policies were converted
         assert "policy_a" in datasets
@@ -289,7 +290,8 @@ class TestFreshDrawsFromDict:
             ],
         }
 
-        datasets = fresh_draws_from_dict(data)
+        # Use auto_normalize=False to test basic conversion without normalization
+        datasets, _ = fresh_draws_from_dict(data, auto_normalize=False)
 
         samples = datasets["policy_a"].samples
         assert samples[0].oracle_label == 0.9
@@ -309,7 +311,8 @@ class TestFreshDrawsFromDict:
             ],
         }
 
-        datasets = fresh_draws_from_dict(data)
+        # Use auto_normalize=False to test basic conversion without normalization
+        datasets, _ = fresh_draws_from_dict(data, auto_normalize=False)
 
         sample = datasets["policy_a"].samples[0]
         assert sample.response == "Test response"
@@ -325,7 +328,8 @@ class TestFreshDrawsFromDict:
             ],
         }
 
-        datasets = fresh_draws_from_dict(data)
+        # Use auto_normalize=False to test basic conversion without normalization
+        datasets, _ = fresh_draws_from_dict(data, auto_normalize=False)
 
         assert datasets["policy_a"].draws_per_prompt == 3
         samples = datasets["policy_a"].samples
@@ -353,7 +357,8 @@ class TestFreshDrawsFromDict:
             ],
         }
 
-        with pytest.raises(ValueError, match="missing required field 'judge_score'"):
+        # Error message changed due to early validation during range detection
+        with pytest.raises(ValueError, match="judge_score"):
             fresh_draws_from_dict(data)
 
     def test_empty_data_raises(self) -> None:
