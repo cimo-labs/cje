@@ -641,7 +641,9 @@ def fresh_draws_from_dict(
         oracle_in_unit_interval = True
         if all_oracle_labels:
             oracle_arr = np.array(all_oracle_labels)
-            oracle_in_unit_interval = np.all((oracle_arr >= 0) & (oracle_arr <= 1))
+            oracle_in_unit_interval = bool(
+                np.all((oracle_arr >= 0) & (oracle_arr <= 1))
+            )
 
         # Only normalize if values are OUTSIDE [0, 1]
         needs_normalization = not judge_in_unit_interval or not oracle_in_unit_interval
@@ -698,7 +700,7 @@ def fresh_draws_from_dict(
             normalized_judge = float(judge_score)
             normalized_oracle: Optional[float] = None
 
-            if norm_info:
+            if norm_info and judge_scale is not None:
                 normalized_judge = judge_scale.normalize(float(judge_score))
                 if record.get("oracle_label") is not None and oracle_scale:
                     normalized_oracle = oracle_scale.normalize(

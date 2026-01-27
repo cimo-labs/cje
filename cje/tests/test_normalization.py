@@ -145,6 +145,7 @@ class TestFreshDrawsFromDictNormalization:
         assert norm_info is not None
         assert norm_info.judge_score_scale.min_val == 60.0
         assert norm_info.judge_score_scale.max_val == 80.0
+        assert norm_info.oracle_label_scale is not None
         assert norm_info.oracle_label_scale.min_val == 70.0
         assert norm_info.oracle_label_scale.max_val == 90.0
 
@@ -195,6 +196,7 @@ class TestFreshDrawsFromDictNormalization:
         }
         _, norm_info = fresh_draws_from_dict(data)
 
+        assert norm_info is not None
         d = norm_info.to_dict()
         assert d["judge_score"]["original_range"] == (0, 100)
         assert d["oracle_label"]["original_range"] == (0, 100)
