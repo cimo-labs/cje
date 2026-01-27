@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, List
 from scipy import stats
 import logging
 
-from .weights import tail_weight_ratio, mass_concentration
+from .weights import mass_concentration
 
 logger = logging.getLogger(__name__)
 
@@ -218,9 +218,12 @@ def compute_dr_policy_diagnostics(
         diagnostics["if_std"] = float(influence_functions.std())
         diagnostics["if_var"] = float(influence_functions.var())
 
-        # Check for heavy tails
-        diagnostics["if_tail_ratio_99_5"] = tail_weight_ratio(
-            np.abs(influence_functions), 0.05, 0.99
+        # Check for heavy tails (quantile ratio)
+        abs_if = np.abs(influence_functions)
+        lo = np.quantile(abs_if, 0.05)
+        hi = np.quantile(abs_if, 0.99)
+        diagnostics["if_tail_ratio_99_5"] = (
+            float(hi / lo) if lo > 1e-12 else float(np.inf)
         )
         diagnostics["if_top1_mass"] = mass_concentration(
             np.abs(influence_functions), 0.01

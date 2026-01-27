@@ -33,6 +33,15 @@ from .diagnostics.planning import (
     plan_for_mde,
 )
 
+# Simulation-based planning
+from .diagnostics.simulation_planning import (
+    SimulationPlanningResult,
+    simulate_variance_model,
+    simulate_planning,
+    simulate_planning_sweep,
+    correlation_to_r2,
+)
+
 # Visualization functions (optional - requires matplotlib)
 try:
     from .visualization import (
@@ -64,6 +73,12 @@ __all__ = [
     "fit_variance_model",
     "plan_evaluation",
     "plan_for_mde",
+    # Simulation-based planning
+    "SimulationPlanningResult",
+    "simulate_variance_model",
+    "simulate_planning",
+    "simulate_planning_sweep",
+    "correlation_to_r2",
 ]
 
 # Add visualization functions to __all__ if available

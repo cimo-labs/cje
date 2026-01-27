@@ -205,20 +205,22 @@ def fit_variance_model(
     fresh_draws: "FreshDrawDataset",
     n_grid: Optional[List[int]] = None,
     oracle_fraction_grid: Optional[List[float]] = None,
-    n_replicates: int = 150,
+    n_replicates: int = 5,
     seed: int = 42,
     verbose: bool = True,
 ) -> FittedVarianceModel:
     """Fit Var(θ̂) = σ²_eval/n + σ²_cal/m from pilot data.
 
-    Uses cross-fitted (out-of-fold) predictions for unbiased residual estimation.
+    Uses the actual CJE pipeline (analyze_dataset) to measure variance at
+    different (n, m) allocations, then fits NNLS to decompose into σ²_eval
+    and σ²_cal components.
 
     Args:
         fresh_draws: Pilot data from the base policy where calibration will be
             learned (FreshDrawDataset with oracle labels).
         n_grid: Sample sizes to measure (default: auto from pilot size).
         oracle_fraction_grid: Oracle fractions to measure (default: [0.15, 0.25, 0.40]).
-        n_replicates: Replicates per grid point for stable Var estimates.
+        n_replicates: Replicates per grid point for stable SE estimates (default 5).
         seed: Random seed for reproducibility.
         verbose: Print progress and diagnostics.
 
@@ -269,34 +271,78 @@ def fit_variance_model(
 
     if verbose:
         print(f"  Grid: n={n_grid}, oracle_frac={oracle_fraction_grid}")
+
+    # Build measurement grid with INDEPENDENT variation in n and m
+    # Key insight: to separate σ²_eval/n from σ²_cal/m, we need measurements where
+    # n varies while m is held constant (and vice versa).
+    #
+    # Design principle: Create a 2D grid with explicit variation in both dimensions
+    # rather than using oracle fractions (which create collinearity).
+    n_oracle_available = sum(
+        1 for s in fresh_draws.samples if s.oracle_label is not None
+    )
+
+    # Define m values: small, medium, large (relative to available oracle)
+    m_values = sorted(
+        set(
+            [
+                max(15, int(n_oracle_available * 0.15)),
+                max(25, int(n_oracle_available * 0.30)),
+                max(40, int(n_oracle_available * 0.50)),
+            ]
+        )
+    )
+
+    # Build orthogonal grid: vary n at each fixed m, and vary m at each fixed n
+    measurement_points: List[Tuple[int, int]] = []
+
+    for n in n_grid:
+        for m in m_values:
+            # Constraint: m < n (can't have more oracle than samples)
+            # Also need m < n_oracle_available (can't use more oracle than exists)
+            if m < n and m <= n_oracle_available:
+                measurement_points.append((n, m))
+
+    # Sort and dedupe
+    measurement_points = sorted(set(measurement_points))
+
+    # Verify we have enough variation - need at least 2 different n and 2 different m
+    unique_n = set(n for n, m in measurement_points)
+    unique_m = set(m for n, m in measurement_points)
+    if len(unique_n) < 2 or len(unique_m) < 2:
+        raise ValueError(
+            f"Grid has insufficient variation (n={unique_n}, m={unique_m}). "
+            f"Need at least 2 unique values in each dimension. "
+            f"Collect more pilot data (recommend 200+ prompts with 100+ oracle labels)."
+        )
+
+    if verbose:
         print(
-            f"  Measuring {len(n_grid) * len(oracle_fraction_grid)} allocations "
+            f"  Measuring {len(measurement_points)} allocations "
             f"({n_replicates} replicates each)..."
         )
 
     # Measure variance at each grid point
     measurements: List[Tuple[int, int, float]] = []
-    for i, n in enumerate(n_grid):
-        for j, frac in enumerate(oracle_fraction_grid):
-            m = max(int(n * frac), 1)
+    for i, (n, m) in enumerate(measurement_points):
+        if verbose:
+            print(f"    n={n}, m={m} ({m/n:.0%})...", end="", flush=True)
+
+        result = _measure_variance_direct(
+            fresh_draws=fresh_draws,
+            n_prompts=n,
+            m_oracle=m,
+            n_replicates=n_replicates,
+            seed=seed + i * 100,
+        )
+
+        if not np.isnan(result["variance"]) and result["variance"] > 0:
+            measurements.append((n, m, result["variance"]))
             if verbose:
-                print(f"    n={n}, m={m} ({frac:.0%})...", end="", flush=True)
-
-            result = _measure_variance_direct(
-                fresh_draws=fresh_draws,
-                n_prompts=n,
-                oracle_fraction=frac,
-                n_replicates=n_replicates,
-                seed=seed + i * 100 + j,
-            )
-
-            if not np.isnan(result["variance"]) and result["variance"] > 0:
-                measurements.append((n, m, result["variance"]))
-                if verbose:
-                    print(f" SE={result['se']:.4f}")
-            else:
-                if verbose:
-                    print(" FAILED")
+                print(f" SE={result['se']:.4f}")
+        else:
+            if verbose:
+                print(" FAILED")
 
     if len(measurements) < 3:
         raise ValueError(
@@ -315,6 +361,23 @@ def fit_variance_model(
         if model.r_squared < 0.85:
             print("\n  ⚠ Low R² - check if labeling is truly ignorable")
             print("    (Use a single policy with random oracle sampling)")
+
+        # Warn if one component dominates completely (potential identification issue)
+        total_sigma2 = model.sigma2_eval + model.sigma2_cal
+        if total_sigma2 > 0:
+            eval_share = model.sigma2_eval / total_sigma2
+            if eval_share < 0.01:
+                print("\n  ⚠ σ²_eval ≈ 0: All variance attributed to calibration.")
+                print("    This may indicate:")
+                print("    - Judge scores are highly predictive of oracle (good!)")
+                print(
+                    "    - OR grid design couldn't separate components (collect more pilot data)"
+                )
+            elif eval_share > 0.99:
+                print("\n  ⚠ σ²_cal ≈ 0: All variance attributed to evaluation.")
+                print("    This may indicate:")
+                print("    - Calibration is very stable (good!)")
+                print("    - OR need more oracle label variation in grid")
 
     return model
 
@@ -445,191 +508,124 @@ def plan_for_mde(
 
 
 # =============================================================================
-# Variance Measurement (with OOF cross-fitting fix)
+# Variance Measurement (using actual CJE pipeline)
 # =============================================================================
-
-
-def _compute_point_estimate_single_replicate(
-    fresh_draws: "FreshDrawDataset",
-    seed: int,
-    n_folds: int = 5,
-) -> Optional[float]:
-    """Compute point estimate θ̂_aug using OUT-OF-FOLD cross-fitting.
-
-    This is the key fix: we use cross-fitted (out-of-fold) predictions for the
-    residual correction. This breaks the isotonic regression property that would
-    make residuals zero on training data.
-
-    The estimator is:
-        θ̂_aug = mean(f̂_full(S)) + mean(Y - f̂_oof(S))
-
-    where f̂_oof uses cross-fitted predictions (calibrator trained on other folds).
-
-    Returns:
-        Point estimate as float, or None if calibration failed.
-    """
-    from .robust_inference import build_direct_eval_table
-    from ..calibration.judge import JudgeCalibrator
-
-    # Wrap single dataset as dict for build_direct_eval_table
-    eval_table = build_direct_eval_table({"_policy": fresh_draws})
-
-    n_oracle = int(np.sum(eval_table.oracle_mask))
-    if n_oracle < 10:
-        return None
-
-    oracle_indices = np.where(eval_table.oracle_mask)[0]
-    n_oracle_total = len(oracle_indices)
-
-    if n_oracle_total < n_folds:
-        n_folds = max(2, n_oracle_total)
-
-    try:
-        rng = np.random.default_rng(seed)
-        fold_assignments = np.zeros(len(eval_table.oracle_mask), dtype=int)
-        shuffled_oracle_idx = rng.permutation(oracle_indices)
-        for i, idx in enumerate(shuffled_oracle_idx):
-            fold_assignments[idx] = i % n_folds
-
-        # Compute OUT-OF-FOLD calibrated predictions
-        calibrated_oof = np.full(len(eval_table.judge_scores), np.nan)
-
-        for fold in range(n_folds):
-            train_mask = eval_table.oracle_mask & (fold_assignments != fold)
-            test_mask = eval_table.oracle_mask & (fold_assignments == fold)
-
-            if np.sum(train_mask) < 5:
-                continue
-
-            calibrator = JudgeCalibrator(
-                random_seed=seed + fold,
-                calibration_mode="monotone",
-            )
-
-            # Fit calibrator on training fold oracle samples
-            train_judge = eval_table.judge_scores[train_mask]
-            train_oracle = eval_table.oracle_labels[train_mask]
-            calibrator.fit_transform(
-                judge_scores=train_judge,
-                oracle_labels=train_oracle,
-            )
-
-            # Predict on test fold (out-of-fold predictions)
-            test_judge = eval_table.judge_scores[test_mask]
-            calibrated_oof[test_mask] = calibrator.predict(test_judge)
-
-        # Full model for plug-in estimate
-        full_calibrator = JudgeCalibrator(random_seed=seed, calibration_mode="monotone")
-        result = full_calibrator.fit_transform(
-            judge_scores=eval_table.judge_scores,
-            oracle_labels=eval_table.oracle_labels[eval_table.oracle_mask],
-            oracle_mask=eval_table.oracle_mask,
-        )
-        calibrated_full = result.calibrated_scores
-
-        # Compute θ̂_aug (single policy)
-        plug_in = np.mean(calibrated_full)
-
-        oracle_mask = eval_table.oracle_mask
-        n_oracle_total = np.sum(oracle_mask)
-
-        if n_oracle_total > 0:
-            oof_preds = calibrated_oof[oracle_mask]
-            oracle_vals = eval_table.oracle_labels[oracle_mask]
-            valid = ~np.isnan(oof_preds)
-            if np.sum(valid) > 0:
-                residuals = oracle_vals[valid] - oof_preds[valid]
-                residual_correction = np.mean(residuals)
-            else:
-                residual_correction = 0.0
-        else:
-            residual_correction = 0.0
-
-        return float(plug_in + residual_correction)
-
-    except Exception as e:
-        logger.debug(f"Point estimate failed: {e}")
-        return None
 
 
 def _measure_variance_direct(
     fresh_draws: "FreshDrawDataset",
     n_prompts: int,
-    oracle_fraction: float,
-    n_replicates: int = 200,
+    m_oracle: int,
+    n_replicates: int = 5,
     seed: int = 42,
 ) -> Dict[str, Any]:
-    """Measure variance by computing Var(θ̂) across outer replicates."""
-    from ..data.fresh_draws import FreshDrawDataset, FreshDrawSample
+    """Measure variance using the actual CJE pipeline (analyze_dataset).
 
-    all_prompt_ids = sorted(set(s.prompt_id for s in fresh_draws.samples))
-    n_available = len(all_prompt_ids)
+    Runs analyze_dataset on subsampled data and uses the reported SE² as the
+    variance estimate. This ensures planning uses the SAME estimator as actual
+    evaluation (Direct mode with bootstrap inference).
 
-    if n_prompts > n_available:
-        n_prompts = n_available
+    Args:
+        fresh_draws: Full pilot dataset
+        n_prompts: Number of prompts to subsample (n)
+        m_oracle: Number of oracle-labeled prompts to include (m)
+        n_replicates: Number of subsamples to average (default 5 for stability)
+        seed: Random seed
+    """
+    from ..interface.analysis import analyze_dataset
 
-    m_oracle = max(int(n_prompts * oracle_fraction), 1)
+    # Separate prompts with and without oracle labels
+    oracle_prompt_ids = sorted(
+        set(s.prompt_id for s in fresh_draws.samples if s.oracle_label is not None)
+    )
+    non_oracle_prompt_ids = sorted(
+        set(s.prompt_id for s in fresh_draws.samples if s.oracle_label is None)
+    )
+
+    n_oracle_available = len(oracle_prompt_ids)
+    n_non_oracle_available = len(non_oracle_prompt_ids)
+
+    # Validate we have enough data
+    if m_oracle > n_oracle_available:
+        m_oracle = n_oracle_available
+    n_non_oracle_needed = n_prompts - m_oracle
+    if n_non_oracle_needed > n_non_oracle_available:
+        n_non_oracle_needed = n_non_oracle_available
+        n_prompts = m_oracle + n_non_oracle_needed
 
     rng = np.random.default_rng(seed)
-    estimates_per_replicate: List[float] = []
+    se_values: List[float] = []
 
     for rep in range(n_replicates):
-        sampled_prompts = set(rng.choice(all_prompt_ids, size=n_prompts, replace=False))
-        oracle_prompts = set(
-            rng.choice(list(sampled_prompts), size=m_oracle, replace=False)
+        # Sample exactly m prompts with oracle and (n-m) without
+        sampled_oracle = set(
+            rng.choice(oracle_prompt_ids, size=m_oracle, replace=False)
+        )
+        sampled_non_oracle = (
+            set(
+                rng.choice(
+                    non_oracle_prompt_ids, size=n_non_oracle_needed, replace=False
+                )
+            )
+            if n_non_oracle_needed > 0
+            else set()
         )
 
-        subsampled_samples = []
+        # Build records - oracle prompts keep their labels, others don't
+        subsampled_records = []
         for s in fresh_draws.samples:
-            if s.prompt_id in sampled_prompts:
-                if s.prompt_id in oracle_prompts:
-                    subsampled_samples.append(s)
-                else:
-                    subsampled_samples.append(
-                        FreshDrawSample(
-                            prompt_id=s.prompt_id,
-                            target_policy=s.target_policy,
-                            judge_score=s.judge_score,
-                            oracle_label=None,
-                            response=s.response,
-                            draw_idx=s.draw_idx,
-                            fold_id=s.fold_id,
-                            metadata=s.metadata,
-                        )
-                    )
+            if s.prompt_id in sampled_oracle:
+                subsampled_records.append(
+                    {
+                        "prompt_id": s.prompt_id,
+                        "judge_score": s.judge_score,
+                        "oracle_label": s.oracle_label,
+                    }
+                )
+            elif s.prompt_id in sampled_non_oracle:
+                subsampled_records.append(
+                    {
+                        "prompt_id": s.prompt_id,
+                        "judge_score": s.judge_score,
+                    }
+                )
 
-        if not subsampled_samples:
+        if len(subsampled_records) < 20:
             continue
 
-        subsampled_data = FreshDrawDataset(
-            target_policy=fresh_draws.target_policy,
-            draws_per_prompt=fresh_draws.draws_per_prompt,
-            samples=subsampled_samples,
-        )
+        try:
+            policy_name = fresh_draws.target_policy
+            result = analyze_dataset(
+                fresh_draws_data={policy_name: subsampled_records},
+                verbose=False,
+            )
 
-        estimate = _compute_point_estimate_single_replicate(
-            subsampled_data, seed=seed + rep
-        )
-        if estimate is not None:
-            estimates_per_replicate.append(estimate)
+            if (
+                result.standard_errors is not None
+                and len(result.standard_errors) > 0
+                and result.standard_errors[0] > 0
+            ):
+                se_values.append(float(result.standard_errors[0]))
+        except Exception as e:
+            logger.debug(f"analyze_dataset failed for replicate {rep}: {e}")
+            continue
 
-    if len(estimates_per_replicate) < 10:
+    if not se_values:
         return {
             "variance": np.nan,
             "se": np.nan,
             "n_actual": n_prompts,
             "m_actual": m_oracle,
-            "n_valid_replicates": len(estimates_per_replicate),
+            "n_valid_replicates": 0,
         }
 
-    variance = float(np.var(estimates_per_replicate, ddof=1))
-
+    median_se = float(np.median(se_values))
     return {
-        "variance": variance,
-        "se": float(np.sqrt(variance)),
+        "variance": median_se**2,
+        "se": median_se,
         "n_actual": n_prompts,
         "m_actual": m_oracle,
-        "n_valid_replicates": len(estimates_per_replicate),
+        "n_valid_replicates": len(se_values),
     }
 
 

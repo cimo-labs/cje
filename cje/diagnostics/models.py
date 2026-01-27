@@ -57,9 +57,6 @@ class IPSDiagnostics:
     ess_per_policy: Dict[str, float]
     max_weight_per_policy: Dict[str, float]
     status_per_policy: Optional[Dict[str, Status]] = None  # Per-policy status
-    weight_tail_ratio_per_policy: Optional[Dict[str, float]] = (
-        None  # DEPRECATED: Use tail_indices
-    )
     tail_indices: Optional[Dict[str, Optional[float]]] = (
         None  # Hill tail index per policy
     )
@@ -90,16 +87,6 @@ class IPSDiagnostics:
         if not self.estimates:
             return "none"
         return max(self.estimates.items(), key=lambda x: x[1])[0]
-
-    @property
-    def worst_weight_tail_ratio(self) -> float:
-        """Worst tail ratio across policies.
-
-        DEPRECATED: Use worst_tail_index instead.
-        """
-        if self.weight_tail_ratio_per_policy:
-            return max(self.weight_tail_ratio_per_policy.values())
-        return 0.0
 
     @property
     def worst_tail_index(self) -> Optional[float]:
@@ -180,11 +167,6 @@ class IPSDiagnostics:
                         issues.append(
                             f"Heavy tail for {policy}: α={tail_idx:.2f} (infinite variance)"
                         )
-        # Fallback to deprecated tail ratio if available
-        elif self.weight_tail_ratio_per_policy:
-            for policy, tail_ratio in self.weight_tail_ratio_per_policy.items():
-                if tail_ratio > 100:
-                    issues.append(f"Heavy tail for {policy}: ratio={tail_ratio:.1f}")
 
         # R² should be <= 1
         if self.calibration_r2 is not None and self.calibration_r2 > 1.0:
@@ -267,7 +249,7 @@ class IPSDiagnostics:
             "weight_status": self.weight_status.value,
             "n_policies": self.n_policies,
             "best_policy": self.best_policy if self.policies else None,
-            "worst_tail_ratio": self.worst_weight_tail_ratio,
+            "worst_tail_index": self.worst_tail_index,
         }
         # Add per-policy metrics
         for policy in self.policies:

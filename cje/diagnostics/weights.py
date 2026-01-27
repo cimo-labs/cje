@@ -30,29 +30,6 @@ def compute_ess(weights: np.ndarray) -> float:
     return effective_sample_size(weights)
 
 
-def tail_weight_ratio(
-    weights: np.ndarray, q_low: float = 0.05, q_high: float = 0.99
-) -> float:
-    """Compute ratio of high to low quantiles.
-
-    DEPRECATED: Use hill_tail_index() instead for more theoretically grounded
-    tail behavior assessment.
-
-    Args:
-        weights: Importance weights
-        q_low: Lower quantile (default 0.05 to avoid instability)
-        q_high: Upper quantile (default 0.99)
-
-    Returns:
-        Ratio of high/low quantiles (inf if low quantile is ~0)
-    """
-    lo = np.quantile(weights, q_low)
-    hi = np.quantile(weights, q_high)
-    if lo <= 1e-12:
-        return float(np.inf)
-    return float(hi / lo)
-
-
 def mass_concentration(weights: np.ndarray, top_pct: float = 0.01) -> float:
     """Fraction of total weight held by top x% of samples.
 

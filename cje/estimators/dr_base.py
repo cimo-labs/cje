@@ -1223,9 +1223,6 @@ class DREstimator(BaseCJEEstimator):
                 weight_status=ips_diagnostics.weight_status,
                 ess_per_policy=ips_diagnostics.ess_per_policy,
                 max_weight_per_policy=ips_diagnostics.max_weight_per_policy,
-                weight_tail_ratio_per_policy=getattr(
-                    ips_diagnostics, "weight_tail_ratio_per_policy", {}
-                ),
                 # Calibration fields (may be None)
                 calibration_rmse=ips_diagnostics.calibration_rmse,
                 calibration_r2=ips_diagnostics.calibration_r2,
@@ -1261,7 +1258,6 @@ class DREstimator(BaseCJEEstimator):
                 weight_status=Status.WARNING,
                 ess_per_policy={},
                 max_weight_per_policy={},
-                weight_tail_ratio_per_policy={},
                 # DR-specific fields
                 dr_cross_fitted=True,
                 dr_n_folds=self.n_folds,

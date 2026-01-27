@@ -71,6 +71,12 @@ class TestPlanningWorkflow:
         assert allocation.se_level > 0
         assert "Evaluation Plan" in allocation.summary()
 
+        # Verify the allocation is valid (oracle can't exceed total samples)
+        assert allocation.m_oracle <= allocation.n_samples
+        # Note: High oracle fraction (even 100%) can be optimal when calibration
+        # variance dominates and cost ratio is moderate. The arena data has a
+        # highly predictive judge, so σ²_eval ≈ 0 is expected.
+
         # Test with different cost model
         allocation_custom = result.plan_allocation(
             budget=5000,
@@ -393,8 +399,8 @@ class TestEmpiricalVarianceMeasurement:
         result = _measure_variance_direct(
             base_data,
             n_prompts=100,
-            oracle_fraction=0.20,
-            n_replicates=50,
+            m_oracle=20,
+            n_replicates=3,  # Fewer replicates for test speed
         )
 
         # Should return valid results

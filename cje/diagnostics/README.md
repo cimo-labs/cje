@@ -10,16 +10,17 @@ The diagnostics system is now consolidated into a single cohesive module at `cje
 
 ```
 cje/diagnostics/
-├── __init__.py          # Public API exports
-├── models.py            # Data models (IPSDiagnostics, DRDiagnostics, CJEDiagnostics, Status, GateState)
-├── weights.py           # Weight diagnostic computations (ESS, Hill, etc.)
-├── overlap.py           # Overlap metrics (Hellinger affinity, auto-tuning, σ(S) floors)
-├── dr.py                # DR-specific diagnostics
-├── transport.py         # Transportability auditing
-├── display.py           # Display and formatting utilities
-├── robust_inference.py  # Robust standard errors and inference
-├── planning.py          # Budget optimization (Square Root Allocation Law)
-└── README.md            # This documentation
+├── __init__.py             # Public API exports
+├── models.py               # Data models (IPSDiagnostics, DRDiagnostics, CJEDiagnostics, Status, GateState)
+├── weights.py              # Weight diagnostic computations (ESS, Hill, etc.)
+├── overlap.py              # Overlap metrics (Hellinger affinity, auto-tuning, σ(S) floors)
+├── dr.py                   # DR-specific diagnostics
+├── transport.py            # Transportability auditing
+├── display.py              # Display and formatting utilities
+├── robust_inference.py     # Robust standard errors and inference
+├── planning.py             # Budget optimization (Square Root Allocation Law)
+├── simulation_planning.py  # Simulation-based planning (no pilot data required)
+└── README.md               # This documentation
 ```
 
 ### Three-Layer Architecture
@@ -1055,6 +1056,66 @@ for policy_name, probe_data in target_probes.items():
         print(f"Warning: calibrator may not transfer to {policy_name}")
         print(f"  δ̂ = {diag.delta_hat:+.3f} (CI: [{diag.ci_lower:+.3f}, {diag.ci_upper:+.3f}])")
 ```
+
+### Simulation-Based Planning (No Pilot Data Required)
+
+When you don't have pilot data yet, you can plan based on **expected judge quality** (isotonic R²):
+
+```python
+from cje import simulate_variance_model, plan_evaluation, CostModel
+
+# Get variance model from judge quality (no real data needed)
+variance_model = simulate_variance_model(r2=0.7)  # Parallels fit_variance_model()
+
+# Use with standard planning functions
+cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
+plan = plan_evaluation(budget=5000, variance_model=variance_model, cost_model=cost)
+print(plan.summary())
+```
+
+**Two approaches to get a `FittedVarianceModel`:**
+
+| Approach | Function | Input | When to use |
+|----------|----------|-------|-------------|
+| **Pilot-based** | `fit_variance_model()` | Real pilot data | You have 200+ samples with oracle labels |
+| **Simulation-based** | `simulate_variance_model()` | R² (judge quality) | Planning before data collection |
+
+Both return a `FittedVarianceModel` that works with `plan_evaluation()` and `plan_for_mde()`.
+
+**Convenience wrapper for exploration:**
+
+```python
+from cje import simulate_planning, simulate_planning_sweep
+
+# Quick sensitivity analysis
+result = simulate_planning(r2=0.7, budget=5000, cost_model=cost)
+print(result.explain())  # Educational output explaining the recommendation
+
+# Sweep across multiple R² values
+results = simulate_planning_sweep([0.5, 0.7, 0.9], budget=5000, cost_model=cost)
+for r in results:
+    print(f"R²={r.r2}: MDE={r.plan.mde:.1%}, oracle={r.plan.oracle_fraction:.0%}")
+```
+
+**Converting correlation to R²:**
+
+If you know your judge's Pearson correlation with oracle but not isotonic R²:
+
+```python
+from cje import correlation_to_r2
+
+r2 = correlation_to_r2(0.8)  # Linear: r² = 0.64
+r2 = correlation_to_r2(0.8, "monotone")  # Monotone nonlinear: ~0.82
+```
+
+**R² interpretation (isotonic R² = fraction of oracle variance explained by judge):**
+
+| R² | Judge Quality | Calibration Uncertainty |
+|----|---------------|------------------------|
+| 0.9+ | Excellent | Low - minimal oracle needed |
+| 0.7-0.9 | Good | Moderate oracle investment |
+| 0.5-0.7 | Moderate | Significant oracle needed |
+| <0.5 | Weak | Heavy oracle investment or improve judge |
 
 ## References
 

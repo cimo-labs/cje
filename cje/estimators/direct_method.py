@@ -925,28 +925,8 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         # ESTIMATOR CONSISTENCY: Use bootstrap's theta_hat as reported estimate.
         # The bootstrap refits calibrator on fresh draws oracle, so we must use its
         # point estimates for consistency. Using self._policy_data (logged-data calibrator)
-        # would create an estimator mismatch.
+        # would create an estimator mismatch (expected with small oracle samples).
         estimates = bootstrap_result["estimates"]
-
-        # Guardrail: detect and log estimator mismatch for diagnostics
-        estimates_logged_list: List[float] = []
-        for policy in self.target_policies:
-            if policy in self._policy_data:
-                pdata = self._policy_data[policy]
-                estimates_logged_list.append(float(np.mean(pdata.calibrated_rewards)))
-            else:
-                estimates_logged_list.append(float("nan"))
-        estimates_logged_calibrator = np.array(estimates_logged_list)
-
-        # Compute mismatch between the two estimators
-        estimator_mismatch = estimates - estimates_logged_calibrator
-        max_mismatch = np.nanmax(np.abs(estimator_mismatch))
-        if max_mismatch > 0.01:
-            logger.warning(
-                f"Estimator mismatch detected: max|Δ| = {max_mismatch:.4f}. "
-                f"This is expected when logged-data and fresh-draws calibrators differ. "
-                f"Using bootstrap's theta_hat for consistency."
-            )
 
         # Use bootstrap SEs (these correctly capture calibrator uncertainty)
         standard_errors = bootstrap_result["standard_errors"]
@@ -1015,14 +995,6 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
                 "oracle_variance_per_policy": bootstrap_result.get(
                     "variance_decomposition", {}
                 ).get("var_cal_per_policy", {}),
-            },
-            "estimator_consistency": {
-                "theta_hat_source": "bootstrap_refit",  # Using bootstrap's estimate for consistency
-                "theta_hat_logged_calibrator": [
-                    float(x) for x in estimates_logged_calibrator
-                ],
-                "estimator_mismatch": [float(x) for x in estimator_mismatch],
-                "max_mismatch": float(max_mismatch),
             },
         }
 

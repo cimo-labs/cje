@@ -25,7 +25,6 @@ from .weights import (
     compute_ess,
     hill_tail_index,
     hill_tail_index_stable,
-    tail_weight_ratio,
     mass_concentration,
 )
 
@@ -85,6 +84,15 @@ from .planning import (
     plan_for_mde,
 )
 
+# Simulation-based planning
+from .simulation_planning import (
+    SimulationPlanningResult,
+    simulate_variance_model,
+    simulate_planning,
+    simulate_planning_sweep,
+    correlation_to_r2,
+)
+
 __all__ = [
     # Data models
     "IPSDiagnostics",
@@ -98,7 +106,6 @@ __all__ = [
     "compute_ess",
     "hill_tail_index",
     "hill_tail_index_stable",
-    "tail_weight_ratio",
     "mass_concentration",
     # DR diagnostics
     "compute_dr_policy_diagnostics",
@@ -138,4 +145,10 @@ __all__ = [
     "fit_variance_model",
     "plan_evaluation",
     "plan_for_mde",
+    # Simulation-based planning
+    "SimulationPlanningResult",
+    "simulate_variance_model",
+    "simulate_planning",
+    "simulate_planning_sweep",
+    "correlation_to_r2",
 ]
