@@ -65,7 +65,9 @@ def _detect_results(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
 
     # C) `promptfoo export` wrapper
-    if isinstance(payload.get("results"), dict) and isinstance(payload["results"].get("results"), list):
+    if isinstance(payload.get("results"), dict) and isinstance(
+        payload["results"].get("results"), list
+    ):
         return payload["results"]["results"]
 
     # A) EvaluateSummaryV3: payload["results"] is a list
@@ -129,12 +131,17 @@ def _vars(r: Dict[str, Any]) -> Dict[str, Any]:
 def _judge_score(r: Dict[str, Any]) -> Optional[float]:
     # Prefer top-level score
     score = r.get("score")
-    if isinstance(score, (int, float)):
+    # NOTE: bool is a subclass of int in Python; exclude it explicitly.
+    if isinstance(score, (int, float)) and not isinstance(score, bool):
         return float(score)
 
     # Fall back to gradingResult.score
     gr = r.get("gradingResult")
-    if isinstance(gr, dict) and isinstance(gr.get("score"), (int, float)):
+    if (
+        isinstance(gr, dict)
+        and isinstance(gr.get("score"), (int, float))
+        and not isinstance(gr.get("score"), bool)
+    ):
         return float(gr["score"])
 
     return None
@@ -206,7 +213,9 @@ def _load_oracle_labels(path: Path) -> Dict[Tuple[str, str], float]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("results_json", help="Promptfoo results JSON (e.g. results.json)")
-    ap.add_argument("--out", default="cje_fresh_draws_data.json", help="Output JSON for CJE")
+    ap.add_argument(
+        "--out", default="cje_fresh_draws_data.json", help="Output JSON for CJE"
+    )
     ap.add_argument(
         "--prompt-id-mode",
         choices=["hash", "raw"],
@@ -305,11 +314,16 @@ def main() -> int:
     if not args.no_label_template:
         print(f"Wrote oracle label template CSV: {args.label_template}")
     if missing_score:
-        print(f"Skipped {missing_score} records without a numeric score", file=sys.stderr)
+        print(
+            f"Skipped {missing_score} records without a numeric score", file=sys.stderr
+        )
 
     if args.run_cje:
         if not args.oracle_labels:
-            print("--run-cje requested but --oracle-labels not provided; skipping.", file=sys.stderr)
+            print(
+                "--run-cje requested but --oracle-labels not provided; skipping.",
+                file=sys.stderr,
+            )
             return 0
         try:
             from cje import analyze_dataset  # type: ignore

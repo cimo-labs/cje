@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import sys
 from dataclasses import dataclass
@@ -53,6 +54,10 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 def _stable_json(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _hash_str(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()[:16]
 
 
 def _as_float(v: Any) -> Optional[float]:
@@ -98,9 +103,27 @@ def _pick_latest_numeric_feedback(feedbacks: Iterable[Any]) -> Dict[str, _Feedba
 
 
 def _run_prompt_id(run: Any) -> str:
+    """Return a prompt_id that is stable across policies when possible.
+
+    Preference order:
+    1) reference_example_id (best when runs were generated from the same dataset)
+    2) hash of run.inputs (fallback that can align across projects if inputs identical)
+
+    Avoid falling back to run.id, which is project-specific and breaks cross-policy alignment.
+    """
+
     ref = getattr(run, "reference_example_id", None)
     if ref is not None:
         return str(ref)
+
+    inputs = getattr(run, "inputs", None)
+    if isinstance(inputs, (dict, list)):
+        return f"inputs::{_hash_str(_stable_json(inputs))}"
+
+    if inputs is not None:
+        return f"inputs::{_hash_str(str(inputs))}"
+
+    # Last resort: still return run id (but this won't align across policies)
     return str(getattr(run, "id"))
 
 
@@ -148,7 +171,9 @@ def main() -> int:
     ap.add_argument("--filter", default=None, help="Optional LangSmith filter string.")
     ap.add_argument("--limit", type=int, default=None, help="Max runs per project.")
 
-    ap.add_argument("--out", default="cje_fresh_draws_data.json", help="Output JSON for CJE")
+    ap.add_argument(
+        "--out", default="cje_fresh_draws_data.json", help="Output JSON for CJE"
+    )
     ap.add_argument(
         "--label-template",
         default="oracle_label_template.csv",
@@ -216,13 +241,17 @@ def main() -> int:
         run_ids = [getattr(r, "id", None) for r in runs]
         run_ids = [rid for rid in run_ids if rid is not None]
 
-        judge_fb = list(client.list_feedback(run_ids=run_ids, feedback_key=[args.feedback_key]))
+        judge_fb = list(
+            client.list_feedback(run_ids=run_ids, feedback_key=[args.feedback_key])
+        )
         judge_map = _pick_latest_numeric_feedback(judge_fb)
 
         oracle_map: Dict[str, _FeedbackPick] = {}
         if args.oracle_feedback_key:
             oracle_fb = list(
-                client.list_feedback(run_ids=run_ids, feedback_key=[args.oracle_feedback_key])
+                client.list_feedback(
+                    run_ids=run_ids, feedback_key=[args.oracle_feedback_key]
+                )
             )
             oracle_map = _pick_latest_numeric_feedback(oracle_fb)
 
@@ -236,7 +265,10 @@ def main() -> int:
             prompt_id = _run_prompt_id(r)
             judge_score = judge_map[rid].score
 
-            sample: Dict[str, Any] = {"prompt_id": prompt_id, "judge_score": judge_score}
+            sample: Dict[str, Any] = {
+                "prompt_id": prompt_id,
+                "judge_score": judge_score,
+            }
             if args.oracle_feedback_key and rid in oracle_map:
                 sample["oracle_label"] = oracle_map[rid].score
 
@@ -252,7 +284,9 @@ def main() -> int:
                         "inputs_json": _stable_json(getattr(r, "inputs", {}) or {}),
                         "outputs_json": _stable_json(getattr(r, "outputs", {}) or {}),
                         "judge_score": judge_score,
-                        "oracle_label": (oracle_map[rid].score if (rid in oracle_map) else ""),
+                        "oracle_label": (
+                            oracle_map[rid].score if (rid in oracle_map) else ""
+                        ),
                     }
                 )
 
@@ -290,7 +324,8 @@ def main() -> int:
     if args.run_cje:
         # Only run CJE if we actually have some oracle labels.
         has_oracle = any(
-            any("oracle_label" in s for s in samples) for samples in fresh_draws.values()
+            any("oracle_label" in s for s in samples)
+            for samples in fresh_draws.values()
         )
         if not has_oracle:
             print(
