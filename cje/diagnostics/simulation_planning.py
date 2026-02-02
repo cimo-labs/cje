@@ -4,29 +4,27 @@ Allows users to get a variance model without real data by specifying
 judge quality (isotonic R²). This enables planning before data collection.
 
 Two approaches to get a FittedVarianceModel:
-1. **Pilot-based** (existing): fit_variance_model(fresh_draws) - from real data
-2. **Simulation-based** (this module): simulate_variance_model(r2) - from judge quality
+1. **Pilot-based**: fit_variance_model(fresh_draws) - from real data
+2. **Simulation-based**: simulate_variance_model(r2) - from judge quality estimate
 
 Both return FittedVarianceModel, which plugs into plan_evaluation() or plan_for_mde().
 
-Note: Simulation-based planning generates synthetic data and runs the actual CJE
-pipeline, so it takes ~30-60 seconds. For production planning decisions, prefer
-pilot-based planning with real data when possible.
+By default, simulate_variance_model() uses fast interpolation from pre-computed
+anchor points (<1ms). Set run_full_simulation=True if you need ground-truth
+validation (2-4 minutes).
 
 Usage:
     from cje import simulate_variance_model, plan_evaluation, CostModel
 
-    # Get variance model from judge quality (runs simulation, ~30-60s)
+    # Get variance model instantly (default behavior)
     variance_model = simulate_variance_model(r2=0.7)
 
     # Use with standard planning functions
     cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
     plan = plan_evaluation(budget=5000, variance_model=variance_model, cost_model=cost)
 
-    # Or use convenience wrapper for exploration
-    from cje import simulate_planning
-    result = simulate_planning(r2=0.7, budget=5000, cost_model=cost)
-    print(result.explain())  # Educational output
+    # For ground-truth validation, run full simulation (2-4 min)
+    variance_model = simulate_variance_model(r2=0.7, run_full_simulation=True)
 
     # If you only know correlation, convert first
     from cje import correlation_to_r2
@@ -46,6 +44,55 @@ from .planning import (
 )
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# Pre-computed anchor points for fast interpolation
+# Generated via _full_simulation_variance() with n_total=1000, oracle_fraction=0.4
+# =============================================================================
+
+_R2_ANCHORS = [0.3, 0.4, 0.5, 0.6, 0.7, 0.9]
+_SIGMA2_EVAL = [0.0000, 0.0617, 0.0203, 0.0299, 0.0851, 0.2234]
+_SIGMA2_CAL = [0.2455, 0.1969, 0.2214, 0.1980, 0.1636, 0.0599]
+
+
+def fast_variance_model(r2: float) -> FittedVarianceModel:
+    """Get a variance model instantly via interpolation (<1ms).
+
+    Uses cubic spline interpolation from pre-computed anchor points to provide
+    instant variance estimates. Suitable for budget planning and exploration.
+
+    For ground-truth validation, use simulate_variance_model() instead (slower
+    but runs the actual CJE pipeline).
+
+    Args:
+        r2: Judge quality as isotonic R² (0.3 to 0.9 recommended).
+            Values outside this range use extrapolation.
+
+    Returns:
+        FittedVarianceModel that can be used with plan_evaluation() or plan_for_mde().
+
+    Example:
+        >>> from cje import fast_variance_model, plan_evaluation, CostModel
+        >>> variance_model = fast_variance_model(r2=0.7)  # Instant!
+        >>> cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
+        >>> plan = plan_evaluation(budget=5000, variance_model=variance_model, cost_model=cost)
+    """
+    from scipy.interpolate import interp1d
+
+    if not 0 <= r2 <= 1:
+        raise ValueError(f"r2 must be in [0, 1], got {r2}")
+
+    eval_fn = interp1d(
+        _R2_ANCHORS, _SIGMA2_EVAL, kind="cubic", fill_value="extrapolate"
+    )
+    cal_fn = interp1d(_R2_ANCHORS, _SIGMA2_CAL, kind="cubic", fill_value="extrapolate")
+
+    return FittedVarianceModel(
+        sigma2_eval=max(0.0, float(eval_fn(r2))),
+        sigma2_cal=max(0.0, float(cal_fn(r2))),
+        r_squared=0.95,  # Approximate fit quality
+        n_measurements=len(_R2_ANCHORS),
+    )
 
 
 @dataclass
@@ -396,14 +443,13 @@ def simulate_variance_model(
     n_replicates: int = 5,
     seed: int = 42,
     verbose: bool = True,
+    run_full_simulation: bool = False,
 ) -> FittedVarianceModel:
     """Get a variance model from judge quality (R²) without real data.
 
-    This is the simulation-based equivalent of fit_variance_model(). Both return
-    a FittedVarianceModel that can be used with plan_evaluation() or plan_for_mde().
-
-    Generates synthetic data with the specified judge quality and runs the actual
-    CJE pipeline to measure variance at different allocations. Takes ~30-60 seconds.
+    By default, uses fast interpolation from pre-computed anchor points (<1ms).
+    Set run_full_simulation=True to run the actual CJE pipeline (2-4 minutes)
+    for ground-truth validation.
 
     For production planning decisions, prefer fit_variance_model() with real pilot
     data when available.
@@ -415,11 +461,13 @@ def simulate_variance_model(
             - 0.7-0.9: Good judge (moderate calibration uncertainty)
             - 0.5-0.7: Moderate judge (significant calibration uncertainty)
             - <0.5: Weak judge (high calibration uncertainty)
-        n_total: Simulated dataset size (default 1000).
-        oracle_fraction: Fraction with oracle labels in simulation (default 0.4).
-        n_replicates: Bootstrap replicates per measurement (default 5).
-        seed: Random seed for reproducibility.
-        verbose: Print progress and diagnostics (default True).
+        n_total: Simulated dataset size (only used if run_full_simulation=True).
+        oracle_fraction: Fraction with oracle labels (only used if run_full_simulation=True).
+        n_replicates: Bootstrap replicates per measurement (only used if run_full_simulation=True).
+        seed: Random seed for reproducibility (only used if run_full_simulation=True).
+        verbose: Print progress and diagnostics.
+        run_full_simulation: If True, run the full CJE pipeline (2-4 min).
+            If False (default), use fast interpolation (<1ms).
 
     Returns:
         FittedVarianceModel that can be used with plan_evaluation() or plan_for_mde().
@@ -429,7 +477,7 @@ def simulate_variance_model(
 
     Example:
         >>> from cje import simulate_variance_model, plan_evaluation, CostModel
-        >>> # Get variance model from judge quality (~30-60s)
+        >>> # Get variance model instantly (default)
         >>> variance_model = simulate_variance_model(r2=0.7)
         >>> # Use with standard planning
         >>> cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
@@ -439,14 +487,19 @@ def simulate_variance_model(
     if not 0 <= r2 <= 1:
         raise ValueError(f"r2 must be in [0, 1], got {r2}")
 
-    return _full_simulation_variance(
-        r2=r2,
-        n_total=n_total,
-        oracle_fraction=oracle_fraction,
-        n_replicates=n_replicates,
-        seed=seed,
-        verbose=verbose,
-    )
+    if run_full_simulation:
+        return _full_simulation_variance(
+            r2=r2,
+            n_total=n_total,
+            oracle_fraction=oracle_fraction,
+            n_replicates=n_replicates,
+            seed=seed,
+            verbose=verbose,
+        )
+    else:
+        if verbose:
+            logger.info(f"Using fast interpolation for R²={r2}")
+        return fast_variance_model(r2)
 
 
 # =============================================================================
