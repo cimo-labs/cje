@@ -59,7 +59,8 @@ estimators/
 All estimators follow the same pattern:
 
 ```python
-from cje import CalibratedIPS, PrecomputedSampler
+from cje.estimators import CalibratedIPS, StackedDREstimator
+from cje.data import PrecomputedSampler
 from cje.calibration import calibrate_dataset
 
 # 1. Calibrate dataset (if using reward calibration)
@@ -76,6 +77,8 @@ sampler = PrecomputedSampler(calibrated_dataset)
 # For IPS:
 estimator = CalibratedIPS(sampler)
 # For DR (requires fresh draws):
+# - easiest: use analyze_dataset(..., fresh_draws_dir=...)
+# - or: call estimator.add_fresh_draws(policy, fresh_draws_df) for each policy before fit_and_estimate()
 estimator = StackedDREstimator(sampler)
 
 # 4. Fit and estimate
@@ -93,9 +96,7 @@ influence = result.influence_functions # For inference
 
 **Use StackedDREstimator** - Combines multiple DR methods via optimal weighting to minimize variance. Requires fresh draws. Provides modest improvements (1-5% SE reduction) over best single method.
 
-**Default estimators**: DR-CPO, TMLE, MRDR (3 core methods)
-
-**Optional additions**: OC-DR-CPO, TR-CPO-E (can be added via `estimators` parameter)
+**Default estimators**: `dr-cpo`, `tmle`, `mrdr` (3 core methods)
 
 ## Diagnostic Warnings & Quality Detection
 
@@ -146,11 +147,11 @@ estimator = CalibratedIPS(sampler, refuse_unreliable=True)
 
 ## Fresh Draws
 
-DR estimators auto-load fresh draws from:
-- `data/{policy}_responses.jsonl`
-- `data/responses/{policy}_responses.jsonl`
-- `data/{policy}_fresh.jsonl`
-- `data/fresh_draws/{policy}.jsonl`
+Fresh draws can be auto-loaded from standard locations relative to a provided `fresh_draws_dir` (see `load_fresh_draws_auto(...)`):
+- `{policy}_responses.jsonl`
+- `responses/{policy}_responses.jsonl`
+- `{policy}_fresh.jsonl`
+- `fresh_draws/{policy}.jsonl`
 
 Or add manually:
 ```python
@@ -301,7 +302,7 @@ When only one fresh draw per prompt (M=1), DR estimators automatically use a con
 ```python
 StackedDREstimator(
     sampler,
-    estimators=['dr-cpo', 'tmle', 'mrdr', 'oc-dr-cpo', 'tr-cpo-e'],
+    estimators=["dr-cpo", "tmle", "mrdr"],
     covariance_regularization=1e-4,  # Ridge regularization strength
     n_folds=20                       # Cross-fitting folds
 )

@@ -4,6 +4,9 @@ This folder is a **thin convenience wrapper** around the standalone converters i
 
 Goal: make it easy to go from “I already have eval results in tool X” → **CJE `fresh_draws_data` JSON** (plus an oracle labeling template).
 
+> These converters are included in the GitHub repo under `scripts/` and are not shipped as part of the PyPI wheel.
+> Run the commands below from the repo root (after `git clone https://github.com/cimo-labs/cje.git && cd cje`).
+
 Refs:
 - CJE paper: https://arxiv.org/abs/2512.11150
 - CJE package: `pip install cje-eval`
@@ -18,6 +21,15 @@ Refs:
 python3 scripts/cje_bridges/convert.py promptfoo results.json \
   --out cje_fresh_draws_data.json \
   --label-template oracle_label_template.csv
+```
+
+After you fill in `oracle_label_template.csv`, re-run to embed oracle labels in the JSON:
+
+```bash
+python3 scripts/cje_bridges/convert.py promptfoo results.json \
+  --oracle-labels oracle_label_template.csv \
+  --out cje_fresh_draws_data_with_oracle.json \
+  --no-label-template
 ```
 
 This supports Promptfoo’s common JSON shapes, including `promptfoo export` wrapper output.
@@ -41,6 +53,17 @@ python3 scripts/cje_bridges/convert.py trulens \
   --judge-col "Answer Relevance" \
   --out cje_fresh_draws_data.json \
   --label-template oracle_label_template.csv
+```
+
+After you fill in `oracle_label_template.csv`, re-run to embed oracle labels in the JSON:
+
+```bash
+python3 scripts/cje_bridges/convert.py trulens \
+  --database-url sqlite:///default.sqlite \
+  --judge-col "Answer Relevance" \
+  --oracle-labels oracle_label_template.csv \
+  --out cje_fresh_draws_data_with_oracle.json \
+  --no-label-template
 ```
 
 Full help:
@@ -73,6 +96,9 @@ Notes:
   across policies when they were generated from the same dataset.
 - If you already logged human labels into LangSmith as feedback, you can pass `--oracle-feedback-key`
   to populate `oracle_label` directly.
+- The CSV template is for convenience when collecting labels, but this script currently only ingests
+  oracle labels via LangSmith feedback (`--oracle-feedback-key`). If you label outside LangSmith,
+  you’ll need to merge labels into the exported JSON yourself or upload them back to LangSmith as feedback.
 
 Full help:
 ```bash

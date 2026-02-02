@@ -212,10 +212,17 @@ All plots support optional saving:
 ## Common Issues
 
 ### "No matplotlib backend"
-Install matplotlib with GUI support:
+Most plots require the optional visualization dependencies:
 ```bash
-pip install matplotlib[gui]
+pip install "cje-eval[viz]"
 ```
+
+If you’re in a headless environment, force a non-GUI backend:
+```bash
+export MPLBACKEND=Agg
+```
+
+If you’re on Linux and want interactive plots, install a GUI backend (e.g. `python3-tk` or Qt bindings) and then install matplotlib (or just use the `cje-eval[viz]` extra above).
 
 ### "Figure too small for content"
 Adjust figsize parameter:

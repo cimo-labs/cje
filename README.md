@@ -23,6 +23,8 @@ We ran 16,000+ tests on Chatbot Arena data. **Without calibration, 95% confidenc
 
 ```bash
 pip install cje-eval
+# Optional (for plotting):
+pip install "cje-eval[viz]"
 ```
 
 ```python
@@ -52,6 +54,7 @@ results = analyze_dataset(
 
 # Or from files: analyze_dataset(fresh_draws_dir="responses/")
 
+# Optional: plotting requires matplotlib (pip install "cje-eval[viz]")
 results.plot_estimates(save_path="ranking.png")
 ```
 
@@ -168,6 +171,15 @@ Walk through a complete example: compare policies, check if calibration transfer
 - [Interface/API](cje/interface/README.md) — `analyze_dataset` implementation
 
 **Bridges (Promptfoo / TruLens / LangSmith → CJE)**
+
+> Note: these bridge converters are repo scripts (they are not installed with `pip install cje-eval`).
+> Clone the repo to use them:
+>
+> ```bash
+> git clone https://github.com/cimo-labs/cje.git
+> cd cje
+> ```
+
 If you already run evals in Promptfoo, TruLens, or LangSmith, you can convert those outputs into CJE’s `fresh_draws_data` format.
 
 ```bash
@@ -191,6 +203,10 @@ python3 scripts/cje_bridges/convert.py langsmith \
   --out cje_fresh_draws_data.json \
   --label-template oracle_label_template.csv
 ```
+
+After you label an oracle slice, re-run the converter to populate `oracle_label`:
+- Promptfoo/TruLens: pass `--oracle-labels <your_labeled_csv_or_jsonl>`
+- LangSmith: if labels are stored in LangSmith as feedback, pass `--oracle-feedback-key <key>`
 
 See: [scripts/cje_bridges/README.md](scripts/cje_bridges/README.md)
 

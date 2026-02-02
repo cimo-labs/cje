@@ -87,7 +87,7 @@ from cje import analyze_dataset
 
 # CJE automatically uses oracle labels from base for calibration
 results = analyze_dataset(
-    fresh_draws_dir="arena_sample/fresh_draws",
+    fresh_draws_dir="examples/arena_sample/fresh_draws",
     estimator="auto"
 )
 
@@ -108,10 +108,10 @@ from cje import analyze_dataset
 from cje.diagnostics import audit_transportability, plot_transport_comparison
 
 # Get calibrator from analysis
-results = analyze_dataset(fresh_draws_dir="arena_sample/fresh_draws")
+results = analyze_dataset(fresh_draws_dir="examples/arena_sample/fresh_draws")
 
 # Load probe as list of dicts (no wrapper needed!)
-probe = [json.loads(line) for line in open("arena_sample/probe_slice/unhelpful_probe.jsonl")]
+probe = [json.loads(line) for line in open("examples/arena_sample/probe_slice/unhelpful_probe.jsonl")]
 
 # Run canonical transportability audit
 diag = audit_transportability(results.calibrator, probe, group_label="policy:unhelpful")
@@ -124,7 +124,7 @@ diag.plot()  # Decile-level residuals
 # Or compare all policies at once
 audits = {}
 for policy in ["clone", "parallel_universe_prompt", "unhelpful"]:
-    probe = [json.loads(line) for line in open(f"arena_sample/probe_slice/{policy}_probe.jsonl")]
+    probe = [json.loads(line) for line in open(f"examples/arena_sample/probe_slice/{policy}_probe.jsonl")]
     audits[policy] = audit_transportability(results.calibrator, probe, group_label=f"policy:{policy}")
 
 fig = plot_transport_comparison(audits)
@@ -135,14 +135,14 @@ fig = plot_transport_comparison(audits)
 ```python
 # IPS mode: logged data only
 results = analyze_dataset(
-    logged_data_path="arena_sample/logged_data.jsonl",
+    logged_data_path="examples/arena_sample/logged_data.jsonl",
     estimator="calibrated-ips"
 )
 
 # DR mode: logged data + fresh draws (most accurate)
 results = analyze_dataset(
-    logged_data_path="arena_sample/logged_data.jsonl",
-    fresh_draws_dir="arena_sample/fresh_draws",
+    logged_data_path="examples/arena_sample/logged_data.jsonl",
+    fresh_draws_dir="examples/arena_sample/fresh_draws",
     estimator="stacked-dr"
 )
 ```

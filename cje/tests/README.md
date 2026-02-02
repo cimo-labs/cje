@@ -59,7 +59,7 @@ Real subset from Arena 5K evaluation:
 
 ### 3. Fixture Architecture
 Shared fixtures in `conftest.py` provide consistent test data:
-- **arena_sample**: Real 100-sample Arena dataset
+- **arena_sample**: Real 1000-sample Arena dataset
 - **arena_fresh_draws**: Filtered fresh draws matching dataset prompts
 - **arena_calibrated**: Pre-calibrated Arena dataset
 - **synthetic datasets**: Edge case testing (NaN, extreme weights)
@@ -72,6 +72,11 @@ Shared fixtures in `conftest.py` provide consistent test data:
 - **Example Validation**: `test_examples.py` ensures tutorial notebook and quickstart work correctly
 
 ## Running Tests
+
+Prereqs:
+- Python `>=3.9,<3.13`
+- If using Poetry: `poetry install`
+- If using pip: `pip install -e ".[viz]" && pip install pytest pytest-cov` (and optionally `nbconvert nbformat` for notebook execution tests)
 
 ```bash
 # Run all tests
@@ -149,14 +154,14 @@ Consistent cross-validation across all components:
 - Hash-based fold assignment from prompt_id
 - Prevents data leakage
 - Ensures reproducibility
-- Single source of truth (`data/folds.py`)
+- Single source of truth (`cje/data/folds.py`)
 
 ## Common Issues
 
 ### "FileNotFoundError for test data"
 Ensure running from project root:
 ```bash
-cd /path/to/causal-judge-evaluation
+cd /path/to/cje
 poetry run pytest cje/tests/
 ```
 
