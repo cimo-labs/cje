@@ -71,7 +71,12 @@ def _load_oracle_labels(path: Path) -> Dict[Tuple[str, str], float]:
             if not line.strip():
                 continue
             row = json.loads(line)
-            policy_id = row.get("policy_id") or row.get("policy") or row.get("app_version") or row.get("app_id")
+            policy_id = (
+                row.get("policy_id")
+                or row.get("policy")
+                or row.get("app_version")
+                or row.get("app_id")
+            )
             prompt_id = row.get("prompt_id")
             oracle_label = row.get("oracle_label")
             if policy_id is None or prompt_id is None or oracle_label is None:
@@ -82,7 +87,12 @@ def _load_oracle_labels(path: Path) -> Dict[Tuple[str, str], float]:
     with path.open("r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            policy_id = row.get("policy_id") or row.get("policy") or row.get("app_version") or row.get("app_id")
+            policy_id = (
+                row.get("policy_id")
+                or row.get("policy")
+                or row.get("app_version")
+                or row.get("app_id")
+            )
             prompt_id = row.get("prompt_id")
             oracle_label = row.get("oracle_label")
             if not policy_id or not prompt_id or oracle_label is None:
@@ -177,7 +187,9 @@ def main() -> int:
         )
         return 2
 
-    policy_col = args.policy_col or _pick_first_existing(df.columns, ["app_version", "app_id", "app_name"]) 
+    policy_col = args.policy_col or _pick_first_existing(
+        df.columns, ["app_version", "app_id", "app_name"]
+    )
     if policy_col is None:
         print(
             "Could not infer policy column. Pass --policy-col explicitly.",
@@ -185,8 +197,12 @@ def main() -> int:
         )
         return 2
 
-    input_col = args.input_col or _pick_first_existing(df.columns, ["input", "main_input"])
-    output_col = args.output_col or _pick_first_existing(df.columns, ["output", "main_output"])
+    input_col = args.input_col or _pick_first_existing(
+        df.columns, ["input", "main_input"]
+    )
+    output_col = args.output_col or _pick_first_existing(
+        df.columns, ["output", "main_output"]
+    )
 
     oracle_map: Dict[Tuple[str, str], float] = {}
     if args.oracle_labels:
@@ -218,14 +234,27 @@ def main() -> int:
             inp = row.get(input_col)
             if inp is None:
                 continue
-            prompt_id = f"input::{_hash_str(str(inp))}"
+
+            # IMPORTANT: prompt_id should be stable across runs/policies.
+            # `str(dict)` / `str(list)` can be non-deterministic, so for structured inputs
+            # we hash a stable JSON serialization instead.
+            if isinstance(inp, (dict, list)):
+                inp_s = _stable_json(inp)
+            else:
+                inp_s = str(inp)
+
+            prompt_id = f"input::{_hash_str(inp_s)}"
 
         judge_score = row.get(args.judge_col)
-        if not isinstance(judge_score, (int, float)):
+        # NOTE: bool is a subclass of int in Python; exclude it explicitly.
+        if not isinstance(judge_score, (int, float)) or isinstance(judge_score, bool):
             missing += 1
             continue
 
-        sample: Dict[str, Any] = {"prompt_id": prompt_id, "judge_score": float(judge_score)}
+        sample: Dict[str, Any] = {
+            "prompt_id": prompt_id,
+            "judge_score": float(judge_score),
+        }
         oracle = oracle_map.get((policy_id, prompt_id))
         if oracle is not None:
             sample["oracle_label"] = oracle
@@ -237,8 +266,16 @@ def main() -> int:
                 "policy_id": policy_id,
                 "prompt_id": prompt_id,
                 "record_id": str(row.get("record_id") or row.get("recordId") or ""),
-                "input": str(row.get(input_col) or "") if input_col else "",
-                "output": str(row.get(output_col) or "") if output_col else "",
+                "input": (
+                    _stable_json(row.get(input_col))
+                    if input_col and isinstance(row.get(input_col), (dict, list))
+                    else (str(row.get(input_col) or "") if input_col else "")
+                ),
+                "output": (
+                    _stable_json(row.get(output_col))
+                    if output_col and isinstance(row.get(output_col), (dict, list))
+                    else (str(row.get(output_col) or "") if output_col else "")
+                ),
                 "judge_score": float(judge_score),
                 "oracle_label": oracle if oracle is not None else "",
             }
@@ -270,11 +307,17 @@ def main() -> int:
     if not args.no_label_template:
         print(f"Wrote oracle label template CSV: {args.label_template}")
     if missing:
-        print(f"Skipped {missing} rows without numeric judge_score in {args.judge_col!r}", file=sys.stderr)
+        print(
+            f"Skipped {missing} rows without numeric judge_score in {args.judge_col!r}",
+            file=sys.stderr,
+        )
 
     if args.run_cje:
         if not args.oracle_labels:
-            print("--run-cje requested but --oracle-labels not provided; skipping.", file=sys.stderr)
+            print(
+                "--run-cje requested but --oracle-labels not provided; skipping.",
+                file=sys.stderr,
+            )
             return 0
         try:
             from cje import analyze_dataset  # type: ignore
