@@ -167,8 +167,8 @@ Walk through a complete example: compare policies, check if calibration transfer
 - [Estimators](cje/estimators/README.md) — Direct, IPS, DR implementations
 - [Interface/API](cje/interface/README.md) — `analyze_dataset` implementation
 
-**Bridges (Promptfoo / TruLens → CJE)**
-If you already run evals in Promptfoo or TruLens, you can convert those outputs into CJE’s `fresh_draws_data` format.
+**Bridges (Promptfoo / TruLens / LangSmith → CJE)**
+If you already run evals in Promptfoo, TruLens, or LangSmith, you can convert those outputs into CJE’s `fresh_draws_data` format.
 
 ```bash
 # Promptfoo
@@ -180,6 +180,14 @@ python3 scripts/cje_bridges/convert.py promptfoo results.json \
 python3 scripts/cje_bridges/convert.py trulens \
   --database-url sqlite:///default.sqlite \
   --judge-col "Answer Relevance" \
+  --out cje_fresh_draws_data.json \
+  --label-template oracle_label_template.csv
+
+# LangSmith (install first: pip install langsmith; set LANGSMITH_API_KEY)
+python3 scripts/cje_bridges/convert.py langsmith \
+  --project "my_model_a_project" \
+  --project "my_model_b_project" \
+  --feedback-key "correctness" \
   --out cje_fresh_draws_data.json \
   --label-template oracle_label_template.csv
 ```
