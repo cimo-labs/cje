@@ -12,7 +12,7 @@ Both return FittedVarianceModel, which plugs into plan_evaluation() or plan_for_
 Usage:
     from cje import simulate_variance_model, plan_evaluation, CostModel
 
-    # Get variance model via simulation (takes 2-4 minutes)
+    # Get variance model via simulation (takes 5-7 minutes)
     variance_model = simulate_variance_model(r2=0.7)
 
     # Use with standard planning functions
@@ -249,7 +249,7 @@ def simulate_variance_model(
 ) -> FittedVarianceModel:
     """Get a variance model from judge quality (R²) without real data.
 
-    Runs a simulation to estimate variance components. Takes 2-4 minutes.
+    Runs a simulation to estimate variance components. Takes 5-7 minutes.
 
     For production planning decisions, prefer fit_variance_model() with real pilot
     data when available.
@@ -275,7 +275,7 @@ def simulate_variance_model(
 
     Example:
         >>> from cje import simulate_variance_model, plan_evaluation, CostModel
-        >>> # Get variance model (takes 2-4 minutes)
+        >>> # Get variance model (takes 5-7 minutes)
         >>> variance_model = simulate_variance_model(r2=0.7)
         >>> # Use with standard planning
         >>> cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
@@ -422,7 +422,7 @@ def simulate_planning(
     """Plan evaluation based on simulated judge quality (convenience wrapper).
 
     Combines simulate_variance_model() + plan_evaluation() into one call,
-    returning additional diagnostics useful for exploration. Takes 2-4 minutes.
+    returning additional diagnostics useful for exploration. Takes 5-7 minutes.
 
     For composable workflows, use simulate_variance_model() directly:
         variance_model = simulate_variance_model(r2=0.7)
@@ -504,8 +504,8 @@ def simulate_planning_sweep(
 ) -> List[SimulationPlanningResult]:
     """Run planning across multiple R² values for sensitivity analysis.
 
-    Note: Each R² value runs a simulation (~2-4 min), so sweeping across
-    N values takes N × 2-4 minutes. Consider using fewer R² values or
+    Note: Each R² value runs a simulation (~5-7 min), so sweeping across
+    N values takes N × 5-7 minutes. Consider using fewer R² values or
     running overnight for large sweeps.
 
     Args:
@@ -526,14 +526,14 @@ def simulate_planning_sweep(
     Example:
         >>> from cje import simulate_planning_sweep, CostModel
         >>> cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-        >>> # Note: This takes ~6-12 minutes for 3 R² values
+        >>> # Note: This takes ~15-21 minutes for 3 R² values
         >>> results = simulate_planning_sweep([0.5, 0.7, 0.9], budget=5000, cost_model=cost)
         >>> for r in results:
         ...     print(f"R²={r.r2}: MDE={r.plan.mde:.1%}, oracle={r.plan.oracle_fraction:.0%}")
     """
     if len(r2_values) > 0:
         print(
-            f"Running {len(r2_values)} simulations (~{len(r2_values) * 2}-{len(r2_values) * 4} min total)..."
+            f"Running {len(r2_values)} simulations (~{len(r2_values) * 5}-{len(r2_values) * 7} min total)..."
         )
 
     results = []
