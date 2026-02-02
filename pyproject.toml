@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cje-eval"
-version = "0.2.19"
+version = "0.2.20"
 description = "Causal Judge Evaluation - Unbiased LLM evaluation framework"
 authors = ["Eddie Landesberg <eddie@cimolabs.com>"]
 license = "MIT"
