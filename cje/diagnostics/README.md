@@ -166,13 +166,13 @@ Gate criteria use combinations of ESS, weight concentration, and coefficient of 
 Measures structural overlap between policies. **Cannot be improved by calibration.**
 - **Affinity > 50%**: Good overlap
 - **Affinity 35-50%**: Marginal overlap
-- **Affinity 20-35%**: Poor overlap (calibration might help)
+- **Affinity 20-35%**: Poor overlap (consider DR or better logging; calibration won’t fix overlap)
 - **Affinity < 20%**: Catastrophic mismatch (refuse estimation)
 
 Key insight: Hellinger tells us whether to give up, ESS tells us how hard to try.
 
 ### TTC (Target-Typicality Coverage)
-TTC = Hellinger affinity = E[√w]. Measures what fraction of the target distribution's mass falls in regions where the logger has meaningful coverage.
+TTC measures what fraction of the target distribution’s *typical* mass falls in regions where the logger has meaningful coverage. It is computed from `(base_logprobs, target_logprobs)` and is **not** the same as Hellinger affinity (`hellinger_affinity(weights) = E[√w]`).
 
 **Decision rule:** If TTC < 0.7, logs-only IPS will fail regardless of weight stabilization.
 - **TTC > 0.7**: Good overlap, IPS may work
@@ -180,17 +180,22 @@ TTC = Hellinger affinity = E[√w]. Measures what fraction of the target distrib
 - **TTC < 0.3**: Poor overlap, IPS will fail
 
 ```python
+import numpy as np
 from cje.diagnostics import compute_ttc, compute_cle_diagnostics
 
+# data should include per-sample base/target logprobs (e.g. from PrecomputedSampler.get_data_for_policy)
+# data = sampler.get_data_for_policy(policy)
+base_lp = np.array([d["base_policy_logprob"] for d in data])
+target_lp = np.array([d["policy_logprob"] for d in data])
+
 # Quick TTC check
-ttc = compute_ttc(importance_weights)
+ttc = compute_ttc(base_lp, target_lp)
 if ttc < 0.7:
     print("Use Direct or DR methods instead of IPS")
 
 # Full CLE diagnostics
-cle = compute_cle_diagnostics(weights, target_logprobs)
+cle = compute_cle_diagnostics(base_lp, target_lp)
 print(cle.summary())
-# CLE: POOR | TTC=12.5% (IPS will fail) | coverage_penalty=2.31 | shape_mismatch=25.4 | cle_factor=58.7x
 ```
 
 ### CLE (Coverage-Limited Efficiency) Diagnostics

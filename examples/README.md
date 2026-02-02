@@ -30,8 +30,8 @@ For IPS/DR modes (reusing logged data without new inference), see [`cje_advanced
 
 ## Dataset
 
-Examples use real data from [LMSYS Chatbot Arena](https://huggingface.co/datasets/lmsys/chatbot_arena_conversations):
-- 1000 prompts, multiple response variants
-- Judge scores (GPT-4.1-nano) + oracle labels (GPT-5) for calibration
+Examples use a curated Chatbot Arena-derived dataset:
+- HF dataset: https://huggingface.co/datasets/elandy/cje-chatbot-arena
+- The repo also includes a ready-to-run sample under `examples/arena_sample/`.
 
 See `arena_sample/README.md` for details.

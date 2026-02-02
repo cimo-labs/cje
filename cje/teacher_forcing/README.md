@@ -4,6 +4,11 @@
 
 The teacher forcing module computes log probabilities log P(response|prompt) for importance weight calculation in CJE. It provides robust, production-ready implementations with automatic fallback mechanisms and support for various chat templates.
 
+> Note: some symbols in `cje.teacher_forcing` are optional and may not import unless dependencies are installed.
+> Install the extras with: `pip install "cje-eval[teacher-forcing]"`.
+> - `compute_teacher_forced_logprob` requires `fireworks-ai`
+> - `HuggingFaceTemplateConfig` requires `transformers`
+
 ## When to Use
 
 ### Use **compute_teacher_forced_logprob** when:
@@ -97,7 +102,7 @@ from cje.teacher_forcing import (
 )
 
 # For HuggingFace models
-hf_config = HuggingFaceTemplateConfig("meta-llama/Llama-3.2-3B-Instruct")
+hf_config = HuggingFaceTemplateConfig("meta-llama/Llama-3.2-3B-Instruct")  # requires transformers
 
 # For Llama 3 models with explicit template
 llama3_config = Llama3TemplateConfig()

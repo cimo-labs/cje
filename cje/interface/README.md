@@ -255,14 +255,11 @@ See [`cje/visualization/README.md`](../visualization/README.md) for all availabl
 ## Command Line Interface
 
 ```bash
-# Basic usage
-python -m cje analyze logs.jsonl
-
-# With fresh draws (for robust estimation)
-python -m cje analyze logs.jsonl --fresh-draws-dir responses/
-
-# Fast mode (no fresh draws)
+# Basic usage (no fresh draws)
 python -m cje analyze logs.jsonl --estimator calibrated-ips
+
+# With fresh draws (for robust estimation; required for stacked-dr)
+python -m cje analyze logs.jsonl --fresh-draws-dir responses/
 
 # Save results
 python -m cje analyze logs.jsonl -o results.json
@@ -423,7 +420,7 @@ def analyze_dataset(
   - `.standard_errors`: Standard errors for each estimate
   - `.diagnostics`: Diagnostic metrics (ESS, overlap quality, etc.)
   - `.calibrator`: Fitted calibrator for transportability audits
-  - `.plan_allocation(budget, cost_model)`: Plan optimal oracle/surrogate allocation for production
+  - `.plan_allocation(budget, cost_model, fresh_draws)`: Plan optimal oracle/surrogate allocation for production (requires pilot fresh draws)
   - `.metadata`: Mode, estimator, data sources (see additional fields below)
 
 **Additional metadata fields** (when using calibration_data_path):
@@ -439,7 +436,7 @@ def analyze_dataset(
 python -m cje analyze <dataset> [options]
 
 Options:
-  --estimator {stacked-dr,calibrated-ips,raw-ips,dr-cpo,oc-dr-cpo,tr-cpo,tr-cpo-e,orthogonalized-ips,mrdr,tmle}
+  --estimator {stacked-dr,calibrated-ips,calibrated-direct,direct,raw-ips,dr-cpo,mrdr,tmle}
   --fresh-draws-dir DIR     Directory with fresh draws
   --output FILE            Save results to JSON
   --verbose               Detailed output

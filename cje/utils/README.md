@@ -62,7 +62,7 @@ Statistical analysis of aggregated diagnostics:
 ### Export Results
 
 ```python
-from cje.utils import export_results_json, export_results_csv
+from cje.utils.export import export_results_json, export_results_csv
 
 # After running estimation
 result = estimator.fit_and_estimate()

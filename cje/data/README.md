@@ -122,15 +122,18 @@ result_dict = result.to_dict()  # Full export with CIs, diagnostics
 
 # Plan budget allocation for production (after pilot)
 from cje import CostModel
+from cje.data.fresh_draws import load_fresh_draws_auto
+
+pilot_data = load_fresh_draws_auto("responses/", "base")
 cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)  # Real dollar costs
-allocation = result.plan_allocation(budget=5000, cost_model=cost_model, fresh_draws=base_data)
+allocation = result.plan_allocation(budget=5000, cost_model=cost_model, fresh_draws=pilot_data)
 print(allocation.summary())
 # Optimal allocation: n=4,800, m=12 (0.3% oracle)
 ```
 
 **New visualization features:**
 ```python
-# Quick plotting (convenience method)
+# Quick plotting (convenience method; requires pip install "cje-eval[viz]")
 result.plot_estimates(
     base_policy_stats={"mean": 0.72, "se": 0.01},
     save_path="estimates.png"

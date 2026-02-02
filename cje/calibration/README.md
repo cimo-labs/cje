@@ -364,12 +364,13 @@ result = calibrator.fit_cv(
 )
 
 # Get out-of-fold predictions
+fold_ids = result.fold_ids
 oof_predictions = calibrator.predict_oof(judge_scores, fold_ids)
 ```
 
 ### Oracle Uncertainty (Default: OUA Jackknife)
 ```python
-from cje import CalibratedIPS
+from cje.estimators import CalibratedIPS
 
 # Default: OUA jackknife for oracle uncertainty (recommended)
 estimator = CalibratedIPS(sampler, oua_jackknife=True)  # Default
