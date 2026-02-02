@@ -167,6 +167,25 @@ Walk through a complete example: compare policies, check if calibration transfer
 - [Estimators](cje/estimators/README.md) — Direct, IPS, DR implementations
 - [Interface/API](cje/interface/README.md) — `analyze_dataset` implementation
 
+**Bridges (Promptfoo / TruLens → CJE)**
+If you already run evals in Promptfoo or TruLens, you can convert those outputs into CJE’s `fresh_draws_data` format.
+
+```bash
+# Promptfoo
+python3 scripts/cje_bridges/convert.py promptfoo results.json \
+  --out cje_fresh_draws_data.json \
+  --label-template oracle_label_template.csv
+
+# TruLens (install first: pip install trulens)
+python3 scripts/cje_bridges/convert.py trulens \
+  --database-url sqlite:///default.sqlite \
+  --judge-col "Answer Relevance" \
+  --out cje_fresh_draws_data.json \
+  --label-template oracle_label_template.csv
+```
+
+See: [scripts/cje_bridges/README.md](scripts/cje_bridges/README.md)
+
 **Examples & Data**
 - [Examples Folder](examples/) — Working code samples
 - [Arena Sample Data](examples/arena_sample/README.md) — Real-world test data
