@@ -9,22 +9,15 @@ Two approaches to get a FittedVarianceModel:
 
 Both return FittedVarianceModel, which plugs into plan_evaluation() or plan_for_mde().
 
-By default, simulate_variance_model() uses fast interpolation from pre-computed
-anchor points (<1ms). Set run_full_simulation=True if you need ground-truth
-validation (2-4 minutes).
-
 Usage:
     from cje import simulate_variance_model, plan_evaluation, CostModel
 
-    # Get variance model instantly (default behavior)
+    # Get variance model via simulation (takes 2-4 minutes)
     variance_model = simulate_variance_model(r2=0.7)
 
     # Use with standard planning functions
     cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
     plan = plan_evaluation(budget=5000, variance_model=variance_model, cost_model=cost)
-
-    # For ground-truth validation, run full simulation (2-4 min)
-    variance_model = simulate_variance_model(r2=0.7, run_full_simulation=True)
 
     # If you only know correlation, convert first
     from cje import correlation_to_r2
@@ -32,7 +25,7 @@ Usage:
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 import logging
 import numpy as np
 
@@ -44,55 +37,6 @@ from .planning import (
 )
 
 logger = logging.getLogger(__name__)
-
-# =============================================================================
-# Pre-computed anchor points for fast interpolation
-# Generated via _full_simulation_variance() with n_total=1000, oracle_fraction=0.4
-# =============================================================================
-
-_R2_ANCHORS = [0.3, 0.4, 0.5, 0.6, 0.7, 0.9]
-_SIGMA2_EVAL = [0.0000, 0.0617, 0.0203, 0.0299, 0.0851, 0.2234]
-_SIGMA2_CAL = [0.2455, 0.1969, 0.2214, 0.1980, 0.1636, 0.0599]
-
-
-def fast_variance_model(r2: float) -> FittedVarianceModel:
-    """Get a variance model instantly via interpolation (<1ms).
-
-    Uses cubic spline interpolation from pre-computed anchor points to provide
-    instant variance estimates. Suitable for budget planning and exploration.
-
-    For ground-truth validation, use simulate_variance_model() instead (slower
-    but runs the actual CJE pipeline).
-
-    Args:
-        r2: Judge quality as isotonic R² (0.3 to 0.9 recommended).
-            Values outside this range use extrapolation.
-
-    Returns:
-        FittedVarianceModel that can be used with plan_evaluation() or plan_for_mde().
-
-    Example:
-        >>> from cje import fast_variance_model, plan_evaluation, CostModel
-        >>> variance_model = fast_variance_model(r2=0.7)  # Instant!
-        >>> cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-        >>> plan = plan_evaluation(budget=5000, variance_model=variance_model, cost_model=cost)
-    """
-    from scipy.interpolate import interp1d
-
-    if not 0 <= r2 <= 1:
-        raise ValueError(f"r2 must be in [0, 1], got {r2}")
-
-    eval_fn = interp1d(
-        _R2_ANCHORS, _SIGMA2_EVAL, kind="cubic", fill_value="extrapolate"
-    )
-    cal_fn = interp1d(_R2_ANCHORS, _SIGMA2_CAL, kind="cubic", fill_value="extrapolate")
-
-    return FittedVarianceModel(
-        sigma2_eval=max(0.0, float(eval_fn(r2))),
-        sigma2_cal=max(0.0, float(cal_fn(r2))),
-        r_squared=0.95,  # Approximate fit quality
-        n_measurements=len(_R2_ANCHORS),
-    )
 
 
 @dataclass
@@ -290,37 +234,64 @@ def _generate_synthetic_data(
     return records
 
 
-def _full_simulation_variance(
-    r2: float,
-    n_total: int,
-    oracle_fraction: float,
-    n_replicates: int,
-    seed: int,
-    verbose: bool,
-) -> FittedVarianceModel:
-    """Fit variance model via bootstrap simulation.
+# =============================================================================
+# Public API: Core Primitive
+# =============================================================================
 
-    Generates synthetic data with specified R² and uses the actual CJE pipeline
-    to measure variance at different allocations.
+
+def simulate_variance_model(
+    r2: float,
+    n_total: int = 1000,
+    oracle_fraction: float = 0.4,
+    n_replicates: int = 5,
+    seed: int = 42,
+    verbose: bool = True,
+) -> FittedVarianceModel:
+    """Get a variance model from judge quality (R²) without real data.
+
+    Runs a simulation to estimate variance components. Takes 2-4 minutes.
+
+    For production planning decisions, prefer fit_variance_model() with real pilot
+    data when available.
 
     Args:
-        r2: Target isotonic R² (judge quality).
-        n_total: Total simulated dataset size.
-        oracle_fraction: Fraction with oracle labels in synthetic data.
-        n_replicates: Number of bootstrap replicates per measurement.
-        seed: Random seed.
-        verbose: Print progress.
+        r2: Judge quality as isotonic R² (0 to 1). This is the fraction of oracle
+            variance explained by the judge after isotonic calibration.
+            - 0.9+: Excellent judge (minimal calibration uncertainty)
+            - 0.7-0.9: Good judge (moderate calibration uncertainty)
+            - 0.5-0.7: Moderate judge (significant calibration uncertainty)
+            - <0.5: Weak judge (high calibration uncertainty)
+        n_total: Simulated dataset size (default 1000).
+        oracle_fraction: Fraction with oracle labels (default 0.4).
+        n_replicates: Bootstrap replicates per measurement (default 5).
+        seed: Random seed for reproducibility.
+        verbose: Print progress and diagnostics.
 
     Returns:
-        FittedVarianceModel fitted from simulated measurements.
+        FittedVarianceModel that can be used with plan_evaluation() or plan_for_mde().
+
+    Raises:
+        ValueError: If r2 is not in [0, 1].
+
+    Example:
+        >>> from cje import simulate_variance_model, plan_evaluation, CostModel
+        >>> # Get variance model (takes 2-4 minutes)
+        >>> variance_model = simulate_variance_model(r2=0.7)
+        >>> # Use with standard planning
+        >>> cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
+        >>> plan = plan_evaluation(budget=5000, variance_model=variance_model, cost_model=cost)
+        >>> print(f"MDE: {plan.mde:.1%}")
     """
     from ..interface.analysis import analyze_dataset
     from scipy.optimize import nnls
 
+    if not 0 <= r2 <= 1:
+        raise ValueError(f"r2 must be in [0, 1], got {r2}")
+
     rng = np.random.default_rng(seed)
 
     if verbose:
-        print(f"Running full simulation (R²={r2:.2f}, n={n_total})...")
+        print(f"Running simulation (R²={r2:.2f}, n={n_total})...")
 
     # Generate base synthetic data
     base_data = _generate_synthetic_data(n_total, oracle_fraction, r2, seed)
@@ -432,77 +403,6 @@ def _full_simulation_variance(
 
 
 # =============================================================================
-# Public API: Core Primitive
-# =============================================================================
-
-
-def simulate_variance_model(
-    r2: float,
-    n_total: int = 1000,
-    oracle_fraction: float = 0.4,
-    n_replicates: int = 5,
-    seed: int = 42,
-    verbose: bool = True,
-    run_full_simulation: bool = False,
-) -> FittedVarianceModel:
-    """Get a variance model from judge quality (R²) without real data.
-
-    By default, uses fast interpolation from pre-computed anchor points (<1ms).
-    Set run_full_simulation=True to run the actual CJE pipeline (2-4 minutes)
-    for ground-truth validation.
-
-    For production planning decisions, prefer fit_variance_model() with real pilot
-    data when available.
-
-    Args:
-        r2: Judge quality as isotonic R² (0 to 1). This is the fraction of oracle
-            variance explained by the judge after isotonic calibration.
-            - 0.9+: Excellent judge (minimal calibration uncertainty)
-            - 0.7-0.9: Good judge (moderate calibration uncertainty)
-            - 0.5-0.7: Moderate judge (significant calibration uncertainty)
-            - <0.5: Weak judge (high calibration uncertainty)
-        n_total: Simulated dataset size (only used if run_full_simulation=True).
-        oracle_fraction: Fraction with oracle labels (only used if run_full_simulation=True).
-        n_replicates: Bootstrap replicates per measurement (only used if run_full_simulation=True).
-        seed: Random seed for reproducibility (only used if run_full_simulation=True).
-        verbose: Print progress and diagnostics.
-        run_full_simulation: If True, run the full CJE pipeline (2-4 min).
-            If False (default), use fast interpolation (<1ms).
-
-    Returns:
-        FittedVarianceModel that can be used with plan_evaluation() or plan_for_mde().
-
-    Raises:
-        ValueError: If r2 is not in [0, 1].
-
-    Example:
-        >>> from cje import simulate_variance_model, plan_evaluation, CostModel
-        >>> # Get variance model instantly (default)
-        >>> variance_model = simulate_variance_model(r2=0.7)
-        >>> # Use with standard planning
-        >>> cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-        >>> plan = plan_evaluation(budget=5000, variance_model=variance_model, cost_model=cost)
-        >>> print(f"MDE: {plan.mde:.1%}")
-    """
-    if not 0 <= r2 <= 1:
-        raise ValueError(f"r2 must be in [0, 1], got {r2}")
-
-    if run_full_simulation:
-        return _full_simulation_variance(
-            r2=r2,
-            n_total=n_total,
-            oracle_fraction=oracle_fraction,
-            n_replicates=n_replicates,
-            seed=seed,
-            verbose=verbose,
-        )
-    else:
-        if verbose:
-            logger.info(f"Using fast interpolation for R²={r2}")
-        return fast_variance_model(r2)
-
-
-# =============================================================================
 # Public API: Convenience Wrappers
 # =============================================================================
 
@@ -522,7 +422,7 @@ def simulate_planning(
     """Plan evaluation based on simulated judge quality (convenience wrapper).
 
     Combines simulate_variance_model() + plan_evaluation() into one call,
-    returning additional diagnostics useful for exploration. Takes ~30-60 seconds.
+    returning additional diagnostics useful for exploration. Takes 2-4 minutes.
 
     For composable workflows, use simulate_variance_model() directly:
         variance_model = simulate_variance_model(r2=0.7)
@@ -604,8 +504,8 @@ def simulate_planning_sweep(
 ) -> List[SimulationPlanningResult]:
     """Run planning across multiple R² values for sensitivity analysis.
 
-    Note: Each R² value runs a full simulation (~30-60s), so sweeping across
-    N values takes N × 30-60 seconds. Consider using fewer R² values or
+    Note: Each R² value runs a simulation (~2-4 min), so sweeping across
+    N values takes N × 2-4 minutes. Consider using fewer R² values or
     running overnight for large sweeps.
 
     Args:
@@ -626,14 +526,14 @@ def simulate_planning_sweep(
     Example:
         >>> from cje import simulate_planning_sweep, CostModel
         >>> cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-        >>> # Note: This takes ~2-3 minutes for 3 R² values
+        >>> # Note: This takes ~6-12 minutes for 3 R² values
         >>> results = simulate_planning_sweep([0.5, 0.7, 0.9], budget=5000, cost_model=cost)
         >>> for r in results:
         ...     print(f"R²={r.r2}: MDE={r.plan.mde:.1%}, oracle={r.plan.oracle_fraction:.0%}")
     """
     if len(r2_values) > 0:
         print(
-            f"Running {len(r2_values)} simulations (~{len(r2_values) * 30}-{len(r2_values) * 60}s total)..."
+            f"Running {len(r2_values)} simulations (~{len(r2_values) * 2}-{len(r2_values) * 4} min total)..."
         )
 
     results = []
