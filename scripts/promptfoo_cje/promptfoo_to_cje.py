@@ -42,7 +42,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
 
 
 def _stable_json(obj: Any) -> str:
@@ -68,17 +68,17 @@ def _detect_results(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     if isinstance(payload.get("results"), dict) and isinstance(
         payload["results"].get("results"), list
     ):
-        return payload["results"]["results"]
+        return cast(List[Dict[str, Any]], payload["results"]["results"])
 
     # A) EvaluateSummaryV3: payload["results"] is a list
     if isinstance(payload.get("results"), list):
-        return payload["results"]
+        return cast(List[Dict[str, Any]], payload["results"])
 
     # B) Older docs: payload["results"]["outputs"]
     results = payload.get("results")
     if isinstance(results, dict) and isinstance(results.get("outputs"), list):
         # These may already be EvaluateResult-like, but could be table outputs.
-        return results["outputs"]
+        return cast(List[Dict[str, Any]], results["outputs"])
 
     raise ValueError(
         "Unrecognized promptfoo JSON structure. Expected either top-level `results: []`, "
@@ -89,12 +89,12 @@ def _detect_results(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _provider_id(r: Dict[str, Any]) -> str:
     prov = r.get("provider")
     if isinstance(prov, dict) and isinstance(prov.get("id"), str):
-        return prov["id"]
+        return cast(str, prov["id"])
     if isinstance(r.get("provider"), str):
-        return r["provider"]
+        return cast(str, r["provider"])
     # Some formats use `providerId`
     if isinstance(r.get("providerId"), str):
-        return r["providerId"]
+        return cast(str, r["providerId"])
     raise ValueError(f"Cannot extract provider id from record keys={list(r.keys())}")
 
 
@@ -102,14 +102,14 @@ def _prompt_label(r: Dict[str, Any]) -> str:
     p = r.get("prompt")
     if isinstance(p, dict):
         if isinstance(p.get("label"), str):
-            return p["label"]
+            return cast(str, p["label"])
         if isinstance(p.get("id"), str):
-            return p["id"]
+            return cast(str, p["id"])
     if isinstance(r.get("prompt"), str):
-        return r["prompt"]
+        return cast(str, r["prompt"])
     # Some formats use `promptId`
     if isinstance(r.get("promptId"), str):
-        return r["promptId"]
+        return cast(str, r["promptId"])
     return "<unknown-prompt>"
 
 
@@ -122,10 +122,10 @@ def _vars(r: Dict[str, Any]) -> Dict[str, Any]:
     """
     tc = r.get("testCase")
     if isinstance(tc, dict) and isinstance(tc.get("vars"), dict):
-        return tc["vars"]
+        return cast(Dict[str, Any], tc["vars"])
 
     v = r.get("vars")
-    return v if isinstance(v, dict) else {}
+    return cast(Dict[str, Any], v) if isinstance(v, dict) else {}
 
 
 def _judge_score(r: Dict[str, Any]) -> Optional[float]:
@@ -160,9 +160,9 @@ def _output_text(r: Dict[str, Any]) -> Optional[str]:
 
     # Older formats may use output/text directly
     if isinstance(r.get("output"), str):
-        return r["output"]
+        return cast(str, r["output"])
     if isinstance(r.get("text"), str):
-        return r["text"]
+        return cast(str, r["text"])
 
     return None
 
