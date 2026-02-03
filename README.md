@@ -170,7 +170,7 @@ Walk through a complete example: compare policies, check if calibration transfer
 - [Estimators](cje/estimators/README.md) — Direct, IPS, DR implementations
 - [Interface/API](cje/interface/README.md) — `analyze_dataset` implementation
 
-**Bridges (Promptfoo / TruLens / LangSmith → CJE)**
+**Bridges (Promptfoo / TruLens / LangSmith / OpenCompass → CJE)**
 
 > Note: these bridge converters are repo scripts (they are not installed with `pip install cje-eval`).
 > Clone the repo to use them:
@@ -180,7 +180,7 @@ Walk through a complete example: compare policies, check if calibration transfer
 > cd cje
 > ```
 
-If you already run evals in Promptfoo, TruLens, or LangSmith, you can convert those outputs into CJE’s `fresh_draws_data` format.
+If you already run evals in Promptfoo, TruLens, LangSmith, or OpenCompass, you can convert those outputs into CJE’s `fresh_draws_data` format.
 
 ```bash
 # Promptfoo
@@ -202,10 +202,15 @@ python3 scripts/cje_bridges/convert.py langsmith \
   --feedback-key "correctness" \
   --out cje_fresh_draws_data.json \
   --label-template oracle_label_template.csv
+
+# OpenCompass (LLM-as-judge; run OpenCompass with --dump-eval-details)
+python3 scripts/cje_bridges/convert.py opencompass path/to/opencompass_results.json \
+  --out cje_fresh_draws_data.json \
+  --label-template oracle_label_template.csv
 ```
 
 After you label an oracle slice, re-run the converter to populate `oracle_label`:
-- Promptfoo/TruLens: pass `--oracle-labels <your_labeled_csv_or_jsonl>`
+- Promptfoo/TruLens/OpenCompass: pass `--oracle-labels <your_labeled_csv_or_jsonl>`
 - LangSmith: if labels are stored in LangSmith as feedback, pass `--oracle-feedback-key <key>`
 
 See: [scripts/cje_bridges/README.md](scripts/cje_bridges/README.md)

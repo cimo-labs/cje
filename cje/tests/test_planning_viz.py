@@ -8,8 +8,8 @@ IMPORTANT: cost_model is REQUIRED - there are no meaningful defaults.
 from __future__ import annotations
 
 import pytest
-import matplotlib
 
+matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")  # Non-interactive backend for testing
 
 import matplotlib.pyplot as plt

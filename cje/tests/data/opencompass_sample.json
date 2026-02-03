@@ -1,0 +1,19 @@
+{
+  "details": [
+    {
+      "origin_prompt": "Which is bigger? A: 2 B: 3",
+      "prediction": "B"
+    },
+    {
+      "origin_prompt": "Choose the correct option. A: foo B: bar",
+      "prediction": "Answer: A"
+    },
+    {
+      "origin_prompt": "Score the response from 0 to 1",
+      "final_score": 0.7
+    },
+    {
+      "prediction": "A"
+    }
+  ]
+}
