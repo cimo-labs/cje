@@ -1,0 +1,27 @@
+{
+  "accuracy": 66.67,
+  "details": {
+    "type": "GEN",
+    "0": {
+      "prompt": "Which is bigger? A: 2 B: 3",
+      "origin_prediction": "The answer is B.",
+      "predictions": "B",
+      "references": "B",
+      "correct": true
+    },
+    "1": {
+      "prompt": "Choose the correct option. A: foo B: bar",
+      "origin_prediction": "Answer: A",
+      "predictions": "A",
+      "references": "A",
+      "correct": true
+    },
+    "2": {
+      "prompt": "Score the response from 0 to 1",
+      "origin_prediction": "I would rate this 0.7",
+      "predictions": "0.7",
+      "references": "1",
+      "correct": false
+    }
+  }
+}

@@ -67,6 +67,66 @@ def test_opencompass_to_cje_converter_smoke(tmp_path: Path) -> None:
     assert len(csv_rows) == 3
 
 
+def test_opencompass_format_details_dict_keyed(tmp_path: Path) -> None:
+    """Test that the converter handles format_details() dict-keyed-by-string-indices output.
+
+    OpenCompass's OpenICLEvalTask.format_details() returns details as
+    {"type": "GEN", "0": {...}, "1": {...}} rather than a list of dicts.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    converter = repo_root / "scripts" / "opencompass_cje" / "opencompass_to_cje.py"
+    sample = (
+        Path(__file__).resolve().parent / "data" / "opencompass_format_details.json"
+    )
+
+    out_json = tmp_path / "cje.json"
+
+    code = _run_script(
+        converter,
+        [
+            str(sample),
+            "--out",
+            str(out_json),
+            "--no-label-template",
+        ],
+    )
+    assert code == 0
+
+    payload = json.loads(out_json.read_text(encoding="utf-8"))
+    assert "opencompass_format_details" in payload
+    rows = payload["opencompass_format_details"]
+    assert len(rows) == 3
+
+    # predictions field is used for judge score extraction
+    assert rows[0]["judge_score"] == 0.0  # "B" -> 0.0
+    assert rows[1]["judge_score"] == 1.0  # "A" -> 1.0
+    assert rows[2]["judge_score"] == 0.7  # "0.7" -> 0.7
+
+
+def test_ppl_format_returns_nonzero_exit(tmp_path: Path) -> None:
+    """PPL-type format_details() output has no prompt field.
+
+    The converter should exit non-zero (all rows dropped) rather than
+    silently producing empty output.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    converter = repo_root / "scripts" / "opencompass_cje" / "opencompass_to_cje.py"
+    sample = Path(__file__).resolve().parent / "data" / "opencompass_ppl_format.json"
+
+    out_json = tmp_path / "cje.json"
+
+    code = _run_script(
+        converter,
+        [
+            str(sample),
+            "--out",
+            str(out_json),
+            "--no-label-template",
+        ],
+    )
+    assert code == 1  # non-zero: all rows dropped
+
+
 def test_unified_wrapper_opencompass(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[2]
     wrapper = repo_root / "scripts" / "cje_bridges" / "convert.py"

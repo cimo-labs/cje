@@ -20,6 +20,9 @@ script is intentionally *best-effort* and supports key overrides.
 Supported (heuristics):
 - Input is either:
     - a dict containing a list under `details` (or common variants), OR
+    - a dict containing `details` as a dict keyed by string indices
+      (``{"type": "GEN", "0": {...}, "1": {...}}``), which is the shape
+      produced by OpenCompass's ``format_details()`` fallback, OR
     - a list of dict records.
 - For each record, we try to extract:
     - prompt-like text (problem/question/prompt/origin_prompt/...)
@@ -71,6 +74,7 @@ _PROMPT_CANDIDATES = [
 
 _PRED_CANDIDATES = [
     "prediction",
+    "predictions",
     "pred",
     "judge",
     "judge_prediction",
@@ -124,11 +128,27 @@ def _to_text(v: Any) -> Optional[str]:
     return str(v)
 
 
+def _dict_keyed_to_list(d: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """Convert ``{"type": "GEN", "0": {...}, "1": {...}}`` to ``[{...}, {...}]``.
+
+    OpenCompass's ``format_details()`` in ``openicl_eval.py`` returns this
+    shape: a dict with a ``type`` key (``"GEN"`` or ``"PPL"``) and per-sample
+    entries keyed by string indices (``"0"``, ``"1"``, ...).
+
+    Returns None if the dict doesn't match this pattern.
+    """
+    numeric_items = {k: v for k, v in d.items() if k.isdigit() and isinstance(v, dict)}
+    if not numeric_items:
+        return None
+    return [numeric_items[k] for k in sorted(numeric_items, key=int)]
+
+
 def _extract_details(payload: Any) -> List[Dict[str, Any]]:
     """Return per-sample detail dicts.
 
     Supported shapes:
     - {"details": [ {...}, ... ]}
+    - {"details": {"type": "GEN", "0": {...}, ...}}  (format_details() output)
     - {"result": {"details": [...]}} (and common container variants)
     - {"records": [ ... ]}, {"data": [ ... ]}, etc.
     - [ {...}, {...} ]
@@ -139,12 +159,19 @@ def _extract_details(payload: Any) -> List[Dict[str, Any]]:
         return list(payload)
 
     if not isinstance(payload, dict):
-        raise ValueError("Unrecognized OpenCompass JSON structure (expected dict or list)")
+        raise ValueError(
+            "Unrecognized OpenCompass JSON structure (expected dict or list)"
+        )
 
     for k in _DETAILS_LIST_CANDIDATES:
         v = payload.get(k)
         if isinstance(v, list) and all(isinstance(x, dict) for x in v):
             return list(v)
+        # Handle format_details() dict-keyed-by-string-indices shape.
+        if isinstance(v, dict):
+            extracted = _dict_keyed_to_list(v)
+            if extracted is not None:
+                return extracted
 
     for container_key in _NESTED_CONTAINER_CANDIDATES:
         container = payload.get(container_key)
@@ -154,6 +181,10 @@ def _extract_details(payload: Any) -> List[Dict[str, Any]]:
             v = container.get(k)
             if isinstance(v, list) and all(isinstance(x, dict) for x in v):
                 return list(v)
+            if isinstance(v, dict):
+                extracted = _dict_keyed_to_list(v)
+                if extracted is not None:
+                    return extracted
 
     raise ValueError(
         "Unrecognized OpenCompass JSON structure. Expected a dict containing a list under one of "
@@ -243,7 +274,9 @@ def main() -> int:
         "input",
         help="OpenCompass per-sample eval JSON file OR a directory containing *.json outputs",
     )
-    ap.add_argument("--out", default="cje_fresh_draws_data.json", help="Output JSON for CJE")
+    ap.add_argument(
+        "--out", default="cje_fresh_draws_data.json", help="Output JSON for CJE"
+    )
     ap.add_argument(
         "--policy-name",
         default=None,
@@ -316,7 +349,9 @@ def main() -> int:
             prompt_key = args.prompt_field
             pred_key = args.prediction_field
 
-            prompt_val = d.get(prompt_key) if prompt_key else _pick_first(d, _PROMPT_CANDIDATES)
+            prompt_val = (
+                d.get(prompt_key) if prompt_key else _pick_first(d, _PROMPT_CANDIDATES)
+            )
             pred_val = d.get(pred_key) if pred_key else _pick_first(d, _PRED_CANDIDATES)
 
             prompt_text = _to_text(prompt_val)
@@ -347,20 +382,32 @@ def main() -> int:
                     "policy_name": policy_name,
                     "prompt_id": prompt_id,
                     "judge_score": judge_score,
-                    "prompt": (prompt_text[:300] + "...") if len(prompt_text) > 300 else prompt_text,
+                    "prompt": (
+                        (prompt_text[:300] + "...")
+                        if len(prompt_text) > 300
+                        else prompt_text
+                    ),
                     "oracle_label": row.get("oracle_label", ""),
                 }
             )
 
     out_path = Path(args.out)
-    out_path.write_text(json.dumps(fresh_draws, indent=2, ensure_ascii=False), encoding="utf-8")
+    out_path.write_text(
+        json.dumps(fresh_draws, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
     if not args.no_label_template:
         lt_path = Path(args.label_template)
         with lt_path.open("w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(
                 f,
-                fieldnames=["policy_name", "prompt_id", "judge_score", "prompt", "oracle_label"],
+                fieldnames=[
+                    "policy_name",
+                    "prompt_id",
+                    "judge_score",
+                    "prompt",
+                    "oracle_label",
+                ],
             )
             writer.writeheader()
             writer.writerows(template_rows)
@@ -373,6 +420,23 @@ def main() -> int:
     print(
         f"Parsed {total} rows. Kept {kept}. Dropped missing_prompt={missing_prompt}, missing_pred={missing_pred}."
     )
+
+    if total > 0 and kept == 0:
+        print(
+            "WARNING: All rows were dropped. The input schema may not match "
+            "any known OpenCompass format. Try --prompt-field and "
+            "--prediction-field overrides, or inspect the input JSON to "
+            "identify the correct field names.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if total > 0 and kept / total < 0.5:
+        print(
+            f"WARNING: {total - kept}/{total} rows dropped ({100 * (total - kept) / total:.0f}%). "
+            "Consider using --prompt-field / --prediction-field overrides.",
+            file=sys.stderr,
+        )
 
     return 0
 

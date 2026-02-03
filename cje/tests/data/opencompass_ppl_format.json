@@ -1,0 +1,18 @@
+{
+  "accuracy": 50.0,
+  "details": {
+    "type": "PPL",
+    "0": {
+      "origin_prediction": {"A": {"score": -2.5}, "B": {"score": -3.1}},
+      "predictions": "0",
+      "references": "0",
+      "correct": true
+    },
+    "1": {
+      "origin_prediction": {"A": {"score": -3.0}, "B": {"score": -2.2}},
+      "predictions": "1",
+      "references": "1",
+      "correct": true
+    }
+  }
+}
