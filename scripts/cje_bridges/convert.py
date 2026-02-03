@@ -5,6 +5,7 @@ This repo currently ships standalone converters:
 - scripts/promptfoo_cje/promptfoo_to_cje.py
 - scripts/trulens_cje/trulens_to_cje.py
 - scripts/langsmith_cje/langsmith_to_cje.py
+- scripts/opencompass_cje/opencompass_to_cje.py
 
 This wrapper provides a single entrypoint:
   python3 scripts/cje_bridges/convert.py <tool> [args...]
@@ -47,17 +48,20 @@ def main() -> int:
         print(
             "Usage: python3 scripts/cje_bridges/convert.py <tool> [args...]\n\n"
             "Tools:\n"
-            "  promptfoo   Convert Promptfoo results JSON to CJE fresh_draws_data\n"
-            "  trulens     Convert TruLens records+feedback to CJE fresh_draws_data\n"
-            "  langsmith   Convert LangSmith runs+feedback to CJE fresh_draws_data\n\n"
+            "  promptfoo    Convert Promptfoo results JSON to CJE fresh_draws_data\n"
+            "  trulens      Convert TruLens records+feedback to CJE fresh_draws_data\n"
+            "  langsmith    Convert LangSmith runs+feedback to CJE fresh_draws_data\n"
+            "  opencompass  Convert OpenCompass per-sample eval JSON to CJE fresh_draws_data\n\n"
             "Examples:\n"
             "  python3 scripts/cje_bridges/convert.py promptfoo results.json --out cje.json\n"
             "  python3 scripts/cje_bridges/convert.py trulens --database-url sqlite:///default.sqlite --judge-col 'Answer Relevance'\n"
-            "  python3 scripts/cje_bridges/convert.py langsmith --project my_project --feedback-key correctness --out cje.json\n\n"
+            "  python3 scripts/cje_bridges/convert.py langsmith --project my_project --feedback-key correctness --out cje.json\n"
+            "  python3 scripts/cje_bridges/convert.py opencompass path/to/results.json --out cje.json\n\n"
             "For full help on a tool:\n"
             "  python3 scripts/promptfoo_cje/promptfoo_to_cje.py --help\n"
             "  python3 scripts/trulens_cje/trulens_to_cje.py --help\n"
             "  python3 scripts/langsmith_cje/langsmith_to_cje.py --help\n"
+            "  python3 scripts/opencompass_cje/opencompass_to_cje.py --help\n"
         )
         return 0
 
@@ -68,6 +72,7 @@ def main() -> int:
     promptfoo_script = scripts_dir / "promptfoo_cje" / "promptfoo_to_cje.py"
     trulens_script = scripts_dir / "trulens_cje" / "trulens_to_cje.py"
     langsmith_script = scripts_dir / "langsmith_cje" / "langsmith_to_cje.py"
+    opencompass_script = scripts_dir / "opencompass_cje" / "opencompass_to_cje.py"
 
     if tool == "promptfoo":
         if not promptfoo_script.exists():
@@ -87,8 +92,14 @@ def main() -> int:
             return 2
         return _run_script(langsmith_script, rest)
 
+    if tool == "opencompass":
+        if not opencompass_script.exists():
+            print(f"Missing script: {opencompass_script}", file=sys.stderr)
+            return 2
+        return _run_script(opencompass_script, rest)
+
     print(
-        f"Unknown tool {tool!r}. Expected one of: promptfoo, trulens, langsmith.",
+        f"Unknown tool {tool!r}. Expected one of: promptfoo, trulens, langsmith, opencompass.",
         file=sys.stderr,
     )
     return 2

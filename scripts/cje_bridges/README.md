@@ -1,4 +1,4 @@
-# CJE bridges (Promptfoo, TruLens, LangSmith)
+# CJE bridges (Promptfoo, TruLens, LangSmith, OpenCompass)
 
 This folder is a **thin convenience wrapper** around the standalone converters in this repo.
 
@@ -105,6 +105,38 @@ Full help:
 python3 scripts/langsmith_cje/langsmith_to_cje.py --help
 ```
 
+### OpenCompass → CJE
+
+OpenCompass supports LLM-as-judge evaluation (e.g. `GenericLLMEvaluator`) and can optionally emit per-sample outputs via `--dump-eval-details`.
+
+Once you have a per-sample output JSON (typically under `output/.../results/.../*.json`), convert it:
+
+```bash
+python3 scripts/cje_bridges/convert.py opencompass path/to/opencompass_results.json \
+  --out cje_fresh_draws_data.json \
+  --label-template oracle_label_template.csv
+```
+
+After you fill in `oracle_label_template.csv`, re-run to embed oracle labels in the JSON:
+
+```bash
+python3 scripts/cje_bridges/convert.py opencompass path/to/opencompass_results.json \
+  --oracle-labels oracle_label_template.csv \
+  --out cje_fresh_draws_data_with_oracle.json \
+  --no-label-template
+```
+
+Notes:
+- OpenCompass JSON schemas vary across evaluators/datasets. This converter is best-effort.
+- If your file uses different keys, pass overrides:
+  - `--prompt-field <key>`
+  - `--prediction-field <key>`
+
+Full help:
+```bash
+python3 scripts/opencompass_cje/opencompass_to_cje.py --help
+```
+
 ---
 
 ## Why this exists
@@ -113,5 +145,6 @@ When teams adopt CJE, the first friction point is almost always **data plumbing*
 - “Our eval runner is Promptfoo, can we use that output?”
 - “We’re scoring with TruLens feedback functions, can we calibrate those?”
 - “We already evaluate everything in LangSmith — can we export it?”
+- “We’re running LLM-as-judge in OpenCompass — can we reuse that output?”
 
 These bridges keep the answer lightweight: yes — export JSON/DB/API → run converter → label an oracle slice → run CJE.
