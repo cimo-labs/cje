@@ -109,6 +109,8 @@ python3 scripts/langsmith_cje/langsmith_to_cje.py --help
 
 OpenCompass supports LLM-as-judge evaluation (e.g. `GenericLLMEvaluator`) and can optionally emit per-sample outputs via `--dump-eval-details`.
 
+In the OpenCompass docs, the `--dump-eval-details` output is a JSON dict with a top-level `details` list; each record commonly includes fields like `origin_prompt` and `prediction` (A/B).
+
 Once you have a per-sample output JSON (typically under `output/.../results/.../*.json`), convert it:
 
 ```bash

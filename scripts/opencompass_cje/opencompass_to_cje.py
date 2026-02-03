@@ -11,6 +11,9 @@ CJE expects:
   }
 
 OpenCompass can emit per-sample judge outputs (e.g. via `--dump-eval-details`).
+In the OpenCompass docs, the example output is a JSON dict with a top-level
+`details` list, where each record includes `origin_prompt` and `prediction`.
+
 Unfortunately, the JSON schema can vary across evaluators and datasets, so this
 script is intentionally *best-effort* and supports key overrides.
 
