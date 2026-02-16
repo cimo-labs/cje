@@ -3,9 +3,10 @@
 This module simulates judge->oracle drift across time periods and compares:
 1) Old calibrator plug-in estimates
 2) Old calibrator + global audit-slice offset
-3) Refit on audit slice (recent-only)
-4) Refit on pooled old+new labels
-5) Two-stage (covariate-aware) variants
+3) Old calibrator + policy-specific audit residual offsets (EIF-like first moment)
+4) Refit on audit slice (recent-only)
+5) Refit on pooled old+new labels
+6) Two-stage (covariate-aware) variants
 
 The target metric is policy-level first moments: E[Y | policy].
 """
@@ -23,7 +24,6 @@ import pandas as pd
 
 from cje.calibration.judge import JudgeCalibrator
 from cje.diagnostics.transport import audit_transportability
-
 
 Scenario = Literal[
     "intercept_shift",
@@ -70,6 +70,7 @@ AUDIT_PROFILES: Dict[str, Dict[str, float]] = {
 METHODS: Tuple[str, ...] = (
     "old_plugin",
     "old_plus_global_offset",
+    "old_plus_policy_offset",
     "recent_refit_monotone",
     "pooled_refit_monotone",
     "recent_refit_two_stage",
@@ -247,11 +248,27 @@ def _method_estimates(
             kind="monotone",
         )
 
-    # Global offset from audit slice
+    # Global offset from audit slice (single correction shared across policies)
     old_audit_pred = old_calibrator.predict(judge_scores=audit_slice["judge"])
     delta_hat = float(np.mean(audit_slice["oracle"] - old_audit_pred))
     for policy, value in method_to_estimates["old_plugin"].items():
         method_to_estimates["old_plus_global_offset"][policy] = value + delta_hat
+
+    # Policy-specific offset (EIF-like first-moment correction):
+    # theta_hat_p = E_p[f_old(S)] + E_audit,p[Y - f_old(S)]
+    for policy, value in method_to_estimates["old_plugin"].items():
+        policy_mask = audit_slice["policy"] == policy
+        if bool(np.any(policy_mask)):
+            policy_pred = old_calibrator.predict(
+                judge_scores=audit_slice["judge"][policy_mask]
+            )
+            policy_delta = float(
+                np.mean(audit_slice["oracle"][policy_mask] - policy_pred)
+            )
+        else:
+            # If audit has no samples for a policy, fall back to global correction.
+            policy_delta = delta_hat
+        method_to_estimates["old_plus_policy_offset"][policy] = value + policy_delta
 
     # Recent-only refits
     recent_mono = _fit_calibrator(
@@ -549,9 +566,15 @@ def _plot_results(summary: pd.DataFrame, output_dir: Path) -> None:
     fig.savefig(output_dir / "method_mae_at_max_audit.png", dpi=200)
     plt.close(fig)
 
-    # Plot 2: Offset vs recent refit as audit size grows
+    # Plot 2: Offset baselines vs recent refit as audit size grows
     compare = summary[
-        summary["method"].isin(["old_plus_global_offset", "recent_refit_monotone"])
+        summary["method"].isin(
+            [
+                "old_plus_global_offset",
+                "old_plus_policy_offset",
+                "recent_refit_monotone",
+            ]
+        )
     ].copy()
     fig2, axes2 = plt.subplots(
         nrows=len(scenarios),
@@ -566,7 +589,11 @@ def _plot_results(summary: pd.DataFrame, output_dir: Path) -> None:
                 (compare["scenario"] == scenario)
                 & (compare["audit_profile"] == profile)
             ]
-            for method in ["old_plus_global_offset", "recent_refit_monotone"]:
+            for method in [
+                "old_plus_global_offset",
+                "old_plus_policy_offset",
+                "recent_refit_monotone",
+            ]:
                 sub = chunk[chunk["method"] == method].sort_values("audit_size")
                 ax.plot(
                     sub["audit_size"],

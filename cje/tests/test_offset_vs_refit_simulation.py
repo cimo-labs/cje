@@ -35,11 +35,11 @@ def test_offset_vs_refit_smoke() -> None:
     assert required_cols.issubset(set(df.columns))
 
 
-def test_intercept_shift_offset_improves_old_plugin() -> None:
-    """Under intercept drift, global offset should beat legacy plug-in on average."""
+def test_intercept_shift_offsets_improve_old_plugin() -> None:
+    """Under intercept drift, offset corrections should beat legacy plug-in."""
     df = run_experiment_suite(
         audit_sizes=[50],
-        n_reps=6,
+        n_reps=8,
         n_old_labels=800,
         n_eval_per_policy=1200,
         seed=17,
@@ -53,10 +53,40 @@ def test_intercept_shift_offset_improves_old_plugin() -> None:
         & (summary["audit_size"] == 50)
     ]
     mae_old = float(chunk[chunk["method"] == "old_plugin"]["mae_policy_mean"].iloc[0])
-    mae_offset = float(
+    mae_global_offset = float(
         chunk[chunk["method"] == "old_plus_global_offset"]["mae_policy_mean"].iloc[0]
     )
-    assert mae_offset < mae_old
+    mae_policy_offset = float(
+        chunk[chunk["method"] == "old_plus_policy_offset"]["mae_policy_mean"].iloc[0]
+    )
+    assert mae_global_offset < mae_old
+    assert mae_policy_offset < mae_old
+
+
+def test_slope_shift_policy_offset_beats_global_offset() -> None:
+    """Under slope drift, policy offsets should beat one global offset."""
+    df = run_experiment_suite(
+        audit_sizes=[50],
+        n_reps=8,
+        n_old_labels=800,
+        n_eval_per_policy=1200,
+        seed=19,
+        scenarios=["slope_shift"],
+        audit_profiles=["balanced"],
+    )
+    summary = summarize_results(df)
+    chunk = summary[
+        (summary["scenario"] == "slope_shift")
+        & (summary["audit_profile"] == "balanced")
+        & (summary["audit_size"] == 50)
+    ]
+    mae_global_offset = float(
+        chunk[chunk["method"] == "old_plus_global_offset"]["mae_policy_mean"].iloc[0]
+    )
+    mae_policy_offset = float(
+        chunk[chunk["method"] == "old_plus_policy_offset"]["mae_policy_mean"].iloc[0]
+    )
+    assert mae_policy_offset < mae_global_offset
 
 
 def test_slope_shift_refit_beats_global_offset() -> None:

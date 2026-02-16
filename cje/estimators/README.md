@@ -196,7 +196,7 @@ Direct Mode automatically adapts its standard error calculation based on the dat
 ```
 θ̂_aug = mean(f̂_full(S)) + mean(Y - f̂_oof(S))
 ```
-This corrects for calibrator bias. Refitting the calibrator on each bootstrap replicate captures the calibration/evaluation covariance that analytic SEs miss.
+This applies a per-policy residual correction that is the default first-moment transport fix in Direct mode. Refitting the calibrator on each bootstrap replicate captures the calibration/evaluation covariance that analytic SEs miss.
 
 ```python
 # Explicit bootstrap for small samples or coupled calibration/evaluation
@@ -252,7 +252,7 @@ This separates:
 - **Calibration oracle**: Only base policy samples (for fitting the calibrator)
 - **Residual oracle**: All policies (for computing transport bias corrections in θ̂_aug)
 
-When the calibrator doesn't transport to target policies, the residual correction `mean(Y - f̂(S))` captures this bias. See `diagnostics/README.md` for details.
+When the calibrator doesn't transport to target policies, the residual correction `mean(Y - f̂(S))` captures this bias per policy. Treat a single global offset as a baseline only. See `diagnostics/README.md` for details.
 
 **Philosophy:** Cluster by the source of dependence. Direct Mode clusters by prompts when paired, IPS/DR cluster by cross-validation folds.
 

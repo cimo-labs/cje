@@ -21,7 +21,6 @@ from cje.diagnostics.robust_inference import (
 from cje.estimators.direct_method import CalibratedDirectEstimator
 from cje.calibration.judge import JudgeCalibrator
 
-
 # ============================================================================
 # E2E Tests - Complete Workflows with Real Arena Data
 # ============================================================================
@@ -348,6 +347,21 @@ class TestCalibratorFactory:
             )
             cal = factory()
             assert cal.calibration_mode == mode
+
+
+class TestDirectEstimatorDefaults:
+    """Regression tests for Direct estimator default inference configuration."""
+
+    def test_calibrated_direct_defaults_to_bootstrap_augmented_per_policy(self) -> None:
+        calibrator = JudgeCalibrator(calibration_mode="monotone")
+        estimator = CalibratedDirectEstimator(
+            target_policies=["base", "target"],
+            reward_calibrator=calibrator,
+        )
+
+        assert estimator.inference_method == "bootstrap"
+        assert estimator.use_augmented_estimator is True
+        assert estimator.use_multipolicy_eif is False
 
 
 # ============================================================================

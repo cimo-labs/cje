@@ -626,18 +626,19 @@ results = analyze_dataset(
 Direct mode supports multiple inference methods for computing standard errors:
 
 ```python
-# Default: auto-selects based on sample size and coupling
+# Recommended default: bootstrap + per-policy augmented correction (θ̂_aug)
 results = analyze_dataset(
-    fresh_draws_dir="responses/",
-    estimator_config={"inference_method": "auto"}
+    fresh_draws_dir="responses/"
 )
 
-# Explicit bootstrap for small samples or coupled data
+# Explicit bootstrap config (equivalent defaults)
 results = analyze_dataset(
     fresh_draws_dir="responses/",
     estimator_config={
         "inference_method": "bootstrap",
-        "n_bootstrap": 2000  # Number of replicates
+        "use_augmented_estimator": True,
+        "use_multipolicy_eif": False,  # Conservative default
+        "n_bootstrap": 2000
     }
 )
 
@@ -656,7 +657,8 @@ results = analyze_dataset(
 | `cluster_robust` | ~22-55% | Standard cluster-robust SEs (fast, ignores calibration uncertainty) |
 | `auto` | varies | Uses cluster_robust; switches to bootstrap when coupling detected |
 
-**Bootstrap with θ̂_aug** is recommended for valid confidence intervals. It uses an AIPW-style bias correction (`θ̂_aug = plug-in + residual correction`) and refits the calibrator on each replicate to capture calibration/evaluation covariance.
+**Bootstrap with θ̂_aug** is recommended for valid confidence intervals. It uses a per-policy AIPW-style bias correction (`θ̂_aug = plug-in + residual correction`) and refits the calibrator on each replicate to capture calibration/evaluation covariance.
+Treat a single global offset as a diagnostic baseline, not as a default production correction.
 
 **When to use bootstrap (recommended for all cases):**
 - Always, if you need valid confidence intervals

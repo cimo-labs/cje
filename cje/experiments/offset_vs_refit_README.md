@@ -1,12 +1,13 @@
 # Offset vs Refit Simulation
 
-This experiment quantifies when a global audit-slice offset is enough, versus when you need to refit calibration.
+This experiment quantifies when offset-style corrections are enough, versus when you need to refit calibration.
 
 It focuses on policy first moments:
 
 - Target: `V(policy) = E[Y | policy]`
 - Legacy estimate: `E[f_old(S)]`
 - Offset estimate: `E[f_old(S)] + delta_hat`, where `delta_hat = E_audit[Y - f_old(S)]`
+- Policy-offset estimate (EIF-like first moment): `E[f_old(S)] + E_audit,policy[Y - f_old(S)]`
 - Refit estimate: learn `f_new` from recent audit labels (or pooled labels), then use `E[f_new(S)]`
 
 ## Scenarios
@@ -27,10 +28,11 @@ And two audit-slice profiles:
 
 1. `old_plugin`
 2. `old_plus_global_offset`
-3. `recent_refit_monotone`
-4. `pooled_refit_monotone`
-5. `recent_refit_two_stage`
-6. `pooled_refit_two_stage`
+3. `old_plus_policy_offset` (policy-specific residual correction)
+4. `recent_refit_monotone`
+5. `pooled_refit_monotone`
+6. `recent_refit_two_stage`
+7. `pooled_refit_two_stage`
 
 ## Run
 
@@ -60,7 +62,7 @@ Written to `--output-dir`:
 1. `offset_vs_refit_raw.csv`: replicate-level metrics
 2. `offset_vs_refit_summary.csv`: aggregated metrics
 3. `method_mae_at_max_audit.png`: method ranking at largest audit size
-4. `offset_vs_refit_by_audit_size.png`: offset vs refit as audit size grows
+4. `offset_vs_refit_by_audit_size.png`: global offset vs policy offset vs refit as audit size grows
 5. `run_config.json`: reproducibility config
 
 ## Key Metrics
@@ -72,7 +74,7 @@ Written to `--output-dir`:
 
 ## Expected Pattern
 
-1. `intercept_shift`: offset should often match refit.
-2. `slope/nonlinear/covariate drift`: refit methods should beat global offset, especially when audit slice is not representative.
-3. Two-stage methods should be most helpful under covariate-dependent drift.
-
+1. `intercept_shift`: policy offset should be competitive with recent refit.
+2. `slope/nonlinear drift`: policy offset should clearly beat global offset.
+3. `covariate_interaction_shift`: two-stage recent refit should usually win.
+4. Treat `old_plus_global_offset` as a baseline, not as the default production correction.
