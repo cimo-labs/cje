@@ -4,7 +4,7 @@
 
 # CJE - Causal Judge Evaluation
 
-**Your LLM judge scores are noisy and nebulous. CJE calibrates them to what actually matters.**
+**Your LLM judge scores are noisy and weakly calibrated. CJE calibrates them to what actually matters.**
 
 [![arXiv](https://img.shields.io/badge/arXiv-2512.11150-b31b1b.svg)](https://arxiv.org/abs/2512.11150)
 [![Dataset](https://img.shields.io/badge/HF-Dataset-yellow)](https://huggingface.co/datasets/elandy/cje-chatbot-arena)
@@ -15,7 +15,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/cje-eval?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/cje-eval)
 
-We ran 16,000+ tests on Chatbot Arena data. **Without calibration, 95% confidence intervals captured the true value 0% of the time.** With CJE: 99% ranking accuracy using just 5% oracle labels, at 14× lower cost.
+We ran 16,000+ tests on Chatbot Arena data. **Without calibration, 95% confidence intervals captured the true value 0% of the time.** CJE restores reliable uncertainty and ranking decisions with a small oracle slice.
 
 ---
 
@@ -98,7 +98,7 @@ Without calibration, you know prompt A scored higher than B—but you don't know
 - Have I tested enough samples?
 - Will this hold next week?
 
-CJE answers all of these. Label 5% of samples with your oracle (human raters, latest SOTA model or AI agent, downstream metric). CJE learns the calibration and applies it everywhere—giving you trustworthy magnitudes, valid confidence intervals, and drift detection.
+CJE answers all of these. Label a small slice with your oracle (human raters, latest SOTA model or AI agent, downstream metric). CJE learns the calibration and applies it everywhere—giving you trustworthy magnitudes, valid confidence intervals, and drift detection.
 
 **The result:** Make decisions faster, spend less on labeling, and defend your conclusions with real statistics.
 
@@ -139,7 +139,7 @@ results = analyze_dataset(fresh_draws_dir="responses/")
 # Check if calibration still works on this week's data (50+ oracle labels)
 diag = audit_transportability(results.calibrator, this_week_samples)
 print(diag.summary())
-# Status: PASS | Samples: 48 | Mean error: +0.007 (CI: -0.05 to +0.06)
+# Transport: PASS | Group: ... | N=50 | δ̂: +0.012 (CI: [-0.008, +0.032])
 ```
 
 <div align="center">
@@ -173,6 +173,7 @@ Walk through a complete example: compare policies, check if calibration transfer
 
 **Technical Guides**
 - [Operational Playbook](PLAYBOOK.md) — End-to-end runbook: audits, failed-audit correction, and label budgeting
+- [Drift Correction Research Note](https://cimolabs.com/research/offset-vs-refit) — Offset vs EIF-style correction vs refit after audit drift
 - [Calibration Methods](cje/calibration/README.md) — AutoCal-R, isotonic regression, two-stage
 - [Diagnostics System](cje/diagnostics/README.md) — Uncertainty quantification, transportability
 - [Estimators](cje/estimators/README.md) — Estimator internals (advanced, including IPS/DR)
