@@ -2,24 +2,17 @@
 
 Simple, reliable LLM evaluation with automatic mode selection and AutoCal-R calibration.
 
+For an end-to-end operational workflow (audits, drift response, label budgeting), see [`PLAYBOOK.md`](../../PLAYBOOK.md).
+
 ## Quick Start
 
-CJE automatically selects the best mode and estimator for your data:
+CJE’s default workflow is Direct mode on fresh draws:
 
 ```python
 from cje import analyze_dataset
 
-# Mode 1: Direct (simplest - compare policies on eval set)
+# Default: Direct mode (on-policy comparison on your eval prompts)
 results = analyze_dataset(fresh_draws_dir="responses/")
-
-# Mode 2: IPS (counterfactual with logged data)
-results = analyze_dataset(logged_data_path="logs.jsonl")  # Auto-selects IPS mode
-
-# Mode 3: DR (most accurate - both logged data and fresh draws)
-results = analyze_dataset(
-    logged_data_path="logs.jsonl",
-    fresh_draws_dir="responses/"  # Auto-selects DR mode
-)
 
 # Print results
 print(f"Policy value: {results.estimates[0]:.3f} ± {1.96*results.standard_errors[0]:.3f}")
@@ -29,129 +22,14 @@ print(f"Policy value: {results.estimates[0]:.3f} ± {1.96*results.standard_error
 
 **Use Direct mode.** It's simple, reliable, and works for the vast majority of LLM evaluation tasks.
 
-IPS and DR modes exist for counterfactual questions ("what if we had deployed a different model?") but require excellent policy overlap which is rare in practice.
-
-## Three Analysis Modes
-
-| Mode | Data Needed | Estimand | When to Use |
-|------|-------------|----------|-------------|
-| **Direct** | Fresh draws only | On-policy comparison | Simplest setup, no logprobs needed |
-| **IPS** | Logged data with logprobs | Counterfactual deployment | Have production logs, want fast estimates |
-| **DR** | Both logged + fresh draws | Counterfactual (most accurate) | High-stakes decisions, maximum accuracy |
-
-### Automatic Mode Selection
-
-Use `estimator="auto"` (default) and CJE will:
-1. Detect the **mode** based on your data (Direct/IPS/DR) using the 3-rule system
-2. Select the best **estimator** for that mode:
-   - **Direct mode** → `direct` estimator
-   - **IPS mode** → `calibrated-ips` estimator (IPS with variance-reduced weights via SIMCal)
-   - **DR mode** → `stacked-dr` estimator (ensemble of DR-CPO, TMLE, MRDR, OC-DR-CPO, TR-CPO-E)
-
-**Note:** In the paper, "Calibrated DR" refers to DR mode, which defaults to `stacked-dr` in the implementation. Stacked DR is an optimal convex combination of multiple DR estimators that typically outperforms any single variant.
-
-### How Mode Detection Works
-
-When you use `estimator="auto"` (the default), CJE automatically detects the mode using a **simple 3-rule system** based on available data:
-
-**Decision rules:**
-1. **fresh_draws + logged_data** → DR mode (doubly robust - best accuracy)
-2. **logged_data only** → IPS mode (importance sampling - counterfactual)
-3. **fresh_draws only** → Direct mode (on-policy comparison)
-
-**Automatic filtering:** If your logged data has incomplete logprobs, CJE will:
-- Automatically filter to only samples with complete logprobs
-- Warn you about coverage (what % of samples were usable)
-- Proceed with the filtered subset
-
-A sample has "complete logprobs" if:
-- `base_policy_logprob` is not None
-- `target_policy_logprobs[policy]` exists for ALL target policies (not None)
-
-Example: If you have 1000 logged samples but only 400 have complete logprobs:
-```python
-# CJE filters to 400 valid samples, warns about 40% coverage
-# With fresh draws → DR mode using 400 samples
-# Without fresh draws → IPS mode using 400 samples (with low coverage warning)
-```
-
-**Mode selection metadata:** Results include `result.metadata["mode_selection"]` with:
-- `mode`: Selected mode ("dr", "ips", or "direct")
-- `estimator`: Actual estimator used (e.g., "stacked-dr")
-- `logprob_coverage`: Coverage fraction
-- `has_fresh_draws`: Whether fresh draws were provided
-- `has_logged_data`: Whether logged data was provided
-- `reason`: Human-readable explanation of selection
-
-**Overriding automatic selection:**
-You can explicitly choose a mode/estimator instead of using `"auto"`:
-```python
-# Force IPS mode even with fresh draws available
-results = analyze_dataset(
-    logged_data_path="logs.jsonl",
-    fresh_draws_dir="responses/",
-    estimator="calibrated-ips"  # Explicitly choose IPS instead of auto DR
-)
-
-# Force Direct mode instead of auto-selected DR
-results = analyze_dataset(
-    logged_data_path="logs.jsonl",
-    fresh_draws_dir="responses/",
-    estimator="direct"  # Use Direct mode for on-policy comparison
-)
-
-# Choose specific DR variant
-results = analyze_dataset(
-    logged_data_path="logs.jsonl",
-    fresh_draws_dir="responses/",
-    estimator="tmle"  # Use TMLE instead of default stacked-dr
-)
-```
+*Footnote (advanced): IPS/DR variants are supported for explicit counterfactual OPE workflows. They require strong overlap and additional diagnostics. See `cje/estimators/README.md` for internals.*
 
 ### What are fresh draws?
-Fresh draws are new responses from your target policies evaluated by the judge. For Direct mode, these are your only data source. For DR mode, they supplement logged data for better accuracy.
+Fresh draws are new responses from your target policies evaluated by the judge.
 
 **Format:** One JSONL file per policy in `fresh_draws_dir`. Policy name is inferred from filename.
 
 **Example:** `responses/clone_responses.jsonl` → policy name is `"clone"`
-
-### ⚠️ Policy Name Matching (IPS/DR Modes)
-
-**CRITICAL:** Policy names must match EXACTLY between logged data and fresh draw filenames.
-
-**How policies are detected:**
-1. **From logged data:** Policy names = keys in `target_policy_logprobs` dict
-2. **From fresh draws:** Policy names = extracted from `{policy}_responses.jsonl` filenames
-
-**Example - Correct matching:**
-```json
-// logs.jsonl (defines policies via keys)
-{
-  "target_policy_logprobs": {
-    "clone": -14.7,
-    "premium": -18.3,
-    "unhelpful": -42.1
-  }
-}
-```
-
-```
-responses/  (filenames must match keys exactly)
-├── clone_responses.jsonl      ✅ matches "clone"
-├── premium_responses.jsonl    ✅ matches "premium"
-└── unhelpful_responses.jsonl  ✅ matches "unhelpful"
-```
-
-**Common mistake - Name mismatch:**
-```json
-// Logged data has "gpt-4"
-{"target_policy_logprobs": {"gpt-4": -14.7}}
-
-// But file is named "gpt4_responses.jsonl"
-❌ Error: No fresh draw file found for policy 'gpt-4'
-```
-
-**Fix:** Use identical names everywhere. If logged data has `"gpt-4"`, file must be `gpt-4_responses.jsonl`.
 
 ## Common Workflows
 
@@ -182,37 +60,6 @@ for i, policy in enumerate(results.metadata["target_policies"]):
 
 # Note: Direct mode auto-discovers policies from filenames
 print(f"Found policies: {results.metadata['target_policies']}")
-```
-
-### IPS Analysis (With Logged Data)
-```python
-# Analyze logged production data
-results = analyze_dataset(logged_data_path="logs.jsonl", estimator="calibrated-ips")
-
-# Check reliability (important for IPS!)
-if results.diagnostics.weight_ess < 0.1:
-    print("⚠️ Low effective sample size - consider using DR mode with fresh draws")
-
-# Get estimates
-for i, policy in enumerate(results.metadata["target_policies"]):
-    print(f"{policy}: {results.estimates[i]:.3f} ± {1.96*results.standard_errors[i]:.3f}")
-```
-
-### DR Analysis (Maximum Accuracy)
-```python
-# Combine logged data with fresh draws for best accuracy
-results = analyze_dataset(
-    logged_data_path="production_logs.jsonl",
-    fresh_draws_dir="responses/",
-    estimator="stacked-dr"  # or "auto"
-)
-
-# Compare policies using built-in method
-baseline_idx = 0
-for i in range(1, len(results.estimates)):
-    comparison = results.compare_policies(i, baseline_idx)
-    sig = "*" if comparison["significant"] else ""
-    print(f"Policy {i} vs baseline: {comparison['difference']:+.3f} (p={comparison['p_value']:.3f}) {sig}")
 ```
 
 ### Export Results
@@ -255,14 +102,11 @@ See [`cje/visualization/README.md`](../visualization/README.md) for all availabl
 ## Command Line Interface
 
 ```bash
-# Basic usage (no fresh draws)
-python -m cje analyze logs.jsonl --estimator calibrated-ips
-
-# With fresh draws (for robust estimation; required for stacked-dr)
-python -m cje analyze logs.jsonl --fresh-draws-dir responses/
+# Direct-style run with fresh draws
+python -m cje analyze logs.jsonl --fresh-draws-dir responses/ --estimator direct
 
 # Save results
-python -m cje analyze logs.jsonl -o results.json
+python -m cje analyze logs.jsonl --fresh-draws-dir responses/ --estimator direct -o results.json
 
 # Validate data format
 python -m cje validate logs.jsonl --verbose
@@ -297,44 +141,13 @@ responses/
 
 **AutoCal-R in Direct mode**: If any fresh draws have `oracle_label`, Direct mode automatically applies AutoCal-R to learn judge→oracle calibration and uses calibrated rewards. Otherwise, uses raw judge scores. More oracle labels = better calibration (5-10% is often sufficient).
 
-### IPS/DR Modes (logged data):
-```json
-{
-  "prompt": "User question here",
-  "response": "Model response here",
-  "base_policy_logprob": -14.7,
-  "target_policy_logprobs": {
-    "clone": -14.7,
-    "parallel_universe_prompt": -18.3,
-    "unhelpful": -42.1
-  },
-  "judge_score": 0.85,        // Required
-  "oracle_label": 0.86        // Optional (for calibration, 5-10% is enough)
-}
-```
-
-Note: `judge_score` and `oracle_label` can be at top-level (preferred) or in `metadata` (backward compatible).
+*Footnote (advanced): IPS/DR logged-data schema and counterfactual diagnostics are documented in `cje/estimators/README.md`.*
 
 **Working example:** See [`examples/arena_sample/`](../../examples/arena_sample/) for complete dataset examples.
 
 ## Troubleshooting
 
-### "ValueError: Estimator 'stacked-dr' requires fresh draws"
-**Solution**: Either provide fresh draws or use calibrated-ips:
-```python
-# Option 1: Provide fresh draws
-analyze_dataset("logs.jsonl", fresh_draws_dir="path/to/responses/")
-
-# Option 2: Use calibrated-ips (no fresh draws needed)
-analyze_dataset("logs.jsonl", estimator="calibrated-ips")
-```
-
-### "Low effective sample size" warning
-**Cause**: Policies are very different from logging policy.
-**Solutions**:
-- Collect more data
-- Use tighter variance cap (advanced)
-- Consider if policies are too different for reliable estimation
+*Footnote (advanced): IPS/DR-specific troubleshooting (ESS, overlap, logprob coverage) lives in `cje/estimators/README.md`.*
 
 ### Missing judge scores
 **Error**: "Judge field 'judge_score' not found"
@@ -346,37 +159,6 @@ with open("logs.jsonl") as f:
     sample = json.loads(f.readline())
     print(sample.get("judge_score"))  # Should not be None
 ```
-
-### "Insufficient data" or no logprob coverage
-**Error**: "No samples have complete logprobs and no fresh draws provided"
-
-**Cause**: None of your samples have complete logprobs (both `base_policy_logprob` and all `target_policy_logprobs`)
-
-**Check your coverage:**
-```python
-import json
-
-with open("logs.jsonl") as f:
-    samples = [json.loads(line) for line in f]
-
-n_valid = 0
-for s in samples:
-    has_base = s.get("base_policy_logprob") is not None
-    has_all_targets = all(
-        s.get("target_policy_logprobs", {}).get(p) is not None
-        for p in ["clone", "parallel_universe_prompt"]  # Your target policies
-    )
-    if has_base and has_all_targets:
-        n_valid += 1
-
-print(f"Logprob coverage: {n_valid}/{len(samples)} = {n_valid/len(samples):.1%}")
-```
-
-**Solutions:**
-1. **Compute missing logprobs** using `cje/teacher_forcing/` (see README section on "Generating Log Probabilities")
-2. **Provide fresh draws** to use Direct mode (no logprobs needed)
-
-**Low coverage warning:** If you see "⚠️ Low coverage", CJE will automatically filter to valid samples and proceed, but results may be less reliable with very few samples.
 
 ## API Reference
 
@@ -406,8 +188,8 @@ def analyze_dataset(
 - `calibration_data_path`: Path to dedicated calibration dataset with oracle labels. Used to learn judge→oracle mapping separately from evaluation data.
 - `combine_oracle_sources`: Pool oracle labels from all sources (calibration + logged + fresh) for maximum data efficiency. Default: `True`. Set `False` to use only calibration_data_path.
 - `estimator`: Estimator name or "auto" for automatic selection
-  - Use "auto" (default) for automatic mode selection
-  - Manual: `direct`, `calibrated-ips`, `stacked-dr`, `dr-cpo`, `tmle`, `mrdr`, etc.
+  - Recommended: `direct` (or `auto` with fresh draws)
+  - *Footnote (advanced): `calibrated-ips`, `stacked-dr`, `dr-cpo`, `tmle`, `mrdr`, etc. for counterfactual OPE.*
 - `judge_field`: Metadata field with judge scores (default: "judge_score")
 - `oracle_field`: Metadata field with oracle labels (default: "oracle_label")
 - `calibration_covariates`: Optional list of metadata field names to use as covariates in two-stage reward calibration (e.g., `["domain", "difficulty"]`). Helps handle confounding where judge scores at fixed S have different oracle outcomes based on observable features. Only works with two-stage or auto calibration mode.
@@ -460,9 +242,9 @@ Use a separate high-quality calibration dataset to learn the judge→oracle mapp
 ```python
 # Learn calibration from curated oracle set, apply to evaluation data
 results = analyze_dataset(
-    logged_data_path="production_logs.jsonl",      # 10K samples, 100 with oracle labels
+    fresh_draws_dir="responses/",                  # Evaluation set
     calibration_data_path="human_labels.jsonl",     # 500 samples, all with high-quality oracle labels
-    estimator="calibrated-ips"
+    estimator="direct"
 )
 
 # Check oracle source breakdown
@@ -488,10 +270,10 @@ print(results.metadata["oracle_sources"])
 **Disable combining** to use only calibration data:
 ```python
 results = analyze_dataset(
-    logged_data_path="eval_data.jsonl",
+    fresh_draws_dir="responses/",
     calibration_data_path="oracle_labels.jsonl",
     combine_oracle_sources=False,  # Use ONLY calibration data for learning f̂
-    estimator="calibrated-ips"
+    estimator="direct"
 )
 ```
 
@@ -573,33 +355,32 @@ Handle judge bias using observable features as covariates in two-stage calibrati
 ```python
 # Example 1: Include response_length covariate (auto-computed)
 results = analyze_dataset(
-    logged_data_path="logs.jsonl",
+    fresh_draws_dir="responses/",
     include_response_length=True,  # Auto-compute response length
-    estimator="calibrated-ips"
+    estimator="direct"
 )
 
 # Example 2: Add custom metadata covariates with response_length
 # Assumes your data has "domain" and "difficulty" in metadata
 results = analyze_dataset(
-    logged_data_path="logs.jsonl",
+    fresh_draws_dir="responses/",
     include_response_length=True,
     calibration_covariates=["domain", "difficulty"],  # Additional covariates
-    estimator="stacked-dr",
-    fresh_draws_dir="responses/"
+    estimator="direct",
 )
 # Effective covariates: ["response_length", "domain", "difficulty"]
 
 # Example 3: Judge score only (default - no covariates)
 results = analyze_dataset(
-    logged_data_path="logs.jsonl",
-    estimator="calibrated-ips"
+    fresh_draws_dir="responses/",
+    estimator="direct"
 )
 
 # Example 4: Custom covariates without response_length
 results = analyze_dataset(
-    logged_data_path="logs.jsonl",
+    fresh_draws_dir="responses/",
     calibration_covariates=["domain"],  # Only domain, no response_length
-    estimator="calibrated-ips"
+    estimator="direct"
 )
 ```
 
@@ -611,8 +392,8 @@ results = analyze_dataset(
 **How it works:**
 1. Two-stage calibration learns g(S, X_cov) → rank → isotonic
 2. Covariates help handle non-monotone patterns in judge scores
-3. DR estimators automatically use covariates in outcome models
-4. All modes (Direct, IPS, DR) support covariate-adjusted calibration
+3. Direct mode uses covariates in the calibration mapping
+4. *Footnote (advanced): IPS/DR variants also support covariate-adjusted calibration*
 
 **Requirements:**
 - Covariate fields must exist in `sample.metadata` for all samples
@@ -685,13 +466,12 @@ This separates calibration (base policy only) from residual corrections (all pol
 ### Custom Configuration
 ```python
 results = analyze_dataset(
-    "logs.jsonl",
-    estimator="dr-cpo",
+    fresh_draws_dir="responses/",
+    estimator="direct",
     estimator_config={
-        "n_folds": 10,
-        "use_calibrated_weights": True,
+        "inference_method": "bootstrap",
+        "n_bootstrap": 2000,
     },
-    fresh_draws_dir="responses/"
 )
 ```
 
@@ -700,31 +480,19 @@ For complex configurations, use Hydra:
 ```bash
 python -m cje.interface.hydra_entry \
   dataset=logs.jsonl \
-  estimator=stacked-dr \
+  estimator=direct \
   fresh_draws_dir=responses/ \
-  estimator_config.n_folds=10
+  estimator_config.inference_method=bootstrap
 ```
 
 ## Summary
 
-**Three modes, three use cases:**
+**Default mode: Direct.**
 
-1. **Direct Mode** (`fresh_draws_dir` only)
-   - Simplest setup - no logprobs needed
-   - On-policy comparison: "Which policy is best on this eval set?"
-   - Auto-discovers policies from filenames
-   - Supports bootstrap inference for small samples (see below)
+1. Use `fresh_draws_dir` (or `fresh_draws_data`) as your primary input.
+2. Use bootstrap inference for reliable confidence intervals.
+3. Run transport audits on small probe slices over time.
 
-2. **IPS Mode** (`logged_data_path` only)
-   - Fast counterfactual estimates from logged data
-   - Check `diagnostics.weight_ess` for reliability
-   - Use when you can't generate fresh draws
-
-3. **DR Mode** (both `logged_data_path` + `fresh_draws_dir`)
-   - Maximum accuracy combining IPS and outcome modeling
-   - Recommended for production decisions
-   - Robust to model misspecification
-
-**Best practice:** Use `estimator="auto"` and let CJE choose the right mode.
+*Footnote (advanced): IPS/DR modes remain available for counterfactual OPE with strong overlap assumptions and diagnostics.*
 
 For more details, see the [examples](../../examples/) and full documentation.

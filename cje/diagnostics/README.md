@@ -1,5 +1,7 @@
 # CJE Diagnostics System
 
+For the operational runbook that combines diagnostics + action policy + budgeting, see [`PLAYBOOK.md`](../../PLAYBOOK.md).
+
 ## Overview
 
 The CJE diagnostics system provides comprehensive monitoring and validation of causal inference assumptions. It follows a **push-based architecture** where estimators compute diagnostics during estimation and attach them to results.

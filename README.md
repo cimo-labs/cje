@@ -60,6 +60,9 @@ results.plot_estimates(save_path="ranking.png")
 
 CJE learns the judge→oracle mapping from the labeled samples and applies it everywhere.
 
+Default recommendation: use **Direct mode** (`fresh_draws_*`) for most evaluation workflows.
+*Footnote: IPS/DR variants are supported for advanced counterfactual OPE, but are not part of the default operational loop.*
+
 ---
 
 ## Label Compatibility
@@ -145,6 +148,10 @@ print(diag.summary())
 
 PASS means your calibration is still valid. FAIL means something changed — investigate or recalibrate.
 
+<div align="center">
+  <img src="images/cje_loop.svg" alt="CJE operational loop: design metrics, sample, fit, precision gate, deploy, monitor, drift gate" width="85%">
+</div>
+
 ---
 
 ## Try It Now
@@ -165,9 +172,10 @@ Walk through a complete example: compare policies, check if calibration transfer
 - [CJE in 3 Minutes](https://youtu.be/VbSYrby8iaQ) — Quick intro: why raw judge scores mislead and how CJE fixes it
 
 **Technical Guides**
+- [Operational Playbook](PLAYBOOK.md) — End-to-end runbook: audits, failed-audit correction, and label budgeting
 - [Calibration Methods](cje/calibration/README.md) — AutoCal-R, isotonic regression, two-stage
 - [Diagnostics System](cje/diagnostics/README.md) — Uncertainty quantification, transportability
-- [Estimators](cje/estimators/README.md) — Direct, IPS, DR implementations
+- [Estimators](cje/estimators/README.md) — Estimator internals (advanced, including IPS/DR)
 - [Interface/API](cje/interface/README.md) — `analyze_dataset` implementation
 - [Experiments](experiments/README.md) — repo-only simulation studies (not shipped in PyPI)
 

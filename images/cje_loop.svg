@@ -1,0 +1,194 @@
+<svg width="740" height="600" xmlns="http://www.w3.org/2000/svg">
+  <!-- The CJE feedback loop - with separate choose and sample steps -->
+
+  <defs>
+    <!-- Arrow marker for main flow -->
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#334155" />
+    </marker>
+
+    <!-- Arrow marker for recalibrate -->
+    <marker id="arrow-recal" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#ef4444" />
+    </marker>
+
+    <!-- Arrow marker for branch -->
+    <marker id="arrow-branch" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#8b5cf6" />
+    </marker>
+
+    <!-- Arrow marker for continue -->
+    <marker id="arrow-continue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#6366f1" />
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="370" y="30" text-anchor="middle" font-family="sans-serif" font-size="18" font-weight="600" fill="#334155">
+    The CJE Loop
+  </text>
+
+  <!-- Step 1: Choose/Design S and Y -->
+  <g>
+    <rect x="50" y="70" width="180" height="70" fill="#fef3c7" stroke="#f59e0b" stroke-width="2" rx="8"/>
+    <text x="140" y="92" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="600" fill="#92400e">
+      1. Design Metrics
+    </text>
+    <text x="140" y="105" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#78350f">
+      Choose S (cheap,
+    </text>
+    <text x="140" y="116" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#78350f">
+      abundant) and Y (higher
+    </text>
+    <text x="140" y="127" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#78350f">
+      quality). Informed by
+    </text>
+    <text x="140" y="138" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#78350f">
+      domain + residuals
+    </text>
+  </g>
+
+  <!-- Arrow 1→2 -->
+  <line x1="230" y1="105" x2="270" y2="105" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 2: Sample -->
+  <g>
+    <rect x="270" y="70" width="180" height="70" fill="#ecfeff" stroke="#06b6d4" stroke-width="2" rx="8"/>
+    <text x="360" y="95" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="600" fill="#0e7490">
+      2. Sample
+    </text>
+    <text x="360" y="113" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#164e63">
+      Collect (S, Y) pairs
+    </text>
+    <text x="360" y="128" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#164e63">
+      from production
+    </text>
+  </g>
+
+  <!-- Arrow 2→3 -->
+  <line x1="450" y1="105" x2="490" y2="105" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 3: Fit mapping -->
+  <g>
+    <rect x="490" y="70" width="180" height="70" fill="#f0fdf4" stroke="#22c55e" stroke-width="2" rx="8"/>
+    <text x="580" y="92" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="600" fill="#166534">
+      3. Fit S→Y
+    </text>
+    <text x="580" y="108" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#14532d">
+      Calibrate + quantify
+    </text>
+    <text x="580" y="120" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#14532d">
+      uncertainty (sampling
+    </text>
+    <text x="580" y="132" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#14532d">
+      + learned mapping)
+    </text>
+  </g>
+
+  <!-- Arrow 3→4 -->
+  <line x1="580" y1="140" x2="580" y2="190" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 4: Check precision (DECISION) -->
+  <g>
+    <polygon points="580,190 660,225 580,260 500,225" fill="#ede9fe" stroke="#8b5cf6" stroke-width="2"/>
+    <text x="580" y="222" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="600" fill="#5b21b6">
+      4. Precise
+    </text>
+    <text x="580" y="238" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="600" fill="#5b21b6">
+      enough?
+    </text>
+  </g>
+
+  <!-- Branch NO: back to step 2 (collect more data) -->
+  <line x1="500" y1="225" x2="360" y2="225" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="6,3"/>
+  <line x1="360" y1="225" x2="360" y2="140" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#arrow-branch)"/>
+  <text x="420" y="218" text-anchor="middle" font-family="sans-serif" font-size="10" font-weight="600" fill="#8b5cf6">
+    No: More Y labels
+  </text>
+
+  <!-- Branch YES: proceed to step 5 -->
+  <line x1="580" y1="260" x2="580" y2="310" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="595" y="283" text-anchor="start" font-family="sans-serif" font-size="10" font-weight="600" fill="#22c55e">
+    Yes
+  </text>
+
+  <!-- Step 5: Deploy -->
+  <g>
+    <rect x="480" y="310" width="200" height="70" fill="#334155" stroke="#475569" stroke-width="2" rx="8"/>
+    <text x="580" y="335" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="600" fill="white">
+      5. Deploy
+    </text>
+    <text x="580" y="353" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#e2e8f0">
+      Use calibrated Y
+    </text>
+    <text x="580" y="368" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#e2e8f0">
+      for decisions
+    </text>
+  </g>
+
+  <!-- Arrow 5→6 -->
+  <line x1="480" y1="345" x2="440" y2="345" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 6: Monitor -->
+  <g>
+    <rect x="250" y="310" width="190" height="70" fill="#e0e7ff" stroke="#6366f1" stroke-width="2" rx="8"/>
+    <text x="345" y="325" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="600" fill="#312e81">
+      6. Monitor
+    </text>
+    <text x="345" y="343" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#3730a3">
+      Collect new (S,Y) pairs
+    </text>
+    <text x="345" y="356" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#3730a3">
+      Apply old f(S) → Ŷ
+    </text>
+    <text x="345" y="369" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#3730a3">
+      Compute Y − Ŷ
+    </text>
+  </g>
+
+  <!-- Arrow 6→7 -->
+  <line x1="345" y1="380" x2="345" y2="430" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 7: Drift detected? (DECISION) -->
+  <g>
+    <polygon points="345,430 435,465 345,500 255,465" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
+    <text x="345" y="458" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="600" fill="#92400e">
+      7. CI on mean
+    </text>
+    <text x="345" y="473" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="600" fill="#92400e">
+      residual ≠ 0?
+    </text>
+  </g>
+
+  <!-- Branch NO: back to step 6 (continue monitoring) -->
+  <!-- Exit right from step 7, go up, then left to step 6 -->
+  <line x1="435" y1="465" x2="460" y2="465" stroke="#6366f1" stroke-width="2" stroke-dasharray="6,3"/>
+  <line x1="460" y1="465" x2="460" y2="345" stroke="#6366f1" stroke-width="2" stroke-dasharray="6,3"/>
+  <line x1="460" y1="345" x2="440" y2="345" stroke="#6366f1" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#arrow-continue)"/>
+  <text x="465" y="410" text-anchor="start" font-family="sans-serif" font-size="10" font-weight="600" fill="#6366f1">
+    No: Keep
+  </text>
+  <text x="465" y="423" text-anchor="start" font-family="sans-serif" font-size="10" font-weight="600" fill="#6366f1">
+    monitoring
+  </text>
+
+  <!-- Branch YES: back to step 1 (improve S and recalibrate) -->
+  <!-- Go left from decision, then up along left side, then right to step 1 -->
+  <line x1="255" y1="465" x2="30" y2="465" stroke="#ef4444" stroke-width="2" stroke-dasharray="6,3"/>
+  <line x1="30" y1="465" x2="30" y2="105" stroke="#ef4444" stroke-width="2" stroke-dasharray="6,3"/>
+  <line x1="30" y1="105" x2="50" y2="105" stroke="#ef4444" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#arrow-recal)"/>
+  <text x="55" y="270" text-anchor="start" font-family="sans-serif" font-size="9" font-weight="600" fill="#ef4444">
+    Yes: Inspect patterns,
+  </text>
+  <text x="55" y="282" text-anchor="start" font-family="sans-serif" font-size="9" font-weight="600" fill="#ef4444">
+    improve S or Y (step 1),
+  </text>
+  <text x="55" y="294" text-anchor="start" font-family="sans-serif" font-size="9" font-weight="600" fill="#ef4444">
+    resample, recalibrate
+  </text>
+
+  <!-- Bottom note -->
+  <text x="370" y="575" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#64748b">
+    Domain engagement + residuals inform metric design; sample for precision; drift triggers recalibration
+  </text>
+</svg>
