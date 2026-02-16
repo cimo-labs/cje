@@ -65,7 +65,7 @@ def analyze_dataset(
             - "calibrated-ips": Importance sampling (requires logged_data_path with logprobs)
             - "raw-ips": Uncalibrated IPS baseline
             - "dr-cpo": DR estimator with calibrated outcome model
-            - "mrdr": Multiply robust DR estimator
+            - "mrdr": More robust DR estimator
             - "tmle": Targeted maximum likelihood estimator
             - "stacked-dr": Doubly robust (requires both logged_data_path and fresh_draws_dir)
         judge_field: Metadata field containing judge scores (default "judge_score")

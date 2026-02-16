@@ -13,7 +13,7 @@ BaseCJEEstimator (abstract)
 ├── StackedDREstimator         # Optimal stacking of DR estimators
 └── DREstimator                # Doubly robust base (abstract)
     ├── DRCPOEstimator         # Basic DR with CPO
-    ├── MRDREstimator          # Multiple robust DR
+    ├── MRDREstimator          # More robust DR
     └── TMLEEstimator          # Targeted maximum likelihood
 ```
 
@@ -31,7 +31,7 @@ Stabilizes importance weights through monotone projection with variance control.
 ### 4. Doubly Robust (DR) Estimation
 Combines direct method (outcome model) with IPS correction. Provides two chances to get the estimate right - if either the outcome model OR the weights are correct, DR is consistent.
 
-### 5. Multiple Robustness (MRDR)
+### 5. More Robust DR (MRDR)
 Achieves robustness to outcome model misspecification, propensity score misspecification, and both simultaneously through cross-fitting.
 
 ### 6. Targeted Learning (TMLE)
@@ -49,7 +49,7 @@ estimators/
 ├── calibrated_ips.py       # IPS with optional SIMCal
 ├── stacking.py             # Optimal stacking of DR estimators
 ├── dr_base.py              # DR base + DRCPOEstimator
-├── mrdr.py                 # Multiple robust DR
+├── mrdr.py                 # More robust DR
 ├── tmle.py                 # TMLE
 └── outcome_models.py       # Outcome models
 ```

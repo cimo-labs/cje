@@ -140,7 +140,7 @@ class TestE2EEstimators:
         assert all(se > 0 for se in results.standard_errors)
 
     def test_mrdr_pipeline(self, arena_sample: Any, arena_fresh_draws: Any) -> None:
-        """Test MRDR: multiply robust doubly robust estimation."""
+        """Test MRDR: more robust doubly robust estimation."""
         # 1. Prepare dataset
         import random
 

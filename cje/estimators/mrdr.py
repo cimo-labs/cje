@@ -138,7 +138,7 @@ class WeightedIsotonicOutcomeModel(BaseOutcomeModel):
 class MRDREstimator(DREstimator):
     """MRDR estimator with policy-specific weighted isotonic outcome models.
 
-    Implements Multiple Robust Doubly Robust (MRDR) estimation with separate
+    Implements More Robust Doubly Robust (MRDR) estimation with separate
     weighted outcome models for each target policy. The weights (omega) for
     each policy's outcome model are derived from that policy's importance weights.
 
