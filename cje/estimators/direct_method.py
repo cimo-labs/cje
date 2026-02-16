@@ -50,6 +50,14 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
     prompts you provided, without accounting for production context distribution
     or using importance weights.
 
+    Supported inference methods are:
+    - "bootstrap"
+    - "cluster_robust"
+    - "auto"
+
+    Legacy alias:
+    - "analytical" -> "cluster_robust"
+
     Args:
         target_policies: List of policy names to evaluate
         reward_calibrator: Optional calibrator to map judge scores to rewards.
@@ -100,6 +108,9 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         >>> estimator.add_fresh_draws("policy_b", fresh_draws_b)
         >>> result = estimator.fit_and_estimate()
     """
+
+    _VALID_INFERENCE_METHODS = {"bootstrap", "cluster_robust", "auto"}
+    _INFERENCE_METHOD_ALIASES = {"analytical": "cluster_robust"}
 
     def __init__(
         self,
@@ -153,19 +164,36 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         self.target_policies = target_policies
         self.paired_comparison = paired_comparison
 
+        normalized_inference = inference_method.strip().lower()
+        if normalized_inference in self._INFERENCE_METHOD_ALIASES:
+            mapped = self._INFERENCE_METHOD_ALIASES[normalized_inference]
+            logger.warning(
+                f"inference_method='{inference_method}' is deprecated; "
+                f"using '{mapped}' instead."
+            )
+            normalized_inference = mapped
+        if normalized_inference not in self._VALID_INFERENCE_METHODS:
+            allowed = ", ".join(sorted(self._VALID_INFERENCE_METHODS))
+            raise ValueError(
+                f"Invalid inference_method '{inference_method}'. "
+                f"Expected one of: {allowed}. "
+                "If you want oracle jackknife augmentation, set "
+                "oua_jackknife=True with a valid inference_method."
+            )
+
         # Auto-detect: when reward_calibrator=None, bootstrap would create a new
         # calibrator internally, defeating "naive" (uncalibrated) mode.
         # Default to cluster_robust in this case.
-        if reward_calibrator is None and inference_method == "bootstrap":
+        if reward_calibrator is None and normalized_inference == "bootstrap":
             logger.info(
                 "reward_calibrator=None with inference_method='bootstrap' would create "
                 "a calibrator during bootstrap. Defaulting to 'cluster_robust' for "
                 "uncalibrated estimation. Pass inference_method='cluster_robust' explicitly "
                 "to silence this message."
             )
-            inference_method = "cluster_robust"
+            normalized_inference = "cluster_robust"
 
-        self.inference_method = inference_method
+        self.inference_method = normalized_inference
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
         self.calibration_data_path = calibration_data_path
@@ -275,11 +303,11 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
 
             return False, "sufficient clusters and no coupling detected"
 
-        # Unknown method - default to cluster_robust
-        logger.warning(
-            f"Unknown inference_method '{self.inference_method}', using cluster_robust"
+        # Should be unreachable due to validation in __init__
+        raise ValueError(
+            f"Invalid inference_method '{self.inference_method}'. "
+            f"Expected one of: {', '.join(sorted(self._VALID_INFERENCE_METHODS))}"
         )
-        return False, "unknown method, defaulting to cluster_robust"
 
     def fit(self) -> None:
         """Prepare data for each policy using fresh draws.

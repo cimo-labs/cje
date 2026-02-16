@@ -363,6 +363,24 @@ class TestDirectEstimatorDefaults:
         assert estimator.use_augmented_estimator is True
         assert estimator.use_multipolicy_eif is False
 
+    def test_analytical_alias_maps_to_cluster_robust(self) -> None:
+        calibrator = JudgeCalibrator(calibration_mode="monotone")
+        estimator = CalibratedDirectEstimator(
+            target_policies=["base"],
+            reward_calibrator=calibrator,
+            inference_method="analytical",
+        )
+        assert estimator.inference_method == "cluster_robust"
+
+    def test_invalid_inference_method_raises(self) -> None:
+        calibrator = JudgeCalibrator(calibration_mode="monotone")
+        with pytest.raises(ValueError, match="Invalid inference_method"):
+            CalibratedDirectEstimator(
+                target_policies=["base"],
+                reward_calibrator=calibrator,
+                inference_method="oua_jackknife",
+            )
+
 
 # ============================================================================
 # Feature Tests - Bootstrap Behavior

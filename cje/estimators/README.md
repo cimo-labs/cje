@@ -189,8 +189,10 @@ Direct Mode automatically adapts its standard error calculation based on the dat
 **Inference Methods** (controlled via `inference_method` parameter):
 - **`bootstrap`** (default): Cluster bootstrap with calibrator refit + θ̂_aug (achieves **~95% coverage**)
 - **`cluster_robust`**: Standard cluster-robust SEs by prompt (fastest, ~22-55% coverage)
-- **`oua_jackknife`**: Adds oracle uncertainty via delete-one-fold jackknife (~77-87% coverage)
 - **`auto`**: Uses cluster_robust; switches to bootstrap when coupling detected
+
+**Separate flag:** `oua_jackknife` is not an `inference_method` value.
+Set `oua_jackknife=True` to add oracle jackknife augmentation on top of the chosen inference method.
 
 **Bootstrap with θ̂_aug** uses an AIPW-style bias correction:
 ```

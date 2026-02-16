@@ -33,7 +33,10 @@ class AnalysisConfig(BaseModel):
     )
     estimator: str = Field(
         "auto",
-        description="Estimator name: auto, calibrated-ips, stacked-dr, direct, etc.",
+        description=(
+            "Estimator name: auto, direct/calibrated-direct, calibrated-ips, raw-ips, "
+            "dr-cpo, mrdr, tmle, stacked-dr."
+        ),
     )
     judge_field: str = Field("judge_score")
     oracle_field: str = Field("oracle_label")

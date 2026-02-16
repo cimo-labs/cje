@@ -60,9 +60,14 @@ def analyze_dataset(
             Priority order when combining: calibration_data > fresh_draws > logged_data.
         estimator: Estimator type. Options:
             - "auto" (default): Automatically select based on available data
+            - "direct" / "calibrated-direct": On-policy evaluation (requires fresh_draws_dir
+              or fresh_draws_data)
             - "calibrated-ips": Importance sampling (requires logged_data_path with logprobs)
+            - "raw-ips": Uncalibrated IPS baseline
+            - "dr-cpo": DR estimator with calibrated outcome model
+            - "mrdr": Multiply robust DR estimator
+            - "tmle": Targeted maximum likelihood estimator
             - "stacked-dr": Doubly robust (requires both logged_data_path and fresh_draws_dir)
-            - "direct": On-policy evaluation (requires fresh_draws_dir)
         judge_field: Metadata field containing judge scores (default "judge_score")
         oracle_field: Metadata field containing oracle labels (default "oracle_label")
         calibration_covariates: Optional list of metadata field names to use as covariates

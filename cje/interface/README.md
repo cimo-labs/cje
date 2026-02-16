@@ -653,9 +653,11 @@ results = analyze_dataset(
 | Method | Coverage | Description |
 |--------|----------|-------------|
 | `bootstrap` (default) | **~95%** | Cluster bootstrap with θ̂_aug + calibrator refit |
-| `oua_jackknife` | ~77-87% | Adds oracle uncertainty via delete-one-fold jackknife |
 | `cluster_robust` | ~22-55% | Standard cluster-robust SEs (fast, ignores calibration uncertainty) |
 | `auto` | varies | Uses cluster_robust; switches to bootstrap when coupling detected |
+
+**Separate flag:** `oua_jackknife` is not an `inference_method` value.
+Set `estimator_config={"oua_jackknife": True}` to add oracle jackknife augmentation.
 
 **Bootstrap with θ̂_aug** is recommended for valid confidence intervals. It uses a per-policy AIPW-style bias correction (`θ̂_aug = plug-in + residual correction`) and refits the calibrator on each replicate to capture calibration/evaluation covariance.
 Treat a single global offset as a diagnostic baseline, not as a default production correction.
