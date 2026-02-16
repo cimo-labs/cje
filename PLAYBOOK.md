@@ -15,6 +15,10 @@ Advanced note: CJE supports IPS/DR variants for counterfactual OPE, but this run
 
 ![CJE operational loop: design metrics, sample, fit, precision gate, deploy, monitor, drift gate](images/cje_loop.svg)
 
+Notation used below:
+- `S`: cheap, high-coverage score signal (usually the model/judge score, e.g., `judge_score`)
+- `Y`: higher-fidelity target label/outcome (usually oracle label, e.g., `oracle_label`)
+
 The recommended loop is:
 1. Design metrics (choose/adjust `S` and `Y`)
 2. Sample (`S, Y` pairs)

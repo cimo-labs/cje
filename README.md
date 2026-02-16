@@ -59,6 +59,7 @@ results.plot_estimates(save_path="ranking.png")
 ```
 
 CJE learns the judge→oracle mapping from the labeled samples and applies it everywhere.
+Notation used in docs/playbook: `S` = judge score signal (`judge_score`), `Y` = oracle target label (`oracle_label`).
 
 Default recommendation: use **Direct mode** (`fresh_draws_*`) for most evaluation workflows.
 Advanced note: IPS/DR variants are supported for counterfactual OPE, but are not part of the default operational loop.
