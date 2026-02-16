@@ -162,7 +162,11 @@ build/
 cache/
 celerybeat-schedule
 celerybeat.pid
-cje/experiments/
+# Keep experiments scratch outputs ignored by default, but allow committed
+# source docs/code for the offset-vs-refit simulation study.
+cje/experiments/*
+!cje/experiments/offset_vs_refit_simulation.py
+!cje/experiments/offset_vs_refit_README.md
 cje/experiments/arena_10k_simplified/ablations/tables/
 cje/experiments/arena_10k_simplified/test_e2e_data/*.jsonl
 cje/experiments/arena_10k_simplified/test_e2e_data/ablation_data/
