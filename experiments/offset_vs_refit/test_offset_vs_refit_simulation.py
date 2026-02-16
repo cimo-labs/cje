@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cje.experiments.offset_vs_refit_simulation import (
+from offset_vs_refit_simulation import (
     METHODS,
     run_experiment_suite,
     summarize_results,

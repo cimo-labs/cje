@@ -40,19 +40,25 @@ From repo root:
 
 ```bash
 cd CJE/cje
-python -m cje.experiments.offset_vs_refit_simulation \
+python experiments/offset_vs_refit/offset_vs_refit_simulation.py \
   --audit-sizes 20,50,100,200 \
   --n-reps 60 \
-  --output-dir cje/experiments/offset_vs_refit_results
+  --output-dir experiments/offset_vs_refit/results
 ```
 
 Faster smoke run:
 
 ```bash
-python -m cje.experiments.offset_vs_refit_simulation \
+python experiments/offset_vs_refit/offset_vs_refit_simulation.py \
   --n-reps 8 \
   --audit-sizes 20,50 \
   --no-plots
+```
+
+Run experiment tests:
+
+```bash
+pytest -q experiments/offset_vs_refit/test_offset_vs_refit_simulation.py
 ```
 
 ## Outputs

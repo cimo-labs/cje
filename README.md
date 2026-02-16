@@ -169,6 +169,7 @@ Walk through a complete example: compare policies, check if calibration transfer
 - [Diagnostics System](cje/diagnostics/README.md) — Uncertainty quantification, transportability
 - [Estimators](cje/estimators/README.md) — Direct, IPS, DR implementations
 - [Interface/API](cje/interface/README.md) — `analyze_dataset` implementation
+- [Experiments](experiments/README.md) — repo-only simulation studies (not shipped in PyPI)
 
 **Bridges (Promptfoo / TruLens / LangSmith / OpenCompass → CJE)**
 

@@ -658,7 +658,7 @@ def main() -> int:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("cje/experiments/offset_vs_refit_results"),
+        default=Path("experiments/offset_vs_refit/results"),
         help="Directory for CSV/JSON/plots.",
     )
     parser.add_argument(
