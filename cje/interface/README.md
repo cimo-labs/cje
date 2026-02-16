@@ -22,7 +22,7 @@ print(f"Policy value: {results.estimates[0]:.3f} ± {1.96*results.standard_error
 
 **Use Direct mode.** It's simple, reliable, and works for the vast majority of LLM evaluation tasks.
 
-*Footnote (advanced): IPS/DR variants are supported for explicit counterfactual OPE workflows. They require strong overlap and additional diagnostics. See `cje/estimators/README.md` for internals.*
+Advanced: IPS/DR variants are supported for explicit counterfactual OPE workflows. They require strong overlap and additional diagnostics. See `cje/estimators/README.md` for internals.
 
 ### What are fresh draws?
 Fresh draws are new responses from your target policies evaluated by the judge.
@@ -141,13 +141,13 @@ responses/
 
 **AutoCal-R in Direct mode**: If any fresh draws have `oracle_label`, Direct mode automatically applies AutoCal-R to learn judge→oracle calibration and uses calibrated rewards. Otherwise, uses raw judge scores. More oracle labels = better calibration (5-10% is often sufficient).
 
-*Footnote (advanced): IPS/DR logged-data schema and counterfactual diagnostics are documented in `cje/estimators/README.md`.*
+Advanced: IPS/DR logged-data schema and counterfactual diagnostics are documented in `cje/estimators/README.md`.
 
 **Working example:** See [`examples/arena_sample/`](../../examples/arena_sample/) for complete dataset examples.
 
 ## Troubleshooting
 
-*Footnote (advanced): IPS/DR-specific troubleshooting (ESS, overlap, logprob coverage) lives in `cje/estimators/README.md`.*
+Advanced: IPS/DR-specific troubleshooting (ESS, overlap, logprob coverage) lives in `cje/estimators/README.md`.
 
 ### Missing judge scores
 **Error**: "Judge field 'judge_score' not found"
@@ -189,7 +189,7 @@ def analyze_dataset(
 - `combine_oracle_sources`: Pool oracle labels from all sources (calibration + logged + fresh) for maximum data efficiency. Default: `True`. Set `False` to use only calibration_data_path.
 - `estimator`: Estimator name or "auto" for automatic selection
   - Recommended: `direct` (or `auto` with fresh draws)
-  - *Footnote (advanced): `calibrated-ips`, `stacked-dr`, `dr-cpo`, `tmle`, `mrdr`, etc. for counterfactual OPE.*
+  - Advanced: `calibrated-ips`, `stacked-dr`, `dr-cpo`, `tmle`, `mrdr`, etc. for counterfactual OPE.
 - `judge_field`: Metadata field with judge scores (default: "judge_score")
 - `oracle_field`: Metadata field with oracle labels (default: "oracle_label")
 - `calibration_covariates`: Optional list of metadata field names to use as covariates in two-stage reward calibration (e.g., `["domain", "difficulty"]`). Helps handle confounding where judge scores at fixed S have different oracle outcomes based on observable features. Only works with two-stage or auto calibration mode.
@@ -393,7 +393,7 @@ results = analyze_dataset(
 1. Two-stage calibration learns g(S, X_cov) → rank → isotonic
 2. Covariates help handle non-monotone patterns in judge scores
 3. Direct mode uses covariates in the calibration mapping
-4. *Footnote (advanced): IPS/DR variants also support covariate-adjusted calibration*
+4. Advanced: IPS/DR variants also support covariate-adjusted calibration.
 
 **Requirements:**
 - Covariate fields must exist in `sample.metadata` for all samples
@@ -493,6 +493,6 @@ python -m cje.interface.hydra_entry \
 2. Use bootstrap inference for reliable confidence intervals.
 3. Run transport audits on small probe slices over time.
 
-*Footnote (advanced): IPS/DR modes remain available for counterfactual OPE with strong overlap assumptions and diagnostics.*
+Advanced: IPS/DR modes remain available for counterfactual OPE with strong overlap assumptions and diagnostics.
 
 For more details, see the [examples](../../examples/) and full documentation.

@@ -61,7 +61,7 @@ results.plot_estimates(save_path="ranking.png")
 CJE learns the judge→oracle mapping from the labeled samples and applies it everywhere.
 
 Default recommendation: use **Direct mode** (`fresh_draws_*`) for most evaluation workflows.
-*Footnote: IPS/DR variants are supported for advanced counterfactual OPE, but are not part of the default operational loop.*
+Advanced note: IPS/DR variants are supported for counterfactual OPE, but are not part of the default operational loop.
 
 ---
 

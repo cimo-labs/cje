@@ -7,11 +7,11 @@ This is the operational runbook for:
 
 It is written against the current CJE API in this repo.
 
-*Footnote: CJE supports IPS/DR variants for advanced counterfactual OPE, but this runbook intentionally focuses on the default Direct-mode operating loop.*
+Advanced note: CJE supports IPS/DR variants for counterfactual OPE, but this runbook intentionally focuses on the default Direct-mode operating loop.
 
 ---
 
-## 0) Canonical Operational Loop (from `cje-loop.svg`)
+## Canonical Operational Loop
 
 ![CJE operational loop: design metrics, sample, fit, precision gate, deploy, monitor, drift gate](images/cje_loop.svg)
 
