@@ -302,6 +302,18 @@ class AnalysisService:
             scale_factor = oracle_scale.max_val - oracle_scale.min_val
             results.standard_errors = results.standard_errors * scale_factor
 
+            # Also denormalize bootstrap CIs if present
+            if "bootstrap_ci" in results.metadata:
+                boot_ci = results.metadata["bootstrap_ci"]
+                boot_ci["lower"] = [
+                    float(v * scale_factor + oracle_scale.min_val)
+                    for v in boot_ci["lower"]
+                ]
+                boot_ci["upper"] = [
+                    float(v * scale_factor + oracle_scale.min_val)
+                    for v in boot_ci["upper"]
+                ]
+
             # Add normalization metadata
             results.metadata["normalization"] = norm_info.to_dict()
 
@@ -316,6 +328,18 @@ class AnalysisService:
             results.estimates = judge_scale.inverse_array(results.estimates)
             scale_factor = judge_scale.max_val - judge_scale.min_val
             results.standard_errors = results.standard_errors * scale_factor
+
+            # Also denormalize bootstrap CIs if present
+            if "bootstrap_ci" in results.metadata:
+                boot_ci = results.metadata["bootstrap_ci"]
+                boot_ci["lower"] = [
+                    float(v * scale_factor + judge_scale.min_val)
+                    for v in boot_ci["lower"]
+                ]
+                boot_ci["upper"] = [
+                    float(v * scale_factor + judge_scale.min_val)
+                    for v in boot_ci["upper"]
+                ]
 
             results.metadata["normalization"] = norm_info.to_dict()
             results.metadata["normalization"]["results_scale"] = "judge_original"
