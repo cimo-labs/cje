@@ -4,7 +4,7 @@
 
 # CJE - Causal Judge Evaluation
 
-**Your LLM judge scores are noisy and weakly calibrated. CJE calibrates them to what actually matters.**
+**Your LLM judge scores are noisy and biased. CJE calibrates them to what actually matters.**
 
 [![arXiv](https://img.shields.io/badge/arXiv-2512.11150-b31b1b.svg)](https://arxiv.org/abs/2512.11150)
 [![Dataset](https://img.shields.io/badge/HF-Dataset-yellow)](https://huggingface.co/datasets/elandy/cje-chatbot-arena)
