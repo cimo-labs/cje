@@ -15,22 +15,18 @@ Advanced note: CJE supports IPS/DR variants for counterfactual OPE, but this run
 
 ![CJE operational loop: design metrics, sample, fit, precision gate, deploy, monitor, drift gate](images/cje_loop.svg)
 
-Notation used below:
-- `S`: cheap, high-coverage score signal (usually the model/judge score, e.g., `judge_score`)
-- `Y`: higher-fidelity target label/outcome (usually oracle label, e.g., `oracle_label`)
-
 The recommended loop is:
 1. Design metrics (choose/adjust `S` and `Y`)
-2. Sample (`S, Y` pairs)
-3. Fit `S -> Y` with uncertainty
+2. Sample (judge scores + oracle labels)
+3. Fit judge→oracle mapping with uncertainty
 4. Precision gate: precise enough?
    - No -> collect more `Y` labels, return to Step 2
    - Yes -> deploy
 5. Deploy
-6. Monitor with new `(S, Y)` and residuals `Y - Y_hat`
+6. Monitor with new oracle labels and residuals
 7. Drift gate: CI on mean residual excludes 0?
    - No -> keep monitoring (Step 6)
-   - Yes -> inspect failure patterns, improve `S`/`Y`, then return to Step 1
+   - Yes -> inspect failure patterns, improve judge/oracle, then return to Step 1
 
 Two-loop framing:
 - **Inner calibration loop:** Steps 1-4
@@ -70,7 +66,7 @@ Notes:
 
 ## 2) Run a Transport Audit (Probe Protocol)
 
-Use a small oracle-labeled probe slice (typically 40-60 rows) on the target policy/group.
+Use a small oracle-labeled probe slice (typically 40-60 rows) on the target policy/group. `results.calibrator` is the fitted calibration model returned by `analyze_dataset` in Section 1.
 
 ```python
 import json
@@ -87,9 +83,9 @@ print(diag.summary())
 # Transport: PASS/WARN/FAIL | Group: ... | N=... | δ̂: ... | Action: ...
 ```
 
-### Current Status Rules (Implementation)
+### Audit Thresholds
 
-The classifier in `cje/diagnostics/transport.py` uses:
+The classifier uses:
 - `PASS`: `0` is inside the 95% CI for `δ̂ = E[Y - f(S)]`
 - `WARN`: CI excludes 0, and `abs(δ̂) < 0.05`
 - `FAIL`: CI excludes 0, and `abs(δ̂) >= 0.05`
@@ -124,10 +120,8 @@ Interpretation:
 - Clear bias; do not rely on unchanged calibrator for high-stakes decisions.
 
 Action:
-- Collect additional target-policy oracle labels (typically 100-200, stratified) and/or improve metric design.
-- Re-estimate with transport-aware bootstrap correction.
-- If failures persist, refit calibration with richer target-era data and covariates.
-- Treat this as Step 7 "drift detected" -> return to Step 1 of the loop.
+- Follow the correction protocol in Section 5 (collect labels → EIF correction → escalate to refit if needed).
+- Treat this as Step 7 "drift detected" → return to Step 1 of the loop.
 
 ---
 
@@ -137,83 +131,28 @@ When probe results pass, treat probe labels as additional calibration signal for
 
 Recommended pattern:
 1. Append validated probe labels to a maintained calibration dataset.
-2. Re-run analysis with pooled oracle sources.
-
-```python
-from cje import analyze_dataset
-
-results_next = analyze_dataset(
-    fresh_draws_dir="responses/next_batch",
-    calibration_data_path="data/oracle_history.jsonl",  # includes prior + passed probes
-    combine_oracle_sources=True,
-    estimator="direct",
-    estimator_config={
-        "inference_method": "bootstrap",
-        "n_bootstrap": 2000,
-        "use_augmented_estimator": True,
-    },
-)
-```
-
-Why this is preferred:
-- It preserves data efficiency by pooling all high-quality labels.
-- Bootstrap refit captures calibration uncertainty with the expanded label set.
+2. Re-run the Section 1 analysis adding `calibration_data_path="data/oracle_history.jsonl"` and `combine_oracle_sources=True` to pool all high-quality labels.
 
 ---
 
 ## 5) Correct for Failed Audits
 
-### Step A: Expand target oracle slice
+### Step A: Collect more target-policy oracle labels
 
-- Sample across score/risk deciles, not only difficult prompts.
+- Sample 100-200 labels across score deciles (not only difficult prompts).
 - Keep labeling random within strata to preserve ignorability.
 
-### Step B: Re-estimate with transport-aware correction
+### Step B: Apply policy-specific EIF correction (default)
 
-Use `calibration_policy` when calibration was learned on a base policy and you suspect transport drift to targets.
+Re-run `analyze_dataset` with the expanded oracle labels pooled in (same pattern as Section 4). The augmented estimator (`use_augmented_estimator=True`) automatically applies per-policy residual correction using the new labels — this fixes mean drift without refitting the calibrator.
 
-```python
-from cje import analyze_dataset
+### Step C: Escalate to refit if residuals show structural drift
 
-results_corrected = analyze_dataset(
-    fresh_draws_dir="responses/current_batch",
-    calibration_data_path="data/base_plus_recent_oracle.jsonl",
-    combine_oracle_sources=True,
-    estimator="direct",
-    estimator_config={
-        "inference_method": "bootstrap",
-        "n_bootstrap": 2000,
-        "use_augmented_estimator": True,
-        "calibration_policy": "base",  # fit calibrator on base-policy oracle slice
-    },
-)
-```
+If decile residuals trend with score or covariates (not just a level shift), refit with `include_response_length=True` and/or `calibration_covariates`.
 
-What this does:
-- Fits calibration using the specified base policy oracle subset.
-- Uses residual correction terms over oracle labels across policies, which captures transport bias in target policies.
+**How to decide:** Plot `Y - f_old(S)` by score decile. Flat = Step B suffices. Trending = Step C needed.
 
-### Step C: Move to richer calibration if FAIL persists
-
-If decile residuals show systematic regional miscalibration:
-- increase target-era oracle coverage,
-- add covariates likely tied to judge bias,
-- allow two-stage calibration via `auto` mode.
-
-```python
-results_refit = analyze_dataset(
-    fresh_draws_dir="responses/current_batch",
-    calibration_data_path="data/recent_target_oracle.jsonl",
-    combine_oracle_sources=True,
-    include_response_length=True,
-    calibration_covariates=["domain", "difficulty"],
-    estimator="direct",
-    estimator_config={"inference_method": "bootstrap"},
-)
-```
-
-Important:
-- Treat global offset-only correction as a diagnostic baseline, not default production correction.
+For the full analysis of correction strategies, see [Post-Audit Drift Correction](https://cimolabs.com/research/offset-vs-refit).
 
 ---
 
@@ -224,19 +163,17 @@ Budgeting uses the planning model:
 - costs `B = c_S * n + c_Y * m`
 - optimize with square-root allocation law.
 
-### Pilot-based planning (recommended)
-
 ```python
 from cje.data.fresh_draws import load_fresh_draws_auto
 from cje.diagnostics import CostModel, fit_variance_model, plan_evaluation, plan_for_mde
 
+# Fit variance model from pilot data (recommended)
 base_pilot = load_fresh_draws_auto("responses/pilot", "base")
+variance_model = fit_variance_model(base_pilot, n_replicates=150, verbose=True)
 
-variance_model = fit_variance_model(
-    base_pilot,
-    n_replicates=150,
-    verbose=True,
-)
+# No pilot yet? Use simulation instead:
+# from cje.diagnostics import simulate_variance_model
+# variance_model = simulate_variance_model(r2=0.7, verbose=True)
 
 cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
 
@@ -252,17 +189,6 @@ plan_target = plan_for_mde(
     cost_model=cost,
 )
 print(plan_target.total_cost)
-```
-
-### No pilot yet: simulation-based planning
-
-```python
-from cje.diagnostics import simulate_variance_model, plan_evaluation, CostModel
-
-variance_model = simulate_variance_model(r2=0.7, verbose=True)
-cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-plan = plan_evaluation(budget=5000, variance_model=variance_model, cost_model=cost)
-print(plan.summary())
 ```
 
 ### Label budgeting rules
@@ -290,5 +216,5 @@ Per evaluation cycle:
 - Inference: `inference_method="bootstrap"`, `n_bootstrap=2000`
 - Debiasing: `use_augmented_estimator=True`
 - Probe size: 40-60 oracle labels per target group
-- FAIL response: collect 100-200 additional target labels + transport-aware re-estimation
+- FAIL response: collect 100-200 target labels, re-run with pooled labels (EIF correction is automatic); escalate to refit if residuals are score-conditional
 - Planning: `fit_variance_model` + `plan_evaluation` / `plan_for_mde`
