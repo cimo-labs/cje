@@ -296,7 +296,7 @@ print(explanation)
 
 # Check if calibration would help
 if metrics.can_calibrate:
-    print("SIMCal calibration could improve ESS")
+    print("Weight stabilization could improve ESS")
 else:
     print("Overlap too poor for calibration to help")
 ```
@@ -378,7 +378,7 @@ Display utilities in `display.py` format diagnostics for tables and comparisons.
 
 **Problem**: Heavy tails (Hill index < 2)
 - **Cause**: Extreme importance weights
-- **Solution**: Tighten variance cap in SIMCal
+- **Solution**: Tighten the weight-stabilization variance cap
 
 **Problem**: Poor calibration (R² < 0.5)
 - **Cause**: Judge doesn't predict oracle well
@@ -577,7 +577,7 @@ Where:
 
 **Coverage comparison (from ablation study):**
 
-| Oracle | Cluster-Robust | OUA Jackknife | Bootstrap+θ̂_aug |
+| Oracle | Cluster-Robust | calibration-aware Jackknife | Bootstrap+θ̂_aug |
 |--------|----------------|---------------|------------------|
 | 5%     | 22%            | 78%           | **94%**          |
 | 10%    | 32%            | 77%           | **96%**          |
@@ -638,19 +638,19 @@ where G is the number of clusters and n is the total number of rows.
 - **Two-way dependence** (e.g., user × day): Use two-way clustering formula (sum one-way variances, subtract intersection)
 - **Time series**: Use moving-block bootstrap with block length ≈ n^(1/3)
 
-### Component 2: Oracle Uncertainty Aware (OUA) Jackknife
+### Component 2: Oracle Uncertainty Aware (calibration-aware) Jackknife
 
 **What it captures:** Uncertainty from learning the calibration function f(S) on a finite oracle slice.
 
-**Why it matters:** When oracle size is small (common: 5-10% coverage), treating the calibrator as fixed drastically understates total uncertainty. OUA properly accounts for this.
+**Why it matters:** When oracle size is small (common: 5-10% coverage), treating the calibrator as fixed drastically understates total uncertainty. calibration-aware properly accounts for this.
 
-**Computing OUA variance:**
+**Computing calibration-aware variance:**
 
 1. Split oracle labels into K folds (same folds used for cross-fitting)
 2. For each fold k:
    - Refit calibrator f^(-k) on oracle \ fold_k (let auto mode selection re-decide mono vs two-stage)
    - Recompute calibrated rewards R^(-k) = f^(-k)(S)
-   - **For IPS/DR**: Re-select SIMCal weights (selection depends on R)
+   - **For IPS/DR**: Re-select stabilized weights (selection depends on R)
    - **For DR**: Refit outcome model (depends on R)
    - Compute point estimate θ_hat^(-k)
 
@@ -660,7 +660,7 @@ Var_OUA = ((K-1)/K) * Σ_{k=1}^K (θ_hat^(-k) - θ_bar)²
 ```
 where `θ_bar = (1/K) Σ_k θ_hat^(-k)`
 
-**Key principle:** OUA captures **oracle-only** uncertainty. It holds the eval log fixed and only refits components that depend on calibrator outputs. This maintains independence with Var_CR.
+**Key principle:** calibration-aware captures **oracle-only** uncertainty. It holds the eval log fixed and only refits components that depend on calibrator outputs. This maintains independence with Var_CR.
 
 ### Combining the Components
 
@@ -689,7 +689,7 @@ Then use t_{1-α/2, df_eff} critical value (e.g., qt(0.975, df_eff) in R).
 For complete transparency, always report:
 
 1. **Point estimate** with 95% CI using SE_total
-2. **OUA share**: `Var_OUA / Var_total` (shows which component dominates)
+2. **calibration uncertainty share**: `Var_OUA / Var_total` (shows which component dominates)
 3. **Cluster structure**: Number of clusters G, cluster size distribution
 4. **Comparison**: i.i.d. SE vs cluster-robust SE (shows dependence penalty)
 
@@ -700,7 +700,7 @@ Estimate: 0.756 [0.712, 0.800]  (95% CI, df=42)
 
 Variance decomposition:
   Cluster-robust (eval): 0.0012  (72%)
-  OUA (oracle):          0.0005  (28%)
+  calibration-aware (oracle):          0.0005  (28%)
   Total:                 0.0017
 
 Cluster structure: G=45 clusters (mean size=22, range [5, 67])
@@ -726,7 +726,7 @@ def compute_cluster_robust_variance(psi, cluster_ids):
     Var_CR = (G / (G - 1)) * (cluster_sums ** 2).sum() / (n ** 2)
     return Var_CR, G
 
-# Component 2: OUA jackknife (oracle-only refits)
+# Component 2: calibration-aware jackknife (oracle-only refits)
 def compute_oua_variance(dataset, oracle_folds, estimator_config):
     """
     Refit calibrator K times, holding eval log fixed
@@ -737,12 +737,12 @@ def compute_oua_variance(dataset, oracle_folds, estimator_config):
 
     for k in range(K):
         # Refit calibrator on oracle \ fold_k
-        f_minus_k = fit_autocal(oracle_minus_fold=k)  # auto mode selection
+        f_minus_k = fit_reward_calibration(oracle_minus_fold=k)  # auto mode selection
 
         # Recompute calibrated rewards
         R_minus_k = f_minus_k(dataset.judge_scores)
 
-        # For IPS/DR: re-select SIMCal (depends on R)
+        # For IPS/DR: re-select weight stabilization (depends on R)
         if mode in ["ips", "dr"]:
             w_tilde = simcal_select(raw_weights, index=S, rewards=R_minus_k)
 
@@ -802,13 +802,13 @@ from cje import analyze_dataset
 result = analyze_dataset(
     fresh_draws_dir="responses/",
     cluster_id_field="user_id",  # Enable cluster-robust SEs
-    n_oracle_folds=5              # OUA jackknife folds (default)
+    n_oracle_folds=5              # calibration-aware jackknife folds (default)
 )
 
 # Access two-component variance decomposition
 print(f"Cluster-robust variance: {result.var_cluster_robust:.4f}")
-print(f"OUA variance: {result.var_oua:.4f}")
-print(f"OUA share: {result.oua_share:.1%}")
+print(f"calibration-aware variance: {result.var_oua:.4f}")
+print(f"calibration uncertainty share: {result.oua_share:.1%}")
 
 # Confidence intervals use SE_total = √(Var_CR + Var_OUA)
 for policy, est in result.estimates.items():
@@ -886,13 +886,13 @@ The final estimate for each policy is: `mean(f̂(S)) + residual_correction`, whi
 - Result: Severe undercoverage (86.9% instead of 95% observed empirically)
 - Fix: Always specify `cluster_id_field` when rows have dependence
 
-**❌ Ignoring OUA with small oracle slices**
+**❌ Ignoring calibration-aware with small oracle slices**
 - Result: CIs too narrow, overconfidence in precision
-- Fix: CJE computes OUA by default; check OUA share in reports
+- Fix: CJE computes calibration-aware by default; check calibration uncertainty share in reports
 
 **❌ Not reporting which component dominates**
 - Result: Unclear whether to add more prompts or more labels
-- Fix: Always report OUA share—if >50%, labels are the bottleneck
+- Fix: Always report calibration uncertainty share—if >50%, labels are the bottleneck
 
 **❌ Mixing cluster levels (e.g., clustering by session but pairing by user)**
 - Result: Incorrect variance, wrong CIs

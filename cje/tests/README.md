@@ -13,7 +13,7 @@ tests/
 │
 ├── E2E Tests (User Workflows)
 │   ├── test_e2e_estimators.py            # Complete pipelines for all estimators
-│   ├── test_e2e_features.py              # SIMCal, cross-fitting, OUA
+│   ├── test_e2e_features.py              # Weight stabilization, cross-fitting, calibration-aware inference
 │   ├── test_interface_integration.py     # High-level API testing
 │   └── test_examples.py                  # Tutorial notebook and quickstart validation
 │
@@ -29,7 +29,7 @@ tests/
 │   ├── test_data_loaders.py              # Data loading functions
 │   ├── test_normalization.py             # Auto-normalization for arbitrary scales
 │   ├── test_calibration_data_smoke.py    # calibration_data_path parameter
-│   ├── test_oua_at_full_coverage.py      # OUA skipping at 100% coverage
+│   ├── test_oua_at_full_coverage.py      # Calibration-aware inference skipped at 100% coverage
 │   ├── test_transport_diagnostics.py     # Transportability probe protocol
 │   ├── test_transport_bootstrap.py       # Transport bootstrap testing
 │   ├── test_cle_diagnostics.py           # CLE and TTC diagnostics
@@ -53,7 +53,7 @@ Real subset from Arena 5K evaluation:
 - 1000 samples with actual judge scores and oracle labels
 - 4 target policies: base, clone, parallel_universe_prompt, unhelpful
 - Fresh draws for each policy enabling DR estimation
-- Ground truth for validation (48% oracle coverage in base policy for AutoCal-R)
+- Ground truth for validation (48% oracle coverage in base policy for reward calibration)
 
 **Note**: The same arena sample data is used in `examples/arena_sample/` for the tutorial notebook and quickstart script.
 

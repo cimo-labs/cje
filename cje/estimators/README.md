@@ -9,7 +9,7 @@ Causal inference methods for unbiased off-policy evaluation of LLMs, transformin
 ```
 BaseCJEEstimator (abstract)
 ├── CalibratedDirectEstimator  # Direct (on-policy) evaluation with fresh draws
-├── CalibratedIPS              # IPS with optional SIMCal weight calibration
+├── CalibratedIPS              # IPS with optional weight stabilization
 ├── StackedDREstimator         # Optimal stacking of DR estimators
 └── DREstimator                # Doubly robust base (abstract)
     ├── DRCPOEstimator         # Basic DR with CPO
@@ -25,7 +25,7 @@ Evaluates target policies using fresh draws sampled directly from those policies
 ### 2. Importance Sampling (IPS)
 Foundation of off-policy evaluation. Reweights logged data to estimate performance under new policies using importance weights W = π_target/π_base.
 
-### 3. SIMCal Weight Calibration
+### 3. Weight stabilization
 Stabilizes importance weights through monotone projection with variance control. Independent of reward calibration. CalibratedIPS now uses outer CV by default (`use_outer_cv=True`) for honest inference accounting for weight learning uncertainty.
 
 ### 4. Doubly Robust (DR) Estimation
@@ -46,7 +46,7 @@ Forms optimal convex combination of DR estimators by minimizing combined influen
 estimators/
 ├── base_estimator.py       # Abstract base
 ├── direct_method.py        # Direct (on-policy) estimator
-├── calibrated_ips.py       # IPS with optional SIMCal
+├── calibrated_ips.py       # IPS with optional weight stabilization
 ├── stacking.py             # Optimal stacking of DR estimators
 ├── dr_base.py              # DR base + DRCPOEstimator
 ├── mrdr.py                 # More robust DR
@@ -273,7 +273,7 @@ standard_errors = np.sqrt(if_variance/n + mc_variance + oracle_variance)
 
 # Check metadata for what's included
 result.metadata["se_components"]["includes_mc_variance"]  # True for DR
-result.metadata["se_components"]["includes_oracle_uncertainty"]  # True if OUA applied
+result.metadata["se_components"]["includes_oracle_uncertainty"]  # True if calibration-aware applied
 ```
 
 ### Convenience Method
@@ -311,8 +311,8 @@ StackedDREstimator(
 ```
 Uses regularized covariance estimation to handle highly correlated component estimators.
 
-### Oracle Uncertainty Augmentation (OUA)
-All estimators support OUA via delete-one-fold jackknife to account for calibrator uncertainty from finite oracle samples. **Note: OUA is automatically skipped at 100% oracle coverage** since there's no oracle uncertainty when all samples have ground truth labels.
+### Oracle Uncertainty Augmentation (calibration-aware)
+All estimators support calibration-aware via delete-one-fold jackknife to account for calibrator uncertainty from finite oracle samples. **Note: calibration-aware is automatically skipped at 100% oracle coverage** since there's no oracle uncertainty when all samples have ground truth labels.
 
 ```python
 # Enabled by default
@@ -324,7 +324,7 @@ result = estimator.fit_and_estimate()
 # Check if oracle uncertainty was added
 if "se_components" in result.metadata:
     if result.metadata["se_components"].get("oracle_uncertainty_skipped"):
-        print("OUA skipped - 100% oracle coverage")
+        print("calibration-aware skipped - 100% oracle coverage")
     elif result.metadata["se_components"].get("includes_oracle_uncertainty"):
         print("Oracle uncertainty included in standard_errors")
 ```
@@ -374,7 +374,7 @@ Always computed and stored for proper inference, policy comparison, and diagnost
 - **IPS**: Horvitz & Thompson (1952)
 - **Doubly Robust**: Robins et al. (1994)
 - **TMLE**: van der Laan & Rubin (2006)
-- **SIMCal**: Surrogate-indexed monotone calibration (2024)
+- **`SIMCalibrator`**: Surrogate-indexed monotone calibration stack (2024)
 
 ## Summary
 

@@ -48,6 +48,10 @@ results.plot_estimates(save_path="ranking.png")  # requires pip install "cje-eva
 
 CJE learns the judge→oracle mapping from labeled samples and applies it everywhere. Label 5–25% of samples with your oracle (human raters, strong model, downstream metric). Any bounded scale works automatically (0–1, 0–100, Likert 1–5).
 
+**Default workflow:** If you can generate fresh responses on a shared prompt set, use **Direct + two-stage calibration**. Use IPS/DR only when you truly need off-policy estimation and overlap diagnostics look healthy enough to trust reweighting.
+
+**What CJE covers:** reward calibration, calibration-aware inference, transport audits, and overlap diagnostics for counterfactual OPE.
+
 ---
 
 ## Real-World Validation

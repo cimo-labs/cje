@@ -2,11 +2,11 @@
 
 ## Overview
 
-The calibration module implements **AutoCal-R** (Automatic Calibration for Rewards), the core mathematical machinery that maps judge scores to oracle labels with automatic mode selection. The module also provides **SIMCal-W** (Surrogate-Indexed Monotone Calibration for Weights), a separate method for stabilizing importance weights in off-policy estimation. These are independent calibration techniques:
+The calibration module implements **reward calibration** (Automatic Calibration for Rewards), the core mathematical machinery that maps judge scores to oracle labels with automatic mode selection. The module also provides **weight stabilization** (Surrogate-Indexed Monotone Calibration for Weights), a separate method for stabilizing importance weights in off-policy estimation. These are independent calibration techniques:
 
-1. **AutoCal-R (Reward Calibration)**: Maps judge scores to oracle labels with automatic mode selection between monotone and two-stage calibration
-2. **SIMCal-W (Weight Stabilization)**: Stabilizes importance weights for off-policy estimation via surrogate-indexed monotone projection (separate from AutoCal-R)
-3. **Cross-fitted models**: Enables orthogonality guarantees for doubly robust methods (used by both AutoCal-R and SIMCal-W when needed)
+1. **reward calibration (Reward Calibration)**: Maps judge scores to oracle labels with automatic mode selection between monotone and two-stage calibration
+2. **weight stabilization (Weight Stabilization)**: Stabilizes importance weights for off-policy estimation via surrogate-indexed monotone projection (separate from reward calibration)
+3. **Cross-fitted models**: Enables orthogonality guarantees for doubly robust methods (used by both reward calibration and weight stabilization when needed)
 
 ## When to Use Each Calibration
 
@@ -15,7 +15,7 @@ The calibration module implements **AutoCal-R** (Automatic Calibration for Rewar
 - You want to map judge scores → oracle scale
 - You're using any estimation method
 
-### Use **Weight Calibration** (SIMCal) when:
+### Use **Weight stabilization** (`SIMCalibrator`) when:
 - Importance weights have high variance
 - You want to stabilize IPS estimates
 - You're using CalibratedIPS or Calibrated DR estimators
@@ -35,21 +35,21 @@ calibration/
 ├── isotonic.py          # Core isotonic regression and variance control
 ├── judge.py             # Judge score calibration to oracle labels
 ├── oracle_slice.py      # Oracle slice configuration
-└── simcal.py            # Stacked SIMCal implementation
+└── simcal.py            # Weight stabilization implementation (`SIMCalibrator`)
 ```
 
 ## Core Concepts
 
-### 1. Judge Score Calibration (AutoCal-R Core)
-AutoCal-R maps cheap LLM judge scores to expensive oracle labels with automatic mode selection. Default is 'auto' mode which automatically chooses between:
+### 1. Judge Score Calibration (reward calibration Core)
+reward calibration maps cheap LLM judge scores to expensive oracle labels with automatic mode selection. Default is 'auto' mode which automatically chooses between:
 - **Monotone calibration**: Standard isotonic regression (when relationship is monotone)
 - **Flexible calibration**: Two-stage g(S)→isotonic for non-monotone relationships
 
-Auto mode detects non-monotonicity by comparing regional performance and selects the appropriate method. The selected mode is stored in metadata for transparency. This automatic selection is a key feature of AutoCal-R.
+Auto mode detects non-monotonicity by comparing regional performance and selects the appropriate method. The selected mode is stored in metadata for transparency. This automatic selection is a key feature of reward calibration.
 
 **Why isotonic?** Isotonic regression is the default because it imposes exactly the right inductive bias (monotonicity) while making minimal assumptions, preserves oracle KPI levels by construction, and is highly efficient with small label budgets (5-10% coverage often sufficient). See the detailed rationale below.
 
-### 2. Weight Calibration (SIMCal)
+### 2. Weight stabilization (`SIMCalibrator`)
 Stabilizes importance weights through surrogate-indexed monotone projection:
 - Projects weights to be monotone with an ordering index
 - Enforces variance constraints via blending
@@ -59,8 +59,8 @@ Stabilizes importance weights through surrogate-indexed monotone projection:
 For doubly robust methods, provides out-of-fold predictions to maintain orthogonality between nuisance functions.
 Stacking relies on the component estimators' influence functions and does not re-fit nuisances at the stack level.
 
-### 4. Oracle-Uncertainty Aware (OUA) Inference
-When we calibrate judge scores using only a subset of oracle labels (e.g., 10% coverage), the calibration function f̂ itself has uncertainty. **OUA** uses delete-one-fold jackknife to add a **variance** component to standard errors, accounting for calibration learning uncertainty. Used by all Cal-IPS/DR estimators and enabled by default.
+### 4. calibration-aware inference Inference
+When we calibrate judge scores using only a subset of oracle labels (e.g., 10% coverage), the calibration function f̂ itself has uncertainty. **calibration-aware** uses delete-one-fold jackknife to add a **variance** component to standard errors, accounting for calibration learning uncertainty. Used by all Cal-IPS/DR estimators and enabled by default.
 
 ## Why Isotonic Regression for Reward Calibration?
 
@@ -92,7 +92,7 @@ With few oracle labels (5-10% coverage is often sufficient), shape constraints b
 The 1-D monotone structure makes diagnostics tractable:
 - **Reliability by region**: Easy to compute and visualize
 - **S-coverage & edge slopes**: Fragility is visible; fix with targeted labels
-- **OUA jackknife**: Delete-one-fold refits propagate calibrator noise cleanly
+- **calibration-aware jackknife**: Delete-one-fold refits propagate calibrator noise cleanly
 
 ### Consistency Guarantees
 When the true E[Y|S] is monotone, f̂ is L²-consistent. When it's not, the two-stage variant (g(S)→isotonic) provides a safety net by learning a smooth transformation first.
@@ -102,7 +102,7 @@ When the true E[Y|S] is monotone, f̂ is L²-consistent. When it's not, the two-
 - **Two-stage flexible**: When S has systematic bias (length effects, prompt families)
 - **Unconstrained methods**: Only if monotonicity fails and you have abundant oracle labels
 
-**Bottom line**: Isotonic hits the sweet spot of correct inductive bias, minimal assumptions, strong stability with few labels, and clean uncertainty accounting—which is why it's the default in AutoCal-R.
+**Bottom line**: Isotonic hits the sweet spot of correct inductive bias, minimal assumptions, strong stability with few labels, and clean uncertainty accounting—which is why it's the default in reward calibration.
 
 ## Why Two-Stage (Index → Rank → Isotonic) When Needed?
 
@@ -122,7 +122,7 @@ When the true E[Y|S] is monotone, f̂ is L²-consistent. When it's not, the two-
 3. **Mean-preserve & cross-fit**
    - We recentre so the oracle mean matches
    - We cross-fit so selection noise and kinks are handled
-   - OUA jackknife then measures calibrator variance honestly
+   - calibration-aware jackknife then measures calibrator variance honestly
 
 ### Why This Is Better Than "Plain Isotonic on S"
 
@@ -134,7 +134,7 @@ When the true E[Y|S] is monotone, f̂ is L²-consistent. When it's not, the two-
 
 **Scale & transport friendly.** Because we learn on U (quantiles), the mapping is invariant to monotone rescalings of the index and more robust to density shifts; your **S-coverage/edge-slope** diagnostic still applies (now on U near 0/1).
 
-**Interpretability preserved.** Output is still a monotone f(S,Z) ∈ [0,1] with mean preserved; panels (reliability by region, coverage, OUA share) remain readable.
+**Interpretability preserved.** Output is still a monotone f(S,Z) ∈ [0,1] with mean preserved; panels (reliability by region, coverage, calibration uncertainty share) remain readable.
 
 ### When to Auto-Switch to Two-Stage
 
@@ -153,20 +153,20 @@ When the true E[Y|S] is monotone, f̂ is L²-consistent. When it's not, the two-
 > **First get the order right (cheap index), then calibrate that order to the KPI scale (isotonic).**
 > Minimal bias, low variance, and diagnostics stay meaningful.
 
-That's why the two-stage AutoCal-R fallback is a great default: it fixes exactly the observed failure modes, assumes very little extra, and slots cleanly into OUA + your report panels.
+That's why the two-stage reward calibration fallback is a great default: it fixes exactly the observed failure modes, assumes very little extra, and slots cleanly into calibration-aware + your report panels.
 
 ## Module Descriptions
 
-### `dataset.py` - Dataset Calibration Workflows (AutoCal-R API)
-High-level functions that orchestrate the AutoCal-R calibration process for entire datasets:
-- `calibrate_dataset()`: Main AutoCal-R entry point - transforms Dataset objects with judge scores into calibrated rewards
+### `dataset.py` - Dataset Calibration Workflows (reward calibration API)
+High-level functions that orchestrate the reward calibration calibration process for entire datasets:
+- `calibrate_dataset()`: Main reward calibration entry point - transforms Dataset objects with judge scores into calibrated rewards
 - `calibrate_from_raw_data()`: Works with raw dictionaries for pipeline integration
 - Handles both standard and cross-fitted calibration
 - Preserves metadata and adds calibration diagnostics
 
-### `judge.py` - Judge Calibration (AutoCal-R Implementation)
-Implements the core AutoCal-R algorithm for calibration from judge scores to oracle labels:
-- `JudgeCalibrator`: Core AutoCal-R class with flexible mode support and automatic selection
+### `judge.py` - Judge Calibration (reward calibration Implementation)
+Implements the core reward calibration algorithm for calibration from judge scores to oracle labels:
+- `JudgeCalibrator`: Core reward calibration class with flexible mode support and automatic selection
 - `fit_transform()`: Standard calibration on oracle subset
 - `fit_cv()`: Cross-fitted calibration for DR methods
 - `index()`: Returns transformation for outcome models (S for monotone, g(S) for two-stage)
@@ -203,7 +203,7 @@ Core mathematical operations for weight calibration:
 - Uses "exact" mode (bisection) for consistency
 - Handles ordering by arbitrary index (e.g., judge scores)
 
-### `simcal.py` - Stacked SIMCal
+### `simcal.py` - Weight stabilization stack
 Advanced weight calibration through stacking:
 - `SIMCalibrator`: Combines {baseline, increasing, decreasing} candidates
 - Out-of-fold (OOF) influence function minimization
@@ -271,7 +271,7 @@ where Var(w_final) ≤ ρ·Var(raw)
 ```
 - **Solution**: Closed-form via quadratic formula
 
-### Stacked SIMCal
+### Stacked weight stabilization
 Combines K=3 candidates by minimizing OOF influence variance:
 ```
 min_π π'Σπ s.t. π ≥ 0, Σπ = 1
@@ -327,7 +327,7 @@ calibrated_weights, info = calibrate_to_target_mean(
 print(f"Variance reduction: {info['var_before']/info['var_after']:.2f}x")
 ```
 
-### Stacked SIMCal
+### Stacked weight stabilization
 ```python
 from cje.calibration import SIMCalibrator, SimcalConfig
 
@@ -368,19 +368,19 @@ fold_ids = result.fold_ids
 oof_predictions = calibrator.predict_oof(judge_scores, fold_ids)
 ```
 
-### Oracle Uncertainty (Default: OUA Jackknife)
+### Oracle Uncertainty (Default: calibration-aware Jackknife)
 ```python
 from cje.estimators import CalibratedIPS
 
-# Default: OUA jackknife for oracle uncertainty (recommended)
+# Default: calibration-aware jackknife for oracle uncertainty (recommended)
 estimator = CalibratedIPS(sampler, oua_jackknife=True)  # Default
 result = estimator.fit_and_estimate()
 # Result has both standard_errors and robust_standard_errors
 
-# Check oracle uncertainty via OUA jackknife (if enabled)
+# Check oracle uncertainty via calibration-aware jackknife (if enabled)
 if result.robust_standard_errors is not None:
     print(f"Standard SE: {result.standard_errors[0]:.4f}")
-    print(f"OUA-adjusted SE: {result.robust_standard_errors[0]:.4f}")
+    print(f"calibration-aware-adjusted SE: {result.robust_standard_errors[0]:.4f}")
     oracle_var = result.robust_standard_errors[0]**2 - result.standard_errors[0]**2
     print(f"Oracle uncertainty contribution: {oracle_var:.6f}")
 ```
@@ -464,7 +464,7 @@ When the ordering index has ties (common with discrete judge scores):
 ## Testing
 
 The calibration module has comprehensive test coverage:
-- `test_stacked_simcal.py`: Stacked SIMCal functionality
+- `test_stacked_simcal.py`: Weight stabilization functionality
 - Integration tests verify calibration in full pipeline
 - Edge case tests for degenerate inputs
 
@@ -478,7 +478,7 @@ poetry run pytest cje/tests/ -k calibration
 ### Computational Complexity
 - **Isotonic regression**: O(n log n) via PAV
 - **Exact projection**: ~30-40 PAV calls (still O(n log n))
-- **Stacked SIMCal**: O(nK²) time, O(K²) memory (K=3 candidates)
+- **Stacked weight stabilization**: O(nK²) time, O(K²) memory (K=3 candidates)
 - **Cross-fitting**: K × isotonic regression cost
 
 
@@ -494,7 +494,7 @@ poetry run pytest cje/tests/ -k calibration
 - Need orthogonality guarantees
 - Have enough data for stable fold models
 
-**Use stacked SIMCal when:**
+**Use stacked weight stabilization when:**
 - Weights have high variance
 - Multiple candidate projections make sense
 - OOF validation is feasible
@@ -514,7 +514,7 @@ for _ in range(n_bootstrap):
     calibrations.append(result.calibrated_scores)
 ```
 
-### Debugging SIMCal
+### Debugging weight stabilization
 ```python
 # Check intermediate steps
 calibrated, info = calibrator.transform(weights, scores, rewards=rewards)
@@ -528,9 +528,9 @@ print(f"Variance reduction: {info['var_before']/info['var_after']:.2f}x")
 - **Isotonic Regression**: Robertson et al. (1988), "Order Restricted Statistical Inference"
 - **PAV Algorithm**: Ayer et al. (1955), "An Empirical Distribution Function for Sampling with Incomplete Information"  
 - **Majorization**: Marshall & Olkin (1979), "Inequalities: Theory of Majorization"
-- **SIMCal**: CJE paper (2025), "Surrogate-Indexed Monotone Calibration"
+- **`SIMCalibrator`**: CJE paper (2025), "Surrogate-Indexed Monotone Calibration"
 - **Cross-fitting**: Chernozhukov et al. (2018), "Double/Debiased Machine Learning"
 
 ## Summary
 
-The calibration module provides three essential transformations for causal inference: mapping judge scores to oracle labels, stabilizing importance weights through SIMCal, and enabling cross-fitted models for DR methods. Each calibration type maintains mean preservation for unbiased estimation while controlling variance through different mechanisms.
+The calibration module provides three essential transformations for causal inference: mapping judge scores to oracle labels, stabilizing importance weights through the `SIMCalibrator` stack, and enabling cross-fitted models for DR methods. Each calibration type maintains mean preservation for unbiased estimation while controlling variance through different mechanisms.

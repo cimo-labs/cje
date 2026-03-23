@@ -92,7 +92,7 @@ sampler = PrecomputedSampler.from_jsonl("calibrated_data.jsonl")
 n_samples = sampler.n_valid_samples
 policies = sampler.target_policies
 
-# Check oracle coverage (affects OUA jackknife when < 1.0)
+# Check oracle coverage (affects calibration-aware jackknife when < 1.0)
 oracle_coverage = sampler.oracle_coverage  # Float in [0, 1]: fraction with oracle labels
 ```
 
@@ -230,7 +230,7 @@ responses/
 **Fields:**
 - `prompt_id`: Identifies the prompt (optional - auto-generated from `prompt` field if missing)
 - `judge_score`: Required - judge evaluation in [0, 1]
-- `oracle_label`: Optional - ground truth for AutoCal-R calibration
+- `oracle_label`: Optional - ground truth for reward calibration
 - `draw_idx`: Optional - defaults to 0 (for multiple draws per prompt)
 - `prompt`: Optional - used to auto-generate `prompt_id` if not provided
 - `response`: Optional - the actual generated text
@@ -330,7 +330,7 @@ Non-core fields go into metadata automatically, allowing:
 
 ### 5. **Oracle Coverage Detection**
 PrecomputedSampler.oracle_coverage property enables:
-- Automatic OUA jackknife activation when coverage < 100%
+- Automatic calibration-aware jackknife activation when coverage < 100%
 - Oracle uncertainty included in standard_errors at partial coverage
 - Graceful handling of partial oracle labels
 - Backward compatibility

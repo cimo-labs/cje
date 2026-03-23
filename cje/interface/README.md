@@ -1,6 +1,6 @@
 # CJE Interface
 
-Simple, reliable LLM evaluation with automatic mode selection and AutoCal-R calibration.
+Simple, reliable LLM evaluation with automatic mode selection and reward calibration.
 
 For an end-to-end operational workflow (audits, drift response, label budgeting), see [`PLAYBOOK.md`](../../PLAYBOOK.md).
 
@@ -131,7 +131,7 @@ responses/
 {
   "prompt_id": "arena_0",
   "judge_score": 0.85,        // Required: judge evaluation
-  "oracle_label": 0.86,       // Optional: ground truth for AutoCal-R
+  "oracle_label": 0.86,       // Optional: ground truth for reward calibration
   "prompt": "User question",  // Optional: for reference
   "response": "Model response" // Optional: for reference
 }
@@ -139,7 +139,7 @@ responses/
 
 **Note:** Policy name is inferred from filename (e.g., `clone_responses.jsonl` → policy `"clone"`). Do NOT include a `"policy"` field in the records.
 
-**AutoCal-R in Direct mode**: If any fresh draws have `oracle_label`, Direct mode automatically applies AutoCal-R to learn judge→oracle calibration and uses calibrated rewards. Otherwise, uses raw judge scores. More oracle labels = better calibration (5-10% is often sufficient).
+**Reward calibration in Direct mode**: If any fresh draws have `oracle_label`, Direct mode automatically learns the judge→oracle mapping and uses calibrated rewards. Otherwise, it uses raw judge scores. More oracle labels = better calibration (5-10% is often sufficient).
 
 Advanced: IPS/DR logged-data schema and counterfactual diagnostics are documented in `cje/estimators/README.md`.
 
