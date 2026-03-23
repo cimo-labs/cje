@@ -374,7 +374,7 @@ Always computed and stored for proper inference, policy comparison, and diagnost
 - **IPS**: Horvitz & Thompson (1952)
 - **Doubly Robust**: Robins et al. (1994)
 - **TMLE**: van der Laan & Rubin (2006)
-- **`SIMCalibrator`**: Surrogate-indexed monotone calibration stack (2024)
+- **`SIMCalibrator`**: Compatibility-preserving runtime name for the weight-stabilization stack (2024)
 
 ## Summary
 

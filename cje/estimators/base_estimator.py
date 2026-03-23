@@ -28,7 +28,7 @@ class BaseCJEEstimator(ABC):
         run_diagnostics: bool = True,
         diagnostic_config: Optional[Dict[str, Any]] = None,
         reward_calibrator: Optional[Any] = None,
-        oua_jackknife: bool = True,  # Default to True for oracle uncertainty augmentation
+        oua_jackknife: bool = True,  # Default to True for calibration-aware inference
     ):
         """Initialize estimator.
 
@@ -36,8 +36,9 @@ class BaseCJEEstimator(ABC):
             sampler: Data sampler with precomputed log probabilities
             run_diagnostics: Whether to compute diagnostics (default True)
             diagnostic_config: Optional configuration dict (for future use)
-            reward_calibrator: Optional reward calibrator for OUA jackknife
-            oua_jackknife: Whether to enable Oracle Uncertainty Augmentation (default True)
+            reward_calibrator: Optional reward calibrator for oracle-jackknife inference
+            oua_jackknife: Whether to include calibration uncertainty via the
+                oracle jackknife (default True)
         """
         self.sampler = sampler
         self.run_diagnostics = run_diagnostics
@@ -47,7 +48,7 @@ class BaseCJEEstimator(ABC):
         self._influence_functions: Dict[str, np.ndarray] = {}
         self._results: Optional[EstimationResult] = None
 
-        # Configure OUA for oracle uncertainty augmentation
+        # Configure oracle-jackknife inference for calibration uncertainty
         self.reward_calibrator = reward_calibrator
         self.oua_jackknife = oua_jackknife
 
@@ -165,7 +166,7 @@ class BaseCJEEstimator(ABC):
         return any(x in class_name for x in ["DR", "MRDR", "TMLE"])
 
     def _apply_oua_jackknife(self, result: EstimationResult) -> None:
-        """Apply Oracle Uncertainty Augmentation via jackknife resampling.
+        """Apply the oracle jackknife for calibration-aware inference.
 
         This method adds oracle uncertainty to standard_errors in-place, accounting
         for finite-sample uncertainty in the learned reward calibrator f̂(S).
@@ -176,7 +177,7 @@ class BaseCJEEstimator(ABC):
         if not (self.oua_jackknife and self.reward_calibrator is not None):
             return
 
-        # Skip OUA at 100% oracle coverage (no oracle uncertainty)
+        # Skip oracle-jackknife augmentation at 100% oracle coverage
         try:
             # Check sampler first (for IPS/DR methods)
             sampler_coverage = (
@@ -206,7 +207,7 @@ class BaseCJEEstimator(ABC):
                     ] = "100% oracle coverage"
                 return
         except Exception:
-            pass  # Continue with normal OUA if we can't check coverage
+            pass  # Continue with the default path if we can't check coverage
 
         # Check if oracle variance is already included (e.g., by DR estimators)
         if isinstance(result.metadata, dict) and result.metadata.get(
@@ -251,13 +252,14 @@ class BaseCJEEstimator(ABC):
                     }
                 )
         except Exception as e:
-            logger.debug(f"OUA jackknife failed: {e}")
+            logger.debug(f"Calibration-aware oracle jackknife failed: {e}")
 
     def get_oracle_jackknife(self, policy: str) -> Optional[np.ndarray]:
         """Compute leave-one-oracle-fold jackknife estimates.
 
-        This method should be overridden by estimators that support OUA.
-        The default implementation returns None (no OUA support).
+        This method should be overridden by estimators that support
+        calibration-aware oracle jackknife paths. The default implementation
+        returns None.
 
         Args:
             policy: Policy name to compute jackknife estimates for

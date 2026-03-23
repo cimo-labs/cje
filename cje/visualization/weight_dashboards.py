@@ -776,7 +776,7 @@ def _plot_single_policy_weight_smoothing(
     """Plot weights vs ordering index with calibration effect.
 
     The ordering index can be either judge scores or calibrated rewards g(s),
-    depending on what was used for SIMCal calibration.
+    depending on what was used for weight stabilization.
     """
 
     # Filter to valid values

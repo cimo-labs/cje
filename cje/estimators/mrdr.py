@@ -661,7 +661,7 @@ class MRDREstimator(DREstimator):
             metadata=metadata,
         )
 
-        # Apply OUA jackknife using base class method (inherits from DREstimator)
+        # Apply oracle-jackknife inference using the base class method
         self._apply_oua_jackknife(result)
 
         return result

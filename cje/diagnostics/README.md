@@ -598,7 +598,7 @@ CJE's uncertainty comes from **two independent sources**:
 Under the standard product-sample setup (oracle and eval datasets are independent), these components are **additive**:
 
 ```
-Var_total = Var_CR + Var_OUA
+Var_total = Var_CR + Var_cal
 ```
 
 This two-component structure is critical for honest inference. Ignoring clustering on the eval side can cause severe undercoverage (e.g., 86.9% instead of 95%), while ignoring calibrator uncertainty understates risk when oracle slices are small.
@@ -638,7 +638,7 @@ where G is the number of clusters and n is the total number of rows.
 - **Two-way dependence** (e.g., user × day): Use two-way clustering formula (sum one-way variances, subtract intersection)
 - **Time series**: Use moving-block bootstrap with block length ≈ n^(1/3)
 
-### Component 2: Oracle Uncertainty Aware (calibration-aware) Jackknife
+### Component 2: Calibration-Aware Oracle Jackknife
 
 **What it captures:** Uncertainty from learning the calibration function f(S) on a finite oracle slice.
 
@@ -656,18 +656,18 @@ where G is the number of clusters and n is the total number of rows.
 
 3. Jackknife variance:
 ```
-Var_OUA = ((K-1)/K) * Σ_{k=1}^K (θ_hat^(-k) - θ_bar)²
+Var_cal = ((K-1)/K) * Σ_{k=1}^K (θ_hat^(-k) - θ_bar)²
 ```
 where `θ_bar = (1/K) Σ_k θ_hat^(-k)`
 
-**Key principle:** calibration-aware captures **oracle-only** uncertainty. It holds the eval log fixed and only refits components that depend on calibrator outputs. This maintains independence with Var_CR.
+**Key principle:** calibration-aware inference captures **oracle-only** uncertainty. It holds the eval log fixed and only refits components that depend on calibrator outputs. This maintains independence with Var_CR.
 
 ### Combining the Components
 
 Because oracle and eval are independent samples, the cross-term vanishes asymptotically:
 
 ```
-Var_total = Var_CR + Var_OUA
+Var_total = Var_CR + Var_cal
 SE_total = √Var_total
 ```
 
@@ -677,9 +677,9 @@ SE_total = √Var_total
 - **Small clusters or oracle**: Use Satterthwaite effective degrees of freedom:
 
 ```
-df_eff = (Var_CR + Var_OUA)² / (Var_CR²/df_CR + Var_OUA²/df_OUA)
+df_eff = (Var_CR + Var_cal)² / (Var_CR²/df_CR + Var_cal²/df_cal)
 
-where df_CR = G - 1, df_OUA = K - 1
+where df_CR = G - 1, df_cal = K - 1
 ```
 
 Then use t_{1-α/2, df_eff} critical value (e.g., qt(0.975, df_eff) in R).
@@ -689,7 +689,7 @@ Then use t_{1-α/2, df_eff} critical value (e.g., qt(0.975, df_eff) in R).
 For complete transparency, always report:
 
 1. **Point estimate** with 95% CI using SE_total
-2. **calibration uncertainty share**: `Var_OUA / Var_total` (shows which component dominates)
+2. **calibration uncertainty share**: `Var_cal / Var_total` (shows which component dominates)
 3. **Cluster structure**: Number of clusters G, cluster size distribution
 4. **Comparison**: i.i.d. SE vs cluster-robust SE (shows dependence penalty)
 
@@ -727,10 +727,10 @@ def compute_cluster_robust_variance(psi, cluster_ids):
     return Var_CR, G
 
 # Component 2: calibration-aware jackknife (oracle-only refits)
-def compute_oua_variance(dataset, oracle_folds, estimator_config):
+def compute_calibration_variance(dataset, oracle_folds, estimator_config):
     """
     Refit calibrator K times, holding eval log fixed
-    Returns: Var_OUA, K
+    Returns: Var_cal, K
     """
     K = len(oracle_folds)
     estimates = []
@@ -755,30 +755,30 @@ def compute_oua_variance(dataset, oracle_folds, estimator_config):
         estimates.append(theta_k)
 
     theta_bar = np.mean(estimates)
-    Var_OUA = ((K - 1) / K) * np.sum((estimates - theta_bar) ** 2)
+    Var_cal = ((K - 1) / K) * np.sum((estimates - theta_bar) ** 2)
 
-    return Var_OUA, K
+    return Var_cal, K
 
 # Combine and construct CI
-def construct_ci(estimate, Var_CR, Var_OUA, df_CR, df_OUA, alpha=0.05):
+def construct_ci(estimate, Var_CR, Var_cal, df_CR, df_cal, alpha=0.05):
     """
     estimate: point estimate
     Var_CR, df_CR: cluster-robust component
-    Var_OUA, df_OUA: oracle uncertainty component
+    Var_cal, df_cal: calibration uncertainty component
     Returns: (lower, upper, df_eff)
     """
-    Var_total = Var_CR + Var_OUA
+    Var_total = Var_CR + Var_cal
     SE_total = np.sqrt(Var_total)
 
     # Satterthwaite effective df
-    if Var_CR > 0 and Var_OUA > 0:
+    if Var_CR > 0 and Var_cal > 0:
         df_eff = (Var_total ** 2) / (
-            (Var_CR ** 2 / df_CR) + (Var_OUA ** 2 / df_OUA)
+            (Var_CR ** 2 / df_CR) + (Var_cal ** 2 / df_cal)
         )
     elif Var_CR > 0:
         df_eff = df_CR
     else:
-        df_eff = df_OUA
+        df_eff = df_cal
 
     # Critical value
     if df_eff >= 30:
@@ -810,7 +810,7 @@ print(f"Cluster-robust variance: {result.var_cluster_robust:.4f}")
 print(f"calibration-aware variance: {result.var_oua:.4f}")
 print(f"calibration uncertainty share: {result.oua_share:.1%}")
 
-# Confidence intervals use SE_total = √(Var_CR + Var_OUA)
+# Confidence intervals use SE_total = √(Var_CR + Var_cal)
 for policy, est in result.estimates.items():
     se = result.standard_errors[policy]  # SE_total
     ci_lower, ci_upper = est - 1.96*se, est + 1.96*se

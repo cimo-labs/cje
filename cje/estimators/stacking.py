@@ -55,7 +55,7 @@ class StackedDREstimator(BaseCJEEstimator):
             parallel: If True, run component estimators in parallel
             seed: Random seed for reproducibility
             n_folds: Number of folds for component cross-fitting
-            oua_jackknife: If True, enable OUA for component estimators
+            oua_jackknife: If True, include calibration uncertainty for component estimators
             force_uniform_weights: If True, force uniform weights (for debugging)
             **kwargs: Additional arguments (reward_calibrator, etc.)
         """
@@ -188,18 +188,18 @@ class StackedDREstimator(BaseCJEEstimator):
         # Apply stacked-level oracle jackknife by linear combination of component jackknifes
         self._apply_stacked_oua(result)
 
-        # Store DF info for t-based CIs (after OUA to account for oracle uncertainty)
+        # Store DF info for t-based CIs after oracle-jackknife inference
         self._store_df_info(result)
 
         return result
 
     def _apply_stacked_oua(self, result: EstimationResult) -> None:
-        """Augment stacked SEs with oracle jackknife (OUA) via linear combination.
+        """Augment stacked SEs with the oracle jackknife via linear combination.
 
         For fixed stacking weights w, the stacked jackknife path is ψ_stack^(−f) = Σ w_k ψ_k^(−f).
         We compute var_oracle_stack = (K-1)/K * Var_f(ψ_stack^(−f)) and add it to standard_errors in-place.
         """
-        # Skip OUA when we have 100% oracle coverage (no oracle uncertainty)
+        # Skip the oracle jackknife at 100% oracle coverage
         try:
             # Check sampler first (for IPS/DR methods)
             sampler_coverage = (
@@ -231,7 +231,7 @@ class StackedDREstimator(BaseCJEEstimator):
                 ] = "100% oracle coverage"
                 return
         except Exception:
-            pass  # Continue with normal OUA calculation if we can't check coverage
+            pass  # Continue with the default path if we can't check coverage
 
         try:
             policies = list(self.sampler.target_policies)
@@ -338,11 +338,11 @@ class StackedDREstimator(BaseCJEEstimator):
 
         The degrees of freedom is determined by the limiting factor:
         - df_cluster from cluster-robust SE (typically n_folds - 1)
-        - If OUA was applied: min(df_cluster, K - 1) where K is number of oracle folds
+        - If oracle-jackknife inference was applied: min(df_cluster, K - 1)
 
         Args:
             result: EstimationResult with estimates and standard_errors already populated
-                   (including OUA adjustment if applicable)
+                   (including oracle-jackknife adjustment if applicable)
 
         Side effects:
             - Stores DF info in result.metadata["degrees_of_freedom"]
@@ -379,7 +379,7 @@ class StackedDREstimator(BaseCJEEstimator):
 
             df_cluster = base_df_info.get("df", self.n_folds - 1)
 
-            # If OUA was applied, get oracle DF and take minimum
+            # If oracle-jackknife inference was applied, get oracle DF and take the minimum
             df_final = df_cluster
             oua_applied = False
             if (

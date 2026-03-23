@@ -1,8 +1,10 @@
-"""Stacked Surrogate-Indexed Monotone Calibration (SIMCal) for importance weights.
+"""Stacked score-indexed weight stabilization for importance weights.
 
-This module implements stacked SIMCal, which combines {increasing, decreasing}
-isotonic candidates via convex optimization to minimize out-of-fold (OOF)
-influence function variance.
+This module implements the score-indexed weight stabilizer used by calibrated
+IPS. The runtime names ``SIMCalibrator`` and ``SimcalConfig`` are retained for
+compatibility, but the public framing is weight stabilization. The method
+combines {increasing, decreasing} isotonic candidates via convex optimization
+to minimize out-of-fold (OOF) influence function variance.
 
 The stacking approach:
 1. Builds candidate weight vectors (isotonic increasing/decreasing, optionally baseline)
@@ -20,11 +22,11 @@ import warnings
 
 @dataclass
 class SimcalConfig:
-    """Configuration for stacked SIMCal calibration.
+    """Configuration for stacked score-indexed weight stabilization.
 
-    Stacked SIMCal combines multiple candidate weight vectors (baseline,
-    increasing, decreasing) to minimize OOF influence function variance,
-    then applies uniform blending to meet ESS/variance constraints.
+    This combines multiple candidate weight vectors (baseline, increasing,
+    decreasing) to minimize OOF influence function variance, then applies
+    uniform blending to meet ESS/variance constraints.
 
     Args:
         ess_floor: Minimum ESS as fraction of n (e.g., 0.2 => ESS >= 0.2 * n)
@@ -70,7 +72,7 @@ class SimcalConfig:
 
 
 class SIMCalibrator:
-    """Stacked Score-Indexed Monotone Calibrator.
+    """Compatibility-preserving runtime wrapper for score-indexed weight stabilization.
 
     Combines {increasing, decreasing} candidates (optionally baseline) to minimize
     OOF influence function variance, then applies uniform blending to
@@ -78,7 +80,7 @@ class SIMCalibrator:
     """
 
     def __init__(self, config: SimcalConfig):
-        """Initialize SIMCalibrator with configuration.
+        """Initialize the compatibility-preserving weight stabilizer.
 
         Args:
             config: SimcalConfig with calibration parameters
@@ -324,7 +326,7 @@ class SIMCalibrator:
         residuals: Optional[np.ndarray] = None,
         fold_ids: Optional[np.ndarray] = None,
     ) -> "SIMCalibrator":
-        """Fit SIMCal on training data.
+        """Fit the weight stabilizer on training data.
 
         Learns isotonic regression models and mixture weights.
 

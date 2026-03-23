@@ -274,7 +274,9 @@ class AnalysisService:
                 calibration_result.calibrator if calibration_result else None
             ),
             run_diagnostics=True,
-            oua_jackknife=calibration_result is not None,  # Include OUA if calibrated
+            oua_jackknife=(
+                calibration_result is not None
+            ),  # Include calibration uncertainty if calibrated
             **config.estimator_config,
         )
 
@@ -433,7 +435,7 @@ class AnalysisService:
                 calibration_result.calibrator if calibration_result else None
             ),
             run_diagnostics=True,
-            oua_jackknife=True,  # Include oracle uncertainty
+            oua_jackknife=True,  # Include calibration uncertainty
             **config.estimator_config,
         )
 

@@ -5,7 +5,8 @@ Usage:
     python -m cje.utils.aggregate_diagnostics --input results_dir --output agg.csv
 
 The aggregator is best-effort: it extracts core fields (policy, estimate, SE)
-and selected metadata (calibration_floor, calibration_info, OUA) if present.
+and selected metadata (calibration_floor, calibration_info, legacy ``oua``
+variance metadata) if present.
 """
 
 from __future__ import annotations
@@ -106,7 +107,7 @@ def aggregate_json_file(path: Path) -> List[Dict[str, Any]]:
             }
         )
 
-        # OUA (var_oracle per policy)
+        # Legacy `oua` metadata (var_oracle per policy)
         var_oracle = _get(metadata, "oua", "var_oracle_per_policy", default={}).get(
             policy
         )

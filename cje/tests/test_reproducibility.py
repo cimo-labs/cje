@@ -15,10 +15,10 @@ class TestSeedPropagation:
     """Test that random seeds propagate correctly through the system."""
 
     def test_simcal_respects_random_seed(self) -> None:
-        """Verify SIMCal uses the configured random seed for KFold."""
+        """Verify score-indexed weight stabilization uses the configured random seed for KFold."""
         n = 100
         np.random.seed(42)
-        # Ensure weights are positive for SIMCal
+        # Ensure weights are positive for the stabilizer
         weights = np.abs(np.random.randn(n)) + 0.5
         scores = np.random.randn(n)
         rewards = np.random.rand(n)
@@ -40,7 +40,7 @@ class TestSeedPropagation:
         """Verify different seeds produce different CV folds."""
         n = 100
         np.random.seed(42)
-        # Ensure weights are positive for SIMCal
+        # Ensure weights are positive for the stabilizer
         weights = np.abs(np.random.randn(n)) + 0.5
         scores = np.random.randn(n)
         rewards = np.random.rand(n)

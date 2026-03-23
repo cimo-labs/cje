@@ -64,7 +64,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             If None, uses raw judge scores (uncalibrated "naive" mode).
         paired_comparison: If True, use within-prompt differences when possible
         run_diagnostics: Whether to compute diagnostics
-        oua_jackknife: Whether to use oracle uncertainty augmentation
+        oua_jackknife: Whether to include calibration uncertainty via the oracle jackknife
         inference_method: How to compute standard errors. One of:
             - "bootstrap": Cluster bootstrap with calibrator refit (default when
               reward_calibrator is provided)
@@ -417,7 +417,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         Returns:
             EstimationResult with:
                 - estimates: Mean calibrated reward for each policy
-                - standard_errors: Including oracle uncertainty via OUA (or bootstrap)
+                - standard_errors: Including calibration uncertainty via the oracle jackknife (or bootstrap)
                 - diagnostics: Simplified (no weight metrics)
                 - metadata: Mode info and caveats
         """
@@ -428,7 +428,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         if use_bootstrap:
             return self._estimate_with_bootstrap(bootstrap_reason)
 
-        # Standard estimation path (cluster-robust SE + OUA jackknife)
+        # Standard estimation path (cluster-robust SE + oracle jackknife)
         estimates = []
         standard_errors = []
         n_samples_used = {}
@@ -577,7 +577,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             metadata=metadata,
         )
 
-        # Apply OUA jackknife using base class method
+        # Apply oracle-jackknife inference using the base class method
         self._apply_oua_jackknife(result)
 
         # Store DF info for t-based CIs (computed automatically by EstimationResult.confidence_interval())
@@ -658,7 +658,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             return None
 
         if self.reward_calibrator is None:
-            logger.debug("No reward_calibrator for OUA")
+            logger.debug("No reward_calibrator for oracle-jackknife inference")
             return None
 
         if policy not in self._policy_data:
@@ -669,7 +669,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         if not hasattr(self.reward_calibrator, "get_fold_models_for_oua"):
             if self.oua_jackknife:
                 raise ValueError(
-                    "OUA jackknife enabled but calibrator doesn't support it. "
+                    "Calibration-aware oracle jackknife is enabled but the calibrator doesn't support it. "
                     "Ensure calibrate_dataset() uses enable_cross_fit=True."
                 )
             return None
@@ -677,7 +677,9 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         fold_models = self.reward_calibrator.get_fold_models_for_oua()
         if not fold_models:
             if self.oua_jackknife:
-                logger.warning("OUA enabled but no fold models available")
+                logger.warning(
+                    "Calibration-aware oracle jackknife is enabled but no fold models are available"
+                )
             return None
 
         # Cache to avoid recomputation
@@ -710,7 +712,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
                         if cov_name not in sample.metadata:
                             raise ValueError(
                                 f"Covariate '{cov_name}' not found in fresh draw metadata "
-                                f"for policy '{policy}' during OUA jackknife"
+                                f"for policy '{policy}' during oracle-jackknife inference"
                             )
                         sample_covariates.append(sample.metadata[cov_name])
                     covariates_list.append(sample_covariates)
@@ -776,11 +778,11 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
 
         The degrees of freedom is determined by the limiting factor:
         - If cluster-robust SE was used: df from clustering (typically n_clusters - 1)
-        - If OUA jackknife was applied: min(df_cluster, K - 1) where K is number of oracle folds
+        - If oracle-jackknife inference was applied: min(df_cluster, K - 1)
 
         Args:
             result: EstimationResult with estimates and standard_errors already populated
-                   (including OUA adjustment if applicable)
+                   (including oracle-jackknife adjustment if applicable)
 
         Side effects:
             - Stores DF info in result.metadata["degrees_of_freedom"]
@@ -801,7 +803,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             # Get cluster DF
             df_cluster = self._df_cluster.get(policy, len(result.estimates) - 1)
 
-            # If OUA was applied, get oracle DF and take minimum
+            # If oracle-jackknife inference was applied, get oracle DF and take the minimum
             df_final = df_cluster
             if self.oua_jackknife and self.reward_calibrator is not None:
                 try:
@@ -849,7 +851,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         analytic cluster-robust SEs. It captures:
         1. Prompt sampling variance
         2. Calibrator uncertainty
-        3. Calibration/evaluation covariance (key term missing from OUA)
+        3. Calibration/evaluation covariance (the key term missing from oracle-jackknife-only inference)
 
         Args:
             bootstrap_reason: Reason why bootstrap was selected (for metadata)

@@ -43,7 +43,7 @@ def _build_calibrated_ips(
         cfg.setdefault("reward_calibrator", calibration_result.calibrator)
         if verbose:
             logger.info(
-                "Using reward_calibrator for DR-aware SIMCal direction selection"
+                "Using reward_calibrator for DR-aware weight-stabilization direction selection"
             )
     return CalibratedIPS(sampler, **cfg)
 
@@ -59,7 +59,9 @@ def _build_calibrated_direct(
     if calibration_result and getattr(calibration_result, "calibrator", None):
         cfg.setdefault("reward_calibrator", calibration_result.calibrator)
         if verbose:
-            logger.info("Using reward_calibrator for direct method OUA")
+            logger.info(
+                "Using reward_calibrator for direct-method calibration-aware inference"
+            )
     # DirectEstimator takes target_policies, not sampler
     return CalibratedDirectEstimator(target_policies=sampler.target_policies, **cfg)
 

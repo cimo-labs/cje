@@ -1,9 +1,8 @@
-"""Dataset calibration utilities (AutoCal-R API).
+"""Dataset calibration utilities for reward calibration.
 
-This module provides the main AutoCal-R entry points for calibrating datasets
-with judge scores to match oracle labels, creating calibrated rewards for CJE
-analysis. AutoCal-R automatically selects between monotone and flexible
-calibration based on the relationship structure.
+This module provides the main entry points for calibrating datasets with judge
+scores to match oracle labels, creating calibrated rewards for CJE analysis.
+It supports monotone and flexible two-stage calibration.
 """
 
 from typing import Dict, List, Any, Optional, Tuple, Literal, cast, Callable
@@ -34,18 +33,18 @@ def calibrate_dataset(
     covariate_names: Optional[List[str]] = None,
     random_seed: int = 42,
 ) -> Tuple[Dataset, CalibrationResult]:
-    """Calibrate judge scores in a dataset to match oracle labels (AutoCal-R).
+    """Calibrate judge scores in a dataset to match oracle labels.
 
-    This is the main AutoCal-R entry point. It extracts judge scores and oracle
-    labels from the dataset, applies AutoCal-R to learn a mean-preserving calibration
-    function, and returns a new dataset with calibrated rewards.
+    This is the main dataset-level reward calibration entry point. It extracts
+    judge scores and oracle labels from the dataset, learns a mean-preserving
+    calibration function, and returns a new dataset with calibrated rewards.
 
     Args:
         dataset: Dataset containing judge scores and oracle labels
         judge_field: Field name in metadata containing judge scores
         oracle_field: Field name in metadata containing oracle labels
         enable_cross_fit: If True, fits cross-fitted models for DR estimation and
-                         oracle-uncertainty-aware (OUA) inference. Default True.
+                         calibration-aware inference via the oracle jackknife. Default True.
         n_folds: Number of CV folds (only used if enable_cross_fit=True)
         calibration_mode: Calibration mode ('auto', 'monotone', 'two_stage').
                          If None, defaults to 'two_stage' when covariates present,

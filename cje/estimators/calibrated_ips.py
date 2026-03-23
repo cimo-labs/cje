@@ -1,9 +1,9 @@
-"""Calibrated Inverse Propensity Scoring (IPS) estimator with stacked SIMCal.
+"""Calibrated Inverse Propensity Scoring (IPS) with score-indexed weight stabilization.
 
-This is the core CJE estimator that uses stacked Score-Indexed Monotone Calibration
-(SIMCal) to stabilize IPS in heavy-tail regimes. It combines {baseline, increasing,
-decreasing} candidates via convex optimization to minimize OOF influence function
-variance, then blends toward uniform to meet variance/ESS constraints.
+This is the core CJE estimator for stabilized IPS in heavy-tail regimes. It
+uses the compatibility-preserving ``SIMCalibrator`` runtime implementation to
+combine {baseline, increasing, decreasing} candidates via convex optimization,
+then blends toward uniform to meet variance/ESS constraints.
 """
 
 import numpy as np
@@ -21,11 +21,12 @@ logger = logging.getLogger(__name__)
 
 
 class CalibratedIPS(BaseCJEEstimator):
-    """IPS estimator with optional SIMCal weight calibration.
+    """IPS estimator with optional score-indexed weight stabilization.
 
     Can operate in two modes:
-    1. calibrate_weights=True (default): Uses stacked Score-Indexed Monotone Calibration (SIMCal)
-       to reduce variance and heavy-tail pathologies in importance weights
+    1. calibrate_weights=True (default): Uses stacked score-indexed weight
+       stabilization to reduce variance and heavy-tail pathologies in
+       importance weights
     2. calibrate_weights=False: Uses raw importance weights directly (equivalent to traditional IPS)
 
     Features when calibrated:
@@ -43,12 +44,12 @@ class CalibratedIPS(BaseCJEEstimator):
 
     Args:
         sampler: PrecomputedSampler with data
-        calibrate_weights: Whether to apply SIMCal weight calibration (default True)
+        calibrate_weights: Whether to apply score-indexed weight stabilization (default True)
         weight_mode: "hajek" for mean-one normalized weights, "raw" for unnormalized (default "hajek")
         clip_weight: Maximum weight value before calibration (default None = no clipping)
         ess_floor: Minimum ESS as fraction of n (default 0.2 = 20% ESS) [only used if calibrate_weights=True]
         var_cap: Maximum allowed variance of calibrated weights (default 1.0 = no variance increase) [only used if calibrate_weights=True]
-        reward_calibrator: Optional JudgeCalibrator for OUA in variance estimation
+        reward_calibrator: Optional JudgeCalibrator for calibration uncertainty in variance estimation
         include_baseline: Whether to include raw weights in the stack (default False) [only used if calibrate_weights=True]
         baseline_shrink: Shrinkage toward baseline for stability (default 0.0) [only used if calibrate_weights=True]
         refuse_unreliable: Whether to refuse (return NaN) for unreliable estimates (default False)
@@ -79,7 +80,7 @@ class CalibratedIPS(BaseCJEEstimator):
         outer_cv_seed: int = 1042,
         **kwargs: Any,
     ):
-        # Pass OUA parameters to base class
+        # Pass calibration-uncertainty parameters to the base class
         super().__init__(
             sampler=sampler,
             run_diagnostics=run_diagnostics,
@@ -133,7 +134,7 @@ class CalibratedIPS(BaseCJEEstimator):
                 # Cache raw weights
                 self._weights_cache[policy] = raw_weights
 
-                # Oracle augmentation removed - using OUA jackknife only
+                # Oracle-slice bias augmentation removed; use the oracle jackknife only
 
                 continue  # Skip calibration for this policy
 
@@ -155,7 +156,7 @@ class CalibratedIPS(BaseCJEEstimator):
             )
             if np.all(np.isnan(S_policy)):
                 raise ValueError(
-                    f"Judge scores are required for SIMCal calibration of policy '{policy}'. "
+                    f"Judge scores are required for score-indexed weight stabilization of policy '{policy}'. "
                     "Ensure samples have 'judge_score' field."
                 )
 
@@ -163,7 +164,7 @@ class CalibratedIPS(BaseCJEEstimator):
             rewards = np.array([d["reward"] for d in data], dtype=float)
             rewards_oof = None  # Will be populated if reward_calibrator available
 
-            # Try to get cross-fitted rewards if reward_calibrator available (for SIMCal ordering)
+            # Try to get cross-fitted rewards if reward_calibrator is available
             # Get OOF predictions for this policy subset
             g_oof = None
             fold_ids: Optional[np.ndarray] = (
@@ -200,7 +201,7 @@ class CalibratedIPS(BaseCJEEstimator):
                             g_oof = self.reward_calibrator.predict_oof_by_index(ds_idx)
                             if g_oof is not None:
                                 logger.debug(
-                                    f"Using index-based cross-fitted rewards (g^OOF) as SIMCal ordering for policy '{policy}'"
+                                    f"Using index-based cross-fitted rewards (g^OOF) as the weight-stabilization ordering for policy '{policy}'"
                                 )
                                 # Also use OOF rewards as IF targets if available
                                 if len(g_oof) == len(rewards):
@@ -226,14 +227,16 @@ class CalibratedIPS(BaseCJEEstimator):
                         g_oof = self.reward_calibrator.predict_oof(S_policy, fold_ids)
                         if g_oof is not None:
                             logger.debug(
-                                f"Using fold-based cross-fitted rewards (g^OOF) as SIMCal ordering for policy '{policy}'"
+                                f"Using fold-based cross-fitted rewards (g^OOF) as the weight-stabilization ordering for policy '{policy}'"
                             )
                             rewards_oof = np.asarray(g_oof, dtype=float)
                 except Exception as e:
-                    logger.debug(f"SIMCal ordering OOF failed for '{policy}': {e}")
+                    logger.debug(
+                        f"Weight-stabilization ordering OOF failed for '{policy}': {e}"
+                    )
                     g_oof = None
 
-            # Determine the ordering index for SIMCal
+            # Determine the ordering index for weight stabilization
             # Use cross-fitted calibrated rewards if available, otherwise raw judge scores
             # Ensure alignment with raw_weights length
             ordering_index = (
@@ -246,7 +249,7 @@ class CalibratedIPS(BaseCJEEstimator):
             # This is handled separately by DR estimators that have access to the subset mapping
             residuals = None
 
-            # Run stacked SIMCal calibration
+            # Run stacked weight stabilization
             cfg = SimcalConfig(
                 ess_floor=self.ess_floor,
                 var_cap=self.var_cap,
@@ -274,7 +277,7 @@ class CalibratedIPS(BaseCJEEstimator):
                     ordering_index,  # Now uses g_oof when available, judge_scores otherwise
                     rewards=(
                         rewards_oof if rewards_oof is not None else rewards
-                    ),  # Prefer OOF rewards for SIMCal
+                    ),  # Prefer OOF rewards for weight stabilization
                     residuals=residuals,  # None for IPS (DR estimators handle this separately)
                     fold_ids=(
                         fold_ids
@@ -287,7 +290,7 @@ class CalibratedIPS(BaseCJEEstimator):
             self._weights_cache[policy] = calibrated
             self._calibration_info[policy] = calib_info
 
-            # Oracle augmentation removed - using OUA jackknife only
+            # Oracle-slice bias augmentation removed; use the oracle jackknife only
 
         self._fitted = True
 
@@ -308,8 +311,8 @@ class CalibratedIPS(BaseCJEEstimator):
             ordering_index: Score index for ordering (judge scores or g_oof)
             rewards: In-sample rewards
             rewards_oof: Out-of-fold rewards (if available)
-            fold_ids: Inner fold IDs for SIMCal's internal CV
-            cfg: SIMCal configuration
+            fold_ids: Inner fold IDs for the stabilizer's internal CV
+            cfg: Weight-stabilization configuration
             policy: Policy name (for deterministic folds)
 
         Returns:
@@ -403,7 +406,7 @@ class CalibratedIPS(BaseCJEEstimator):
                 "mean_w": float(np.mean(w_train)) if w_train.size else 1.0,
             }
 
-            # Inner fold IDs for SIMCal's internal CV (subset of original fold_ids)
+            # Inner fold IDs for the stabilizer's internal CV
             if fold_ids is not None:
                 inner_folds_train = fold_ids[train_mask]
                 # Renumber to be contiguous
@@ -413,7 +416,7 @@ class CalibratedIPS(BaseCJEEstimator):
             else:
                 inner_folds_train = None
 
-            # Fit SIMCal on training folds
+            # Fit the stabilizer on training folds
             sim = SIMCalibrator(cfg)
             try:
                 sim.fit(w_train, s_train, rewards=r_train, fold_ids=inner_folds_train)
@@ -661,7 +664,7 @@ class CalibratedIPS(BaseCJEEstimator):
                 else float("nan")
             )
 
-            # No augmentation - OUA jackknife handles oracle uncertainty via variance
+            # No bias augmentation; the oracle jackknife handles calibration uncertainty
             estimate = psi_w
             estimates.append(estimate)
 
@@ -773,7 +776,7 @@ class CalibratedIPS(BaseCJEEstimator):
                     weights * (R_oof - psi_w) - psi_w * (weights - mean_w)
                 ) / denom
 
-                # No augmentation - OUA jackknife handles oracle uncertainty via variance
+                # No bias augmentation; the oracle jackknife handles calibration uncertainty
                 influence = ratio_if
 
             # IIC removed - use influence functions directly
@@ -805,7 +808,7 @@ class CalibratedIPS(BaseCJEEstimator):
                     # Store degrees of freedom for this policy
                     df_cluster = res.get("df", n - 1)
 
-                    # If OUA was applied, get oracle DF and take minimum
+                    # If oracle-jackknife inference was applied, get oracle DF and take the minimum
                     df_final = df_cluster
                     if self.oua_jackknife and self.reward_calibrator is not None:
                         try:
@@ -902,7 +905,7 @@ class CalibratedIPS(BaseCJEEstimator):
             pass
 
         # Optionally add oracle-uncertainty jackknife variance
-        # Apply OUA jackknife using base class method
+        # Apply oracle-jackknife inference using the base class method
         self._apply_oua_jackknife(result)
 
         # Build and attach diagnostics directly
@@ -987,7 +990,7 @@ class CalibratedIPS(BaseCJEEstimator):
             if not hasattr(self.reward_calibrator, "get_fold_models_for_oua"):
                 if self.oua_jackknife:
                     raise ValueError(
-                        "OUA jackknife is enabled but reward calibrator doesn't support it. "
+                        "Calibration-aware oracle jackknife is enabled but the reward calibrator doesn't support it. "
                         "Ensure calibrate_dataset() uses enable_cross_fit=True."
                     )
                 return None
@@ -997,7 +1000,7 @@ class CalibratedIPS(BaseCJEEstimator):
             if not fold_models:
                 if self.oua_jackknife:
                     logger.warning(
-                        "OUA jackknife is enabled but no fold models available. "
+                        "Calibration-aware oracle jackknife is enabled but no fold models are available. "
                         "This may happen if calibration mode doesn't support cross-fitting."
                     )
                 return None
@@ -1023,7 +1026,7 @@ class CalibratedIPS(BaseCJEEstimator):
                 # For FlexibleCalibrator monotone or standard isotonic, it's IsotonicRegression
                 rewards_loo = np.clip(fold_model.predict(judge_scores), 0.0, 1.0)
 
-                # OUA jackknife: only recompute with different calibrator, no bias augmentation
+                # Oracle jackknife: only recompute with a different calibrator, no bias augmentation
                 contrib = weights * rewards_loo
                 jack.append(float(np.mean(contrib)))
 

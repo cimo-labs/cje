@@ -532,7 +532,7 @@ class TestLowOracleCoverage:
         After fix: fresh_draws oracle labels are masked to match calibration oracle slice.
         Bootstrap should:
         1. Complete successfully (adaptive min_oracle_per_replicate)
-        2. Have similar SE magnitudes to cluster_robust/OUA at same coverage
+        2. Have similar SE magnitudes to cluster_robust/oracle-jackknife inference at the same coverage
         """
         if len(arena_fresh_draws) < 1:
             pytest.skip("No fresh draws available")

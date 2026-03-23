@@ -46,7 +46,7 @@ class DREstimator(BaseCJEEstimator):
         sampler: PrecomputedSampler with logged data
         outcome_model: Outcome model for predictions (default: IsotonicOutcomeModel)
         n_folds: Number of cross-fitting folds (default 5)
-        use_calibrated_weights: If True, use SIMCal calibration; if False, use raw weights (default True)
+        use_calibrated_weights: If True, use score-indexed weight stabilization; if False, use raw weights (default True)
         weight_mode: "hajek" for mean-one normalized weights, "raw" for unnormalized (default "hajek")
         reward_calibrator: Optional reward calibrator for CalibratorBackedOutcomeModel (always use if available)
         **kwargs: Additional arguments passed to the base class (e.g., oracle_slice_config)
@@ -91,7 +91,7 @@ class DREstimator(BaseCJEEstimator):
         # This is passed by ablation code but not used by DR estimators
         kwargs.pop("var_cap", None)
 
-        # Pass OUA parameters to base class
+        # Pass calibration-uncertainty parameters to the base class
         super().__init__(
             sampler=sampler,
             run_diagnostics=run_diagnostics,
@@ -125,7 +125,7 @@ class DREstimator(BaseCJEEstimator):
             f"Using CalibratedIPS with calibrate_weights={use_calibrated_weights} for importance weights in DR"
         )
 
-        # Oracle augmentation removed - using OUA jackknife only
+        # Oracle-slice bias augmentation removed; use the oracle jackknife only
 
         # Choose default outcome model based on available reward_calibrator
         if outcome_model is None:
@@ -706,7 +706,7 @@ class DREstimator(BaseCJEEstimator):
             dm_term = g_fresh.mean()  # Direct method term
             ips_correction_base = weights * (logged_rewards - g_logged)
 
-            # No augmentation - OUA jackknife handles oracle uncertainty via variance
+            # No bias augmentation; the oracle jackknife handles calibration uncertainty
             ips_correction = ips_correction_base.mean()
             dr_estimate = dm_term + ips_correction
 
@@ -743,7 +743,7 @@ class DREstimator(BaseCJEEstimator):
                 # Store degrees of freedom for this policy
                 df_cluster = res_if.get("df", len(if_contributions) - 1)
 
-                # If OUA was applied, get oracle DF and take minimum
+                # If oracle-jackknife inference was applied, get oracle DF and take the minimum
                 df_final = df_cluster
                 if self.oua_jackknife and self.reward_calibrator is not None:
                     try:
@@ -883,7 +883,7 @@ class DREstimator(BaseCJEEstimator):
                         f"Skipping oracle uncertainty for {policy}: 100% oracle coverage"
                     )
             except Exception:
-                pass  # Continue with normal OUA calculation if we can't check
+                pass  # Continue with the default path if we can't check
 
             if not skip_oua:
                 jack = self.get_oracle_jackknife(policy)
@@ -1150,7 +1150,7 @@ class DREstimator(BaseCJEEstimator):
             metadata=metadata,
         )
 
-        # Apply OUA jackknife using base class method
+        # Apply oracle-jackknife inference using the base class method
         self._apply_oua_jackknife(base_result)
 
         return base_result
@@ -1394,7 +1394,7 @@ class DREstimator(BaseCJEEstimator):
         if not hasattr(self.reward_calibrator, "get_fold_models_for_oua"):
             if self.oua_jackknife:
                 raise ValueError(
-                    "OUA jackknife is enabled but reward calibrator doesn't support it. "
+                    "Calibration-aware oracle jackknife is enabled but the reward calibrator doesn't support it. "
                     "Ensure calibrate_dataset() uses enable_cross_fit=True."
                 )
             return None
@@ -1403,7 +1403,7 @@ class DREstimator(BaseCJEEstimator):
         if not fold_models:
             if self.oua_jackknife:
                 logger.warning(
-                    "OUA jackknife is enabled but no fold models available. "
+                    "Calibration-aware oracle jackknife is enabled but no fold models are available. "
                     "This may happen if calibration mode doesn't support cross-fitting."
                 )
             return None

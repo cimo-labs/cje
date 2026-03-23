@@ -1,9 +1,8 @@
-"""Judge score calibration using isotonic regression (AutoCal-R).
+"""Judge score calibration for reward calibration.
 
-This module implements AutoCal-R (Automatic Calibration for Rewards), which
-calibrates cheap LLM judge scores to actual business KPIs/oracle labels using
-monotonic regression on a labeled subset. AutoCal-R automatically selects
-between monotone and two-stage calibration based on the relationship structure.
+This module calibrates cheap LLM judge scores to oracle labels using
+monotonic regression on a labeled subset. It supports both monotone and
+two-stage calibration, with automatic mode selection when requested.
 """
 
 import numpy as np
@@ -44,16 +43,16 @@ class CalibrationResult:
 
 
 class JudgeCalibrator:
-    """Calibrate judge scores to oracle labels using isotonic regression (AutoCal-R core).
+    """Calibrate judge scores to oracle labels for reward calibration.
 
-    This is the core implementation of AutoCal-R (Automatic Calibration for Rewards),
-    which provides mean-preserving, largely monotone mapping from judge scores to
-    oracle labels with automatic mode selection.
+    This is the core judge-score calibration implementation. It provides a
+    mean-preserving, largely monotone mapping from judge scores to oracle
+    labels with automatic mode selection.
 
     Args:
         random_seed: Random seed for reproducibility
         balance_oracle_folds: Whether to balance oracle samples across folds
-        calibration_mode: AutoCal-R mode - 'auto' (default), 'monotone', or 'two_stage'
+        calibration_mode: Calibration mode - 'auto' (default), 'monotone', or 'two_stage'
     """
 
     def __init__(
@@ -188,7 +187,9 @@ class JudgeCalibrator:
             )
 
         n_oracle = len(oracle_y)
-        self.oracle_coverage = n_oracle / n_total  # Store for OUA skip check
+        self.oracle_coverage = (
+            n_oracle / n_total
+        )  # Store for calibration-uncertainty checks
 
         if n_oracle < 10:
             raise ValueError(f"Too few oracle samples ({n_oracle}). Need at least 10.")
@@ -376,7 +377,9 @@ class JudgeCalibrator:
             )
 
         n_oracle = len(oracle_y)
-        self.oracle_coverage = n_oracle / n_total  # Store for OUA skip check
+        self.oracle_coverage = (
+            n_oracle / n_total
+        )  # Store for calibration-uncertainty checks
 
         if n_oracle < n_folds * 2:
             raise ValueError(
@@ -603,7 +606,7 @@ class JudgeCalibrator:
             return judge_scores
 
     def has_fold_models(self) -> bool:
-        """Check if fold models are available for OUA.
+        """Check if fold models are available for calibration-aware inference.
 
         Returns:
             True if fold models exist, False otherwise
@@ -611,7 +614,7 @@ class JudgeCalibrator:
         return len(self.get_fold_models_for_oua()) > 0
 
     def get_fold_models_for_oua(self) -> Dict[int, Any]:
-        """Get fold models for OUA jackknife, handling both standard and flexible calibration.
+        """Get fold models for the oracle jackknife used in calibration-aware inference.
 
         This method provides a unified interface to access fold models regardless of
         the calibration mode (monotone, two_stage, auto) being used.

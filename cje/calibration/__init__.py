@@ -1,7 +1,7 @@
 """Calibration utilities for CJE.
 
 This module contains all calibration functionality:
-- Optimized isotonic regression for weight calibration
+- Optimized isotonic regression for weight stabilization
 - Judge score calibration to match oracle labels
 - Dataset calibration workflows
 - Oracle slice uncertainty augmentation
@@ -31,7 +31,7 @@ from .oracle_slice import (
 __all__ = [
     # Isotonic regression utilities
     "calibrate_to_target_mean",
-    # SIMCal
+    # Legacy runtime names for weight stabilization
     "SIMCalibrator",
     "SimcalConfig",
     # Judge calibration

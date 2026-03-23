@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Test that OUA is correctly skipped at 100% oracle coverage.
+Test that oracle-jackknife inference is correctly skipped at 100% oracle coverage.
 
-This test ensures that oracle uncertainty is not added to standard_errors
-when oracle_coverage = 1.0, preventing the bug discovered in the
-ablation experiments.
+This test ensures that calibration uncertainty is not added to
+standard_errors when oracle_coverage = 1.0, preventing the bug
+discovered in the ablation experiments.
 """
 
 import pytest
@@ -56,7 +56,7 @@ def create_test_dataset(oracle_coverage: float = 1.0, n_samples: int = 100) -> D
 
 
 def test_ips_skips_oua_at_full_coverage() -> None:
-    """Test that CalibratedIPS skips OUA at 100% oracle coverage."""
+    """Test that CalibratedIPS skips oracle-jackknife inference at 100% coverage."""
     # Create dataset with 100% coverage
     dataset = create_test_dataset(oracle_coverage=1.0)
 
@@ -67,11 +67,11 @@ def test_ips_skips_oua_at_full_coverage() -> None:
     # Create sampler (target_policies already in dataset)
     sampler = PrecomputedSampler(dataset)
 
-    # Create estimator with OUA enabled
+    # Create estimator with oracle-jackknife inference enabled
     estimator = CalibratedIPS(
         sampler,
         calibrate_weights=False,  # Use raw IPS for simplicity
-        oua_jackknife=True,  # Enable OUA
+        oua_jackknife=True,  # Enable calibration-aware inference
     )
     estimator.reward_calibrator = mock_calibrator
 
@@ -81,7 +81,7 @@ def test_ips_skips_oua_at_full_coverage() -> None:
     # Check that standard errors were computed
     assert result.standard_errors is not None
 
-    # Check metadata indicates OUA was skipped
+    # Check metadata indicates oracle-jackknife inference was skipped
     assert result.metadata is not None
     assert "se_components" in result.metadata
     assert (
@@ -91,7 +91,7 @@ def test_ips_skips_oua_at_full_coverage() -> None:
 
 
 def test_ips_applies_oua_at_partial_coverage() -> None:
-    """Test that CalibratedIPS applies OUA at partial oracle coverage."""
+    """Test that CalibratedIPS applies oracle-jackknife inference at partial coverage."""
     # Create dataset with 50% coverage
     dataset = create_test_dataset(oracle_coverage=0.5)
 
@@ -102,7 +102,7 @@ def test_ips_applies_oua_at_partial_coverage() -> None:
     # Create sampler (target_policies already in dataset)
     sampler = PrecomputedSampler(dataset)
 
-    # Create estimator with OUA enabled
+    # Create estimator with oracle-jackknife inference enabled
     estimator = CalibratedIPS(sampler, calibrate_weights=False, oua_jackknife=True)
     estimator.reward_calibrator = mock_calibrator
 
@@ -132,9 +132,9 @@ def test_ips_applies_oua_at_partial_coverage() -> None:
 
 
 def test_stacked_dr_skips_oua_at_full_coverage() -> None:
-    """Test that estimators skip OUA at 100% oracle coverage."""
+    """Test that estimators skip oracle-jackknife inference at 100% oracle coverage."""
     # At 100% oracle coverage, there's no uncertainty in the calibrator,
-    # so OUA should be skipped.
+    # so the oracle jackknife should be skipped.
 
     # Create dataset with 100% coverage
     dataset = create_test_dataset(oracle_coverage=1.0)
@@ -157,7 +157,7 @@ def test_stacked_dr_skips_oua_at_full_coverage() -> None:
     # Fit and estimate
     result = estimator.fit_and_estimate()
 
-    # Check that OUA was skipped
+    # Check that oracle-jackknife inference was skipped
     assert result.standard_errors is not None
     assert result.metadata is not None
     assert "se_components" in result.metadata
@@ -168,7 +168,7 @@ def test_stacked_dr_skips_oua_at_full_coverage() -> None:
 
 
 def test_multiple_estimators_at_full_coverage() -> None:
-    """Test multiple estimators to ensure they all skip OUA at 100% coverage."""
+    """Test multiple estimators to ensure they all skip oracle-jackknife inference at 100% coverage."""
     dataset = create_test_dataset(oracle_coverage=1.0)
 
     # Mock calibrator
@@ -188,18 +188,18 @@ def test_multiple_estimators_at_full_coverage() -> None:
         # Fit and estimate
         result = estimator.fit_and_estimate()
 
-        # Check that OUA was skipped
+        # Check that oracle-jackknife inference was skipped
         assert result.standard_errors is not None
         assert result.metadata is not None
         assert "se_components" in result.metadata
         assert (
             result.metadata["se_components"].get("oracle_uncertainty_skipped")
             == "100% oracle coverage"
-        ), f"{estimator.__class__.__name__} should skip OUA at 100% coverage"
+        ), f"{estimator.__class__.__name__} should skip oracle-jackknife inference at 100% coverage"
 
 
 def test_direct_method_skips_oua_at_full_coverage() -> None:
-    """Test that CalibratedDirectEstimator skips OUA at 100% oracle coverage.
+    """Test that CalibratedDirectEstimator skips oracle-jackknife inference at 100% oracle coverage.
 
     The direct method doesn't use a sampler, so it must check oracle_coverage
     on the calibrator instead.
@@ -242,11 +242,11 @@ def test_direct_method_skips_oua_at_full_coverage() -> None:
         draws_per_prompt=1,
     )
 
-    # Create direct estimator with OUA enabled
+    # Create direct estimator with oracle-jackknife inference enabled
     estimator = CalibratedDirectEstimator(
         target_policies=["policy_a"],
         reward_calibrator=calibrator,
-        oua_jackknife=True,  # Enable OUA
+        oua_jackknife=True,  # Enable calibration-aware inference
         inference_method="analytical",  # Use analytical for speed
     )
 
@@ -259,13 +259,13 @@ def test_direct_method_skips_oua_at_full_coverage() -> None:
     # Check that standard errors were computed
     assert result.standard_errors is not None
 
-    # Check metadata indicates OUA was skipped
+    # Check metadata indicates oracle-jackknife inference was skipped
     assert result.metadata is not None
     assert "se_components" in result.metadata
     assert (
         result.metadata["se_components"].get("oracle_uncertainty_skipped")
         == "100% oracle coverage"
-    ), "Direct method should skip OUA at 100% oracle coverage"
+    ), "Direct method should skip oracle-jackknife inference at 100% oracle coverage"
 
 
 if __name__ == "__main__":

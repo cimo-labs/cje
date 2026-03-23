@@ -5,7 +5,7 @@ These metrics quantify how well two policies overlap, which determines
 the reliability of importance-weighted estimates. The key insight is that
 some metrics (like Hellinger affinity) measure structural compatibility
 that cannot be improved by calibration, while others (like ESS) can be
-improved through techniques like SIMCal.
+improved through weight stabilization.
 """
 
 from dataclasses import dataclass
@@ -29,7 +29,7 @@ class OverlapMetrics:
             None if n < 50, < 2 indicates infinite variance
         overlap_quality: Categorical assessment of overlap
         efficiency_loss: Fraction of data effectively wasted (1 - ess_fraction)
-        can_calibrate: Whether calibration methods like SIMCal could help
+        can_calibrate: Whether weight stabilization could help
         recommended_method: Suggested estimation method given the overlap
         confidence_penalty: How much wider CIs are vs uniform sampling
         auto_tuned_threshold: ESS threshold for target CI width (if computed)
@@ -43,7 +43,7 @@ class OverlapMetrics:
     # Derived interpretations
     overlap_quality: str  # "good", "marginal", "poor", "catastrophic"
     efficiency_loss: float  # How much data we're effectively losing
-    can_calibrate: bool  # Whether SIMCal can potentially help
+    can_calibrate: bool  # Whether weight stabilization can potentially help
 
     # Recommendations
     recommended_method: str  # "ips", "calibrated-ips", "dr", "refuse"

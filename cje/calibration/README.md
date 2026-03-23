@@ -2,7 +2,7 @@
 
 ## Overview
 
-The calibration module implements **reward calibration** (Automatic Calibration for Rewards), the core mathematical machinery that maps judge scores to oracle labels with automatic mode selection. The module also provides **weight stabilization** (Surrogate-Indexed Monotone Calibration for Weights), a separate method for stabilizing importance weights in off-policy estimation. These are independent calibration techniques:
+The calibration module implements **reward calibration**, the core mathematical machinery that maps judge scores to oracle labels with automatic mode selection. The module also provides **weight stabilization**, a separate method for stabilizing importance weights in off-policy estimation. These are independent calibration techniques:
 
 1. **reward calibration (Reward Calibration)**: Maps judge scores to oracle labels with automatic mode selection between monotone and two-stage calibration
 2. **weight stabilization (Weight Stabilization)**: Stabilizes importance weights for off-policy estimation via surrogate-indexed monotone projection (separate from reward calibration)
@@ -528,7 +528,7 @@ print(f"Variance reduction: {info['var_before']/info['var_after']:.2f}x")
 - **Isotonic Regression**: Robertson et al. (1988), "Order Restricted Statistical Inference"
 - **PAV Algorithm**: Ayer et al. (1955), "An Empirical Distribution Function for Sampling with Incomplete Information"  
 - **Majorization**: Marshall & Olkin (1979), "Inequalities: Theory of Majorization"
-- **`SIMCalibrator`**: CJE paper (2025), "Surrogate-Indexed Monotone Calibration"
+- **`SIMCalibrator`**: Compatibility-preserving runtime name for the CJE weight-stabilization stack
 - **Cross-fitting**: Chernozhukov et al. (2018), "Double/Debiased Machine Learning"
 
 ## Summary

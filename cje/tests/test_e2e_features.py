@@ -1,7 +1,7 @@
 """End-to-end tests for CJE features using real arena data.
 
-Tests major features like SIMCal, oracle augmentation, and cross-fitting
-in realistic scenarios with the arena dataset.
+Tests major features like weight stabilization, calibration-aware inference,
+and cross-fitting in realistic scenarios with the arena dataset.
 """
 
 import pytest
@@ -22,11 +22,11 @@ from cje.estimators import CalibratedIPS, DRCPOEstimator
 # The feature adds 565 lines of complexity for minimal benefit
 
 
-class TestSIMCalFeature:
-    """Test SIMCal (Surrogate-Indexed Monotone Calibration) variance control."""
+class TestWeightStabilizationFeature:
+    """Test score-indexed weight stabilization variance control."""
 
     def test_simcal_mean_preservation(self, arena_sample: Dataset) -> None:
-        """Test SIMCal preserves mean of weights."""
+        """Test weight stabilization preserves the mean of weights."""
         import random
 
         random.seed(42)
@@ -154,7 +154,7 @@ class TestIntegrationScenarios:
     def test_full_pipeline_with_all_features(
         self, arena_sample: Dataset, arena_fresh_draws: Dict[str, FreshDrawDataset]
     ) -> None:
-        """Test complete pipeline with SIMCal, cross-fitting, and oracle augmentation."""
+        """Test complete pipeline with weight stabilization, cross-fitting, and calibration-aware inference."""
         import random
 
         random.seed(42)
