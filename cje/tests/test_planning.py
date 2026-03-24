@@ -7,6 +7,8 @@ using real arena data and complete workflows via analyze_dataset().
 import pytest
 import numpy as np
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 from cje import analyze_dataset
 
@@ -384,6 +386,57 @@ class TestCostModelUnit:
 class TestEmpiricalVarianceMeasurement:
     """Tests for empirical variance measurement utilities."""
 
+    def test_measure_variance_direct_uses_planning_bootstrap_config(self) -> None:
+        """Planning variance measurement should use the lighter bootstrap config."""
+        import cje.diagnostics.planning as planning_module
+        import cje.interface.analysis as analysis_module
+
+        captured_configs = []
+
+        def fake_analyze_dataset(**kwargs: Any) -> Any:
+            captured_configs.append(kwargs.get("estimator_config"))
+            return SimpleNamespace(standard_errors=[0.1])
+
+        samples = []
+        for i in range(20):
+            samples.append(
+                SimpleNamespace(
+                    prompt_id=f"oracle-{i}",
+                    judge_score=0.8,
+                    oracle_label=1.0,
+                )
+            )
+        for i in range(20):
+            samples.append(
+                SimpleNamespace(
+                    prompt_id=f"judge-{i}",
+                    judge_score=0.6,
+                    oracle_label=None,
+                )
+            )
+
+        fresh_draws = cast(Any, SimpleNamespace(target_policy="base", samples=samples))
+
+        original_analyze_dataset = analysis_module.analyze_dataset
+        setattr(analysis_module, "analyze_dataset", fake_analyze_dataset)
+
+        try:
+            result = planning_module._measure_variance_direct(
+                fresh_draws,
+                n_prompts=30,
+                m_oracle=15,
+                n_replicates=2,
+                seed=0,
+            )
+        finally:
+            setattr(analysis_module, "analyze_dataset", original_analyze_dataset)
+
+        assert result["n_valid_replicates"] == 2
+        assert captured_configs == [
+            {"inference_method": "bootstrap", "n_bootstrap": 200},
+            {"inference_method": "bootstrap", "n_bootstrap": 200},
+        ]
+
     def test_measure_variance_direct_basic(self) -> None:
         """Basic test that _measure_variance_direct runs without error."""
         from cje.data.fresh_draws import load_fresh_draws_auto
@@ -417,6 +470,72 @@ class TestEmpiricalVarianceMeasurement:
 
 class TestFittedVarianceModel:
     """Tests for the empirically-fitted variance model."""
+
+    def test_fit_variance_model_honors_oracle_fraction_grid(self) -> None:
+        """oracle_fraction_grid should determine the measurement grid."""
+        import cje.diagnostics.planning as planning_module
+
+        calls = []
+
+        def fake_measure_variance_direct(
+            *,
+            fresh_draws: Any,
+            n_prompts: int,
+            m_oracle: int,
+            n_replicates: int = 5,
+            seed: int = 42,
+        ) -> dict[str, Any]:
+            calls.append((n_prompts, m_oracle))
+            return {
+                "variance": 1.0 / n_prompts + 0.5 / m_oracle,
+                "se": 0.1,
+                "n_actual": n_prompts,
+                "m_actual": m_oracle,
+                "n_valid_replicates": n_replicates,
+            }
+
+        samples = []
+        for i in range(40):
+            samples.append(
+                SimpleNamespace(
+                    prompt_id=f"oracle-{i}",
+                    judge_score=0.8,
+                    oracle_label=1.0,
+                )
+            )
+        for i in range(80):
+            samples.append(
+                SimpleNamespace(
+                    prompt_id=f"judge-{i}",
+                    judge_score=0.6,
+                    oracle_label=None,
+                )
+            )
+
+        fresh_draws = cast(Any, SimpleNamespace(target_policy="base", samples=samples))
+
+        original_measure_variance_direct = planning_module._measure_variance_direct
+        setattr(
+            planning_module, "_measure_variance_direct", fake_measure_variance_direct
+        )
+
+        try:
+            model = planning_module.fit_variance_model(
+                fresh_draws,
+                n_grid=[50, 100],
+                oracle_fraction_grid=[0.25, 0.50],
+                n_replicates=1,
+                verbose=False,
+            )
+        finally:
+            setattr(
+                planning_module,
+                "_measure_variance_direct",
+                original_measure_variance_direct,
+            )
+
+        assert model.n_measurements == 4
+        assert calls == [(50, 15), (50, 20), (100, 15), (100, 20)]
 
     def test_fit_variance_model_synthetic(self) -> None:
         """Fit model to synthetic data with known parameters."""

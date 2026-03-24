@@ -43,6 +43,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Planning fits a variance surface by repeatedly re-running the Direct estimator.
+# A smaller bootstrap keeps this repeated measurement loop tractable while still
+# accounting for calibration-induced uncertainty in the reported SEs.
+_PLANNING_BOOTSTRAP_REPLICATES = 200
+
+
 @dataclass
 class CostModel:
     """Cost parameters for budget optimization.
@@ -219,7 +225,8 @@ def fit_variance_model(
         fresh_draws: Pilot data from the base policy where calibration will be
             learned (FreshDrawDataset with oracle labels).
         n_grid: Sample sizes to measure (default: auto from pilot size).
-        oracle_fraction_grid: Oracle fractions to measure (default: [0.15, 0.25, 0.40]).
+        oracle_fraction_grid: Relative oracle-label levels used to build the
+            calibration grid (default: [0.15, 0.25, 0.40]).
         n_replicates: Replicates per grid point for stable SE estimates (default 5).
         seed: Random seed for reproducibility.
         verbose: Print progress and diagnostics.
@@ -238,6 +245,11 @@ def fit_variance_model(
 
     if verbose:
         print(f"Fitting variance model from pilot (n={n_total} prompts)")
+
+    oracle_prompt_ids = sorted(
+        set(s.prompt_id for s in fresh_draws.samples if s.oracle_label is not None)
+    )
+    n_oracle_available = len(oracle_prompt_ids)
 
     # Check labeling ignorability
     ignorability = _check_labeling_ignorability(fresh_draws)
@@ -272,24 +284,29 @@ def fit_variance_model(
     if verbose:
         print(f"  Grid: n={n_grid}, oracle_frac={oracle_fraction_grid}")
 
+    if not oracle_fraction_grid:
+        raise ValueError("oracle_fraction_grid must contain at least one fraction")
+
+    invalid_fractions = [f for f in oracle_fraction_grid if f <= 0 or f > 1]
+    if invalid_fractions:
+        raise ValueError(
+            "oracle_fraction_grid fractions must lie in (0, 1], got "
+            f"{invalid_fractions}"
+        )
+
     # Build measurement grid with INDEPENDENT variation in n and m
     # Key insight: to separate σ²_eval/n from σ²_cal/m, we need measurements where
     # n varies while m is held constant (and vice versa).
     #
     # Design principle: Create a 2D grid with explicit variation in both dimensions
     # rather than using oracle fractions (which create collinearity).
-    n_oracle_available = sum(
-        1 for s in fresh_draws.samples if s.oracle_label is not None
-    )
-
-    # Define m values: small, medium, large (relative to available oracle)
+    # Use the requested oracle fractions to set the distinct calibration levels.
+    # Fractions are converted into fixed m values so the grid still varies n and m
+    # independently, which avoids the collinearity of setting m = frac * n.
     m_values = sorted(
         set(
-            [
-                max(15, int(n_oracle_available * 0.15)),
-                max(25, int(n_oracle_available * 0.30)),
-                max(40, int(n_oracle_available * 0.50)),
-            ]
+            min(max(15, int(n_oracle_available * frac)), n_oracle_available)
+            for frac in oracle_fraction_grid
         )
     )
 
@@ -522,8 +539,9 @@ def _measure_variance_direct(
     """Measure variance using the actual CJE pipeline (analyze_dataset).
 
     Runs analyze_dataset on subsampled data and uses the reported SE² as the
-    variance estimate. This ensures planning uses the SAME estimator as actual
-    evaluation (Direct mode with bootstrap inference).
+    variance estimate. Planning keeps the same Direct estimator family as the
+    production workflow, but uses a lighter bootstrap internally so the repeated
+    grid scan stays tractable.
 
     Args:
         fresh_draws: Full pilot dataset
@@ -598,6 +616,10 @@ def _measure_variance_direct(
             result = analyze_dataset(
                 fresh_draws_data={policy_name: subsampled_records},
                 verbose=False,
+                estimator_config={
+                    "inference_method": "bootstrap",
+                    "n_bootstrap": _PLANNING_BOOTSTRAP_REPLICATES,
+                },
             )
 
             if (

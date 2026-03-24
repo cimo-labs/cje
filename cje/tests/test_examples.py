@@ -7,10 +7,32 @@ ensuring the documented usage patterns work correctly.
 import pytest
 import numpy as np
 from typing import Any
+from pathlib import Path
 
 
 # Mark all tests in this file as E2E tests
 pytestmark = [pytest.mark.e2e, pytest.mark.uses_arena_sample]
+
+
+def _prepare_notebook_for_local_repo_execution(nb: Any) -> Any:
+    """Rewrite install cells so notebook tests exercise the local checkout."""
+    repo_root = Path(__file__).parent.parent.parent
+    bootstrap_local_repo = (
+        "import sys\n"
+        f"repo_root = {str(repo_root)!r}\n"
+        "if repo_root not in sys.path:\n"
+        "    sys.path.insert(0, repo_root)\n"
+        "print(f'Using local CJE checkout: {repo_root}')\n"
+    )
+
+    for cell in nb.cells:
+        if (
+            cell.cell_type == "code"
+            and "pip install -q --upgrade cje-eval" in cell.source
+        ):
+            cell.source = bootstrap_local_repo
+
+    return nb
 
 
 class TestNotebookWalkthrough:
@@ -289,6 +311,7 @@ class TestNotebookExecution:
         # Read the notebook
         with open(notebook_path) as f:
             nb = nbformat.read(f, as_version=4)
+        nb = _prepare_notebook_for_local_repo_execution(nb)
 
         # Execute all cells
         # Note: This will download data, install packages, etc. - mark as slow test
@@ -334,6 +357,7 @@ class TestNotebookExecution:
         # Read the notebook
         with open(notebook_path) as f:
             nb = nbformat.read(f, as_version=4)
+        nb = _prepare_notebook_for_local_repo_execution(nb)
 
         # Execute all cells
         ep = ExecutePreprocessor(

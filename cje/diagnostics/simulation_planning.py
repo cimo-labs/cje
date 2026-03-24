@@ -12,7 +12,7 @@ Both return FittedVarianceModel, which plugs into plan_evaluation() or plan_for_
 Usage:
     from cje import simulate_variance_model, plan_evaluation, CostModel
 
-    # Get variance model via simulation (takes 5-7 minutes)
+    # Get variance model via simulation
     variance_model = simulate_variance_model(r2=0.7)
 
     # Use with standard planning functions
@@ -34,6 +34,7 @@ from .planning import (
     EvaluationPlan,
     CostModel,
     plan_evaluation,
+    _PLANNING_BOOTSTRAP_REPLICATES,
 )
 
 logger = logging.getLogger(__name__)
@@ -249,7 +250,7 @@ def simulate_variance_model(
 ) -> FittedVarianceModel:
     """Get a variance model from judge quality (R²) without real data.
 
-    Runs a simulation to estimate variance components. Takes 5-7 minutes.
+    Runs a simulation to estimate variance components.
 
     For production planning decisions, prefer fit_variance_model() with real pilot
     data when available.
@@ -275,7 +276,7 @@ def simulate_variance_model(
 
     Example:
         >>> from cje import simulate_variance_model, plan_evaluation, CostModel
-        >>> # Get variance model (takes 5-7 minutes)
+        >>> # Get variance model
         >>> variance_model = simulate_variance_model(r2=0.7)
         >>> # Use with standard planning
         >>> cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
@@ -352,6 +353,10 @@ def simulate_variance_model(
                     result = analyze_dataset(
                         fresh_draws_data={"synthetic": subsample},
                         verbose=False,
+                        estimator_config={
+                            "inference_method": "bootstrap",
+                            "n_bootstrap": _PLANNING_BOOTSTRAP_REPLICATES,
+                        },
                     )
                     if (
                         result.standard_errors is not None
@@ -422,7 +427,7 @@ def simulate_planning(
     """Plan evaluation based on simulated judge quality (convenience wrapper).
 
     Combines simulate_variance_model() + plan_evaluation() into one call,
-    returning additional diagnostics useful for exploration. Takes 5-7 minutes.
+    returning additional diagnostics useful for exploration.
 
     For composable workflows, use simulate_variance_model() directly:
         variance_model = simulate_variance_model(r2=0.7)
@@ -504,8 +509,8 @@ def simulate_planning_sweep(
 ) -> List[SimulationPlanningResult]:
     """Run planning across multiple R² values for sensitivity analysis.
 
-    Note: Each R² value runs a simulation (~5-7 min), so sweeping across
-    N values takes N × 5-7 minutes. Consider using fewer R² values or
+    Note: Each R² value runs a simulation, so sweeping across
+    N values can still take a while. Consider using fewer R² values or
     running overnight for large sweeps.
 
     Args:
