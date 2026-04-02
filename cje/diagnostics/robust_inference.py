@@ -445,7 +445,7 @@ def cluster_bootstrap_direct_with_refit(
         warnings.warn(
             "use_multipolicy_eif is deprecated and ignored. "
             "CJE now uses per-policy residual correction only.",
-            DeprecationWarning,
+            FutureWarning,
             stacklevel=2,
         )
 

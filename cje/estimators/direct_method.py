@@ -189,7 +189,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             warnings.warn(
                 "use_multipolicy_eif is deprecated and ignored. "
                 "CJE now uses per-policy residual correction only.",
-                DeprecationWarning,
+                FutureWarning,
                 stacklevel=2,
             )
 
@@ -199,6 +199,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         self.calibration_data_path = calibration_data_path
         self.use_augmented_estimator = use_augmented_estimator
         self.calibration_policy = calibration_policy  # For transport experiments
+        self.use_multipolicy_eif = False  # Legacy compatibility attribute
         self._policy_data: Dict[str, PolicyData] = {}
         self._fresh_draws: Dict[str, Any] = {}  # Storage for fresh draws
         self._bootstrap_result: Optional[Dict[str, Any]] = (

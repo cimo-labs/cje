@@ -382,7 +382,7 @@ class TestDirectEstimatorDefaults:
 
     def test_legacy_false_multipolicy_flag_warns_and_is_ignored(self) -> None:
         calibrator = JudgeCalibrator(calibration_mode="monotone")
-        with pytest.warns(DeprecationWarning, match="deprecated and ignored"):
+        with pytest.warns(FutureWarning, match="deprecated and ignored"):
             estimator = CalibratedDirectEstimator(
                 target_policies=["base", "target"],
                 reward_calibrator=calibrator,
@@ -391,6 +391,7 @@ class TestDirectEstimatorDefaults:
 
         assert estimator.inference_method == "bootstrap"
         assert estimator.use_augmented_estimator is True
+        assert estimator.use_multipolicy_eif is False
 
     def test_legacy_true_multipolicy_flag_raises(self) -> None:
         calibrator = JudgeCalibrator(calibration_mode="monotone")
@@ -419,7 +420,7 @@ class TestBootstrapBehavior:
         table = build_direct_eval_table(arena_fresh_draws)
         factory = make_calibrator_factory(mode="monotone", seed=42)
 
-        with pytest.warns(DeprecationWarning, match="deprecated and ignored"):
+        with pytest.warns(FutureWarning, match="deprecated and ignored"):
             result = cluster_bootstrap_direct_with_refit(
                 eval_table=table,
                 calibrator_factory=factory,
