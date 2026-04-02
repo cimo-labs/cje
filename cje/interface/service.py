@@ -23,6 +23,14 @@ class AnalysisService:
     def __init__(self) -> None:
         pass
 
+    def _metadata_estimator_config(
+        self, estimator_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Drop legacy compatibility keys that are no longer operational."""
+        sanitized = dict(estimator_config)
+        sanitized.pop("use_multipolicy_eif", None)
+        return sanitized
+
     def _build_covariate_list(
         self, config: AnalysisConfig, dataset: Optional[Dataset] = None
     ) -> Optional[List[str]]:
@@ -383,8 +391,11 @@ class AnalysisService:
                 )
                 results.metadata["oracle_coverage"] = oracle_coverage
 
-        if config.estimator_config:
-            results.metadata["estimator_config"] = config.estimator_config
+        metadata_estimator_config = self._metadata_estimator_config(
+            config.estimator_config
+        )
+        if metadata_estimator_config:
+            results.metadata["estimator_config"] = metadata_estimator_config
 
         # NEW: Add oracle sources metadata if available
         if oracle_sources_metadata:
@@ -468,8 +479,11 @@ class AnalysisService:
         results.metadata["calibration"] = "from_logged_data"
         results.metadata["judge_field"] = config.judge_field
         results.metadata["oracle_field"] = config.oracle_field
-        if config.estimator_config:
-            results.metadata["estimator_config"] = config.estimator_config
+        metadata_estimator_config = self._metadata_estimator_config(
+            config.estimator_config
+        )
+        if metadata_estimator_config:
+            results.metadata["estimator_config"] = metadata_estimator_config
 
         # Add mode_selection metadata
         # Note: This is Direct mode with logged data for calibration
@@ -700,8 +714,11 @@ class AnalysisService:
         if detected_mode:
             results.metadata["mode"] = detected_mode
         results.metadata["target_policies"] = list(sampler.target_policies)
-        if config.estimator_config:
-            results.metadata["estimator_config"] = config.estimator_config
+        metadata_estimator_config = self._metadata_estimator_config(
+            config.estimator_config
+        )
+        if metadata_estimator_config:
+            results.metadata["estimator_config"] = metadata_estimator_config
         results.metadata["judge_field"] = config.judge_field
         results.metadata["oracle_field"] = config.oracle_field
 

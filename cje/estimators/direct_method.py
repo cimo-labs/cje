@@ -18,9 +18,10 @@ Use this when you want: "Which policy is best on this eval set?"
 Don't use for: "What would happen if we deployed π' in production?"
 """
 
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Union
 import numpy as np
 import logging
+import warnings
 from dataclasses import dataclass
 
 from .base_estimator import BaseCJEEstimator
@@ -28,6 +29,8 @@ from ..data.models import EstimationResult
 from ..diagnostics import IPSDiagnostics, Status
 
 logger = logging.getLogger(__name__)
+
+BoolLike = Union[bool, np.bool_]
 
 
 @dataclass
@@ -80,23 +83,9 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             still use all policies' oracle samples, enabling bias correction for
             policies where the calibrator doesn't transport. If None, use all
             oracle samples for both calibration and residuals (default).
-        use_multipolicy_eif: If True, use multi-policy EIF which pools oracle labels
-            across all policies with density ratio weighting w_p(z) = f_p(z)/g(z).
-            This can yield ~50% RMSE reduction at 5-10% oracle coverage when
-            multiple policies share the same calibration curve.
-
-            **Requirement**: Shared calibration assumption - E[Y|Z=z, P=p] = E[Y|Z=z]
-            for all policies p. This is STRONGER than mean transport (which only
-            requires E[Y - f(Z)] = 0 per policy). Test with binned residual analysis
-            before enabling.
-
-            **Caveats**:
-            - Only supported with calibration_mode='monotone' (not two_stage)
-            - If a policy fails the shared calibration assumption, it will bias
-              estimates for ALL policies (unlike per-policy residuals which isolate)
-            - Diminishing returns at high oracle coverage (>25%)
-
-            Default False (conservative - uses per-policy residual correction).
+        use_multipolicy_eif: Legacy compatibility shim. Multi-policy EIF has been
+            removed. Passing True raises a ValueError. Passing False emits a
+            deprecation warning and is otherwise ignored.
 
     Example:
         >>> # Fresh draws from multiple policies
@@ -125,7 +114,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         calibration_data_path: Optional[str] = None,
         use_augmented_estimator: bool = True,
         calibration_policy: Optional[str] = None,
-        use_multipolicy_eif: bool = False,
+        use_multipolicy_eif: Optional[BoolLike] = None,
         **kwargs: Any,
     ):
         # Create a minimal dummy sampler for base class compatibility
@@ -193,13 +182,34 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             )
             normalized_inference = "cluster_robust"
 
+        if use_multipolicy_eif is not None and not isinstance(
+            use_multipolicy_eif, (bool, np.bool_)
+        ):
+            raise TypeError(
+                "use_multipolicy_eif must be a boolean or None. "
+                f"Got {type(use_multipolicy_eif).__name__}."
+            )
+
+        if use_multipolicy_eif is not None and bool(use_multipolicy_eif):
+            raise ValueError(
+                "use_multipolicy_eif=True is no longer supported. "
+                "CJE now uses per-policy residual correction only."
+            )
+        if use_multipolicy_eif is not None and not bool(use_multipolicy_eif):
+            warnings.warn(
+                "use_multipolicy_eif is deprecated and ignored. "
+                "CJE now uses per-policy residual correction only.",
+                FutureWarning,
+                stacklevel=2,
+            )
+
         self.inference_method = normalized_inference
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
         self.calibration_data_path = calibration_data_path
         self.use_augmented_estimator = use_augmented_estimator
         self.calibration_policy = calibration_policy  # For transport experiments
-        self.use_multipolicy_eif = use_multipolicy_eif
+        self.use_multipolicy_eif = False  # Legacy compatibility attribute
         self._policy_data: Dict[str, PolicyData] = {}
         self._fresh_draws: Dict[str, Any] = {}  # Storage for fresh draws
         self._bootstrap_result: Optional[Dict[str, Any]] = (
@@ -946,7 +956,6 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             seed=self.bootstrap_seed,
             use_augmented_estimator=self.use_augmented_estimator,
             calibration_policy_idx=calibration_policy_idx,
-            use_multipolicy_eif=self.use_multipolicy_eif,
         )
 
         # Cache result for pairwise comparisons
