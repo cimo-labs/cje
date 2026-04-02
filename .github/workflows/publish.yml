@@ -16,6 +16,24 @@ jobs:
     environment: pypi  # Optional: use GitHub environment for approval gate
 
     steps:
+      - name: Validate publish target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          TARGET_COMMITISH: ${{ github.event.release.target_commitish }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$REF_NAME" != "main" ]; then
+            echo "::error::Manual PyPI publish is only allowed from the main branch. Re-run this workflow on main."
+            exit 1
+          fi
+
+          if [ "$EVENT_NAME" = "release" ] && [ -n "${TARGET_COMMITISH:-}" ] && [ "$TARGET_COMMITISH" != "main" ]; then
+            echo "::error::This release targets '$TARGET_COMMITISH'. PyPI publish is only allowed for releases cut from main."
+            exit 1
+          fi
+
       - name: Check out code
         uses: actions/checkout@v4
 
@@ -31,6 +49,29 @@ jobs:
           virtualenvs-create: true
           virtualenvs-in-project: true
 
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(poetry version -s)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Fail fast if version already exists on PyPI
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/cje-eval/${VERSION}/json")
+          if [ "$STATUS" = "200" ]; then
+            echo "::error::cje-eval ${VERSION} is already published on PyPI. Bump the package version before publishing again."
+            exit 1
+          fi
+
+          if [ "$STATUS" != "404" ]; then
+            echo "::error::Unable to verify whether cje-eval ${VERSION} already exists on PyPI (HTTP ${STATUS})."
+            exit 1
+          fi
+
       - name: Build package
         run: poetry build
 
@@ -38,12 +79,6 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           print-hash: true
-
-      - name: Get version
-        id: version
-        run: |
-          VERSION=$(poetry version -s)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
