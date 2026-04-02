@@ -50,7 +50,6 @@ results = analyze_dataset(
         "inference_method": "bootstrap",
         "n_bootstrap": 2000,
         "use_augmented_estimator": True,
-        "use_multipolicy_eif": False,  # conservative default
     },
 )
 
@@ -60,7 +59,6 @@ print(results.standard_errors)
 
 Notes:
 - `bootstrap` + `use_augmented_estimator=True` is the production default.
-- Keep `use_multipolicy_eif=False` unless you have evidence of shared calibration curves across policies.
 
 ---
 

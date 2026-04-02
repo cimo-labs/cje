@@ -2,7 +2,7 @@
 
 ## Overview
 
-The CJE test suite focuses on end-to-end testing with real data. The suite consists of 20 test files providing comprehensive coverage of critical functionality.
+The CJE test suite focuses on end-to-end testing with real data. The suite consists of 19 test files providing comprehensive coverage of critical functionality.
 
 ## File Structure
 
@@ -20,7 +20,6 @@ tests/
 ├── Core Tests (Infrastructure)
 │   ├── test_infrastructure.py            # Critical infrastructure and edge cases
 │   ├── test_unified_folds.py             # Comprehensive fold management
-│   ├── test_multipolicy_eif.py           # Multi-policy EIF testing
 │   └── test_reproducibility.py           # Determinism and seed propagation
 │
 ├── Feature Tests

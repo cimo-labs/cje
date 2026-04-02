@@ -418,7 +418,6 @@ results = analyze_dataset(
     estimator_config={
         "inference_method": "bootstrap",
         "use_augmented_estimator": True,
-        "use_multipolicy_eif": False,  # Conservative default
         "n_bootstrap": 2000
     }
 )

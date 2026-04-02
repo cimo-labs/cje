@@ -458,6 +458,27 @@ def test_three_modes_estimate_clone_accurately() -> None:
         ), f"Clone should have decent overlap, got ESS={clone_ess:.1%}"
 
 
+def test_direct_legacy_multipolicy_flag_is_stripped_from_metadata() -> None:
+    """Legacy use_multipolicy_eif configs should warn, be ignored, and not persist in metadata."""
+    dataset_path, fresh_draws_dir = _arena_paths()
+
+    with pytest.warns(DeprecationWarning, match="deprecated and ignored"):
+        results = analyze_dataset(
+            logged_data_path=str(dataset_path),
+            fresh_draws_dir=str(fresh_draws_dir),
+            estimator="direct",
+            estimator_config={
+                "inference_method": "cluster_robust",
+                "use_multipolicy_eif": False,
+            },
+            verbose=False,
+        )
+
+    estimator_config = results.metadata.get("estimator_config", {})
+    assert "use_multipolicy_eif" not in estimator_config
+    assert estimator_config.get("inference_method") == "cluster_robust"
+
+
 def test_dr_and_direct_rank_unhelpful_as_worst() -> None:
     """DR and Direct modes should both rank unhelpful as the worst policy.
 

@@ -361,7 +361,6 @@ class TestDirectEstimatorDefaults:
 
         assert estimator.inference_method == "bootstrap"
         assert estimator.use_augmented_estimator is True
-        assert estimator.use_multipolicy_eif is False
 
     def test_analytical_alias_maps_to_cluster_robust(self) -> None:
         calibrator = JudgeCalibrator(calibration_mode="monotone")
@@ -381,6 +380,27 @@ class TestDirectEstimatorDefaults:
                 inference_method="oua_jackknife",
             )
 
+    def test_legacy_false_multipolicy_flag_warns_and_is_ignored(self) -> None:
+        calibrator = JudgeCalibrator(calibration_mode="monotone")
+        with pytest.warns(DeprecationWarning, match="deprecated and ignored"):
+            estimator = CalibratedDirectEstimator(
+                target_policies=["base", "target"],
+                reward_calibrator=calibrator,
+                use_multipolicy_eif=False,
+            )
+
+        assert estimator.inference_method == "bootstrap"
+        assert estimator.use_augmented_estimator is True
+
+    def test_legacy_true_multipolicy_flag_raises(self) -> None:
+        calibrator = JudgeCalibrator(calibration_mode="monotone")
+        with pytest.raises(ValueError, match="no longer supported"):
+            CalibratedDirectEstimator(
+                target_policies=["base", "target"],
+                reward_calibrator=calibrator,
+                use_multipolicy_eif=True,
+            )
+
 
 # ============================================================================
 # Feature Tests - Bootstrap Behavior
@@ -389,6 +409,46 @@ class TestDirectEstimatorDefaults:
 
 class TestBootstrapBehavior:
     """Test bootstrap-specific behaviors."""
+
+    def test_bootstrap_legacy_false_multipolicy_flag_warns(
+        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
+    ) -> None:
+        if not arena_fresh_draws:
+            pytest.skip("No fresh draws available")
+
+        table = build_direct_eval_table(arena_fresh_draws)
+        factory = make_calibrator_factory(mode="monotone", seed=42)
+
+        with pytest.warns(DeprecationWarning, match="deprecated and ignored"):
+            result = cluster_bootstrap_direct_with_refit(
+                eval_table=table,
+                calibrator_factory=factory,
+                n_bootstrap=5,
+                min_oracle_per_replicate=5,
+                seed=42,
+                use_multipolicy_eif=False,
+            )
+
+        assert result["n_valid_replicates"] > 0
+
+    def test_bootstrap_legacy_true_multipolicy_flag_raises(
+        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
+    ) -> None:
+        if not arena_fresh_draws:
+            pytest.skip("No fresh draws available")
+
+        table = build_direct_eval_table(arena_fresh_draws)
+        factory = make_calibrator_factory(mode="monotone", seed=42)
+
+        with pytest.raises(ValueError, match="no longer supported"):
+            cluster_bootstrap_direct_with_refit(
+                eval_table=table,
+                calibrator_factory=factory,
+                n_bootstrap=5,
+                min_oracle_per_replicate=5,
+                seed=42,
+                use_multipolicy_eif=True,
+            )
 
     def test_resample_until_valid(
         self, arena_fresh_draws: Dict[str, FreshDrawDataset]
