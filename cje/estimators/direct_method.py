@@ -180,12 +180,20 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             )
             normalized_inference = "cluster_robust"
 
-        if use_multipolicy_eif is True:
+        if use_multipolicy_eif is not None and not isinstance(
+            use_multipolicy_eif, (bool, np.bool_)
+        ):
+            raise TypeError(
+                "use_multipolicy_eif must be a boolean or None. "
+                f"Got {type(use_multipolicy_eif).__name__}."
+            )
+
+        if use_multipolicy_eif is not None and bool(use_multipolicy_eif):
             raise ValueError(
                 "use_multipolicy_eif=True is no longer supported. "
                 "CJE now uses per-policy residual correction only."
             )
-        if use_multipolicy_eif is False:
+        if use_multipolicy_eif is not None and not bool(use_multipolicy_eif):
             warnings.warn(
                 "use_multipolicy_eif is deprecated and ignored. "
                 "CJE now uses per-policy residual correction only.",
