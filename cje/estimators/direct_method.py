@@ -18,7 +18,7 @@ Use this when you want: "Which policy is best on this eval set?"
 Don't use for: "What would happen if we deployed π' in production?"
 """
 
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Union
 import numpy as np
 import logging
 import warnings
@@ -29,6 +29,8 @@ from ..data.models import EstimationResult
 from ..diagnostics import IPSDiagnostics, Status
 
 logger = logging.getLogger(__name__)
+
+BoolLike = Union[bool, np.bool_]
 
 
 @dataclass
@@ -112,7 +114,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         calibration_data_path: Optional[str] = None,
         use_augmented_estimator: bool = True,
         calibration_policy: Optional[str] = None,
-        use_multipolicy_eif: Optional[bool] = None,
+        use_multipolicy_eif: Optional[BoolLike] = None,
         **kwargs: Any,
     ):
         # Create a minimal dummy sampler for base class compatibility

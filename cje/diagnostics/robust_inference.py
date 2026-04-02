@@ -15,6 +15,7 @@ from typing import (
     Callable,
     TYPE_CHECKING,
     Literal,
+    Union,
 )
 from dataclasses import dataclass, field
 from scipy import stats
@@ -25,6 +26,8 @@ if TYPE_CHECKING:
     from ..data.fresh_draws import FreshDrawDataset
 
 logger = logging.getLogger(__name__)
+
+BoolLike = Union[bool, np.bool_]
 
 
 # ========== Residual-Augmented Estimator (AIPW-style) ==========
@@ -388,7 +391,7 @@ def cluster_bootstrap_direct_with_refit(
     seed: int = 42,
     use_augmented_estimator: bool = True,
     calibration_policy_idx: Optional[int] = None,
-    use_multipolicy_eif: Optional[bool] = None,
+    use_multipolicy_eif: Optional[BoolLike] = None,
 ) -> Dict[str, Any]:
     """Cluster bootstrap with calibrator refit for Direct mode.
 
