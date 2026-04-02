@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.25
+
 - Remove the experimental multi-policy EIF implementation and standardize Direct-mode bootstrap on per-policy residual correction.
 - Keep a temporary compatibility shim so legacy `use_multipolicy_eif=False` configs warn and are ignored, while `True` now fails fast with a clear error.
 - Remove stale docs and tests for the retired multi-policy EIF path.
