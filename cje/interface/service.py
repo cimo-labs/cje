@@ -64,6 +64,33 @@ class AnalysisService:
 
         return covariates if covariates else None
 
+    def _direct_calibration_folds(self, n_oracle: int, n_folds: int = 5) -> int:
+        """Choose the number of calibration folds for Direct mode.
+
+        Cross-fitted calibration needs at least 2 oracle samples per fold.
+        When fewer than 2 * n_folds oracle labels are available (but at
+        least 4), reduce the fold count instead of failing outright.
+
+        Args:
+            n_oracle: Number of oracle-labeled samples available for calibration
+            n_folds: Desired number of CV folds
+
+        Returns:
+            Number of folds to use (possibly reduced)
+        """
+        if n_oracle >= n_folds * 2 or n_oracle < 4:
+            # Enough labels for the requested folds, or too few to calibrate
+            # at all (let the calibrator raise its actionable error).
+            return n_folds
+        reduced_folds = max(2, n_oracle // 2)
+        logger.warning(
+            f"Only {n_oracle} oracle-labeled samples available; reducing "
+            f"calibration folds from {n_folds} to {reduced_folds}. Results "
+            f"will be noisier — provide at least {n_folds * 2} oracle labels "
+            f"for stable calibration."
+        )
+        return reduced_folds
+
     def run(self, config: AnalysisConfig) -> EstimationResult:
         # Determine estimator choice early
         chosen_estimator = config.estimator.lower() if config.estimator else "auto"
@@ -214,12 +241,17 @@ class AnalysisService:
             )
 
             # Learn calibration from combined/calibration-only dataset
+            n_oracle_for_calibration = sum(
+                1
+                for s in calibration_dataset_for_rewards.samples
+                if s.oracle_label is not None
+            )
             _, calibration_result = calibrate_dataset(
                 calibration_dataset_for_rewards,
                 judge_field=config.judge_field,
                 oracle_field=config.oracle_field,
                 enable_cross_fit=True,
-                n_folds=5,
+                n_folds=self._direct_calibration_folds(n_oracle_for_calibration),
                 covariate_names=covariate_names,
             )
 
@@ -270,7 +302,7 @@ class AnalysisService:
                     judge_field=config.judge_field,
                     oracle_field=config.oracle_field,
                     enable_cross_fit=True,
-                    n_folds=5,
+                    n_folds=self._direct_calibration_folds(n_with_oracle),
                     covariate_names=covariate_names,
                 )
 

@@ -29,16 +29,24 @@ from cje import analyze_dataset
 results = analyze_dataset(
     fresh_draws_data={
         "gpt-4o": [
-            {"prompt_id": "eval_001", "judge_score": 0.85, "oracle_label": 0.9},
-            {"prompt_id": "eval_002", "judge_score": 0.72, "oracle_label": 0.7},
-            {"prompt_id": "eval_003", "judge_score": 0.68},
-            {"prompt_id": "eval_004", "judge_score": 0.79},
+            {"prompt_id": "eval_001", "judge_score": 0.85, "oracle_label": 0.90},
+            {"prompt_id": "eval_002", "judge_score": 0.72, "oracle_label": 0.70},
+            {"prompt_id": "eval_003", "judge_score": 0.91, "oracle_label": 0.88},
+            {"prompt_id": "eval_004", "judge_score": 0.64, "oracle_label": 0.55},
+            {"prompt_id": "eval_005", "judge_score": 0.77, "oracle_label": 0.74},
+            {"prompt_id": "eval_006", "judge_score": 0.88, "oracle_label": 0.92},
+            {"prompt_id": "eval_007", "judge_score": 0.68},
+            {"prompt_id": "eval_008", "judge_score": 0.79},
         ],
         "claude-sonnet": [
             {"prompt_id": "eval_001", "judge_score": 0.78, "oracle_label": 0.82},
             {"prompt_id": "eval_002", "judge_score": 0.81, "oracle_label": 0.79},
-            {"prompt_id": "eval_003", "judge_score": 0.75},
-            {"prompt_id": "eval_004", "judge_score": 0.83},
+            {"prompt_id": "eval_003", "judge_score": 0.86, "oracle_label": 0.84},
+            {"prompt_id": "eval_004", "judge_score": 0.70, "oracle_label": 0.66},
+            {"prompt_id": "eval_005", "judge_score": 0.74, "oracle_label": 0.71},
+            {"prompt_id": "eval_006", "judge_score": 0.93, "oracle_label": 0.90},
+            {"prompt_id": "eval_007", "judge_score": 0.75},
+            {"prompt_id": "eval_008", "judge_score": 0.83},
         ],
     }
 )
@@ -46,7 +54,7 @@ results = analyze_dataset(
 results.plot_estimates(save_path="ranking.png")  # requires pip install "cje-eval[viz]"
 ```
 
-CJE learns the judge→oracle mapping from labeled samples and applies it everywhere. Label 5–25% of samples with your oracle (human raters, strong model, downstream metric). Any bounded scale works automatically (0–1, 0–100, Likert 1–5).
+CJE learns the judge→oracle mapping from labeled samples and applies it everywhere. CJE needs at least 10 oracle-labeled samples pooled across policies (2 per calibration fold) — in practice, label 5–25% of your data with your oracle (human raters, strong model, downstream metric). Any bounded scale works automatically (0–1, 0–100, Likert 1–5).
 
 **Default workflow:** If you can generate fresh responses on a shared prompt set, use **Direct + two-stage calibration**. Use IPS/DR only when you truly need off-policy estimation and overlap diagnostics look healthy enough to trust reweighting.
 
