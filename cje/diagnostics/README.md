@@ -216,9 +216,11 @@ Components:
 
 ### Effective Sample Size (ESS)
 Measures how many "effective" samples remain after weighting. **Can be improved by calibration.**
-- **ESS > 30%**: Good overlap
-- **ESS 10-30%**: Moderate overlap issues  
-- **ESS < 10%**: Severe overlap problems
+
+The canonical ladder lives in `cje.diagnostics.gates` (`ess_status`) and is the ONLY ESS ladder in the library — every surface (estimator gates, `Status` grading, display tables, dashboards) uses it, so a policy at ESS 25% gets the same WARNING verdict everywhere:
+- **ESS ≥ 30%**: GOOD — the paper's ship-gate for reliable IPS
+- **ESS 10-30%**: WARNING — moderate overlap issues
+- **ESS < 10%**: CRITICAL — severe overlap problems
 
 ### Auto-Tuned ESS Thresholds
 Instead of fixed thresholds, compute based on desired CI width using variance bounds for bounded rewards [0,1]:
@@ -236,6 +238,9 @@ Estimates tail behavior of importance weights (k = 5% of samples).
 - **α ≥ 2**: Finite variance, acceptable
 - **α ∈ [1, 2)**: Infinite variance, WARNING
 - **α < 1**: Infinite mean, CRITICAL
+- **α = NaN**: Estimation FAILED (e.g. >~95% exact-zero weights). Treated as *unknown* — escalated to WARNING when ESS is also below the 30% ship-gate, and displayed as "n/a". `+inf` is reserved for genuinely uniform tails.
+
+The tail index feeds `weight_status` (WARNING/CRITICAL as above); it is **not** a NaN-refusal gate.
 
 ### Calibration R²
 Measures judge-to-oracle calibration quality.
@@ -349,24 +354,26 @@ Display utilities in `display.py` format diagnostics for tables and comparisons.
 
 ### When to Trust Results
 
+These bands use the same canonical thresholds as `cje.diagnostics.gates` (ESS ship-gate 30%, warning floor 10%):
+
 ✅ **High Confidence**:
 - Overall status: GOOD
-- ESS > 50%
-- Hill index > 2.5
+- ESS ≥ 30% (paper ship-gate)
+- Hill index ≥ 2.0
 - Calibration R² > 0.8
 - DR: Balanced DM/IPS contributions
 
 ⚠️ **Use with Caution**:
 - Overall status: WARNING
-- ESS 20-50%
-- Hill index 2.0-2.5
+- ESS 10-30%
+- Hill index 1.0-2.0 (or NaN: estimation failed, tail risk unknown)
 - Calibration R² 0.5-0.8
 - DR: One component dominates
 
 🔴 **Do Not Trust**:
 - Overall status: CRITICAL
-- ESS < 20%
-- Hill index < 2.0
+- ESS < 10%
+- Hill index < 1.0
 - Calibration R² < 0.5
 - DR: Negative R² values
 

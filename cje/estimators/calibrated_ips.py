@@ -602,26 +602,36 @@ class CalibratedIPS(BaseCJEEstimator):
             # We use percentage-based gates because they measure distribution overlap quality,
             # not just statistical power. Poor overlap means the estimate is dominated by
             # a small subset of data, making it practically unreliable even if statistically valid.
+            # Thresholds come from the canonical gates module so every surface
+            # (this gate, diagnostics statuses, displays, docs) agrees.
+            from ..diagnostics.gates import (
+                ESS_GOOD_THRESHOLD,
+                RAW_NEAR_ZERO_CRITICAL,
+                TOP_5PCT_CONCENTRATION_WARNING,
+                WEIGHT_CV_WARNING,
+            )
+
             refuse = False
             reasons = []
 
-            if ess < 0.30:  # Less than 30% effective sample size
+            if ess < ESS_GOOD_THRESHOLD:  # Below the paper's 30% ship-gate
                 refuse = True
                 reasons.append(f"ESS={ess:.1%}")
 
-            if raw_near_zero > 0.85:  # More than 85% of raw weights near zero
+            if raw_near_zero > RAW_NEAR_ZERO_CRITICAL:  # >85% raw weights near zero
                 refuse = True
                 reasons.append(f"raw_near_zero={raw_near_zero:.1%}")
 
             if (
-                top_5pct_weight > 0.30 and cv_weights > 2.0
+                top_5pct_weight > TOP_5PCT_CONCENTRATION_WARNING
+                and cv_weights > WEIGHT_CV_WARNING
             ):  # High concentration AND high variability
                 refuse = True
                 reasons.append(f"top_5%={top_5pct_weight:.1%} with CV={cv_weights:.1f}")
 
             if refuse:
                 # Build warning message that clarifies calibrated vs raw overlap issues
-                if raw_near_zero > 0.85 and ess > 0.30:
+                if raw_near_zero > RAW_NEAR_ZERO_CRITICAL and ess > ESS_GOOD_THRESHOLD:
                     # Calibration helped but raw overlap is poor
                     warning_msg = (
                         f"Policy '{policy}' has poor raw overlap ({raw_near_zero:.1%} of raw weights near-zero) "
@@ -1179,23 +1189,38 @@ class CalibratedIPS(BaseCJEEstimator):
             else:
                 overlap_quality = "good"
 
-        # Determine status based on ESS, Hellinger, and tail indices
-        worst_tail_idx = min(
-            (idx for idx in tail_indices.values() if idx is not None),
-            default=float("inf"),
-        )
+        # Determine status via the canonical gates (ESS ladder, tail indices,
+        # Hellinger overlap). NaN tail indices mean the Hill estimator FAILED
+        # (degenerate weights) and are treated as unknown, never as light.
+        from ..diagnostics.gates import ess_status, tail_status, worst_status
 
-        # Include Hellinger in status determination
-        if overlap_quality == "catastrophic" or weight_ess < 0.01:
-            weight_status = Status.CRITICAL
-        elif worst_tail_idx < 1.5:  # Very heavy tails
-            weight_status = Status.CRITICAL
-        elif overlap_quality == "poor" or weight_ess < 0.1:
-            weight_status = Status.WARNING
-        elif worst_tail_idx < 2.0:  # Heavy tails (infinite variance)
-            weight_status = Status.WARNING
+        finite_tails = [
+            idx for idx in tail_indices.values() if idx is not None and np.isfinite(idx)
+        ]
+        has_failed_tail = any(
+            idx is not None and np.isnan(idx) for idx in tail_indices.values()
+        )
+        worst_tail_idx: Optional[float]
+        if finite_tails:
+            worst_tail_idx = min(finite_tails)
+        elif has_failed_tail:
+            worst_tail_idx = float("nan")  # All estimable tails failed: unknown
         else:
-            weight_status = Status.GOOD
+            worst_tail_idx = None
+
+        # Hellinger (action-space E[sqrt(w)]) status: structural overlap
+        if overlap_quality == "catastrophic":
+            hellinger_status: Optional[Status] = Status.CRITICAL
+        elif overlap_quality == "poor":
+            hellinger_status = Status.WARNING
+        else:
+            hellinger_status = None
+
+        weight_status = worst_status(
+            ess_status(weight_ess),
+            tail_status(worst_tail_idx, weight_ess),
+            hellinger_status,
+        )
 
         # Get calibration info if available
         calibration_rmse = None

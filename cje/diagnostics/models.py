@@ -90,13 +90,28 @@ class IPSDiagnostics:
 
     @property
     def worst_tail_index(self) -> Optional[float]:
-        """Lowest (worst) Hill tail index across policies."""
+        """Lowest (worst) Hill tail index across policies.
+
+        NaN entries mean tail estimation FAILED for that policy. If any
+        policy has a finite index, the worst finite index is returned;
+        if every estimable policy failed, NaN is returned (unknown, not
+        light); None means no tail index was computed at all.
+        """
         if self.tail_indices:
-            valid_indices = [
-                idx for idx in self.tail_indices.values() if idx is not None
+            finite_indices = [
+                idx
+                for idx in self.tail_indices.values()
+                if idx is not None and np.isfinite(idx)
             ]
-            if valid_indices:
-                return min(valid_indices)
+            if finite_indices:
+                return min(finite_indices)
+            if any(
+                idx is not None and np.isnan(idx) for idx in self.tail_indices.values()
+            ):
+                return float("nan")
+            inf_indices = [idx for idx in self.tail_indices.values() if idx is not None]
+            if inf_indices:
+                return min(inf_indices)
         return None
 
     @property
@@ -155,11 +170,16 @@ class IPSDiagnostics:
             if max_w > 100:
                 issues.append(f"Extreme max weight for {policy}: {max_w:.1f}")
 
-        # Check for heavy tails using Hill index
+        # Check for heavy tails using Hill index (NaN = estimation failed)
         if self.tail_indices:
             for policy, tail_idx in self.tail_indices.items():
                 if tail_idx is not None:
-                    if tail_idx < 1.5:
+                    if np.isnan(tail_idx):
+                        issues.append(
+                            f"Tail index estimation failed for {policy} "
+                            f"(degenerate weights; tail risk unknown)"
+                        )
+                    elif tail_idx < 1.5:
                         issues.append(
                             f"Extremely heavy tail for {policy}: α={tail_idx:.2f} (infinite mean risk)"
                         )
@@ -594,16 +614,24 @@ class CJEDiagnostics:
         elif ips.weight_ess < 0.3:
             variance_risk = "medium"
 
-        # Check tail indices
+        # Check tail indices (NaN = estimation failed = unknown, not light)
         if ips.tail_indices:
             worst_tail = min(
-                (v for v in ips.tail_indices.values() if v is not None),
+                (
+                    v
+                    for v in ips.tail_indices.values()
+                    if v is not None and np.isfinite(v)
+                ),
                 default=float("inf"),
             )
             if worst_tail < 2.0:
                 variance_risk = "critical"  # Infinite variance
             elif worst_tail < 2.5:
                 variance_risk = "high"
+            elif any(v is not None and np.isnan(v) for v in ips.tail_indices.values()):
+                # Tail estimation failed somewhere: escalate to at least high
+                if variance_risk == "low":
+                    variance_risk = "medium"
 
         return cls(
             estimator_type=ips.estimator_type,

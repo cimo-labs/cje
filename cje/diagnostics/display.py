@@ -44,13 +44,10 @@ def create_weight_summary_table(
         ):
             status = diagnostics.status_per_policy[policy].value
         else:
-            # Fallback: Determine status based on ESS
-            if ess > 0.5:
-                status = "GOOD"
-            elif ess > 0.2:
-                status = "WARNING"
-            else:
-                status = "CRITICAL"
+            # Fallback: canonical ESS ladder (same verdict everywhere)
+            from .gates import ess_status
+
+            status = ess_status(ess).value
 
         lines.append(f"{policy:<30} {ess:>7.1%} {max_w:>12.4f} {status:<10}")
 

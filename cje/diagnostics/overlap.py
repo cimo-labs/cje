@@ -268,19 +268,21 @@ def compute_overlap_metrics(
     else:
         confidence_penalty = np.inf
 
-    # Recommendation engine based on all metrics
+    # Recommendation engine based on all metrics (canonical ESS ladder)
+    from .gates import ESS_GOOD_THRESHOLD, ESS_WARNING_THRESHOLD
+
     if quality == "catastrophic":
         recommended = "refuse"
-    elif tail_index and tail_index < 1.5:
+    elif tail_index is not None and np.isfinite(tail_index) and tail_index < 1.5:
         # Extremely heavy tails - need bias correction
         recommended = "dr"
-    elif ess_fraction < 0.10:
+    elif ess_fraction < ESS_WARNING_THRESHOLD:
         # Low ESS - depends on overlap quality
         if quality == "poor":
             recommended = "refuse"
         else:
             recommended = "dr"
-    elif ess_fraction < 0.30 and can_calibrate:
+    elif ess_fraction < ESS_GOOD_THRESHOLD and can_calibrate:
         # Moderate ESS with decent overlap - calibration can help
         recommended = "calibrated-ips"
     else:
@@ -353,7 +355,13 @@ def diagnose_overlap_problems(
 
     # Add specific warnings about tail behavior
     if metrics.tail_index is not None:
-        if metrics.tail_index < 1:
+        if np.isnan(metrics.tail_index):
+            msgs.append(
+                "⚠️  Tail index could not be estimated (α=n/a)\n"
+                "   Weights are too degenerate for the Hill estimator - "
+                "treat tail risk as unknown, not light."
+            )
+        elif metrics.tail_index < 1:
             msgs.append(
                 f"⚠️  Extremely heavy tails (α={metrics.tail_index:.2f})\n"
                 f"   Infinite mean - estimates are unreliable!"
