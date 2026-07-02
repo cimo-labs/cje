@@ -750,9 +750,17 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
                         1.0,
                     )
                 else:
-                    # No covariates - use fold model directly
+                    # No covariates - still route through predict_oof so that
+                    # mode-specific transforms are applied (two-stage calibrators
+                    # need g(S) -> ECDF -> isotonic; the raw fold model would be
+                    # fed judge scores where it expects the rank index).
+                    fold_ids = np.full(len(pdata.judge_scores), fold_id, dtype=int)
                     rewards_loo = np.clip(
-                        fold_model.predict(pdata.judge_scores), 0.0, 1.0
+                        self.reward_calibrator.predict_oof(
+                            pdata.judge_scores, fold_ids
+                        ),
+                        0.0,
+                        1.0,
                     )
 
                 # Compute LOO estimate

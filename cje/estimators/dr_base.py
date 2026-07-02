@@ -5,12 +5,12 @@ to achieve better bias-variance tradeoffs and double robustness properties.
 """
 
 import numpy as np
-from typing import Dict, List, Optional, Any, cast
+from typing import Dict, List, Optional, Any, Tuple, cast
 import logging
 from pathlib import Path
 
 from .calibrated_ips import CalibratedIPS
-from .base_estimator import BaseCJEEstimator
+from .base_estimator import BaseCJEEstimator, oracle_jackknife_variance
 from .outcome_models import IsotonicOutcomeModel, CalibratorBackedOutcomeModel
 from ..data.models import EstimationResult
 from ..diagnostics import DRDiagnostics, IPSDiagnostics
@@ -52,14 +52,19 @@ class DREstimator(BaseCJEEstimator):
         **kwargs: Additional arguments passed to the base class (e.g., oracle_slice_config)
 
     Monte Carlo Variance Handling:
-        When there's only M=1 fresh draw per prompt, we cannot estimate within-prompt variance directly.
-        The estimator automatically applies a conservative upper bound:
-        - Uses total variance across single draws as upper bound for within-prompt variance
-        - Conservative because mixture variance >= average within-component variance
-        - Respects [0,1] scale constraint (variance <= 0.25)
-        - For mixed cases (some M>=2, some M=1), combines exact computation with upper bound
+        The influence functions are built from per-prompt MEANS of the fresh-draw
+        predictions, so the (cluster-robust) influence-function variance already
+        contains the within-prompt Monte Carlo noise E[sigma_i^2 / M_i] / n from
+        finite fresh draws. The reported standard error therefore does NOT add a
+        separate MC term — doing so double-counted the MC component (up to
+        ~sqrt(2)x SE inflation when M=1).
 
-        This ensures confidence intervals properly reflect uncertainty even with limited fresh draws.
+        An estimate of the MC component is still computed and stored in
+        metadata["mc_variance_diagnostics"] (see _record_mc_diagnostics) so users
+        can see how much of the sampling variance is attributable to finite fresh
+        draws. When M=1 the within-prompt variance is not identifiable and a
+        conservative upper bound (total variance across single draws, capped at
+        0.25) is reported in the diagnostics.
 
     Note: The reward_calibrator (for reward calibration) is independent of use_calibrated_weights (for weight
     calibration). DR estimators should receive the reward_calibrator whenever oracle coverage < 100%.
@@ -169,6 +174,10 @@ class DREstimator(BaseCJEEstimator):
         # Storage for fresh draws (added via add_fresh_draws)
         self._fresh_draws: Dict[str, FreshDrawDataset] = {}
         self._outcome_fitted = False
+
+        # Fresh-draw MC statistics/diagnostics (metadata only, never in SEs)
+        self._fresh_draw_stats: Dict[str, Dict[str, Any]] = {}
+        self._mc_diagnostics: Dict[str, Dict[str, Any]] = {}
 
         # Store components for diagnostics
         self._dm_component: Dict[str, np.ndarray] = {}
@@ -296,6 +305,257 @@ class DREstimator(BaseCJEEstimator):
             unique_folds=list(range(self.n_folds)),
             policy=policy,
         )
+
+    def _compute_policy_se(
+        self,
+        policy: str,
+        if_contributions: np.ndarray,
+        fold_ids: Optional[np.ndarray],
+        alpha: float = 0.05,
+    ) -> Tuple[float, Dict[str, Any], Dict[str, Any]]:
+        """Unified DR-family standard error for one policy.
+
+        ALL DR estimators (DR-CPO, TMLE, MRDR) report standard errors on the
+        same basis via this helper:
+
+        - cluster-robust influence-function SE on the outcome folds (CRV1),
+          with a naive IID fallback when clustering is unavailable;
+        - plus oracle-uncertainty variance from the delete-one-fold jackknife
+          (sum formula, paper Alg. 6; skipped at 100% oracle coverage);
+        - degrees of freedom = min(cluster df, K_oracle - 1) for t-based CIs.
+
+        The influence functions are built from per-prompt MEANS of the
+        fresh-draw predictions, so their variance already contains the
+        within-prompt Monte Carlo noise from finite fresh draws. No separate
+        MC term is composed into the SE (see _record_mc_diagnostics for the
+        metadata-only MC diagnostics).
+
+        Callers must record se_parts in metadata["se_components"] and set
+        includes_oracle_uncertainty=True so _apply_oua_jackknife does not add
+        the oracle variance a second time.
+
+        Args:
+            policy: Target policy name
+            if_contributions: Influence contributions for this policy
+            fold_ids: Outcome-fold ids used as clusters (may be None)
+            alpha: Significance level for the stored t-critical value
+
+        Returns:
+            (se, df_entry, se_parts):
+            - se: total standard error (IF and oracle, in quadrature)
+            - df_entry: {"df", "t_critical", "n_clusters"} for
+              metadata["degrees_of_freedom"][policy]
+            - se_parts: {"se_if", "var_oracle", "oracle_jackknife_count"}
+        """
+        from scipy import stats as sp_stats
+        from ..diagnostics.robust_inference import (
+            cluster_robust_se,
+            compose_se_components,
+        )
+
+        n = len(if_contributions)
+        se_if = float(np.std(if_contributions, ddof=1) / np.sqrt(n)) if n > 1 else 0.0
+        df_cluster = max(n - 1, 1)
+        n_clusters = n
+
+        if fold_ids is not None and n > 1:
+            try:
+                res_if = cluster_robust_se(
+                    data=if_contributions,
+                    cluster_ids=fold_ids,
+                    statistic_fn=lambda x: float(np.mean(x)),
+                    influence_fn=lambda x: x,  # IF already provided
+                    alpha=alpha,
+                )
+                naive_se = se_if
+                se_if = float(res_if["se"])
+                df_cluster = int(res_if.get("df", df_cluster))
+                n_clusters = int(res_if.get("n_clusters", n))
+                logger.debug(
+                    f"Using cluster-robust SE for {policy}: "
+                    f"naive={naive_se:.6f}, robust={se_if:.6f}, "
+                    f"n_clusters={n_clusters}, df={df_cluster}"
+                )
+            except Exception as e:
+                logger.debug(f"cluster_robust_se failed for {policy}: {e}")
+
+        # Oracle uncertainty via the delete-one-fold jackknife
+        # (skipped at 100% oracle coverage: no uncertainty with all labels)
+        var_oracle = 0.0
+        K = 0
+        skip_oua = False
+        try:
+            coverage = getattr(self.sampler, "oracle_coverage", None)
+            if coverage is None and self.reward_calibrator is not None:
+                coverage = getattr(self.reward_calibrator, "oracle_coverage", None)
+            if coverage is not None and coverage >= 1.0:
+                skip_oua = True
+                logger.debug(
+                    f"Skipping oracle uncertainty for {policy}: 100% oracle coverage"
+                )
+        except Exception:
+            pass  # Continue with the default path if we can't check
+
+        if not skip_oua:
+            jack = self.get_oracle_jackknife(policy)
+            if jack is not None and len(jack) >= 2:
+                K = len(jack)
+                var_oracle = float(oracle_jackknife_variance(jack))
+                logger.debug(
+                    f"Oracle SE for {policy}: {np.sqrt(var_oracle):.6f} from {K} folds"
+                )
+
+        df_final = df_cluster
+        if K >= 2:
+            df_final = min(df_final, K - 1)
+        df_final = max(df_final, 1)
+
+        se = compose_se_components(se_if, float(np.sqrt(var_oracle)))
+
+        df_entry = {
+            "df": int(df_final),
+            "t_critical": float(sp_stats.t.ppf(1 - alpha / 2, df_final)),
+            "n_clusters": int(n_clusters),
+        }
+        se_parts = {
+            "se_if": float(se_if),
+            "var_oracle": float(var_oracle),
+            "oracle_jackknife_count": int(K),
+        }
+        return float(se), df_entry, se_parts
+
+    def _build_se_components_metadata(
+        self, se_parts_by_policy: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Build metadata["se_components"] for the unified DR-family SE.
+
+        Sets includes_oracle_uncertainty=True (the oracle jackknife variance is
+        added inline by _compute_policy_se) so _apply_oua_jackknife never adds
+        it a second time, and records the per-policy SE decomposition.
+        """
+        return {
+            "includes_oracle_uncertainty": True,
+            # No separate MC term: the IF variance already contains the
+            # within-prompt fresh-draw Monte Carlo noise.
+            "includes_mc_variance": False,
+            "mc_variance_in_if": True,
+            "se_if_per_policy": {
+                p: parts["se_if"] for p, parts in se_parts_by_policy.items()
+            },
+            "oracle_variance_per_policy": {
+                p: parts["var_oracle"] for p, parts in se_parts_by_policy.items()
+            },
+            "oracle_jackknife_counts": {
+                p: parts["oracle_jackknife_count"]
+                for p, parts in se_parts_by_policy.items()
+            },
+        }
+
+    def _store_fresh_draw_stats(
+        self,
+        policy: str,
+        variances: np.ndarray,
+        draws_per_prompt: np.ndarray,
+    ) -> None:
+        """Store per-prompt fresh-draw variance statistics (diagnostics only).
+
+        Per-prompt variances should be sample variances (ddof=1) for M_i >= 2
+        and 0.0 for M_i = 1 prompts.
+        """
+        self._fresh_draw_stats[policy] = {
+            "variances": np.asarray(variances, dtype=float),
+            "draws_per_prompt": np.asarray(draws_per_prompt, dtype=int),
+            "n_prompts": int(len(variances)),
+        }
+
+    def _record_mc_diagnostics(
+        self, policy: str, g_fresh: np.ndarray, base_se: float
+    ) -> None:
+        """Compute fresh-draw Monte Carlo variance diagnostics (metadata ONLY).
+
+        The reported SE does NOT include a separate MC term: the influence
+        functions are built from per-prompt means of the fresh-draw
+        predictions, so the (cluster-robust) IF variance already contains
+        E[sigma_i^2 / M_i] / n. A prior implementation re-added mc_var in
+        quadrature, double-counting the MC component (up to ~sqrt(2)x SE
+        inflation when M=1). mc_var is retained here purely as a diagnostic
+        of how much sampling variance is attributable to finite fresh draws.
+
+        When M=1 the within-prompt variance is not identifiable; a
+        conservative upper bound (total variance across single draws, capped
+        at 0.25 for [0,1] outcomes) is reported instead. Mixed cases combine
+        the exact computation for M>=2 prompts with the bound for M=1 prompts.
+        """
+        if policy not in self._fresh_draw_stats:
+            return
+
+        fd_stats = self._fresh_draw_stats[policy]
+        fresh_var = np.asarray(fd_stats["variances"], dtype=float)
+        M = np.asarray(fd_stats["draws_per_prompt"])
+        n = len(g_fresh)
+        if n == 0:
+            return
+
+        s2_total: Optional[float] = None
+        s2_cap: Optional[float] = None
+
+        if np.all(M >= 2):
+            # Exact MC variance computation
+            mc_var = float(np.sum(fresh_var / np.maximum(M, 1)) / (n**2))
+            fallback_used = False
+            fallback_method = "exact"
+        else:
+            # Automatic fallback for M=1 cases: conservative upper bound
+            # using total variance. For a mixture distribution,
+            # Var(X) = E[Var(X|I)] + Var(E[X|I]) >= E[Var(X|I)], so the
+            # total variance upper-bounds the average within-prompt variance.
+            fallback_used = True
+            s2_total = float(np.var(g_fresh, ddof=1)) if n > 1 else 0.0
+            s2_cap = min(s2_total, 0.25)  # Cap at max variance for [0,1]
+
+            has_multi = bool(np.any(M >= 2))
+            if has_multi:
+                # Combine exact for M>=2 and bound for M=1
+                mask_multi = M >= 2
+                exact_part = float(
+                    np.sum(fresh_var[mask_multi] / np.maximum(M[mask_multi], 1))
+                ) / (n**2)
+                n_singles = int(np.sum(M < 2))
+                bound_part = float(n_singles * s2_cap) / (n**2)
+                mc_var = exact_part + bound_part
+                fallback_method = "upper_bound(mixed)"
+            else:
+                # All M=1, use pure bound
+                mc_var = s2_cap / n if n > 0 else 0.0
+                fallback_method = "upper_bound(total_var)"
+
+            logger.debug(
+                f"Using MC variance fallback for {policy}: "
+                f"{fallback_method}, s2_cap={s2_cap:.4f}"
+            )
+
+        self._mc_diagnostics[policy] = {
+            "base_se": float(base_se),
+            "mc_var": float(mc_var),
+            "mc_share": (
+                mc_var / (base_se**2) if base_se > 0 else 0.0
+            ),  # Share of the IF variance attributable to fresh-draw MC noise
+            "avg_draws_per_prompt": float(M.mean()),
+            "min_draws_per_prompt": int(M.min()),
+            "max_draws_per_prompt": int(M.max()),
+            "fallback_used": fallback_used,
+            "fallback_method": fallback_method,
+            "n_prompts": int(n),
+            "n_prompts_M1": int(np.sum(M < 2)),
+            "included_in_se": False,  # MC noise is already inside the IF variance
+        }
+
+        # Add fallback-specific diagnostics if used
+        if fallback_used:
+            if s2_total is not None:
+                self._mc_diagnostics[policy]["s2_total"] = float(s2_total)
+            if s2_cap is not None:
+                self._mc_diagnostics[policy]["s2_cap"] = float(s2_cap)
 
     def fit(self) -> None:
         """Fit weight calibration (if applicable) and outcome model."""
@@ -471,6 +731,7 @@ class DREstimator(BaseCJEEstimator):
         # Calibration-floor metrics per policy
         calibration_floor_meta: Dict[str, Dict[str, float]] = {}
         df_info = {}  # Track degrees of freedom per policy
+        se_parts_by_policy: Dict[str, Dict[str, Any]] = {}  # SE components
 
         for policy in self.sampler.target_policies:
             # Check fresh draws are available
@@ -655,9 +916,9 @@ class DREstimator(BaseCJEEstimator):
                 # Average over draws for this prompt
                 g_fresh_all.append(g_fresh_prompt.mean())
 
-                # Track variance for diagnostics
+                # Track variance for diagnostics (unbiased sample variance)
                 if len(g_fresh_prompt) > 1:
-                    fresh_draw_var_per_prompt_list.append(g_fresh_prompt.var())
+                    fresh_draw_var_per_prompt_list.append(g_fresh_prompt.var(ddof=1))
                 else:
                     fresh_draw_var_per_prompt_list.append(0.0)
 
@@ -674,15 +935,9 @@ class DREstimator(BaseCJEEstimator):
                 else:
                     draws_per_prompt_list.append(1)  # Fallback
 
-            if not hasattr(self, "_fresh_draw_stats"):
-                self._fresh_draw_stats = {}
-            self._fresh_draw_stats[policy] = {
-                "variances": fresh_draw_var_per_prompt,
-                "draws_per_prompt": np.array(
-                    draws_per_prompt_list
-                ),  # Now per-prompt M_i
-                "n_prompts": len(fresh_draw_var_per_prompt),
-            }
+            self._store_fresh_draw_stats(
+                policy, fresh_draw_var_per_prompt, np.array(draws_per_prompt_list)
+            )
 
             # Sanity check: weights should have mean approximately 1.0 (only for Hajek/calibrated weights)
             weights_mean = weights.mean()
@@ -721,191 +976,19 @@ class DREstimator(BaseCJEEstimator):
 
             # IIC removed - influence functions used directly
 
-            # Base SE from influence functions (using cluster-robust SE on outcome folds)
-            from ..diagnostics.robust_inference import (
-                cluster_robust_se,
-                compose_se_components,
+            # Unified DR-family SE: cluster-robust IF SE on outcome folds plus
+            # oracle-jackknife variance, with t-based df metadata. The IF is
+            # built from per-prompt fresh-draw means, so its variance already
+            # contains the within-prompt Monte Carlo noise — no separate MC
+            # term is composed into the SE.
+            se, df_entry, se_parts = self._compute_policy_se(
+                policy, if_contributions, valid_fold_ids
             )
+            df_info[policy] = df_entry
+            se_parts_by_policy[policy] = se_parts
 
-            se_if = np.std(if_contributions, ddof=1) / np.sqrt(
-                len(if_contributions)
-            )  # fallback
-            try:
-                res_if = cluster_robust_se(
-                    data=if_contributions,
-                    cluster_ids=valid_fold_ids,  # outcome folds (one per prompt)
-                    statistic_fn=lambda x: np.mean(x),
-                    influence_fn=lambda x: x,  # IF already provided
-                    alpha=0.05,
-                )
-                se_if = res_if["se"]
-
-                # Store degrees of freedom for this policy
-                df_cluster = res_if.get("df", len(if_contributions) - 1)
-
-                # If oracle-jackknife inference was applied, get oracle DF and take the minimum
-                df_final = df_cluster
-                if self.oua_jackknife and self.reward_calibrator is not None:
-                    try:
-                        if hasattr(self.reward_calibrator, "get_fold_models_for_oua"):
-                            fold_models = (
-                                self.reward_calibrator.get_fold_models_for_oua()
-                            )
-                            if fold_models:
-                                K = len(fold_models)
-                                df_oracle = K - 1
-                                df_final = min(df_cluster, df_oracle)
-                    except Exception as e:
-                        logger.debug(f"Could not get oracle DF for {policy}: {e}")
-
-                # Ensure DF is at least 1
-                df_final = max(df_final, 1)
-
-                # Store DF info
-                from scipy import stats
-
-                t_crit = stats.t.ppf(1 - 0.05 / 2, df_final)
-                df_info[policy] = {
-                    "df": int(df_final),
-                    "t_critical": float(t_crit),
-                    "n_clusters": int(res_if.get("n_clusters", len(if_contributions))),
-                }
-
-                logger.debug(
-                    f"Using cluster-robust SE for {policy}: "
-                    f"naive={np.std(if_contributions, ddof=1) / np.sqrt(len(if_contributions)):.6f}, "
-                    f"robust={se_if:.6f}, n_clusters={res_if['n_clusters']}, df={df_final}"
-                )
-            except Exception as e:
-                logger.debug(f"cluster_robust_se failed for {policy}: {e}")
-
-            base_se = se_if  # For backward compatibility with diagnostics below
-
-            # Add Monte Carlo variance component from finite fresh draws
-            mc_var = 0.0
-            n = len(g_fresh) if policy in self._dm_component else 0
-
-            if hasattr(self, "_fresh_draw_stats") and policy in self._fresh_draw_stats:
-                stats = self._fresh_draw_stats[policy]
-                fresh_var = np.asarray(
-                    stats["variances"]
-                )  # per-prompt sample var if M_i>=2, else 0
-                M = np.asarray(stats["draws_per_prompt"])  # Ensure numpy array
-
-                # Check if we can compute exact MC variance (all M >= 2)
-                if np.all(M >= 2):
-                    # Exact MC variance computation
-                    mc_var = np.sum(fresh_var / np.maximum(M, 1)) / (len(data) ** 2)
-                    fallback_used = False
-                    fallback_method = "exact"
-                    s2_total = None
-                    s2_cap = None
-                else:
-                    # Automatic fallback for M=1 cases
-                    # Conservative upper bound using total variance
-                    # Mathematical justification: For a mixture distribution,
-                    # Var(X) = E[Var(X|I)] + Var(E[X|I]) >= E[Var(X|I)]
-                    # where I indexes the components (prompts).
-                    # Thus the total variance upper-bounds the average within-prompt variance.
-                    fallback_used = True
-                    s2_total = float(np.var(g_fresh, ddof=1)) if n > 1 else 0.0
-                    s2_cap = min(
-                        s2_total, 0.25
-                    )  # Cap at maximum possible variance for [0,1]
-
-                    # Check if we have mixed M values (some M>=2, some M=1)
-                    has_multi = np.any(M >= 2)
-                    if has_multi:
-                        # Combine exact for M>=2 and bound for M=1
-                        mask_multi = M >= 2
-                        M_array = np.asarray(
-                            M
-                        )  # Ensure it's a numpy array for indexing
-                        exact_part = float(
-                            np.sum(
-                                fresh_var[mask_multi]
-                                / np.maximum(M_array[mask_multi], 1)
-                            )
-                        ) / (n**2)
-                        n_singles = int(np.sum(M < 2))
-                        bound_part = float(np.sum(np.ones(n_singles) * s2_cap)) / (n**2)
-                        mc_var = exact_part + bound_part
-                        fallback_method = "upper_bound(mixed)"
-                    else:
-                        # All M=1, use pure bound
-                        mc_var = s2_cap / n if n > 0 else 0.0
-                        fallback_method = "upper_bound(total_var)"
-
-                    logger.debug(
-                        f"Using MC variance fallback for {policy}: "
-                        f"{fallback_method}, s2_cap={s2_cap:.4f}"
-                    )
-
-                # Store MC diagnostics with fallback information
-                if not hasattr(self, "_mc_diagnostics"):
-                    self._mc_diagnostics = {}
-                self._mc_diagnostics[policy] = {
-                    "base_se": base_se,
-                    "mc_var": mc_var,
-                    "mc_share": (
-                        mc_var / (base_se**2 + mc_var)
-                        if (base_se**2 + mc_var) > 0
-                        else 0
-                    ),
-                    "avg_draws_per_prompt": float(M.mean()),
-                    "min_draws_per_prompt": int(M.min()),
-                    "max_draws_per_prompt": int(M.max()),
-                    "fallback_used": fallback_used,
-                    "fallback_method": fallback_method,
-                    "n_prompts": int(n),
-                    "n_prompts_M1": int(np.sum(M < 2)),
-                }
-
-                # Add fallback-specific diagnostics if used
-                if fallback_used:
-                    if s2_total is not None:
-                        self._mc_diagnostics[policy]["s2_total"] = float(s2_total)
-                    if s2_cap is not None:
-                        self._mc_diagnostics[policy]["s2_cap"] = float(s2_cap)
-
-            # Add oracle uncertainty from finite-oracle jackknife
-            se_oracle = 0.0
-
-            # Skip oracle uncertainty at 100% coverage (no uncertainty when we have all labels)
-            skip_oua = False
-            try:
-                if (
-                    hasattr(self.sampler, "oracle_coverage")
-                    and self.sampler.oracle_coverage == 1.0
-                ):
-                    skip_oua = True
-                    logger.debug(
-                        f"Skipping oracle uncertainty for {policy}: 100% oracle coverage"
-                    )
-            except Exception:
-                pass  # Continue with the default path if we can't check
-
-            if not skip_oua:
-                jack = self.get_oracle_jackknife(policy)
-                if jack is not None and len(jack) >= 2:
-                    K = len(jack)
-                    mu = float(np.mean(jack))
-                    se_oracle = float(np.sqrt((K - 1) / K * np.sum((jack - mu) ** 2)))
-                    logger.debug(
-                        f"Oracle SE for {policy}: {se_oracle:.6f} from {K} folds"
-                    )
-
-            # Total SE combining all sources: IF (cluster-robust), oracle, and fresh-draw MC
-            se = compose_se_components(se_if, se_oracle, mc_var)
-
-            # For backward compatibility, keep total_var
-            total_var = se**2
-
-            if mc_var > 0:
-                logger.debug(
-                    f"SE for '{policy}': base={base_se:.4f}, with MC={se:.4f} "
-                    f"(MC adds {100*mc_var/total_var:.1f}% to variance)"
-                )
+            # Fresh-draw MC diagnostics (metadata only; never added to the SE)
+            self._record_mc_diagnostics(policy, g_fresh, se_parts["se_if"])
 
             # Store influence functions (always needed for proper inference)
             self._influence_functions[policy] = if_contributions
@@ -1001,10 +1084,10 @@ class DREstimator(BaseCJEEstimator):
             "n_folds": self.n_folds,
         }
 
-        # Add MC variance diagnostics if available
-        if hasattr(self, "_mc_diagnostics"):
+        # Add MC variance diagnostics if available (metadata only, not in SEs)
+        if self._mc_diagnostics:
             dr_metadata["mc_variance_diagnostics"] = self._mc_diagnostics
-            dr_metadata["mc_variance_included"] = True
+            dr_metadata["mc_variance_included"] = False
 
         # Create overview
         dr_overview = {}
@@ -1063,10 +1146,10 @@ class DREstimator(BaseCJEEstimator):
         # Add dr_metadata to surface MC variance diagnostics
         metadata["dr_metadata"] = dr_metadata
 
-        # Also expose MC variance at top-level for stacker convenience
-        if hasattr(self, "_mc_diagnostics"):
+        # Also expose MC variance diagnostics at top-level (metadata only)
+        if self._mc_diagnostics:
             metadata["mc_variance_diagnostics"] = self._mc_diagnostics
-            metadata["mc_variance_included"] = True
+            metadata["mc_variance_included"] = False
 
         # Attach compact core summary for empirical analysis (no UX change)
         try:
@@ -1126,11 +1209,11 @@ class DREstimator(BaseCJEEstimator):
             pass
 
         # Mark that oracle variance is already included in standard_errors
-        # (prevents base class from adding it again)
-        metadata["se_components"] = {
-            "includes_oracle_uncertainty": True,
-            "includes_mc_variance": True,
-        }
+        # (prevents _apply_oua_jackknife from adding it again). MC variance is
+        # NOT composed separately: the IF variance already contains it.
+        metadata["se_components"] = self._build_se_components_metadata(
+            se_parts_by_policy
+        )
 
         # Add sample indices for IF alignment in stacking
         if hasattr(self, "_if_sample_indices"):
@@ -1150,8 +1233,10 @@ class DREstimator(BaseCJEEstimator):
             metadata=metadata,
         )
 
-        # Apply oracle-jackknife inference using the base class method
-        self._apply_oua_jackknife(base_result)
+        # Oracle-jackknife variance is already included by _compute_policy_se
+        # (metadata["se_components"]["includes_oracle_uncertainty"] is True),
+        # so _apply_oua_jackknife must not be called here — the oracle
+        # variance enters each policy's SE exactly once.
 
         return base_result
 
@@ -1377,7 +1462,9 @@ class DREstimator(BaseCJEEstimator):
             Array of K jackknife estimates, or None if not applicable
 
         Note:
-            The jackknife variance is computed as: var_oracle = (K-1)/K * Var(estimates)
+            The jackknife variance is computed as:
+            var_oracle = (K-1)/K * Σ_k (estimate_k − mean)²
+            (delete-one-fold jackknife, sum over folds — not the mean).
             This represents the additional uncertainty from learning f: judge → oracle
             from a finite sample of oracle labels.
         """
@@ -1492,9 +1579,19 @@ class DREstimator(BaseCJEEstimator):
                         1.0,
                     )
                 else:
-                    # No covariates - use fold model directly
+                    # No covariates - still route through predict_oof so that
+                    # mode-specific transforms are applied (two-stage calibrators
+                    # need g(S) -> ECDF -> isotonic; the raw fold model would be
+                    # fed judge scores where it expects the rank index).
+                    fold_ids_logged = np.full(
+                        len(judge_scores_logged), fold_id, dtype=int
+                    )
                     logged_rewards_loo = np.clip(
-                        fold_model.predict(judge_scores_logged), 0.0, 1.0
+                        self.reward_calibrator.predict_oof(
+                            judge_scores_logged, fold_ids_logged
+                        ),
+                        0.0,
+                        1.0,
                     )
 
                 # Compute per-prompt fresh draw means (like main estimate() does)
@@ -1528,9 +1625,12 @@ class DREstimator(BaseCJEEstimator):
                                 fresh_covariates_array,
                             )
                         else:
-                            # No covariates - use fold model directly
-                            prompt_preds = fold_model.predict(
-                                np.array(prompt_fresh_scores)
+                            # No covariates - route through predict_oof (see above)
+                            fresh_fold_ids = np.full(
+                                len(prompt_fresh_scores), fold_id, dtype=int
+                            )
+                            prompt_preds = self.reward_calibrator.predict_oof(
+                                np.array(prompt_fresh_scores), fresh_fold_ids
                             )
                         prompt_preds = np.clip(prompt_preds, 0.0, 1.0)
                         g_fresh_means.append(prompt_preds.mean())

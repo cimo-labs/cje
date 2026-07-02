@@ -730,6 +730,17 @@ class CalibratedIPS(BaseCJEEstimator):
                 )
                 R_oof = rewards.copy()
 
+            # At 100% oracle coverage the estimate consumes raw oracle labels
+            # (no calibration), so the IF must use those same rewards —
+            # substituting smoothed calibrator predictions here removes the
+            # reward-noise term from the variance and understates the SE.
+            try:
+                sampler_coverage = getattr(self.sampler, "oracle_coverage", None)
+                if sampler_coverage is not None and sampler_coverage >= 1.0:
+                    R_oof = rewards.copy()
+            except Exception:
+                pass
+
             # Check if we should use honest IFs with outer CV
             calib_info = self._calibration_info.get(policy, {})
             if self.use_outer_cv and "outer_fold_ids" in calib_info:
@@ -758,23 +769,25 @@ class CalibratedIPS(BaseCJEEstimator):
                     w_test = weights[test_mask]
                     r_oof_test = R_oof[test_mask]
 
-                    # Hajek ratio IF with training mean weight (not test mean)
+                    # Hajek ratio IF with training mean weight (not test mean):
+                    # φ_i = w_i (R_i − ψ) / mean_w. Note w(R−ψ) already carries
+                    # the denominator correction of the ratio estimator —
+                    # subtracting ψ(w − mean_w) again double-counts it.
                     denom_train = mean_w_train if mean_w_train > 0 else 1.0
 
                     influence[test_mask] = (
-                        w_test * (r_oof_test - train_estimate)
-                        - train_estimate
-                        * (w_test - mean_w_train)  # Use train mean weight
-                    ) / denom_train
+                        w_test * (r_oof_test - train_estimate) / denom_train
+                    )
             else:
                 # Standard single-pass influence functions
-                # Ratio IF for Hajek term (use the same weights used in ψ̂_w)
-                # φ^H_i = [w_i (R_oof_i - ψ̂_w) - ψ̂_w (w_i - mean_w)] / mean_w
+                # Ratio IF for the Hajek estimator ψ̂ = Σ w R / Σ w:
+                # φ^H_i = w_i (R_oof_i - ψ̂_w) / mean_w
+                # (delta method: (a_i − ψ b_i)/E[w] with a=wR, b=w collapses to
+                # w(R−ψ)/E[w]; subtracting ψ(w − mean_w) again double-counts
+                # the denominator correction and understates the variance).
                 # Normalization by mean_w is critical for raw weights; harmless for Hájek (mean≈1)
                 denom = mean_w if mean_w > 0 else 1.0
-                ratio_if = (
-                    weights * (R_oof - psi_w) - psi_w * (weights - mean_w)
-                ) / denom
+                ratio_if = weights * (R_oof - psi_w) / denom
 
                 # No bias augmentation; the oracle jackknife handles calibration uncertainty
                 influence = ratio_if
@@ -1019,12 +1032,41 @@ class CalibratedIPS(BaseCJEEstimator):
             if len(judge_scores) != len(weights):
                 return None
 
+            # Covariates (e.g. two-stage '+cov' calibrators) must flow through
+            # predict_oof; the raw fold models expect the rank index, not S.
+            covariate_names: List[str] = []
+            if hasattr(self.reward_calibrator, "covariate_names"):
+                covariate_names = self.reward_calibrator.covariate_names or []
+            covariates_array: Optional[np.ndarray] = None
+            if covariate_names:
+                covariate_rows = []
+                for d in data:
+                    row = []
+                    for cov_name in covariate_names:
+                        cov_value = d.get(cov_name)
+                        if cov_value is None:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' not found in logged data "
+                                f"for policy '{policy}' during oracle-jackknife inference"
+                            )
+                        row.append(float(cov_value))  # type: ignore[arg-type]
+                    covariate_rows.append(row)
+                covariates_array = np.array(covariate_rows)
+
             jack: List[float] = []
-            for fold_id, fold_model in fold_models.items():
-                # Recompute rewards under leave-one-fold reward_calibrator
-                # For FlexibleCalibrator two-stage, fold_model is already IsotonicRegression
-                # For FlexibleCalibrator monotone or standard isotonic, it's IsotonicRegression
-                rewards_loo = np.clip(fold_model.predict(judge_scores), 0.0, 1.0)
+            for fold_id in fold_models.keys():
+                # Recompute rewards under the leave-one-fold reward_calibrator.
+                # Route through predict_oof so mode-specific transforms are
+                # applied (two-stage: g(S) -> ECDF -> isotonic); a constant fold
+                # id yields leave-that-fold-out predictions for every sample.
+                fold_ids = np.full(len(judge_scores), fold_id, dtype=int)
+                rewards_loo = np.clip(
+                    self.reward_calibrator.predict_oof(
+                        judge_scores, fold_ids, covariates_array
+                    ),
+                    0.0,
+                    1.0,
+                )
 
                 # Oracle jackknife: only recompute with a different calibrator, no bias augmentation
                 contrib = weights * rewards_loo
@@ -1032,7 +1074,10 @@ class CalibratedIPS(BaseCJEEstimator):
 
             return np.asarray(jack, dtype=float) if jack else None
         except Exception as e:
-            logger.debug(f"get_oracle_jackknife failed for {policy}: {e}")
+            if self.oua_jackknife:
+                logger.warning(f"get_oracle_jackknife failed for {policy}: {e}")
+            else:
+                logger.debug(f"get_oracle_jackknife failed for {policy}: {e}")
             return None
 
     def get_calibration_info(self, target_policy: str) -> Optional[Dict]:

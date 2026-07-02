@@ -165,8 +165,10 @@ estimator.add_fresh_draws('policy', FreshDrawDataset(samples=[...]))
 ### Complete Standard Errors
 
 `standard_errors` always includes all sources of uncertainty:
-- **Influence function (IF) variance**: Base sampling uncertainty
-- **Monte Carlo (MC) variance**: For DR estimators with finite fresh draws
+- **Influence function (IF) variance**: Base sampling uncertainty. For DR
+  estimators the IF is built from per-prompt means of the fresh-draw
+  predictions, so it already contains the Monte Carlo noise from finite
+  fresh draws (no separate MC term is added — see below)
 - **Oracle variance**: When calibration uses partial oracle labels (oracle_coverage < 100%)
 
 ### Confidence Intervals with t-Distribution
@@ -266,15 +268,24 @@ standard_errors = np.sqrt(if_variance/n + oracle_variance)
 # Oracle variance is automatically skipped at 100% oracle coverage
 ```
 
-### DR Standard Errors (with Monte Carlo Variance)
+### DR Standard Errors
+All DR estimators (DR-CPO, TMLE, MRDR, and Stacked-DR) report SEs on the same
+basis via a shared helper:
 ```python
-# Complete SE includes all three components
-standard_errors = np.sqrt(if_variance/n + mc_variance + oracle_variance)
+# Cluster-robust IF variance (CRV1 on outcome folds) + oracle jackknife variance
+standard_errors = np.sqrt(cluster_robust_if_variance + oracle_variance)
 
 # Check metadata for what's included
-result.metadata["se_components"]["includes_mc_variance"]  # True for DR
-result.metadata["se_components"]["includes_oracle_uncertainty"]  # True if calibration-aware applied
+result.metadata["se_components"]["includes_oracle_uncertainty"]  # True for DR
+result.metadata["se_components"]["includes_mc_variance"]  # False: no separate MC term
+result.metadata["se_components"]["mc_variance_in_if"]  # True: MC noise lives inside the IF variance
 ```
+
+The influence functions average the fresh-draw predictions per prompt, so the
+IF variance already contains the within-prompt Monte Carlo noise
+E[σ²ᵢ/Mᵢ]/n from finite fresh draws. Adding a separate `mc_variance` term
+(as a prior implementation did) double-counts that component — up to ~√2×
+SE inflation when M=1.
 
 ### Convenience Method
 ```python
@@ -291,10 +302,14 @@ if "degrees_of_freedom" in result.metadata:
         print(f"{policy}: df={info['df']}, t_crit={info['t_critical']:.3f}")
 ```
 
-### Automatic MC Variance Handling
-When only one fresh draw per prompt (M=1), DR estimators automatically use a conservative upper bound:
+### Fresh-Draw MC Diagnostics (metadata only)
+DR estimators still estimate the fresh-draw MC component and expose it in
+`result.metadata["mc_variance_diagnostics"]` (per policy: `mc_var`,
+`mc_share`, draws per prompt, fallback info). It is never composed into the
+SE. When only one fresh draw per prompt is available (M=1), the diagnostic
+uses a conservative upper bound:
 - Total variance across single draws bounds within-prompt variance
-- Capped at 0.25 for binary [0,1] outcomes
+- Capped at 0.25 for [0,1] outcomes
 - Mixed cases (some M≥2, some M=1) combine exact computation with upper bound
 
 

@@ -1394,10 +1394,19 @@ def compute_robust_inference(
 ) -> Dict[str, Any]:
     """Comprehensive robust inference with dependence and multiplicity handling.
 
+    Influence functions are mean-centered by CJE convention, so the bootstrap
+    (or cluster) distribution of their mean is centered near zero. Confidence
+    intervals are therefore re-centered on the corresponding point estimate:
+    CI_i = estimates[i] + (bootstrap CI of mean(IF_i)).
+
     Args:
         estimates: Point estimates for policies
-        influence_functions: If provided, use for inference
-        data: Raw data (if influence_functions not provided)
+        influence_functions: Mean-centered influence functions, shape (n,) for
+            a single policy or (n, n_policies). Required.
+        data: Deprecated and unsupported. Raw data cannot be used to
+            re-estimate the statistic on resamples (a prior implementation
+            silently returned zero-width CIs and p=0). Pass
+            influence_functions instead; a ValueError is raised otherwise.
         method: "stationary_bootstrap", "moving_block", or "cluster"
         cluster_ids: For cluster-robust SEs
         alpha: Significance level for CIs
@@ -1408,7 +1417,20 @@ def compute_robust_inference(
 
     Returns:
         Dictionary with complete robust inference results
+
+    Raises:
+        ValueError: If influence_functions is not provided.
     """
+    if influence_functions is None:
+        raise ValueError(
+            "compute_robust_inference requires influence_functions. The raw "
+            "`data` path cannot re-estimate the per-policy statistic on "
+            "bootstrap resamples (it previously returned degenerate zero-width "
+            "intervals and p-values of 0). Pass the per-policy influence "
+            "functions from the estimator instead, e.g. "
+            "result.influence_functions."
+        )
+
     n_policies = len(estimates)
 
     # Compute robust SEs for each policy
@@ -1417,101 +1439,69 @@ def compute_robust_inference(
     p_values: List[float] = []
 
     for i in range(n_policies):
-        if method == "stationary_bootstrap":
-            if influence_functions is not None:
-                # Use influence functions
-                result = stationary_bootstrap_se(
-                    (
-                        influence_functions[:, i]
-                        if influence_functions.ndim > 1
-                        else influence_functions
-                    ),
-                    lambda x: np.mean(x),
-                    n_bootstrap=n_bootstrap,
-                    alpha=alpha,
-                )
-            elif data is not None:
-                # Use raw data
-                result = stationary_bootstrap_se(
-                    data,
-                    lambda x: estimates[i],  # Placeholder - would need actual estimator
-                    n_bootstrap=n_bootstrap,
-                    alpha=alpha,
-                )
-            else:
-                raise ValueError("Need either influence_functions or data")
+        if_data = (
+            influence_functions[:, i]
+            if influence_functions.ndim > 1
+            else influence_functions
+        )
 
+        use_t_pvalue = False
+        if method == "stationary_bootstrap":
+            result = stationary_bootstrap_se(
+                if_data,
+                lambda x: float(np.mean(x)),
+                n_bootstrap=n_bootstrap,
+                alpha=alpha,
+            )
         elif method == "moving_block":
             # Moving block bootstrap for time series data
-            if influence_functions is not None:
-                result = moving_block_bootstrap_se(
-                    (
-                        influence_functions[:, i]
-                        if influence_functions.ndim > 1
-                        else influence_functions
-                    ),
-                    lambda x: np.mean(x),
-                    n_bootstrap=n_bootstrap,
-                    alpha=alpha,
-                )
-            elif data is not None:
-                result = moving_block_bootstrap_se(
-                    data,
-                    lambda x: estimates[i],  # Use the estimate
-                    n_bootstrap=n_bootstrap,
-                    alpha=alpha,
-                )
-            else:
-                raise ValueError("Need either influence_functions or data")
-
+            result = moving_block_bootstrap_se(
+                if_data,
+                lambda x: float(np.mean(x)),
+                n_bootstrap=n_bootstrap,
+                alpha=alpha,
+            )
         elif method == "cluster" and cluster_ids is not None:
-            if influence_functions is not None:
-                # Use cluster-robust SE with proper t-based inference
-                if_data = (
-                    influence_functions[:, i]
-                    if influence_functions.ndim > 1
-                    else influence_functions
-                )
-                result = cluster_robust_se(
-                    data=if_data,
-                    cluster_ids=cluster_ids,
-                    statistic_fn=lambda x: np.mean(x),
-                    influence_fn=lambda x: x,  # IF already provided
-                    alpha=alpha,
-                )
-                robust_ses.append(result["se"])
-                robust_cis.append((result["ci_lower"], result["ci_upper"]))
-
-                # t-based p-value (not normal!)
-                df = max(result.get("df", 1), 1)
-                t_stat = estimates[i] / result["se"] if result["se"] > 0 else 0.0
-                p_val = 2 * (1 - stats.t.cdf(abs(t_stat), df))
-                p_values.append(float(p_val))
-                continue
-            else:
-                raise ValueError("Need influence_functions for cluster method")
+            # Cluster-robust SE with proper t-based inference
+            result = cluster_robust_se(
+                data=if_data,
+                cluster_ids=cluster_ids,
+                statistic_fn=lambda x: float(np.mean(x)),
+                influence_fn=lambda x: x,  # IF already provided
+                alpha=alpha,
+            )
+            use_t_pvalue = True
         else:
             # Fallback to classical
-            if influence_functions is not None:
-                se = np.std(influence_functions[:, i]) / np.sqrt(
-                    len(influence_functions)
-                )
-            elif data is not None:
-                se = np.std(data) / np.sqrt(len(data))
-            else:
-                raise ValueError("Need either influence_functions or data")
+            se = np.std(if_data) / np.sqrt(len(if_data))
+            z_crit = stats.norm.ppf(1 - alpha / 2)
             result = {
+                "estimate": 0.0,
                 "se": se,
-                "ci_lower": estimates[i] - 1.96 * se,
-                "ci_upper": estimates[i] + 1.96 * se,
+                "ci_lower": -z_crit * se,
+                "ci_upper": z_crit * se,
             }
 
-        robust_ses.append(result["se"])
-        robust_cis.append((result["ci_lower"], result["ci_upper"]))
+        robust_ses.append(float(result["se"]))
+
+        # Re-center the interval on the point estimate. The IFs are
+        # mean-centered, so result["estimate"] (=mean of the IFs) is ~0 and
+        # the raw interval brackets 0, not the policy value.
+        center = float(estimates[i]) - float(result.get("estimate", 0.0))
+        robust_cis.append(
+            (center + float(result["ci_lower"]), center + float(result["ci_upper"]))
+        )
 
         # Compute p-value for test that estimate != 0
-        z_stat = estimates[i] / result["se"] if result["se"] > 0 else 0
-        p_val = 2 * (1 - stats.norm.cdf(abs(z_stat)))
+        if result["se"] > 0:
+            stat = estimates[i] / result["se"]
+        else:
+            stat = 0.0
+        if use_t_pvalue:
+            df = max(int(result.get("df", 1)), 1)
+            p_val = float(2 * (1 - stats.t.cdf(abs(stat), df)))
+        else:
+            p_val = float(2 * (1 - stats.norm.cdf(abs(stat))))
         p_values.append(p_val)
 
     robust_ses_array = np.array(robust_ses)

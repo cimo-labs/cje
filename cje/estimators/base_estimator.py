@@ -11,6 +11,29 @@ from ..data.precomputed_sampler import PrecomputedSampler
 logger = logging.getLogger(__name__)
 
 
+def oracle_jackknife_variance(jack: np.ndarray) -> float:
+    """Delete-one-fold jackknife variance of the calibration (OUA) component.
+
+    Var_cal = (K-1)/K * Σ_k (ψ^(−k) − ψ̄)²
+
+    This is the standard delete-a-group jackknife (paper Alg. 6). Note the sum,
+    not the mean, over folds: dividing by K here understates the variance by a
+    factor of K.
+
+    Args:
+        jack: Array of K leave-one-oracle-fold estimates
+
+    Returns:
+        Jackknife variance estimate (0.0 if fewer than 2 folds)
+    """
+    jack = np.asarray(jack, dtype=float)
+    K = len(jack)
+    if K < 2:
+        return 0.0
+    psi_bar = float(np.mean(jack))
+    return (K - 1) / K * float(np.sum((jack - psi_bar) ** 2))
+
+
 class BaseCJEEstimator(ABC):
     """Abstract base class for CJE estimators.
 
@@ -230,8 +253,7 @@ class BaseCJEEstimator(ABC):
                     and i < len(result.standard_errors)
                 ):
                     K = len(jack)
-                    psi_bar = float(np.mean(jack))
-                    var_orc = (K - 1) / K * float(np.mean((jack - psi_bar) ** 2))
+                    var_orc = oracle_jackknife_variance(jack)
 
                 var_oracle_map[policy] = var_orc
                 jk_counts[policy] = K
