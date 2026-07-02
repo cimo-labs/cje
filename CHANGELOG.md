@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Fix the README and interface-README Quick Start examples, which crashed verbatim because they provided fewer than the 10 oracle labels required by 5-fold cross-fitted calibration; document the 10-label minimum next to the labeling guidance.
+- Reduce calibration folds gracefully (with a warning) in Direct mode when 4-9 oracle labels are available instead of failing; below 4 labels, the calibration error now says exactly how to fix it.
+- Handle degenerate fold assignments in FlexibleCalibrator (all oracle samples hashed into one fold) by falling back to fitting on all oracle samples for that fold.
+- Reduce full-data calibration folds for small oracle slices in cluster-bootstrap inference so Direct-mode point estimates no longer come back NaN with fewer than 10 labels.
 
 ## 0.2.25
 

@@ -202,6 +202,10 @@ class FlexibleCalibrator:
         """Fit standard monotone isotonic regression."""
         for k in np.unique(folds):
             train_mask = folds != k
+            if not np.any(train_mask):
+                # All oracle samples landed in fold k (possible with very
+                # small oracle slices); fall back to fitting on all samples.
+                train_mask = np.ones_like(train_mask)
             iso = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
             iso.fit(S[train_mask], Y[train_mask])
             self._monotone_models[k] = iso
@@ -226,6 +230,10 @@ class FlexibleCalibrator:
         # Step 1: Fit smooth g(S, X_cov) and ECDF for each fold
         for k in unique_folds:
             train_mask = folds != k
+            if not np.any(train_mask):
+                # All oracle samples landed in fold k (possible with very
+                # small oracle slices); fall back to fitting on all samples.
+                train_mask = np.ones_like(train_mask)
             S_train = S[train_mask]
             Y_train = Y[train_mask]
 
@@ -264,6 +272,9 @@ class FlexibleCalibrator:
         # Step 2: Fit isotonic on rank-transformed space for each fold
         for k in unique_folds:
             train_mask = folds != k
+            if not np.any(train_mask):
+                # Same fallback as Step 1 for degenerate fold assignments.
+                train_mask = np.ones_like(train_mask)
 
             if self._g_models.get(k) is not None:
                 # Build feature matrix for this fold

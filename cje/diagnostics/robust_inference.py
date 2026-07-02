@@ -507,10 +507,13 @@ def cluster_bootstrap_direct_with_refit(
             prompt_id_strings[i] for i in np.where(calibration_oracle_mask)[0]
         ]
 
+        n_cal_oracle_full = int(np.sum(calibration_oracle_mask))
         calibrator.fit_cv(
             judge_scores=judge_scores[calibration_oracle_mask],
             oracle_labels=oracle_labels[calibration_oracle_mask],
-            n_folds=5,
+            n_folds=min(
+                5, max(2, n_cal_oracle_full // 2)
+            ),  # Reduce folds if low oracle
             prompt_ids=cal_oracle_prompt_ids,  # For cluster-level folds
             covariates=(
                 covariates[calibration_oracle_mask] if covariates is not None else None
