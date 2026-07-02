@@ -84,7 +84,17 @@ def detect_analysis_mode(
             n_valid_logprobs += 1
 
     logprob_coverage = n_valid_logprobs / n_total if n_total > 0 else 0.0
-    has_fresh_draws = fresh_draws_dir is not None and Path(fresh_draws_dir).exists()
+
+    # A nonexistent fresh_draws_dir must fail loudly: silently treating it as
+    # "no fresh draws" would downgrade auto mode from DR to IPS and change the
+    # estimand without the user noticing (e.g. on a simple typo).
+    if fresh_draws_dir is not None and not Path(fresh_draws_dir).exists():
+        raise FileNotFoundError(
+            f"fresh_draws_dir does not exist: '{fresh_draws_dir}'. "
+            "Fix the path (or omit fresh_draws_dir to run IPS mode without "
+            "fresh draws)."
+        )
+    has_fresh_draws = fresh_draws_dir is not None
 
     # Error if no valid logprobs and no fresh draws
     if logprob_coverage == 0 and not has_fresh_draws:

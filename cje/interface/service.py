@@ -65,6 +65,15 @@ class AnalysisService:
         return covariates if covariates else None
 
     def run(self, config: AnalysisConfig) -> EstimationResult:
+        # In-memory fresh draws are only wired up for Direct-only mode. With
+        # logged data they used to be silently ignored (no DR, metadata said
+        # has_fresh_draws=False), so fail loudly instead.
+        if config.fresh_draws_data is not None and config.logged_data_path is not None:
+            raise ValueError(
+                "fresh_draws_data together with logged_data_path is not yet "
+                "supported; write draws to disk and pass fresh_draws_dir"
+            )
+
         # Determine estimator choice early
         chosen_estimator = config.estimator.lower() if config.estimator else "auto"
 
@@ -272,6 +281,13 @@ class AnalysisService:
                     enable_cross_fit=True,
                     n_folds=5,
                     covariate_names=covariate_names,
+                )
+            else:
+                logger.warning(
+                    "No oracle labels found — returning UNCALIBRATED judge-score "
+                    "means; CIs do not account for judge bias. Results will be "
+                    "labeled method='naive_direct'. Add oracle labels to the "
+                    "fresh draws or provide calibration_data_path to calibrate."
                 )
 
         from ..estimators.direct_method import CalibratedDirectEstimator

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Fail loudly on silent interface downgrades**: `analyze_dataset` now raises when `fresh_draws_data` is combined with `logged_data_path` (the in-memory draws were silently ignored — no DR, metadata claimed `has_fresh_draws=False`); auto mode raises `FileNotFoundError` when `fresh_draws_dir` does not exist instead of silently downgrading DR→IPS; and zero-oracle Direct runs emit a prominent warning and are labeled `method="naive_direct"` instead of `"calibrated_direct"` (uncalibrated judge-score means were previously indistinguishable from calibrated results).
 - **Fix CalibratedIPS influence function understating the SE ~2x**: (a) the Hajek ratio IF included an extra `−ψ(w−mean_w)` term that double-counted the ratio-denominator correction (the delta method gives `φ = w(R−ψ)/mean_w`); (b) at 100% oracle coverage the IF was built from smoothed OOF calibrator predictions while the estimate consumed raw oracle labels, deleting the reward-noise term from the variance. Discovered by the new Monte Carlo coverage harness (reported-SE/empirical-SD ratio was 0.44-0.63 at full oracle coverage; now ~1.0).
 - **Add a Monte Carlo ground-truth coverage harness** (`cje/tests/test_mc_coverage.py`): synthetic DGP with a known policy value; fast CI layer asserts point-estimate bias and reported-SE-vs-empirical-SD bands for calibrated-ips and dr-cpo (catching any resurgence of the OUA ×K, MC double-count, or IF-formula bugs), plus a slow 300-replicate 95% CI coverage layer across direct/calibrated-ips/dr-cpo/tmle/stacked-dr.
 

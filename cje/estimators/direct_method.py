@@ -216,6 +216,19 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             None  # Cache bootstrap results
         )
 
+    @property
+    def _method_name(self) -> str:
+        """Method label reflecting whether rewards are actually calibrated.
+
+        Without a reward calibrator the estimator averages raw judge scores,
+        so labeling the result 'calibrated_direct' would be misleading.
+        """
+        return (
+            "calibrated_direct"
+            if self.reward_calibrator is not None
+            else "naive_direct"
+        )
+
     def add_fresh_draws(self, policy: str, fresh_draws: Any) -> None:
         """Add fresh draws for a target policy.
 
@@ -581,7 +594,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             estimates=np.array(estimates),
             standard_errors=np.array(standard_errors),
             n_samples_used=n_samples_used,
-            method="calibrated_direct",
+            method=self._method_name,
             influence_functions=influence_functions,
             diagnostics=diagnostics,
             metadata=metadata,
@@ -632,7 +645,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
 
         diagnostics = IPSDiagnostics(
             estimator_type="Direct",
-            method="calibrated_direct",
+            method=self._method_name,
             n_samples_total=total_samples,
             n_samples_valid=valid_samples,
             n_policies=len(policies),
@@ -1058,7 +1071,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             estimates=np.array(estimates),
             standard_errors=np.array(standard_errors),
             n_samples_used=n_samples_used,
-            method="calibrated_direct_bootstrap",
+            method=f"{self._method_name}_bootstrap",
             influence_functions=influence_functions,
             diagnostics=diagnostics,
             metadata=metadata,
