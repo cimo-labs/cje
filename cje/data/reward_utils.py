@@ -79,9 +79,33 @@ def add_rewards_to_existing_data(
         # Fallback to index
         return f"sample_{idx:06d}"
 
-    # Build mapping from prompt_id -> (judge_score, sample)
-    prompt_to_sample = {}
+    # Align dataset samples with raw record indices. The loader preserves
+    # record order (skipping invalid records), so dataset.samples is an
+    # ordered subsequence of raw_data. Keying everything on record index —
+    # not prompt_id — keeps duplicate prompt_ids as distinct responses, each
+    # of which must receive f(its own judge score).
+    aligned_raw_idx: List[int] = []
+    raw_pos = 0
+    n_raw = len(raw_data)
     for sample in dataset.samples:
+        while (
+            raw_pos < n_raw
+            and derive_prompt_id(raw_data[raw_pos], raw_pos) != sample.prompt_id
+        ):
+            raw_pos += 1
+        if raw_pos >= n_raw:
+            raise ValueError(
+                f"Could not align dataset sample with prompt_id "
+                f"'{sample.prompt_id}' to a raw record in {data_path}; "
+                f"loaded samples are expected to be an ordered subsequence "
+                f"of the raw records."
+            )
+        aligned_raw_idx.append(raw_pos)
+        raw_pos += 1
+
+    # Collect judge scores per sample (positional, not keyed by prompt_id)
+    judge_scores = []
+    for sample, raw_idx in zip(dataset.samples, aligned_raw_idx):
         # Get judge score - standard field is top-level, custom fields in metadata
         score = None
         if judge_score_field == "judge_score":
@@ -89,25 +113,12 @@ def add_rewards_to_existing_data(
         else:
             # Custom field name - check metadata
             score = sample.metadata.get(judge_score_field)
-        # If still None, will need to get from raw data later
 
-        prompt_to_sample[sample.prompt_id] = (score, sample)
-
-    # Collect judge scores aligned with dataset samples
-    judge_scores = []
-    sample_ids = []
-    for sample in dataset.samples:
-        score, _ = prompt_to_sample[sample.prompt_id]
-
-        # If score not in metadata, try to find in raw data
+        # If still None, try the aligned raw record
         if score is None:
-            # Find matching raw record by prompt_id
-            for idx, raw_record in enumerate(raw_data):
-                raw_prompt_id = derive_prompt_id(raw_record, idx)
-                if raw_prompt_id == sample.prompt_id:
-                    if judge_score_field in raw_record:
-                        score = raw_record[judge_score_field]
-                    break
+            raw_record = raw_data[raw_idx]
+            if judge_score_field in raw_record:
+                score = raw_record[judge_score_field]
 
         if score is None:
             raise ValueError(
@@ -118,31 +129,28 @@ def add_rewards_to_existing_data(
             score = score.get("mean", score.get("value"))
 
         judge_scores.append(float(score))
-        sample_ids.append(sample.prompt_id)
 
     judge_scores_array = np.array(judge_scores)
 
     # Apply calibration
     calibrated_rewards = calibrator.predict(judge_scores_array)
 
-    # Build mapping from prompt_id to calibrated reward
-    reward_by_id = {
-        pid: float(reward) for pid, reward in zip(sample_ids, calibrated_rewards)
+    # Map raw record index -> calibrated reward
+    reward_by_raw_idx = {
+        raw_idx: float(reward)
+        for raw_idx, reward in zip(aligned_raw_idx, calibrated_rewards)
     }
 
-    # Add rewards to raw data, matching by prompt_id
+    # Add rewards to raw data, matching by record index
     data = []
     skipped_count = 0
     for i, raw_record in enumerate(raw_data):
         # Start from the original raw record to preserve all fields
         record = dict(raw_record)  # Make a copy
 
-        # Derive prompt_id for this raw record
-        prompt_id = derive_prompt_id(raw_record, i)
-
         # Inject the calibrated reward if we have it
-        if prompt_id in reward_by_id:
-            record[output_reward_field] = reward_by_id[prompt_id]
+        if i in reward_by_raw_idx:
+            record[output_reward_field] = reward_by_raw_idx[i]
         else:
             # This record was filtered by the loader, no reward to assign
             skipped_count += 1
@@ -152,8 +160,8 @@ def add_rewards_to_existing_data(
         data.append(record)
 
     if skipped_count > 0:
-        logger.info(
-            f"Skipped adding rewards to {skipped_count} records "
+        logger.warning(
+            f"Skipped adding rewards to {skipped_count}/{len(raw_data)} records "
             f"(filtered by DatasetLoader)"
         )
 

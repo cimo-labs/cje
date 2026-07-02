@@ -94,19 +94,30 @@ class DatasetLoader:
         if target_policies is None:
             target_policies = self._detect_target_policies(data)
 
-        # Convert raw data to samples
+        # Convert raw data to samples. Invalid records are FILTERED with a
+        # counted warning; if every record is invalid we FAIL loudly.
         samples = []
+        n_skipped = 0
         for idx, record in enumerate(data):
             try:
                 sample = self._convert_record_to_sample(record, idx)
                 samples.append(sample)
             except (KeyError, ValueError) as e:
-                # Skip invalid records
-                print(f"Skipping invalid record: {e}")
+                n_skipped += 1
+                logger.warning(f"Skipping invalid record {idx}: {e}")
                 continue
 
+        if n_skipped:
+            logger.warning(
+                f"Skipped {n_skipped}/{len(data)} invalid records while loading dataset"
+            )
+
         if not samples:
-            raise ValueError("No valid samples could be created from data")
+            raise ValueError(
+                f"No valid samples could be created from data: all "
+                f"{len(data)} records were skipped due to validation errors. "
+                f"See the warnings above for per-record reasons."
+            )
 
         return Dataset(
             samples=samples,
@@ -133,11 +144,17 @@ class DatasetLoader:
             record: Raw data record
             idx: Index in dataset (used as fallback if prompt is also missing)
         """
-        # Get prompt_id - check top-level first, then metadata, then auto-generate
-        prompt_id = record.get("prompt_id") or record.get("metadata", {}).get(
-            "prompt_id"
-        )
+        # Get prompt_id - check top-level first, then metadata, then auto-generate.
+        # Explicit None checks: falsy but valid ids like 0 or "" must not be
+        # treated as missing (and silently hash-replaced).
+        prompt_id = record.get("prompt_id")
         if prompt_id is None:
+            prompt_id = record.get("metadata", {}).get("prompt_id")
+        if prompt_id is not None:
+            # Coerce to string (fresh-draw loading does the same) so integer
+            # ids like 0 survive validation and join correctly across datasets.
+            prompt_id = str(prompt_id)
+        else:
             # Auto-generate from prompt hash for consistency across datasets
             # This ensures fresh draws will map to the same prompt_id
             prompt = record.get(self.prompt_field, "")
@@ -261,9 +278,10 @@ class FreshDrawLoader:
                 try:
                     data = json.loads(line)
 
-                    # Create FreshDrawSample
+                    # Create FreshDrawSample (str() so integer ids like 0
+                    # survive validation and join with logged data)
                     sample = FreshDrawSample(
-                        prompt_id=data["prompt_id"],
+                        prompt_id=str(data["prompt_id"]),
                         target_policy=data["target_policy"],
                         judge_score=data["judge_score"],
                         oracle_label=data.get("oracle_label"),  # Optional

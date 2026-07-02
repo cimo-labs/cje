@@ -186,7 +186,12 @@ class CalibratedIPS(BaseCJEEstimator):
 
                         pids = [str(d.get("prompt_id")) for d in data]
 
-                        # Check if any duplicates affect our data
+                        # Check if any duplicates affect our data. ds_idx must
+                        # be initialized before the branch: it used to be left
+                        # unassigned on the duplicate path, and the resulting
+                        # UnboundLocalError was swallowed by the blanket except
+                        # below, silently skipping the fold-based OOF fallback.
+                        ds_idx: Optional[np.ndarray] = None
                         if dups.intersection(pids):
                             logger.debug(
                                 f"Duplicate prompt_ids detected for policy '{policy}'; falling back to fold-based OOF"
@@ -197,7 +202,7 @@ class CalibratedIPS(BaseCJEEstimator):
                                 [ds_index_by_pid.get(pid, -1) for pid in pids],
                                 dtype=int,
                             )
-                        if g_oof is None and np.all(ds_idx >= 0):
+                        if g_oof is None and ds_idx is not None and np.all(ds_idx >= 0):
                             g_oof = self.reward_calibrator.predict_oof_by_index(ds_idx)
                             if g_oof is not None:
                                 logger.debug(

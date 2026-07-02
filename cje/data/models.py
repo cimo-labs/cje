@@ -1,5 +1,6 @@
 """Data models for CJE using Pydantic."""
 
+import math
 from typing import Dict, List, Optional, Any, Tuple, Union
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator
@@ -64,7 +65,19 @@ class Sample(BaseModel):
 
     @field_validator("base_policy_logprob")
     def validate_base_policy_logprob(cls, v: Optional[float]) -> Optional[float]:
-        if v is not None and v > 0:
+        if v is None:
+            return v
+        if not math.isfinite(v):
+            # NaN/inf silently corrupt importance weights downstream (Hajek
+            # weights zero out other samples; raw weights explode). -inf means
+            # "impossible under the policy" — filter or fix such records
+            # upstream; use None as the explicit missing-value marker.
+            raise ValueError(
+                f"base_policy_logprob must be finite, got {v}. "
+                f"Use None to mark missing log probabilities, and filter or fix "
+                f"non-finite values upstream."
+            )
+        if v > 0:
             raise ValueError(f"Log probability must be <= 0, got {v}")
         return v
 
@@ -73,7 +86,15 @@ class Sample(BaseModel):
         cls, v: Dict[str, Optional[float]]
     ) -> Dict[str, Optional[float]]:
         for policy, logprob in v.items():
-            if logprob is not None and logprob > 0:
+            if logprob is None:
+                continue
+            if not math.isfinite(logprob):
+                raise ValueError(
+                    f"Log probability for {policy} must be finite, got {logprob}. "
+                    f"Use None to mark missing log probabilities, and filter or "
+                    f"fix non-finite values upstream."
+                )
+            if logprob > 0:
                 raise ValueError(
                     f"Log probability for {policy} must be <= 0, got {logprob}"
                 )

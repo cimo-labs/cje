@@ -50,6 +50,8 @@ def analyze_dataset(
         fresh_draws_data: In-memory alternative to fresh_draws_dir. Dict mapping policy names
             to lists of records. Each record needs: prompt_id, judge_score. Optional: oracle_label.
             Example: {"policy_a": [{"prompt_id": "1", "judge_score": 0.8}, ...], ...}
+            Direct mode only — combining with logged_data_path is not yet supported
+            (write draws to disk and pass fresh_draws_dir instead).
         calibration_data_path: Path to dedicated calibration dataset with oracle labels.
             Use this to learn judge→oracle mapping from a curated oracle set separate
             from your evaluation data. If combine_oracle_sources=True (default), will
