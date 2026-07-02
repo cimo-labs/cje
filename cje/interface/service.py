@@ -607,6 +607,23 @@ class AnalysisService:
             config.verbose,
         )
 
+        # When calibration_data_path supplies the oracle pool, that pool is
+        # ONLY for fitting the calibrator. Estimation (and mode detection)
+        # must run on the logged evaluation dataset, so transfer the fitted
+        # calibrator's rewards onto it. Estimating on the pool itself would
+        # evaluate the wrong dataset — and with combined sources, fabricated
+        # dummy logprobs would make every policy's estimate identical.
+        if calibration_dataset_for_rewards is not dataset:
+            pool_calibration_info = calibrated_dataset.metadata.get("calibration_info")
+            calibrated_dataset = self._apply_fitted_calibrator_to_dataset(
+                dataset,
+                calibration_result,
+                config.judge_field,
+                config.verbose,
+            )
+            if pool_calibration_info is not None:
+                calibrated_dataset.metadata["calibration_info"] = pool_calibration_info
+
         # Auto mode detection
         detected_mode: Optional[str] = None
         logprob_coverage: float = 0.0
@@ -1104,3 +1121,92 @@ class AnalysisService:
             covariate_names=covariate_names,
         )
         return calibrated_dataset, cal_result
+
+    def _apply_fitted_calibrator_to_dataset(
+        self,
+        dataset: Dataset,
+        calibration_result: Optional[Any],
+        judge_field: str,
+        verbose: bool,
+    ) -> Dataset:
+        """Apply an already-fitted calibrator to a dataset (fit on A, apply to B).
+
+        Used when calibration_data_path supplies the oracle pool: the
+        calibrator is fitted on the calibration/combined pool, then applied
+        here to the logged evaluation dataset. Rewards use the pooled model
+        (same choice calibrate_dataset makes for point predictions); fold
+        assignments stay consistent downstream because get_fold() hashes
+        prompt_ids.
+        """
+        import numpy as np
+
+        from ..calibration.dataset import AUTO_COMPUTABLE_COVARIATES
+
+        calibrator = (
+            getattr(calibration_result, "calibrator", None)
+            if calibration_result is not None
+            else None
+        )
+        if calibrator is None:
+            raise ValueError(
+                "calibration_data_path was provided but no calibrator was fitted "
+                "(the calibration data appears to already contain precomputed "
+                "rewards). Provide judge scores plus oracle labels in the "
+                "calibration file, or drop calibration_data_path."
+            )
+
+        # Judge scores: same extraction rules as calibrate_dataset
+        judge_scores: List[float] = []
+        for i, sample in enumerate(dataset.samples):
+            if judge_field == "judge_score":
+                value = sample.judge_score
+            else:
+                value = sample.metadata.get(judge_field)
+            if value is None:
+                raise ValueError(
+                    f"Judge field '{judge_field}' not found or is None for "
+                    f"sample {i} (prompt_id={sample.prompt_id}) of the logged "
+                    "dataset; cannot apply the fitted calibrator."
+                )
+            judge_scores.append(float(value))
+        scores = np.array(judge_scores)
+
+        # Covariates: the fitted calibrator dictates which are needed
+        covariates_array: Optional[Any] = None
+        cov_names = list(getattr(calibrator, "covariate_names", None) or [])
+        if cov_names:
+            rows: List[List[float]] = []
+            for i, sample in enumerate(dataset.samples):
+                row: List[float] = []
+                for cov_name in cov_names:
+                    value = sample.metadata.get(cov_name)
+                    if value is None and cov_name in AUTO_COMPUTABLE_COVARIATES:
+                        compute_fn, _required = AUTO_COMPUTABLE_COVARIATES[cov_name]
+                        value = compute_fn(sample)
+                    if value is None:
+                        raise ValueError(
+                            f"Covariate '{cov_name}' required by the fitted "
+                            f"calibrator is missing for sample {i} "
+                            f"(prompt_id={sample.prompt_id}) of the logged dataset."
+                        )
+                    row.append(float(value))
+                rows.append(row)
+            covariates_array = np.array(rows)
+
+        rewards = np.clip(
+            calibrator.predict(scores, covariates=covariates_array), 0.0, 1.0
+        )
+
+        new_samples = [
+            sample.model_copy(update={"reward": float(reward)})
+            for sample, reward in zip(dataset.samples, rewards)
+        ]
+        if verbose:
+            logger.info(
+                f"Applied calibrator fitted on the calibration pool to the "
+                f"logged evaluation dataset ({len(new_samples)} samples)"
+            )
+        updated: Dataset = dataset.model_copy(
+            update={"samples": new_samples, "metadata": dataset.metadata.copy()}
+        )
+        return updated
