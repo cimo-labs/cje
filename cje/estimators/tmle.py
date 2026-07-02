@@ -32,8 +32,218 @@ def _logit(p: np.ndarray) -> np.ndarray:
     return np.asarray(result)
 
 
+def fit_fold_weight_maps(
+    scores: np.ndarray, weights: np.ndarray, fold_ids: np.ndarray
+) -> Dict[int, Tuple[np.ndarray, np.ndarray]]:
+    """Fit per-fold maps s -> E[w | S=s] from logged (score, weight) pairs.
+
+    The TMLE clever covariate must be evaluable on fresh draws, where only the
+    judge score is available. With calibrated (S-indexed) weights this map
+    recovers the weight function essentially exactly (weights are a
+    deterministic function of S within each fold); with raw weights it is the
+    projection of the weights onto sigma(S), which is the least-favorable
+    direction in the S-restricted outcome model.
+
+    Returns:
+        Dict fold_id -> (sorted unique scores, mean weight at each score),
+        for use with np.interp.
+    """
+    maps: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+    scores = np.asarray(scores, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    fold_ids = np.asarray(fold_ids, dtype=int)
+    for k in np.unique(fold_ids):
+        mask = fold_ids == k
+        xs, inverse = np.unique(scores[mask], return_inverse=True)
+        sums = np.zeros(len(xs))
+        counts = np.zeros(len(xs))
+        np.add.at(sums, inverse, weights[mask])
+        np.add.at(counts, inverse, 1.0)
+        maps[int(k)] = (xs, sums / counts)
+    return maps
+
+
+def eval_fold_weight_map(
+    maps: Dict[int, Tuple[np.ndarray, np.ndarray]], fold_id: int, scores: np.ndarray
+) -> np.ndarray:
+    """Evaluate a fitted fold weight map at new judge scores (clamped interp)."""
+    xs, ys = maps[int(fold_id)]
+    return np.asarray(np.interp(np.asarray(scores, dtype=float), xs, ys))
+
+
+def solve_logistic_fluctuation(
+    q0_logged: np.ndarray,
+    rewards: np.ndarray,
+    clever: np.ndarray,
+    max_iter: int = 50,
+    tol: float = 1e-8,
+) -> Tuple[float, Dict[str, Any]]:
+    """Solve for eps in logit(Q*) = logit(Q0) + eps*H by weighted logistic MLE.
+
+    H is the clever covariate; the MLE score is sum(H * (Y - Q_eps)).
+    Uses scale-aware convergence: |score| / sqrt(Fisher) < tol.
+    """
+    q0 = np.clip(q0_logged, _EPS, 1.0 - _EPS)
+    eta0 = _logit(q0)
+
+    eps = 0.0
+    converged = False
+    score_val = None
+    fisher_val = None
+    normalized_score = None
+
+    # If all clever-covariate values ~0, skip targeting
+    if float(np.sum(np.abs(clever))) <= 0:
+        return 0.0, dict(
+            epsilon=0.0,
+            converged=True,
+            iters=0,
+            score=0.0,
+            fisher=0.0,
+            normalized_score=0.0,
+        )
+
+    t = 0
+    for t in range(max_iter):
+        mu = _expit(eta0 + eps * clever)
+        score = float(np.sum(clever * (rewards - mu)))
+        fisher = float(np.sum((clever**2) * mu * (1.0 - mu)))
+
+        score_val = score
+        fisher_val = fisher
+
+        if fisher > 1e-12:
+            normalized_score = abs(score) / np.sqrt(fisher)
+            if normalized_score <= tol:
+                converged = True
+                break
+        else:
+            if abs(score) <= tol:
+                converged = True
+                normalized_score = abs(score)
+                break
+            logger.warning(
+                "TMLE logistic fluctuation: near-singular Fisher; stopping early."
+            )
+            break
+
+        step = score / fisher
+        if abs(step) > 5.0:
+            step = float(np.sign(step) * 5.0)
+        eps += step
+
+    if not converged:
+        logger.info(
+            f"TMLE logistic fluctuation did not fully converge: "
+            f"iters={max_iter}, normalized_score={normalized_score}, "
+            f"|score|={abs(score_val) if score_val is not None else 0:.3e}, fisher={fisher_val}"
+        )
+
+    return float(eps), dict(
+        epsilon=float(eps),
+        converged=bool(converged),
+        iters=int(t + 1),
+        score=float(score_val if score_val is not None else 0.0),
+        fisher=float(fisher_val if fisher_val is not None else 0.0),
+        normalized_score=float(
+            normalized_score if normalized_score is not None else 0.0
+        ),
+    )
+
+
+def solve_identity_fluctuation(
+    q0_logged: np.ndarray, rewards: np.ndarray, clever: np.ndarray
+) -> Tuple[float, Dict[str, Any]]:
+    """Solve for eps in Q* = Q0 + eps*H via the EIF score equation."""
+    num = float(np.sum(clever * (rewards - q0_logged)))
+    den = float(np.sum(clever**2))
+    if den <= 1e-12:
+        return 0.0, dict(epsilon=0.0, converged=True, iters=1, score=num, fisher=den)
+    eps = num / den
+    return float(eps), dict(
+        epsilon=float(eps),
+        converged=True,
+        iters=1,
+        score=float(num),
+        fisher=den,
+    )
+
+
+def apply_targeted_fluctuation(
+    g_logged0: np.ndarray,
+    rewards: np.ndarray,
+    h_logged: np.ndarray,
+    g_fresh_draws: List[np.ndarray],
+    h_fresh_draws: List[np.ndarray],
+    link: str = "logit",
+    max_iter: int = 50,
+    tol: float = 1e-8,
+) -> Tuple[np.ndarray, np.ndarray, float, Dict[str, Any]]:
+    """Run the TMLE targeting step and propagate it to fresh draws.
+
+    Solves the fluctuation on the logged data (clever covariate h_logged),
+    then applies the SAME targeted model to the fresh-draw predictions with
+    the clever covariate evaluated at the fresh judge scores. Shifting only
+    the logged side would cancel the IPS correction exactly and collapse the
+    estimator to the untargeted plug-in.
+
+    Args:
+        g_logged0: Initial outcome predictions on logged data
+        rewards: Logged rewards
+        h_logged: Clever covariate on logged data (weight map at logged scores)
+        g_fresh_draws: Per-prompt arrays of initial fresh-draw predictions
+        h_fresh_draws: Per-prompt arrays of clever covariate at fresh scores
+        link: 'logit' or 'identity'
+        max_iter, tol: Fluctuation solver controls
+
+    Returns:
+        (g_logged_star, g_fresh_star_means, eps, info) where g_fresh_star_means
+        has one targeted per-prompt mean per logged prompt.
+    """
+    if link == "logit":
+        eps, info = solve_logistic_fluctuation(
+            g_logged0, rewards, h_logged, max_iter, tol
+        )
+        g_logged_star = _expit(_logit(g_logged0) + eps * h_logged)
+        g_fresh_star_means = np.array(
+            [
+                (
+                    float(np.mean(_expit(_logit(np.asarray(g)) + eps * np.asarray(h))))
+                    if len(g) > 0
+                    else float("nan")
+                )
+                for g, h in zip(g_fresh_draws, h_fresh_draws)
+            ]
+        )
+    elif link == "identity":
+        eps, info = solve_identity_fluctuation(g_logged0, rewards, h_logged)
+        g_logged_star = np.clip(g_logged0 + eps * h_logged, 0.0, 1.0)
+        g_fresh_star_means = np.array(
+            [
+                (
+                    float(
+                        np.mean(np.clip(np.asarray(g) + eps * np.asarray(h), 0.0, 1.0))
+                    )
+                    if len(g) > 0
+                    else float("nan")
+                )
+                for g, h in zip(g_fresh_draws, h_fresh_draws)
+            ]
+        )
+    else:
+        raise ValueError(f"link must be one of ['logit','identity'], got {link}")
+    return np.asarray(g_logged_star), g_fresh_star_means, eps, info
+
+
 class TMLEEstimator(DREstimator):
     """TMLE with cross-fitted isotonic outcome models.
+
+    Targeting: the fluctuation is solved on the logged data with a clever
+    covariate h(S) = E[w | S] (fit per fold; equal to the weights themselves
+    when they are S-calibrated), and the targeted outcome model is propagated
+    to the fresh draws via h evaluated at the fresh judge scores. Shifting
+    only the logged side would cancel the IPS correction exactly and collapse
+    the estimator to the untargeted plug-in.
 
     Now properly inherits from DREstimator for consistency with other DR methods.
 
@@ -181,10 +391,13 @@ class TMLEEstimator(DREstimator):
                 prompts, responses, scores, fold_ids, covariates=logged_covariates
             )
 
-            # 2) Get initial predictions on fresh draws
+            # 2) Get initial predictions on fresh draws (keep per-draw arrays:
+            # the targeted update must be applied per draw, then averaged)
             fresh_dataset = self._fresh_draws[policy]
             g_fresh0_all = []
             fresh_var_all = []
+            g_fresh_draws_all: List[np.ndarray] = []
+            fresh_scores_all: List[np.ndarray] = []
 
             for i, prompt_id in enumerate(prompt_ids):
                 fresh_scores = fresh_dataset.get_scores_for_prompt_id(prompt_id)
@@ -207,6 +420,8 @@ class TMLEEstimator(DREstimator):
                     covariates=fresh_covariates,
                 )
                 g_fresh0_all.append(g_fresh_prompt.mean())
+                g_fresh_draws_all.append(np.asarray(g_fresh_prompt, dtype=float))
+                fresh_scores_all.append(np.asarray(fresh_scores, dtype=float))
 
                 if len(g_fresh_prompt) > 1:
                     fresh_var_all.append(g_fresh_prompt.var())
@@ -216,23 +431,33 @@ class TMLEEstimator(DREstimator):
             g_fresh0 = np.array(g_fresh0_all)
             fresh_var = np.array(fresh_var_all)
 
-            # 3) Targeting step: solve for ε and update Q0 → Q*
-            if self.link == "logit":
-                eps, info = self._solve_logistic_fluctuation(
-                    g_logged0, rewards, weights
-                )
-                # Clever covariate is W, so update is ε·W
-                g_logged_star = _expit(_logit(g_logged0) + eps * weights)
-                # DO NOT shift the fresh draw predictions - only the logged term
-                g_fresh_star = g_fresh0
-            else:  # identity link
-                eps, info = self._solve_identity_fluctuation(
-                    g_logged0, rewards, weights
-                )
-                # Update with ε·W for identity link too
-                g_logged_star = np.clip(g_logged0 + eps * weights, 0.0, 1.0)
-                # DO NOT shift the fresh draw predictions
-                g_fresh_star = g_fresh0
+            # 3) Targeting step: solve for ε and update Q0 → Q* everywhere.
+            # The clever covariate must be a function of the judge score so it
+            # can be evaluated on fresh draws: fit per-fold maps s -> E[w|S=s]
+            # (exact for calibrated S-indexed weights, a projection for raw
+            # weights) and use them on both the logged and fresh sides.
+            weight_maps = fit_fold_weight_maps(scores, weights, fold_ids)
+            h_logged = np.array(
+                [
+                    eval_fold_weight_map(weight_maps, fold_ids[i], scores[i : i + 1])[0]
+                    for i in range(len(scores))
+                ]
+            )
+            h_fresh_all = [
+                eval_fold_weight_map(weight_maps, fold_ids[i], fresh_scores_all[i])
+                for i in range(len(prompt_ids))
+            ]
+
+            g_logged_star, g_fresh_star, eps, info = apply_targeted_fluctuation(
+                g_logged0,
+                rewards,
+                h_logged,
+                g_fresh_draws_all,
+                h_fresh_all,
+                link=self.link,
+                max_iter=self.max_iter,
+                tol=self.tol,
+            )
 
             # 4) TMLE estimate = DM + IPS correction (using targeted predictions)
             dm_term = float(g_fresh_star.mean())
@@ -277,6 +502,7 @@ class TMLEEstimator(DREstimator):
                     ips_correction=float(ips_corr),
                     n=len(rewards),
                     mean_weight=float(weights.mean()),
+                    targeting_shift=float(np.nanmean(g_fresh_star - g_fresh0)),
                 )
             )
             self._tmle_info[policy] = info
@@ -490,104 +716,13 @@ class TMLEEstimator(DREstimator):
     def _solve_logistic_fluctuation(
         self, q0_logged: np.ndarray, rewards: np.ndarray, weights: np.ndarray
     ) -> Tuple[float, Dict[str, Any]]:
-        """Solve for ε in logit(Q*) = logit(Q0) + ε·W using weighted logistic MLE.
-
-        The clever covariate is W, so the fluctuation is ε·W, not just ε.
-        Uses scale-aware convergence: |score| / sqrt(Fisher) < tol
-        """
-        # Guards
-        q0 = np.clip(q0_logged, _EPS, 1.0 - _EPS)
-        eta0 = _logit(q0)
-
-        eps = 0.0
-        converged = False
-        score_val = None
-        fisher_val = None
-        normalized_score = None
-
-        # If all weights ~0, skip targeting
-        if float(np.sum(weights)) <= 0:
-            return 0.0, dict(
-                epsilon=0.0,
-                converged=True,
-                iters=0,
-                score=0.0,
-                fisher=0.0,
-                normalized_score=0.0,
-            )
-
-        for t in range(self.max_iter):
-            # CRITICAL FIX: clever covariate is W, so fluctuation is ε·W
-            mu = _expit(eta0 + eps * weights)
-            # weighted score (sum w*(y-mu))
-            score = float(np.sum(weights * (rewards - mu)))
-            # Fisher information for ε with clever covariate W
-            fisher = float(np.sum((weights**2) * mu * (1.0 - mu)))
-
-            score_val = score
-            fisher_val = fisher
-
-            # Scale-aware convergence: |score| / sqrt(Fisher)
-            # This is the normalized score that accounts for parameter scale
-            if fisher > 1e-12:
-                normalized_score = abs(score) / np.sqrt(fisher)
-                # Scale-aware tolerance (much more stringent and meaningful)
-                if normalized_score <= self.tol:
-                    converged = True
-                    break
-            else:
-                # Fisher too small - declare converged if score is small
-                if abs(score) <= self.tol:
-                    converged = True
-                    normalized_score = abs(score)  # Use raw score as fallback
-                    break
-                logger.warning(
-                    "TMLE logistic fluctuation: near-singular Fisher; stopping early."
-                )
-                break
-
-            # Newton update; cap step to avoid giant jumps
-            step = score / fisher
-            if abs(step) > 5.0:
-                step = np.sign(step) * 5.0
-            eps += step
-
-        if not converged:
-            logger.info(
-                f"TMLE logistic fluctuation did not fully converge: "
-                f"iters={self.max_iter}, normalized_score={normalized_score:.3e}, "
-                f"|score|={abs(score_val) if score_val is not None else 0:.3e}, fisher={fisher_val:.3e}"
-            )
-
-        return float(eps), dict(
-            epsilon=float(eps),
-            converged=bool(converged),
-            iters=int(t + 1),
-            score=float(score_val if score_val is not None else 0.0),
-            fisher=float(fisher_val if fisher_val is not None else 0.0),
-            normalized_score=float(
-                normalized_score if normalized_score is not None else 0.0
-            ),
+        """Solve for ε in logit(Q*) = logit(Q0) + ε·H (delegates to module fn)."""
+        return solve_logistic_fluctuation(
+            q0_logged, rewards, weights, self.max_iter, self.tol
         )
 
     def _solve_identity_fluctuation(
         self, q0_logged: np.ndarray, rewards: np.ndarray, weights: np.ndarray
     ) -> Tuple[float, Dict[str, Any]]:
-        """Solve for ε in Q* = Q0 + ε·W via the EIF score equation.
-
-        The clever covariate is W, so the update is ε·W.
-        """
-        num = float(np.sum(weights * (rewards - q0_logged)))
-        den = float(np.sum(weights**2))  # CRITICAL FIX: denominator is sum(W²)
-        if den <= 1e-12:
-            return 0.0, dict(
-                epsilon=0.0, converged=True, iters=1, score=num, fisher=den
-            )
-        eps = num / den
-        return float(eps), dict(
-            epsilon=float(eps),
-            converged=True,
-            iters=1,
-            score=float(num),
-            fisher=den,
-        )
+        """Solve for ε in Q* = Q0 + ε·H (delegates to module fn)."""
+        return solve_identity_fluctuation(q0_logged, rewards, weights)
