@@ -808,12 +808,15 @@ class AnalysisService:
         verbose: bool = False,
     ) -> tuple[Dataset, Dict[str, Any]]:
         """
-        Combine oracle labels from multiple sources with priority handling.
+        Combine oracle (judge, oracle) pairs from multiple sources.
 
-        Priority order (highest to lowest):
-        1. calibration_dataset
-        2. fresh_draws_per_policy
-        3. logged_dataset
+        Oracle labels attach to RESPONSES, not prompts: several sources (or
+        several policies' fresh draws) can legitimately contribute different
+        pairs for the same prompt_id, and ALL of them are kept as calibration
+        pairs. Only true duplicates — same source, same prompt, identical
+        judge and oracle values — are deduped. Cross-source disagreements on
+        the same prompt (oracle diff > 0.05) are reported as conflicts but
+        both pairs still enter calibration.
 
         Args:
             calibration_dataset: Optional calibration dataset with oracle labels
@@ -829,11 +832,39 @@ class AnalysisService:
         """
         from ..data.models import Sample
 
-        # Track oracle samples by prompt_id: {prompt_id: (oracle, source, judge_score)}
-        oracle_map: Dict[str, tuple[float, str, float]] = {}
+        # Accumulate every (prompt_id, source, judge, oracle) pair
+        pairs: List[tuple[str, str, float, float]] = []
+        seen_pairs: set = set()
+        oracle_by_prompt: Dict[str, List[tuple[str, float]]] = {}
         conflicts: List[Dict[str, Any]] = []
 
-        # Priority 3: Logged data (lowest priority)
+        def _add_pair(
+            prompt_id: str, source: str, judge_val: float, oracle_val: float
+        ) -> bool:
+            """Add a calibration pair; returns False for true duplicates."""
+            key = (source, prompt_id, judge_val, oracle_val)
+            if key in seen_pairs:
+                return False
+            # Cross-source conflict check (pairs are kept either way)
+            for prev_source, prev_oracle in oracle_by_prompt.get(prompt_id, []):
+                if prev_source != source and abs(prev_oracle - oracle_val) > 0.05:
+                    conflicts.append(
+                        {
+                            "prompt_id": prompt_id,
+                            "existing_value": float(prev_oracle),
+                            "existing_source": prev_source,
+                            "new_value": float(oracle_val),
+                            "new_source": source,
+                            "difference": abs(prev_oracle - oracle_val),
+                        }
+                    )
+                    break
+            seen_pairs.add(key)
+            pairs.append((prompt_id, source, judge_val, oracle_val))
+            oracle_by_prompt.setdefault(prompt_id, []).append((source, oracle_val))
+            return True
+
+        # Logged data
         n_from_logged = 0
         if logged_dataset:
             for sample in logged_dataset.samples:
@@ -849,14 +880,16 @@ class AnalysisService:
                         else sample.metadata.get(judge_field)
                     )
                     if judge_val is not None:
-                        oracle_map[sample.prompt_id] = (
-                            float(oracle_val),
+                        if _add_pair(
+                            sample.prompt_id,
                             "logged_data",
                             float(judge_val),
-                        )
-                        n_from_logged += 1
+                            float(oracle_val),
+                        ):
+                            n_from_logged += 1
 
-        # Priority 2: Fresh draws
+        # Fresh draws (every policy's labeled draws count — labels attach to
+        # responses, so K policies can contribute K pairs for one prompt)
         n_from_fresh = 0
         if fresh_draws_per_policy:
             for policy, fd_dataset in fresh_draws_per_policy.items():
@@ -865,30 +898,15 @@ class AnalysisService:
                         fd_sample.oracle_label is not None
                         and fd_sample.judge_score is not None
                     ):
-                        if fd_sample.prompt_id in oracle_map:
-                            old_oracle, old_source, _ = oracle_map[fd_sample.prompt_id]
-                            # Check for conflict
-                            if abs(old_oracle - fd_sample.oracle_label) > 0.05:
-                                conflicts.append(
-                                    {
-                                        "prompt_id": fd_sample.prompt_id,
-                                        "old_value": float(old_oracle),
-                                        "old_source": old_source,
-                                        "new_value": float(fd_sample.oracle_label),
-                                        "new_source": "fresh_draws",
-                                        "difference": abs(
-                                            old_oracle - fd_sample.oracle_label
-                                        ),
-                                    }
-                                )
-                        oracle_map[fd_sample.prompt_id] = (
-                            float(fd_sample.oracle_label),
+                        if _add_pair(
+                            fd_sample.prompt_id,
                             "fresh_draws",
                             float(fd_sample.judge_score),
-                        )
-                        n_from_fresh += 1
+                            float(fd_sample.oracle_label),
+                        ):
+                            n_from_fresh += 1
 
-        # Priority 1: Calibration data (highest - overwrites all)
+        # Calibration data
         n_from_calib = 0
         if calibration_dataset:
             for sample in calibration_dataset.samples:
@@ -904,48 +922,39 @@ class AnalysisService:
                         else sample.metadata.get(judge_field)
                     )
                     if judge_val is not None:
-                        if sample.prompt_id in oracle_map:
-                            old_oracle, old_source, _ = oracle_map[sample.prompt_id]
-                            # Check for conflict
-                            if abs(old_oracle - oracle_val) > 0.05:
-                                conflicts.append(
-                                    {
-                                        "prompt_id": sample.prompt_id,
-                                        "old_value": float(old_oracle),
-                                        "old_source": old_source,
-                                        "new_value": float(oracle_val),
-                                        "new_source": "calibration_data",
-                                        "difference": abs(old_oracle - oracle_val),
-                                    }
-                                )
-                        oracle_map[sample.prompt_id] = (
-                            float(oracle_val),
+                        if _add_pair(
+                            sample.prompt_id,
                             "calibration_data",
                             float(judge_val),
-                        )
-                        n_from_calib += 1
+                            float(oracle_val),
+                        ):
+                            n_from_calib += 1
 
-        # Log conflicts if any
-        if conflicts and verbose:
+        # Log conflicts if any (loud by default — cross-source disagreement is
+        # a data-quality signal the user must see)
+        if conflicts:
             logger.warning(
-                f"Found {len(conflicts)} prompts with conflicting oracle labels (diff > 0.05). "
-                f"Using priority: calibration_data > fresh_draws > logged_data"
+                f"Found {len(conflicts)} prompts with conflicting oracle labels "
+                f"across sources (diff > 0.05). All pairs are kept for "
+                f"calibration (oracle labels attach to responses, not prompts); "
+                f"large cross-source differences may indicate inconsistent "
+                f"oracle definitions."
             )
             # Log top 5 conflicts
             for conflict in conflicts[:5]:
                 logger.debug(
-                    f"  {conflict['prompt_id']}: {conflict['old_source']}={conflict['old_value']:.3f} "
-                    f"→ {conflict['new_source']}={conflict['new_value']:.3f} (diff={conflict['difference']:.3f})"
+                    f"  {conflict['prompt_id']}: {conflict['existing_source']}={conflict['existing_value']:.3f} "
+                    f"vs {conflict['new_source']}={conflict['new_value']:.3f} (diff={conflict['difference']:.3f})"
                 )
 
-        # Build combined dataset with all unique oracle samples
+        # Build combined dataset with every accumulated pair
         combined_samples = []
         # Use target policies parameter - cast to Dict[str, Optional[float]] for variance
         target_policies_dict: Dict[str, Optional[float]] = {
             policy: -1.0 for policy in target_policies
         }
 
-        for prompt_id, (oracle_val, source, judge_val) in oracle_map.items():
+        for prompt_id, source, judge_val, oracle_val in pairs:
             # Create Sample with judge and oracle
             sample = Sample(
                 prompt_id=prompt_id,
@@ -962,11 +971,11 @@ class AnalysisService:
 
         if verbose:
             logger.info(
-                f"Combined oracle sources: {len(combined_samples)} total "
+                f"Combined oracle sources: {len(combined_samples)} total pairs "
                 f"(calib={n_from_calib}, fresh={n_from_fresh}, logged={n_from_logged})"
             )
 
-        # Build metadata
+        # Build metadata (counts reflect pairs that actually enter calibration)
         oracle_sources_metadata = {
             "calibration_data": {
                 "n_oracle": n_from_calib,
@@ -988,7 +997,6 @@ class AnalysisService:
             },
             "total_oracle": len(combined_samples),
             "n_conflicts": len(conflicts),
-            "priority_order": ["calibration_data", "fresh_draws", "logged_data"],
         }
 
         if conflicts:

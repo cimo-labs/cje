@@ -7,6 +7,7 @@ clear error or FILTER with a counted warning.
 
 import logging
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -511,3 +512,193 @@ class TestAntiCorrelatedJudgeWarning:
         assert not any(
             "collapsed to a constant" in record.message for record in caplog.records
         )
+
+
+class TestCombineOracleSourcesKeepsAllPairs:
+    """_combine_oracle_sources used to dedupe oracle pairs by prompt_id alone:
+    K policies' fresh-draw labels for one prompt collapsed to the last policy's
+    pair while n_from_fresh still counted every overwrite."""
+
+    @staticmethod
+    def _fresh_draw(
+        policy: str, prompt_id: str, judge: float, oracle: float, draw_idx: int = 0
+    ) -> Any:
+        from cje.data.fresh_draws import FreshDrawDataset, FreshDrawSample
+
+        return FreshDrawDataset(
+            target_policy=policy,
+            draws_per_prompt=1,
+            samples=[
+                FreshDrawSample(
+                    prompt_id=prompt_id,
+                    target_policy=policy,
+                    judge_score=judge,
+                    oracle_label=oracle,
+                    draw_idx=draw_idx,
+                    response=None,
+                    fold_id=None,
+                )
+            ],
+        )
+
+    def test_two_policies_same_prompt_contribute_two_pairs(self) -> None:
+        from cje.interface.service import AnalysisService
+
+        fresh_draws = {
+            "policy_a": self._fresh_draw("policy_a", "p1", judge=0.4, oracle=0.45),
+            "policy_b": self._fresh_draw("policy_b", "p1", judge=0.8, oracle=0.85),
+        }
+
+        combined, metadata = AnalysisService()._combine_oracle_sources(
+            None,
+            None,
+            fresh_draws,
+            ["policy_a", "policy_b"],
+            "judge_score",
+            "oracle_label",
+        )
+
+        assert combined.n_samples == 2
+        assert metadata["fresh_draws"]["n_oracle"] == 2
+        assert metadata["total_oracle"] == 2
+        judge_scores = sorted(
+            s.judge_score for s in combined.samples if s.judge_score is not None
+        )
+        assert judge_scores == [0.4, 0.8]
+
+    def test_true_duplicates_are_deduped(self) -> None:
+        from cje.data.fresh_draws import FreshDrawDataset, FreshDrawSample
+        from cje.interface.service import AnalysisService
+
+        # Same source + prompt + identical judge & oracle values -> one pair
+        fd = FreshDrawDataset(
+            target_policy="policy_a",
+            draws_per_prompt=2,
+            samples=[
+                FreshDrawSample(
+                    prompt_id="p1",
+                    target_policy="policy_a",
+                    judge_score=0.4,
+                    oracle_label=0.45,
+                    draw_idx=i,
+                    response=None,
+                    fold_id=None,
+                )
+                for i in range(2)
+            ],
+        )
+
+        combined, metadata = AnalysisService()._combine_oracle_sources(
+            None,
+            None,
+            {"policy_a": fd},
+            ["policy_a"],
+            "judge_score",
+            "oracle_label",
+        )
+
+        assert combined.n_samples == 1
+        assert metadata["fresh_draws"]["n_oracle"] == 1
+
+    def test_cross_source_conflict_warned_but_both_pairs_kept(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from cje.interface.service import AnalysisService
+
+        def make_dataset(judge: float, oracle: float) -> Dataset:
+            sample = Sample(
+                prompt_id="p1",
+                prompt="prompt",
+                response="response",
+                base_policy_logprob=-1.0,
+                target_policy_logprobs={"policy_a": -1.0},
+                judge_score=judge,
+                oracle_label=oracle,
+                reward=None,
+            )
+            return Dataset(samples=[sample], target_policies=["policy_a"])
+
+        calibration_dataset = make_dataset(judge=0.9, oracle=0.9)
+        logged_dataset = make_dataset(judge=0.2, oracle=0.2)
+
+        with caplog.at_level(logging.WARNING):
+            combined, metadata = AnalysisService()._combine_oracle_sources(
+                calibration_dataset,
+                logged_dataset,
+                None,
+                ["policy_a"],
+                "judge_score",
+                "oracle_label",
+            )
+
+        assert combined.n_samples == 2  # both pairs kept, none overwritten
+        assert metadata["n_conflicts"] == 1
+        assert any(
+            "conflicting oracle labels" in record.message for record in caplog.records
+        )
+
+
+class TestDuplicatePromptIdOofFallback:
+    """CalibratedIPS.fit: the duplicate-prompt_id branch left ds_idx unbound;
+    the UnboundLocalError was swallowed by a blanket except, silently skipping
+    the fold-based OOF fallback (Option 2)."""
+
+    class _StubCalibrator:
+        """Calibrator stub exposing both OOF interfaces."""
+
+        def __init__(self) -> None:
+            self.oof_by_index_called = False
+            self.oof_called = False
+
+        def predict_oof_by_index(self, ds_idx: np.ndarray) -> np.ndarray:
+            self.oof_by_index_called = True
+            return np.full(len(ds_idx), 0.5)
+
+        def predict_oof(
+            self, judge_scores: np.ndarray, fold_ids: np.ndarray
+        ) -> np.ndarray:
+            self.oof_called = True
+            return np.clip(np.asarray(judge_scores, dtype=float), 0.0, 1.0)
+
+    @staticmethod
+    def _dataset_with_duplicate_prompt_ids() -> Dataset:
+        rng = np.random.default_rng(13)
+        samples = []
+        for i in range(20):
+            # Two samples share prompt_id "p0"
+            prompt_id = "p0" if i in (0, 1) else f"p{i}"
+            judge = float(rng.uniform(0.1, 0.9))
+            samples.append(
+                Sample(
+                    prompt_id=prompt_id,
+                    prompt=f"prompt {i}",
+                    response=f"response {i}",
+                    base_policy_logprob=-10.0,
+                    target_policy_logprobs={"pi_target": -10.0 + 0.1 * (i % 5)},
+                    judge_score=judge,
+                    oracle_label=None,
+                    reward=judge,
+                )
+            )
+        return Dataset(samples=samples, target_policies=["pi_target"])
+
+    def test_duplicate_prompt_ids_fall_through_to_fold_based_oof(self) -> None:
+        from cje.data.precomputed_sampler import PrecomputedSampler
+        from cje.estimators.calibrated_ips import CalibratedIPS
+
+        dataset = self._dataset_with_duplicate_prompt_ids()
+        sampler = PrecomputedSampler(dataset)
+        stub = self._StubCalibrator()
+
+        estimator = CalibratedIPS(
+            sampler,
+            reward_calibrator=stub,
+            use_outer_cv=False,
+            oua_jackknife=False,
+        )
+        estimator.fit()
+
+        # With duplicate prompt_ids, Option 1 (index-based OOF) must be
+        # skipped and control must FALL THROUGH to Option 2 (fold-based OOF).
+        assert not stub.oof_by_index_called
+        assert stub.oof_called

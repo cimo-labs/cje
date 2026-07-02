@@ -89,12 +89,11 @@ def test_calibration_data_path_smoke(tmp_path: Path) -> None:
     assert oracle_sources["logged_data"]["n_oracle"] == 10  # 10% of logged
     assert oracle_sources["total_oracle"] == 60  # Combined total (50 + 10)
 
-    # Verify priority order metadata
-    assert oracle_sources["priority_order"] == [
-        "calibration_data",
-        "fresh_draws",
-        "logged_data",
-    ]
+    # No priority/overwrite semantics anymore: every (judge, oracle) pair is
+    # kept (oracle labels attach to responses, not prompts), so priority_order
+    # metadata is gone and cross-source conflicts are counted instead.
+    assert "priority_order" not in oracle_sources
+    assert oracle_sources["n_conflicts"] == 0
 
     print("✅ Smoke test passed!")
     print(f"   Total oracle labels combined: {oracle_sources['total_oracle']}")
