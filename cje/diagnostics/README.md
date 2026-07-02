@@ -174,12 +174,16 @@ Measures structural overlap between policies. **Cannot be improved by calibratio
 Key insight: Hellinger tells us whether to give up, ESS tells us how hard to try.
 
 ### TTC (Target-Typicality Coverage)
-TTC measures what fraction of the target distribution’s *typical* mass falls in regions where the logger has meaningful coverage. It is computed from `(base_logprobs, target_logprobs)` and is **not** the same as Hellinger affinity (`hellinger_affinity(weights) = E[√w]`).
+TTC measures the logging policy's coverage of the *target-typical* region T (samples whose mean per-token surprisal under π' is below the target-distribution q_0.9 quantile — so α = 0.9 by construction). It is computed from `(base_logprobs, target_logprobs)` and is **not** the same as Hellinger affinity (`hellinger_affinity(weights) = E[√w]`).
 
-**Decision rule:** If TTC < 0.7, logs-only IPS will fail regardless of weight stabilization.
-- **TTC > 0.7**: Good overlap, IPS may work
-- **TTC 0.3-0.7**: Marginal, consider DR methods
-- **TTC < 0.3**: Poor overlap, IPS will fail
+**TTC is computed automatically**: `CalibratedIPS` (and the DR estimators through their internal IPS component) populate `diagnostics.ttc_per_policy`, fold TTC into `weight_status` / `status_per_policy` via the canonical gates (WARNING below 0.70, CRITICAL below 0.30), and record which length normalizer was used in `result.metadata["ttc_diagnostics"]`.
+
+**Length normalization caveat**: the paper's statistic normalizes surprisal by token count. The pipeline uses a `response_token_count` metadata field when every sample has one; otherwise it falls back to response length in characters as a documented proxy (`length_normalizer: "response_chars"`). Passing `token_counts=None` to `compute_ttc` directly degrades to total sequence surprisal, which confounds typicality with response length.
+
+**Decision rule (paper gate, `cje.diagnostics.gates`):** If TTC < 0.7, logs-only IPS will fail regardless of weight stabilization.
+- **TTC ≥ 0.7**: Good overlap, IPS may work
+- **TTC 0.3-0.7**: Marginal, consider DR methods (WARNING)
+- **TTC < 0.3**: Poor overlap, IPS will fail (CRITICAL)
 
 ```python
 import numpy as np
@@ -189,14 +193,15 @@ from cje.diagnostics import compute_ttc, compute_cle_diagnostics
 # data = sampler.get_data_for_policy(policy)
 base_lp = np.array([d["base_policy_logprob"] for d in data])
 target_lp = np.array([d["policy_logprob"] for d in data])
+token_counts = np.array([d["response_token_count"] for d in data])  # or char lengths
 
-# Quick TTC check
-ttc = compute_ttc(base_lp, target_lp)
+# Quick TTC check (also available as diagnostics.ttc_per_policy after estimation)
+ttc = compute_ttc(base_lp, target_lp, token_counts=token_counts)
 if ttc < 0.7:
     print("Use Direct or DR methods instead of IPS")
 
 # Full CLE diagnostics
-cle = compute_cle_diagnostics(base_lp, target_lp)
+cle = compute_cle_diagnostics(base_lp, target_lp, token_counts=token_counts)
 print(cle.summary())
 ```
 

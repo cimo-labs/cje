@@ -65,6 +65,9 @@ class IPSDiagnostics:
     hellinger_affinity: Optional[float] = None  # Overall Hellinger affinity
     hellinger_per_policy: Optional[Dict[str, float]] = None  # Per-policy Hellinger
     overlap_quality: Optional[str] = None  # "good", "marginal", "poor", "catastrophic"
+    # Target-Typicality Coverage per policy (paper gate: >= 0.70 for
+    # reliable logs-only IPS; < 0.30 means IPS fails regardless of ESS)
+    ttc_per_policy: Optional[Dict[str, float]] = None
 
     # ========== Calibration Diagnostics (None for raw mode) ==========
     calibration_rmse: Optional[float] = None
@@ -112,6 +115,15 @@ class IPSDiagnostics:
             inf_indices = [idx for idx in self.tail_indices.values() if idx is not None]
             if inf_indices:
                 return min(inf_indices)
+        return None
+
+    @property
+    def worst_ttc(self) -> Optional[float]:
+        """Lowest (worst) Target-Typicality Coverage across policies."""
+        if self.ttc_per_policy:
+            valid = [v for v in self.ttc_per_policy.values() if v is not None]
+            if valid:
+                return min(valid)
         return None
 
     @property
@@ -188,6 +200,24 @@ class IPSDiagnostics:
                             f"Heavy tail for {policy}: α={tail_idx:.2f} (infinite variance)"
                         )
 
+        # Check Target-Typicality Coverage against the paper's gates
+        if self.ttc_per_policy:
+            from .gates import TTC_GOOD_THRESHOLD, TTC_CRITICAL_THRESHOLD
+
+            for policy, ttc in self.ttc_per_policy.items():
+                if ttc is None:
+                    continue
+                if ttc < TTC_CRITICAL_THRESHOLD:
+                    issues.append(
+                        f"TTC {ttc:.1%} for {policy}: logger coverage of "
+                        f"target-typical region is poor; logs-only IPS will fail"
+                    )
+                elif ttc < TTC_GOOD_THRESHOLD:
+                    issues.append(
+                        f"TTC {ttc:.1%} for {policy} below the 70% gate; "
+                        f"prefer Direct/DR over logs-only IPS"
+                    )
+
         # R² should be <= 1
         if self.calibration_r2 is not None and self.calibration_r2 > 1.0:
             issues.append(f"Calibration R² > 1.0: {self.calibration_r2}")
@@ -210,6 +240,10 @@ class IPSDiagnostics:
             f"Best policy: {self.best_policy}",
             f"Weight ESS: {self.weight_ess:.1%}",
         ]
+
+        worst_ttc = self.worst_ttc
+        if worst_ttc is not None:
+            lines.append(f"Worst TTC: {worst_ttc:.1%}")
 
         if self.is_calibrated:
             lines.append(f"Calibration RMSE: {self.calibration_rmse:.3f}")
@@ -270,12 +304,15 @@ class IPSDiagnostics:
             "n_policies": self.n_policies,
             "best_policy": self.best_policy if self.policies else None,
             "worst_tail_index": self.worst_tail_index,
+            "worst_ttc": self.worst_ttc,
         }
         # Add per-policy metrics
         for policy in self.policies:
             row[f"{policy}_estimate"] = self.estimates.get(policy)
             row[f"{policy}_se"] = self.standard_errors.get(policy)
             row[f"{policy}_ess"] = self.ess_per_policy.get(policy)
+            if self.ttc_per_policy:
+                row[f"{policy}_ttc"] = self.ttc_per_policy.get(policy)
         # Add calibration metrics if available
         if self.calibration_rmse is not None:
             row["calibration_rmse"] = self.calibration_rmse

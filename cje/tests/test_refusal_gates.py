@@ -7,11 +7,19 @@ Covers:
 - hill_tail_index returning NaN (not +inf) on estimation failure, with
   downstream consumers treating NaN as "unknown" rather than the
   healthiest possible tail.
+- TTC (Target-Typicality Coverage) computed with the paper's per-token
+  construction (mass 0.9), populated into IPSDiagnostics, and folded
+  into weight_status.
 """
+
+from typing import Callable, Tuple
 
 import numpy as np
 import pytest
 
+from cje.calibration import calibrate_dataset
+from cje.data.models import Dataset, EstimationResult, Sample
+from cje.data.precomputed_sampler import PrecomputedSampler
 from cje.diagnostics import (
     IPSDiagnostics,
     Status,
@@ -20,6 +28,7 @@ from cje.diagnostics import (
     ess_status,
     hill_tail_index,
     tail_status,
+    ttc_status,
     worst_status,
 )
 from cje.diagnostics.gates import (
@@ -27,7 +36,54 @@ from cje.diagnostics.gates import (
     ESS_WARNING_THRESHOLD,
     format_tail_index,
 )
-from cje.diagnostics.overlap import compute_overlap_metrics
+from cje.diagnostics.overlap import (
+    compute_cle_diagnostics,
+    compute_overlap_metrics,
+    compute_ttc,
+)
+from cje.estimators.calibrated_ips import CalibratedIPS
+
+POLICY = "target"
+
+
+def _tilted_dataset(
+    n: int,
+    rng: np.random.Generator,
+    tilt: Callable[[float], float],
+    oracle_frac: float = 0.5,
+) -> Dataset:
+    """DGP from test_mc_coverage: tilted logprobs encode w(S) exactly."""
+    samples = []
+    for i in range(n):
+        s = float(rng.uniform())
+        y = float(np.clip(0.25 + 0.5 * s + rng.normal(0, 0.08), 0, 1))
+        samples.append(
+            Sample(
+                prompt_id=f"p{i}",
+                prompt=f"question {i}",
+                response=f"answer {i}",
+                reward=None,
+                base_policy_logprob=-10.0,
+                target_policy_logprobs={POLICY: -10.0 + float(np.log(tilt(s)))},
+                judge_score=s,
+                oracle_label=y if rng.uniform() < oracle_frac else None,
+            )
+        )
+    return Dataset(samples=samples, target_policies=[POLICY])
+
+
+def _run_calibrated_ips(dataset: Dataset) -> Tuple[CalibratedIPS, EstimationResult]:
+    calibrated, cal_result = calibrate_dataset(
+        dataset,
+        judge_field="judge_score",
+        oracle_field="oracle_label",
+        enable_cross_fit=True,
+        n_folds=5,
+    )
+    sampler = PrecomputedSampler(calibrated)
+    estimator = CalibratedIPS(sampler, reward_calibrator=cal_result.calibrator)
+    result = estimator.fit_and_estimate()
+    return estimator, result
 
 
 def _weights_with_ess(ess_fraction: float, n: int = 1000) -> np.ndarray:
@@ -168,3 +224,109 @@ class TestHillTailIndexFailure:
         assert format_tail_index(None) == "n/a"
         assert format_tail_index(float("inf")) == "inf"
         assert format_tail_index(2.345) == "2.35"
+
+
+class TestTTCStatistic:
+    """Findings #27/#28: TTC must use the paper's per-token construction."""
+
+    def test_default_mass_is_090(self) -> None:
+        # Identical policies: TTC = target_typical_mass, which must default
+        # to the paper's q_0.9 construction (was 0.8)
+        rng = np.random.default_rng(7)
+        base_lp = rng.normal(-50, 10, 2000)
+        assert compute_ttc(base_lp, base_lp.copy()) == pytest.approx(0.90, abs=0.02)
+        assert compute_cle_diagnostics(base_lp, base_lp.copy()).alpha == pytest.approx(
+            0.90, abs=0.03
+        )
+
+    def test_per_token_normalization_removes_length_confound(self) -> None:
+        # Two groups of logged samples:
+        # - 900 long responses: total surprisal 100 over 1000 tokens
+        #   (0.1/token, the MOST per-token-typical outputs)
+        # - 100 short responses: total surprisal 20 over 10 tokens
+        #   (2.0/token) carrying ~91% of the target's mass (w = 9.1)
+        # Total-NLL ranks every long response as more surprising than every
+        # short one, so T collapses to the short-response region and TTC
+        # reads ~0.1 — a false alarm driven purely by length (the paper's
+        # confound). The per-token statistic includes both groups (both are
+        # within the q_0.9 per-token threshold under the target), TTC = 1.
+        n_long, n_short = 900, 100
+        target_lp = np.concatenate([np.full(n_long, -100.0), np.full(n_short, -20.0)])
+        log_w = np.concatenate(
+            [np.full(n_long, np.log(0.1)), np.full(n_short, np.log(9.1))]
+        )
+        base_lp = target_lp - log_w
+        token_counts = np.concatenate([np.full(n_long, 1000.0), np.full(n_short, 10.0)])
+
+        # Per-token (paper statistic): logger covers the target-typical set
+        ttc_per_token = compute_ttc(base_lp, target_lp, token_counts=token_counts)
+        assert ttc_per_token >= 0.99
+
+        # Total surprisal (old statistic): T becomes "short responses only"
+        ttc_total = compute_ttc(base_lp, target_lp)
+        assert ttc_total <= 0.15
+
+    def test_token_counts_validation(self) -> None:
+        base_lp = np.full(10, -10.0)
+        with pytest.raises(ValueError):
+            compute_ttc(base_lp, base_lp, token_counts=np.ones(5))
+        with pytest.raises(ValueError):
+            compute_ttc(base_lp, base_lp, token_counts=np.zeros(10))
+
+
+class TestTTCWiredIntoPipeline:
+    """Finding #27: TTC must be computed and surfaced during estimation."""
+
+    def test_ttc_populated_in_ips_diagnostics(self) -> None:
+        rng = np.random.default_rng(42)
+        # Mild mean-one tilt: w(S) = 0.4 + 1.2 S (same DGP as test_mc_coverage)
+        dataset = _tilted_dataset(500, rng, lambda s: 0.4 + 1.2 * s)
+        estimator, result = _run_calibrated_ips(dataset)
+
+        diag = estimator.get_diagnostics()
+        assert diag is not None
+        assert diag.ttc_per_policy is not None
+        assert POLICY in diag.ttc_per_policy
+        ttc = diag.ttc_per_policy[POLICY]
+        assert 0.0 < ttc <= 1.0
+        # Mild tilt: coverage should be healthy
+        assert ttc >= 0.7
+
+        # The length-normalizer used must be recorded (char proxy here:
+        # the synthetic samples have no response_token_count metadata)
+        ttc_meta = result.metadata["ttc_diagnostics"][POLICY]
+        assert ttc_meta["length_normalizer"] == "response_chars"
+        assert ttc_meta["ttc"] == pytest.approx(ttc)
+
+        # Surfaced in the human-readable summary
+        assert "TTC" in diag.summary()
+
+    def test_token_count_metadata_is_preferred(self) -> None:
+        rng = np.random.default_rng(3)
+        dataset = _tilted_dataset(300, rng, lambda s: 0.4 + 1.2 * s)
+        for sample in dataset.samples:
+            sample.metadata["response_token_count"] = 25
+        estimator, result = _run_calibrated_ips(dataset)
+        ttc_meta = result.metadata["ttc_diagnostics"][POLICY]
+        assert ttc_meta["length_normalizer"] == "response_token_count"
+
+    def test_low_ttc_escalates_weight_status(self) -> None:
+        rng = np.random.default_rng(11)
+        # Concentrated tilt: target puts ~91% of its mass on the top decile
+        # of S, so the logger covers the target-typical region on only ~10%
+        # of samples -> TTC ~= 0.1 < 0.30 -> CRITICAL, even though ESS is
+        # far above the 1% the old ladder needed for CRITICAL.
+        dataset = _tilted_dataset(800, rng, lambda s: 9.1 if s > 0.9 else 0.1)
+        estimator, _ = _run_calibrated_ips(dataset)
+
+        diag = estimator.get_diagnostics()
+        assert diag is not None
+        assert diag.ttc_per_policy is not None
+        ttc = diag.ttc_per_policy[POLICY]
+        assert ttc < 0.30
+        assert ttc_status(ttc) == Status.CRITICAL
+        assert diag.weight_status == Status.CRITICAL
+        assert diag.status_per_policy is not None
+        assert diag.status_per_policy[POLICY] == Status.CRITICAL
+        # And validate() names the problem
+        assert any("TTC" in issue for issue in diag.validate())

@@ -1308,6 +1308,13 @@ class DREstimator(BaseCJEEstimator):
                 weight_status=ips_diagnostics.weight_status,
                 ess_per_policy=ips_diagnostics.ess_per_policy,
                 max_weight_per_policy=ips_diagnostics.max_weight_per_policy,
+                status_per_policy=ips_diagnostics.status_per_policy,
+                tail_indices=ips_diagnostics.tail_indices,
+                # Overlap fields from IPS (incl. the paper's TTC gate input)
+                hellinger_affinity=ips_diagnostics.hellinger_affinity,
+                hellinger_per_policy=ips_diagnostics.hellinger_per_policy,
+                overlap_quality=ips_diagnostics.overlap_quality,
+                ttc_per_policy=ips_diagnostics.ttc_per_policy,
                 # Calibration fields (may be None)
                 calibration_rmse=ips_diagnostics.calibration_rmse,
                 calibration_r2=ips_diagnostics.calibration_r2,

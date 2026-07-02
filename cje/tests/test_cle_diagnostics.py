@@ -238,7 +238,8 @@ class TestComputeCLEDiagnostics:
         """Identical policies should give optimal diagnostics.
 
         With identical policies:
-        - TTC = coverage_percentile (0.8) since weights are uniform
+        - TTC = target_typical_mass (0.9 default, matching the paper's
+          q_0.9 construction) since weights are uniform
         - Bhattacharyya = 1.0 (perfect overlap)
         - ESS = 1.0 (no variance inflation)
         """
@@ -250,8 +251,8 @@ class TestComputeCLEDiagnostics:
         cle = compute_cle_diagnostics(base_lp, target_lp)
 
         assert cle.ttc == pytest.approx(
-            0.80, abs=0.02
-        )  # TTC = coverage_percentile for uniform weights
+            0.90, abs=0.02
+        )  # TTC = target_typical_mass for uniform weights (paper default 0.9)
         assert cle.bhattacharyya == pytest.approx(1.0, abs=0.02)  # Perfect overlap
         assert cle.ess_fraction == pytest.approx(1.0, abs=0.02)  # No variance
         assert cle.chi_squared_T < 0.1  # Very low variance in T

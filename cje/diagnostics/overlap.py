@@ -415,47 +415,112 @@ def diagnose_overlap_problems(
 # =============================================================================
 
 
+def _target_typical_region(
+    base_logprobs: np.ndarray,
+    target_logprobs: np.ndarray,
+    target_typical_mass: float,
+    token_counts: Optional[np.ndarray],
+) -> np.ndarray:
+    """Boolean mask of logged samples inside the target-typical region T.
+
+    T = {(x,a) : surprisal(a|x) <= q_{target_typical_mass}} where the
+    quantile is taken under the TARGET distribution (estimated from the
+    logged sample via self-normalized importance weights) and surprisal is
+    the mean per-token surprisal -log pi'(a|x) / |a| when a length
+    normalizer is available, else total sequence surprisal.
+    """
+    from scipy.special import logsumexp
+
+    n = len(base_logprobs)
+
+    # Importance weights give the target distribution over logged samples
+    log_weights = target_logprobs - base_logprobs
+    normalized_log_weights = log_weights - logsumexp(log_weights)
+    target_weights = np.exp(normalized_log_weights)
+
+    # Surprisal under the target policy, per-token when lengths are known
+    target_surprisal = -target_logprobs
+    if token_counts is not None:
+        token_counts = np.asarray(token_counts, dtype=float)
+        if len(token_counts) != n:
+            raise ValueError(
+                f"token_counts length ({len(token_counts)}) does not match "
+                f"logprobs length ({n})"
+            )
+        if not np.all(np.isfinite(token_counts)) or np.any(token_counts <= 0):
+            raise ValueError("token_counts must be finite and positive")
+        target_surprisal = target_surprisal / token_counts
+
+    # Threshold = target-distribution quantile of surprisal at target_typical_mass
+    sorted_idx = np.argsort(target_surprisal)
+    cumulative = np.cumsum(target_weights[sorted_idx])
+    idx = int(np.searchsorted(cumulative, target_typical_mass))
+    threshold = target_surprisal[sorted_idx[min(idx, n - 1)]]
+
+    # T = samples with target surprisal <= threshold (where target concentrates)
+    result: np.ndarray = target_surprisal <= threshold
+    return result
+
+
 def compute_ttc(
     base_logprobs: np.ndarray,
     target_logprobs: np.ndarray,
-    target_typical_mass: float = 0.8,
+    target_typical_mass: float = 0.9,
+    token_counts: Optional[np.ndarray] = None,
 ) -> float:
     """
     Compute Target-Typicality Coverage (TTC).
 
-    From the CJE paper:
-    > TTC (Target-Typicality Coverage) = β̂ = logger coverage of target-typical regions.
-    > If TTC < 0.7, logs-only IPS will fail; prefer Direct or DR methods.
+    From the CJE paper (arXiv:2512.11150, setup):
+    > T = {(x,a) : mean per-token surprisal under π' <= q_0.9 of per-token
+    > surprisal under π'}, so α = 0.9 by construction. TTC = β̂ = the
+    > empirical fraction of LOGGED samples falling in T.
+    > Gate: if TTC < 0.7, logs-only IPS will fail; prefer Direct or DR.
 
     TTC measures how well the logging policy covers the regions where the target
     policy concentrates. It is computed as:
 
-    1. Define T = target-typical region containing target_typical_mass of target mass
-       (found via target surprisal threshold)
-    2. TTC = β = P_π₀(T) = logger mass on T = fraction of samples in T
+    1. Define T = target-typical region containing target_typical_mass of target
+       mass (via a per-token surprisal threshold when lengths are available)
+    2. TTC = β = P_π₀(T) = logger mass on T = fraction of logged samples in T
 
     Low TTC means the logger rarely generates what the target wants,
     setting a hard precision floor that logs-only methods cannot beat.
 
+    .. warning::
+        The paper's statistic normalizes surprisal by the TOKEN count |a|.
+        The Sample schema stores only sequence-level logprobs, so callers
+        should pass ``token_counts`` when available (e.g. a
+        ``response_token_count`` metadata field). Callers in the estimation
+        pipeline fall back to response length in characters as a length
+        normalizer — a documented proxy that approximates the paper's
+        statistic (it removes the length confound but with character rather
+        than token units). With ``token_counts=None`` the statistic degrades
+        to TOTAL sequence surprisal, which confounds typicality with
+        response length; the 0.7 gate was calibrated for the per-token
+        construction.
+
     Note: TTC is distinct from Bhattacharyya affinity (hellinger_affinity).
     TTC measures coverage in action space (does logger cover target-typical regions?);
-    Bhattacharyya measures shape mismatch in surrogate space (how concentrated are weights?).
+    Bhattacharyya measures shape mismatch of the weight/judge distributions.
     Both are CLE diagnostics but for different components of the bound.
 
     Args:
         base_logprobs: Log probabilities under logging policy, log π₀(a|x)
         target_logprobs: Log probabilities under target policy, log π'(a|x)
         target_typical_mass: Fraction of target mass to define T.
-            Default 0.8 means T contains 80% of target probability mass.
+            Default 0.9 matches the paper (α = 0.9 by construction).
+        token_counts: Optional per-sample response lengths (tokens preferred;
+            characters acceptable as a proxy) used to compute mean per-token
+            surprisal. Without it, total sequence surprisal is used (see
+            warning above).
 
     Returns:
         TTC ∈ (0, 1] where:
-        - TTC > 0.7: Good coverage, IPS may work
-        - TTC ∈ [0.3, 0.7]: Marginal, consider DR
+        - TTC >= 0.7: Good coverage, IPS may work
+        - TTC ∈ [0.3, 0.7): Marginal, consider DR
         - TTC < 0.3: Poor coverage, IPS will fail regardless of ESS
     """
-    from scipy.special import logsumexp
-
     base_logprobs = np.asarray(base_logprobs)
     target_logprobs = np.asarray(target_logprobs)
     n = len(base_logprobs)
@@ -463,28 +528,12 @@ def compute_ttc(
     if n == 0:
         return 0.0
 
-    # Compute importance weights to get target distribution
-    log_weights = target_logprobs - base_logprobs
-    normalized_log_weights = log_weights - logsumexp(log_weights)
-    target_weights = np.exp(normalized_log_weights)
-
-    # Define T = target-typical region containing target_typical_mass
-    # Use target surprisal to find where target concentrates
-    target_surprisal = -target_logprobs
-
-    # Sort by target surprisal, find threshold for target_typical_mass
-    sorted_idx = np.argsort(target_surprisal)
-    cumulative = np.cumsum(target_weights[sorted_idx])
-    idx = int(np.searchsorted(cumulative, target_typical_mass))
-    threshold = target_surprisal[sorted_idx[min(idx, n - 1)]]
-
-    # T = samples with target surprisal <= threshold (where target concentrates)
-    in_T = target_surprisal <= threshold
+    in_T = _target_typical_region(
+        base_logprobs, target_logprobs, target_typical_mass, token_counts
+    )
 
     # TTC = β = logger mass on T (fraction of samples, since samples are from logger)
-    ttc = float(np.mean(in_T))
-
-    return ttc
+    return float(np.mean(in_T))
 
 
 @dataclass
@@ -514,12 +563,17 @@ class CLEDiagnostics:
 
     **TTC vs Bhattacharyya**:
     - TTC (β): Coverage in **action space** - logger coverage of target-typical regions
-    - Bhattacharyya (E[√w]): Shape mismatch in **surrogate space** - weight concentration
+    - Bhattacharyya (E[√w]): Shape mismatch of the **importance weights**
+      (action space; the paper's judge-space gate A_B >= 0.85 is the separate
+      ``bhattacharyya_judge_space`` metric)
 
     Attributes:
         ttc: Target-Typicality Coverage = β = logger mass on T
-        bhattacharyya: Bhattacharyya coefficient = E[√w] (surrogate space shape)
-        alpha: Target mass on T (≈ target_typical_mass by construction)
+        bhattacharyya: Bhattacharyya coefficient = E[√w] over importance
+            weights (ACTION-space affinity; not the paper's judge-space A_B,
+            see ``bhattacharyya_judge_space``)
+        alpha: Target mass on T (≈ target_typical_mass by construction;
+            default 0.9, matching the paper's q_0.9 construction)
         beta: Same as TTC (alias for clarity in CLE bound)
         coverage_penalty: α/√β (the CLE coverage factor)
         chi_squared_T: Var(w) **inside T only** (shape mismatch where it matters)
@@ -530,8 +584,8 @@ class CLEDiagnostics:
     """
 
     ttc: float  # β = logger mass on T (the key diagnostic!)
-    bhattacharyya: float  # E[√w] (surrogate space shape)
-    alpha: float  # Target mass on T (≈0.8 by construction)
+    bhattacharyya: float  # E[√w] over importance weights (action space)
+    alpha: float  # Target mass on T (≈ target_typical_mass by construction)
     beta: float  # Alias for ttc
     coverage_penalty: float
     chi_squared_T: float  # Computed inside T only
@@ -579,7 +633,8 @@ class CLEDiagnostics:
 def compute_cle_diagnostics(
     base_logprobs: np.ndarray,
     target_logprobs: np.ndarray,
-    target_typical_mass: float = 0.8,
+    target_typical_mass: float = 0.9,
+    token_counts: Optional[np.ndarray] = None,
 ) -> CLEDiagnostics:
     """
     Compute Coverage-Limited Efficiency (CLE) diagnostics.
@@ -592,18 +647,24 @@ def compute_cle_diagnostics(
 
     Where:
     - T = target-typical region (containing target_typical_mass of target mass)
-    - α = target mass on T (≈ target_typical_mass by construction)
+    - α = target mass on T (≈ target_typical_mass by construction;
+      default 0.9, matching the paper's q_0.9 construction)
     - β = logger mass on T = TTC (the key diagnostic!)
     - χ²_T = weight variance inside T
 
     **Key insight**: TTC = β (logger coverage), not α!
     - Low TTC means logger rarely covers where target concentrates → IPS fails
 
+    See ``compute_ttc`` for the per-token-surprisal construction and the
+    caveats that apply when ``token_counts`` is unavailable.
+
     Args:
         base_logprobs: Log probabilities under logging policy, log π₀(a|x)
         target_logprobs: Log probabilities under target policy, log π'(a|x)
         target_typical_mass: Fraction of target mass to define T.
-            Default 0.8 means T contains 80% of target probability mass.
+            Default 0.9 matches the paper (α = 0.9 by construction).
+        token_counts: Optional per-sample response lengths used to compute
+            mean per-token surprisal (see ``compute_ttc``).
 
     Returns:
         CLEDiagnostics with all CLE bound components
@@ -651,20 +712,13 @@ def compute_cle_diagnostics(
     ess_fraction = ess / n
 
     # --- Define T = target-typical region ---
-    # T contains target_typical_mass of target mass
-    # Use target surprisal to find where target concentrates
+    # T contains target_typical_mass of target mass, thresholded on
+    # (per-token, when lengths available) target surprisal
     normalized_log_weights = log_weights - logsumexp(log_weights)
     target_weights = np.exp(normalized_log_weights)
-    target_surprisal = -target_logprobs
-
-    # Sort by target surprisal, find threshold for target_typical_mass
-    sorted_idx = np.argsort(target_surprisal)
-    cumulative = np.cumsum(target_weights[sorted_idx])
-    idx = int(np.searchsorted(cumulative, target_typical_mass))
-    threshold = target_surprisal[sorted_idx[min(idx, n - 1)]]
-
-    # T = samples with target surprisal <= threshold (where target concentrates)
-    in_T = target_surprisal <= threshold
+    in_T = _target_typical_region(
+        base_logprobs, target_logprobs, target_typical_mass, token_counts
+    )
 
     # --- α = target mass on T ---
     alpha = float(np.sum(target_weights[in_T]))

@@ -1142,6 +1142,8 @@ class CalibratedIPS(BaseCJEEstimator):
         tail_indices = {}
         status_per_policy = {}
         hellinger_per_policy = {}  # New: Hellinger affinity per policy
+        ttc_per_policy: Dict[str, float] = {}  # Target-Typicality Coverage
+        ttc_meta: Dict[str, Dict[str, Any]] = {}
         overall_ess = 0.0
         total_n = 0
 
@@ -1165,6 +1167,16 @@ class CalibratedIPS(BaseCJEEstimator):
                     from ..diagnostics.overlap import hellinger_affinity
 
                     hellinger_per_policy[policy] = hellinger_affinity(raw_weights)
+
+                # Target-Typicality Coverage (paper gate: >= 0.70) from the
+                # logprobs available at estimation time
+                ttc_info = self._compute_policy_ttc(policy)
+                if ttc_info is not None:
+                    ttc_per_policy[policy] = ttc_info[0]
+                    ttc_meta[policy] = {
+                        "ttc": ttc_info[0],
+                        "length_normalizer": ttc_info[1],
+                    }
 
                 # Track overall
                 n = len(weights)
@@ -1190,9 +1202,14 @@ class CalibratedIPS(BaseCJEEstimator):
                 overlap_quality = "good"
 
         # Determine status via the canonical gates (ESS ladder, tail indices,
-        # Hellinger overlap). NaN tail indices mean the Hill estimator FAILED
-        # (degenerate weights) and are treated as unknown, never as light.
-        from ..diagnostics.gates import ess_status, tail_status, worst_status
+        # Hellinger overlap, TTC). NaN tail indices mean the Hill estimator
+        # FAILED (degenerate weights) and are treated as unknown, never as light.
+        from ..diagnostics.gates import (
+            ess_status,
+            tail_status,
+            ttc_status,
+            worst_status,
+        )
 
         finite_tails = [
             idx for idx in tail_indices.values() if idx is not None and np.isfinite(idx)
@@ -1216,10 +1233,29 @@ class CalibratedIPS(BaseCJEEstimator):
         else:
             hellinger_status = None
 
+        # TTC status (paper gate: WARNING below 0.70, CRITICAL below 0.30).
+        # Fold into both per-policy statuses and the overall weight status.
+        worst_ttc_status: Optional[Status] = None
+        for policy, ttc_value in ttc_per_policy.items():
+            policy_ttc_status = ttc_status(ttc_value)
+            if policy in status_per_policy:
+                status_per_policy[policy] = worst_status(
+                    status_per_policy[policy], policy_ttc_status
+                )
+            worst_ttc_status = worst_status(worst_ttc_status, policy_ttc_status)
+            if policy_ttc_status != Status.GOOD:
+                logger.warning(
+                    f"TTC={ttc_value:.1%} for policy '{policy}' is below the "
+                    f"paper's 70% gate: the logging policy rarely covers the "
+                    f"target-typical region, so logs-only IPS is unreliable "
+                    f"even when ESS looks healthy. Prefer Direct/DR methods."
+                )
+
         weight_status = worst_status(
             ess_status(weight_ess),
             tail_status(worst_tail_idx, weight_ess),
             hellinger_status,
+            worst_ttc_status,
         )
 
         # Get calibration info if available
@@ -1237,6 +1273,10 @@ class CalibratedIPS(BaseCJEEstimator):
         # Store tail indices in result metadata
         if tail_indices:
             result.metadata["tail_indices"] = tail_indices
+
+        # Store TTC details (value + which length normalizer was used)
+        if ttc_meta:
+            result.metadata["ttc_diagnostics"] = ttc_meta
 
         # Create IPSDiagnostics with new overlap metrics
         diagnostics = IPSDiagnostics(
@@ -1259,6 +1299,7 @@ class CalibratedIPS(BaseCJEEstimator):
             hellinger_affinity=overall_hellinger,
             hellinger_per_policy=hellinger_per_policy if hellinger_per_policy else None,
             overlap_quality=overlap_quality,
+            ttc_per_policy=ttc_per_policy if ttc_per_policy else None,
             # Calibration fields
             calibration_rmse=calibration_rmse,
             calibration_r2=calibration_r2,
@@ -1266,6 +1307,56 @@ class CalibratedIPS(BaseCJEEstimator):
         )
 
         return diagnostics
+
+    def _compute_policy_ttc(self, policy: str) -> Optional[Tuple[float, str]]:
+        """Compute Target-Typicality Coverage for one policy.
+
+        The paper's TTC uses mean PER-TOKEN surprisal under the target
+        policy. Token counts are read from a ``response_token_count``
+        metadata field when every sample provides one; otherwise response
+        length in characters is used as a documented length-normalizer
+        proxy (recorded in the returned tuple and in
+        ``result.metadata["ttc_diagnostics"]``).
+
+        Returns:
+            (ttc, length_normalizer) or None when logprobs are unavailable.
+        """
+        try:
+            data = self.sampler.get_data_for_policy(policy)
+            if not data:
+                return None
+
+            base_lp = np.array(
+                [d.get("base_policy_logprob") for d in data], dtype=float
+            )
+            target_lp = np.array([d.get("policy_logprob") for d in data], dtype=float)
+            if not (np.all(np.isfinite(base_lp)) and np.all(np.isfinite(target_lp))):
+                return None
+
+            token_counts_raw = [d.get("response_token_count") for d in data]
+            length_normalizer = "response_token_count"
+            token_counts: Optional[np.ndarray]
+            if all(
+                isinstance(tc, (int, float)) and float(tc) > 0
+                for tc in token_counts_raw
+            ):
+                token_counts = np.array(token_counts_raw, dtype=float)
+            else:
+                # Proxy: response length in characters (approximates the
+                # paper's per-token normalization; see compute_ttc docstring)
+                length_normalizer = "response_chars"
+                token_counts = np.array(
+                    [max(len(d.get("response") or ""), 1) for d in data],
+                    dtype=float,
+                )
+
+            from ..diagnostics.overlap import compute_ttc
+
+            ttc = compute_ttc(base_lp, target_lp, token_counts=token_counts)
+            return float(ttc), length_normalizer
+        except Exception as e:
+            logger.debug(f"Could not compute TTC for policy '{policy}': {e}")
+            return None
 
     def get_diagnostics(self) -> Optional[IPSDiagnostics]:
         """Get the diagnostics object."""
