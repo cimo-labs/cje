@@ -52,9 +52,14 @@ class OverlapMetrics:
     # Auto-tuning info
     auto_tuned_threshold: Optional[float] = None  # ESS threshold for target CI
 
-    # σ(S) structural floors
+    # σ(S) structural floors (populated when judge scores are provided)
+    # bc_sigmaS: binned Bhattacharyya affinity A_B between the judge-score
+    #   marginals under pi_0 and pi' (the paper's gate: A_B >= 0.85).
+    # aessf_sigmaS: A-ESSF = A_B^2, a structural ceiling on the ESS fraction
+    #   achievable by ANY weight function measurable in sigma(S)
+    #   (Cauchy-Schwarz: 1 = E[w] <= sqrt(E[w^{3/2}] E[w^{1/2}]) and
+    #   Jensen give ESS/n = 1/E[w^2] <= (E[sqrt(w)])^2).
     aessf_sigmaS: Optional[float] = None  # A-ESSF on judge marginal σ(S)
-    aessf_sigmaS_lcb: Optional[float] = None  # Lower confidence bound for A-ESSF
     bc_sigmaS: Optional[float] = None  # Bhattacharyya coefficient on σ(S)
 
     def summary(self) -> str:
@@ -79,7 +84,6 @@ class OverlapMetrics:
             "confidence_penalty": self.confidence_penalty,
             "auto_tuned_threshold": self.auto_tuned_threshold,
             "aessf_sigmaS": self.aessf_sigmaS,
-            "aessf_sigmaS_lcb": self.aessf_sigmaS_lcb,
             "bc_sigmaS": self.bc_sigmaS,
         }
         return {k: v for k, v in d.items() if v is not None}  # Filter None values
@@ -87,10 +91,18 @@ class OverlapMetrics:
 
 def hellinger_affinity(weights: np.ndarray, epsilon: float = 1e-10) -> float:
     """
-    Compute Bhattacharyya coefficient (Hellinger affinity).
+    Compute the ACTION-SPACE Bhattacharyya coefficient (Hellinger affinity).
 
-    This measures the overlap between two distributions. For importance weights
-    w = p'/p, the affinity is E[√w] under the base distribution.
+    This measures the overlap between two policies over the full action
+    space. For importance weights w = p'/p, the affinity is E[√w] under the
+    base distribution.
+
+    .. note::
+        This is NOT the paper's judge-space overlap gate. The paper gates on
+        the binned Bhattacharyya affinity A_B computed between judge-score
+        marginals (``bhattacharyya_judge_space``, gate A_B >= 0.85). By the
+        data-processing inequality the judge-space A_B is an UPPER bound on
+        this action-space value, so the two use different grading ladders.
 
     Key properties:
     - Value in (0, 1] where 1 indicates perfect overlap
@@ -133,6 +145,90 @@ def hellinger_affinity(weights: np.ndarray, epsilon: float = 1e-10) -> float:
     # Theoretical bound: affinity ∈ (0, 1] for mean-1 weights
     # In practice might slightly exceed 1 due to numerics
     return min(affinity, 1.0)
+
+
+def bhattacharyya_judge_space(
+    judge_scores_logged: np.ndarray,
+    weights: Optional[np.ndarray] = None,
+    judge_scores_target: Optional[np.ndarray] = None,
+    n_bins: int = 20,
+) -> float:
+    """Binned Bhattacharyya affinity A_B in JUDGE-SCORE space.
+
+    This is the paper's overlap gate (arXiv:2512.11150, appendix
+    diagnostics): A_B = Σ_b sqrt(p_b(π₀) · p_b(π')) over binned
+    judge-score densities, with **gate A_B >= 0.85** for reliable IPS and
+    A_B < 0.5 indicating severe distribution mismatch. It is a DIFFERENT
+    quantity from ``hellinger_affinity(weights) = E[sqrt(w)]``, which is the
+    action-space affinity: by the data-processing inequality the judge-space
+    A_B upper-bounds the action-space value, so the two are graded on
+    different ladders (see ``cje.diagnostics.gates``).
+
+    Two estimation modes for the π' judge-score marginal:
+
+    1. **Fresh draws available** (preferred): pass ``judge_scores_target``,
+       the judge scores of fresh draws sampled from π'.
+    2. **Logs only**: pass ``weights`` (RAW importance weights π'/π₀ for the
+       logged samples). The π' marginal is estimated as the weight-weighted
+       histogram of the logged judge scores.
+
+    Args:
+        judge_scores_logged: Judge scores S of logged samples (under π₀)
+        weights: Raw importance weights aligned with judge_scores_logged
+            (used when judge_scores_target is not provided)
+        judge_scores_target: Judge scores of fresh draws from π' (preferred)
+        n_bins: Number of histogram bins (default 20)
+
+    Returns:
+        A_B ∈ [0, 1]; NaN when it cannot be computed.
+    """
+    logged = np.asarray(judge_scores_logged, dtype=float)
+    valid_logged = np.isfinite(logged)
+
+    if judge_scores_target is not None:
+        target = np.asarray(judge_scores_target, dtype=float)
+        target = target[np.isfinite(target)]
+        logged = logged[valid_logged]
+        if len(logged) == 0 or len(target) == 0:
+            return float(np.nan)
+        lo = min(float(np.min(logged)), float(np.min(target)))
+        hi = max(float(np.max(logged)), float(np.max(target)))
+        if hi <= lo:
+            return 1.0  # All scores identical: distributions coincide
+        edges = np.linspace(lo, hi, n_bins + 1)
+        p, _ = np.histogram(logged, bins=edges)
+        q, _ = np.histogram(target, bins=edges)
+        p_norm = p / p.sum()
+        q_norm = q / q.sum()
+    elif weights is not None:
+        w = np.asarray(weights, dtype=float)
+        if len(w) != len(np.asarray(judge_scores_logged)):
+            raise ValueError(
+                f"weights length ({len(w)}) does not match judge scores "
+                f"length ({len(np.asarray(judge_scores_logged))})"
+            )
+        w = w[valid_logged]
+        logged = logged[valid_logged]
+        keep = np.isfinite(w) & (w >= 0)
+        logged, w = logged[keep], w[keep]
+        if len(logged) == 0 or w.sum() <= 0:
+            return float(np.nan)
+        lo, hi = float(np.min(logged)), float(np.max(logged))
+        if hi <= lo:
+            return 1.0
+        edges = np.linspace(lo, hi, n_bins + 1)
+        p, _ = np.histogram(logged, bins=edges)
+        q, _ = np.histogram(logged, bins=edges, weights=w)
+        p_norm = p / p.sum()
+        q_norm = q / q.sum()
+    else:
+        raise ValueError(
+            "bhattacharyya_judge_space requires either judge_scores_target "
+            "(fresh draws) or weights (logs-only mode)"
+        )
+
+    affinity = float(np.sum(np.sqrt(p_norm * q_norm)))
+    return min(max(affinity, 0.0), 1.0)
 
 
 def compute_auto_tuned_threshold(
@@ -181,14 +277,18 @@ def compute_overlap_metrics(
     n_samples: Optional[int] = None,
     compute_tail_index: bool = True,
     auto_tune_threshold: bool = False,
+    judge_scores: Optional[np.ndarray] = None,
 ) -> OverlapMetrics:
     """
     Compute comprehensive overlap diagnostics.
 
-    This function computes three complementary metrics:
-    1. Hellinger affinity: Structural overlap (cannot be improved)
+    This function computes complementary metrics:
+    1. Hellinger affinity: Action-space structural overlap (cannot be improved)
     2. ESS fraction: Statistical efficiency (can be improved by calibration)
     3. Tail index: Pathological behavior (partially improvable)
+    4. When ``judge_scores`` is provided: the paper's judge-space
+       Bhattacharyya affinity A_B (``bc_sigmaS``, gate A_B >= 0.85) and the
+       σ(S) structural ESS ceiling (``aessf_sigmaS = A_B²``)
 
     Args:
         weights: Importance weights (will be normalized to mean 1)
@@ -196,6 +296,8 @@ def compute_overlap_metrics(
         n_samples: Sample size (defaults to len(weights))
         compute_tail_index: Whether to compute Hill tail index
         auto_tune_threshold: Whether to compute auto-tuned ESS threshold
+        judge_scores: Optional judge scores aligned with weights, used to
+            populate the σ(S) fields (bc_sigmaS, aessf_sigmaS)
 
     Returns:
         OverlapMetrics with diagnostics and recommendations
@@ -258,6 +360,18 @@ def compute_overlap_metrics(
         quality = "good"
         can_calibrate = True
 
+    # σ(S) structural floors when judge scores are available
+    bc_sigmaS: Optional[float] = None
+    aessf_sigmaS: Optional[float] = None
+    if judge_scores is not None:
+        try:
+            bc_value = bhattacharyya_judge_space(judge_scores, weights=weights)
+            if np.isfinite(bc_value):
+                bc_sigmaS = float(bc_value)
+                aessf_sigmaS = float(bc_value**2)
+        except ValueError as e:
+            logger.debug(f"Could not compute judge-space Bhattacharyya: {e}")
+
     # Compute efficiency loss (how much data we're wasting)
     efficiency_loss = 1.0 - ess_fraction
 
@@ -299,6 +413,8 @@ def compute_overlap_metrics(
         recommended_method=recommended,
         confidence_penalty=confidence_penalty,
         auto_tuned_threshold=auto_tuned_threshold,
+        aessf_sigmaS=aessf_sigmaS,
+        bc_sigmaS=bc_sigmaS,
     )
 
 

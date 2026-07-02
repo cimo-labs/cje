@@ -31,6 +31,13 @@ from cje.diagnostics import (
     ttc_status,
     worst_status,
 )
+from cje.diagnostics import (
+    BoundaryCard,
+    CJEDiagnostics,
+    bhattacharyya_judge_space,
+    bhattacharyya_status,
+    boundary_card,
+)
 from cje.diagnostics.gates import (
     ESS_GOOD_THRESHOLD,
     ESS_WARNING_THRESHOLD,
@@ -310,6 +317,19 @@ class TestTTCWiredIntoPipeline:
         ttc_meta = result.metadata["ttc_diagnostics"][POLICY]
         assert ttc_meta["length_normalizer"] == "response_token_count"
 
+    def test_bc_sigmaS_present_and_graded_after_run(self) -> None:
+        rng = np.random.default_rng(5)
+        dataset = _tilted_dataset(400, rng, lambda s: 0.4 + 1.2 * s)
+        estimator, _ = _run_calibrated_ips(dataset)
+        diag = estimator.get_diagnostics()
+        assert diag is not None
+        assert diag.bc_sigmaS_per_policy is not None
+        bc = diag.bc_sigmaS_per_policy[POLICY]
+        assert 0.0 <= bc <= 1.0
+        # Mild tilt: judge marginals nearly coincide, gate should pass
+        assert bc >= 0.85
+        assert bhattacharyya_status(bc) == Status.GOOD
+
     def test_low_ttc_escalates_weight_status(self) -> None:
         rng = np.random.default_rng(11)
         # Concentrated tilt: target puts ~91% of its mass on the top decile
@@ -330,3 +350,166 @@ class TestTTCWiredIntoPipeline:
         assert diag.status_per_policy[POLICY] == Status.CRITICAL
         # And validate() names the problem
         assert any("TTC" in issue for issue in diag.validate())
+
+
+class TestJudgeSpaceBhattacharyya:
+    """Finding #29: the paper gates on judge-space A_B >= 0.85, not E[sqrt(w)]."""
+
+    def test_identical_marginals_give_one(self) -> None:
+        rng = np.random.default_rng(0)
+        scores = rng.uniform(0, 1, 5000)
+        # Uniform weights: pi' marginal == pi0 marginal
+        assert bhattacharyya_judge_space(scores, weights=np.ones(5000)) >= 0.99
+        # Fresh-draw mode with an i.i.d. copy
+        assert (
+            bhattacharyya_judge_space(
+                scores, judge_scores_target=rng.uniform(0, 1, 5000)
+            )
+            > 0.95
+        )
+
+    def test_disjoint_marginals_give_zero(self) -> None:
+        rng = np.random.default_rng(1)
+        logged = rng.uniform(0.0, 0.4, 2000)
+        target = rng.uniform(0.6, 1.0, 2000)
+        bc = bhattacharyya_judge_space(logged, judge_scores_target=target)
+        assert bc <= 0.05
+        assert bhattacharyya_status(bc) == Status.CRITICAL
+
+    def test_gate_grading(self) -> None:
+        assert bhattacharyya_status(0.90) == Status.GOOD
+        assert bhattacharyya_status(0.85) == Status.GOOD
+        assert bhattacharyya_status(0.70) == Status.WARNING
+        assert bhattacharyya_status(0.40) == Status.CRITICAL
+
+    def test_requires_weights_or_target_scores(self) -> None:
+        with pytest.raises(ValueError):
+            bhattacharyya_judge_space(np.linspace(0, 1, 10))
+
+    def test_overlap_metrics_populates_sigmaS_fields(self) -> None:
+        rng = np.random.default_rng(2)
+        scores = rng.uniform(0, 1, 1000)
+        weights = 0.4 + 1.2 * scores  # mean-one tilt in S
+        metrics = compute_overlap_metrics(
+            weights, compute_tail_index=False, judge_scores=scores
+        )
+        assert metrics.bc_sigmaS is not None
+        assert 0.0 < metrics.bc_sigmaS <= 1.0
+        assert metrics.aessf_sigmaS == pytest.approx(metrics.bc_sigmaS**2)
+
+    def test_ab_upper_bounds_action_space_affinity(self) -> None:
+        # Data-processing inequality: judge-space A_B >= E[sqrt(w)]
+        from cje.diagnostics import hellinger_affinity
+
+        rng = np.random.default_rng(3)
+        scores = rng.uniform(0, 1, 4000)
+        weights = np.exp(rng.normal(0, 1.0, 4000))  # weights independent of S
+        bc = bhattacharyya_judge_space(scores, weights=weights)
+        assert bc >= hellinger_affinity(weights) - 0.02
+
+
+class TestBoundaryCard:
+    """Findings #31/#20: coverage badge wired in; coverage_risk never a
+    hardcoded 'low'."""
+
+    def test_refuse_level_fires_for_out_of_range_fresh_scores(self) -> None:
+        rng = np.random.default_rng(4)
+        S_oracle = rng.uniform(0.3, 0.7, 200)  # calibration support
+        # 10% of the policy's (fresh) judge scores extrapolate above 0.7
+        S_policy = np.concatenate(
+            [rng.uniform(0.3, 0.7, 900), rng.uniform(0.75, 0.95, 100)]
+        )
+        R_policy = rng.uniform(0.35, 0.65, 1000)
+        card = boundary_card(
+            S_policy=S_policy,
+            S_oracle=S_oracle,
+            R_policy=R_policy,
+            R_min=0.3,
+            R_max=0.7,
+        )
+        assert isinstance(card, BoundaryCard)
+        assert card.status == "REFUSE-LEVEL"
+        assert card.out_of_range == pytest.approx(0.10, abs=0.01)
+
+    def test_in_range_scores_are_ok(self) -> None:
+        rng = np.random.default_rng(5)
+        S = rng.uniform(0.3, 0.7, 500)
+        card = boundary_card(
+            S_policy=S,
+            S_oracle=np.array([0.25, 0.75]),
+            R_policy=rng.uniform(0.4, 0.6, 500),
+            R_min=0.0,
+            R_max=1.0,
+        )
+        assert card.status == "OK"
+
+    def test_cje_diagnostics_coverage_risk_follows_cards(self) -> None:
+        ips = _make_ips_diagnostics(
+            boundary_cards={
+                "pi": {"status": "REFUSE-LEVEL", "out_of_range": 0.12},
+            }
+        )
+        unified = CJEDiagnostics.from_ips_diagnostics(ips)
+        assert unified.coverage_risk == "critical"
+        assert unified.refuse_level_claims is True
+        assert unified.can_make_level_claims is False
+        assert unified.extrapolation_rate == pytest.approx(0.12)
+        assert "REFUSE LEVEL CLAIMS" in unified.summary()
+
+    def test_cje_diagnostics_ok_cards_give_low(self) -> None:
+        ips = _make_ips_diagnostics(
+            boundary_cards={"pi": {"status": "OK", "out_of_range": 0.0}}
+        )
+        unified = CJEDiagnostics.from_ips_diagnostics(ips)
+        assert unified.coverage_risk == "low"
+        assert unified.refuse_level_claims is False
+
+    def test_cje_diagnostics_unknown_without_cards(self) -> None:
+        # No boundary cards computed: coverage must be UNKNOWN (not 'low'),
+        # and level claims must not be certified
+        ips = _make_ips_diagnostics()
+        unified = CJEDiagnostics.from_ips_diagnostics(ips)
+        assert unified.coverage_risk == "unknown"
+        assert unified.refuse_level_claims is False
+        assert unified.can_make_level_claims is False
+
+    def test_boundary_card_wired_into_estimation(self) -> None:
+        # Oracle labels exist only for S in [0.0, 0.8]: ~20% of logged judge
+        # scores sit above the oracle calibration range -> REFUSE-LEVEL
+        rng = np.random.default_rng(6)
+        samples = []
+        for i in range(500):
+            s = float(rng.uniform())
+            y = float(np.clip(0.25 + 0.5 * s + rng.normal(0, 0.08), 0, 1))
+            has_oracle = s <= 0.8 and rng.uniform() < 0.5
+            samples.append(
+                Sample(
+                    prompt_id=f"p{i}",
+                    prompt=f"question {i}",
+                    response=f"answer {i}",
+                    reward=None,
+                    base_policy_logprob=-10.0,
+                    target_policy_logprobs={
+                        POLICY: -10.0 + float(np.log(0.4 + 1.2 * s))
+                    },
+                    judge_score=s,
+                    oracle_label=y if has_oracle else None,
+                )
+            )
+        dataset = Dataset(samples=samples, target_policies=[POLICY])
+        estimator, result = _run_calibrated_ips(dataset)
+
+        diag = estimator.get_diagnostics()
+        assert diag is not None
+        assert diag.boundary_cards is not None
+        card = diag.boundary_cards[POLICY]
+        assert card["status"] == "REFUSE-LEVEL"
+        assert card["out_of_range"] >= 0.05
+        assert result.metadata["boundary_cards"][POLICY] == card
+
+        # coverage_risk follows the badge; refuse_level_claims can now fire
+        unified = CJEDiagnostics.from_ips_diagnostics(diag)
+        assert unified.coverage_risk == "critical"
+        assert unified.refuse_level_claims is True
+        # validate() names the problem
+        assert any("REFUSE-LEVEL" in issue for issue in diag.validate())

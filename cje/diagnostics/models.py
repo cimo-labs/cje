@@ -68,6 +68,12 @@ class IPSDiagnostics:
     # Target-Typicality Coverage per policy (paper gate: >= 0.70 for
     # reliable logs-only IPS; < 0.30 means IPS fails regardless of ESS)
     ttc_per_policy: Optional[Dict[str, float]] = None
+    # Judge-space binned Bhattacharyya affinity A_B per policy
+    # (paper gate: A_B >= 0.85 for reliable IPS; < 0.5 severe mismatch)
+    bc_sigmaS_per_policy: Optional[Dict[str, float]] = None
+    # Serialized BoundaryCard per policy (the paper's coverage badge:
+    # status "OK" | "CAUTION" | "REFUSE-LEVEL")
+    boundary_cards: Optional[Dict[str, Dict[str, Any]]] = None
 
     # ========== Calibration Diagnostics (None for raw mode) ==========
     calibration_rmse: Optional[float] = None
@@ -122,6 +128,15 @@ class IPSDiagnostics:
         """Lowest (worst) Target-Typicality Coverage across policies."""
         if self.ttc_per_policy:
             valid = [v for v in self.ttc_per_policy.values() if v is not None]
+            if valid:
+                return min(valid)
+        return None
+
+    @property
+    def worst_bc_sigmaS(self) -> Optional[float]:
+        """Lowest (worst) judge-space Bhattacharyya affinity across policies."""
+        if self.bc_sigmaS_per_policy:
+            valid = [v for v in self.bc_sigmaS_per_policy.values() if v is not None]
             if valid:
                 return min(valid)
         return None
@@ -218,6 +233,38 @@ class IPSDiagnostics:
                         f"prefer Direct/DR over logs-only IPS"
                     )
 
+        # Check judge-space Bhattacharyya affinity against the paper's gates
+        if self.bc_sigmaS_per_policy:
+            from .gates import (
+                BHATTACHARYYA_GOOD_THRESHOLD,
+                BHATTACHARYYA_SEVERE_THRESHOLD,
+            )
+
+            for policy, bc in self.bc_sigmaS_per_policy.items():
+                if bc is None:
+                    continue
+                if bc < BHATTACHARYYA_SEVERE_THRESHOLD:
+                    issues.append(
+                        f"Judge-space A_B {bc:.2f} for {policy}: severe "
+                        f"distribution mismatch (< 0.5)"
+                    )
+                elif bc < BHATTACHARYYA_GOOD_THRESHOLD:
+                    issues.append(
+                        f"Judge-space A_B {bc:.2f} for {policy} below the "
+                        f"0.85 gate for reliable IPS"
+                    )
+
+        # Check coverage badges (level-claim identification risk)
+        if self.boundary_cards:
+            for policy, card in self.boundary_cards.items():
+                if card.get("status") == "REFUSE-LEVEL":
+                    issues.append(
+                        f"REFUSE-LEVEL for {policy}: "
+                        f"{card.get('out_of_range', 0.0):.1%} of judge scores "
+                        f"outside the oracle calibration range; do not ship "
+                        f"level claims (ranking may stand)"
+                    )
+
         # R² should be <= 1
         if self.calibration_r2 is not None and self.calibration_r2 > 1.0:
             issues.append(f"Calibration R² > 1.0: {self.calibration_r2}")
@@ -244,6 +291,19 @@ class IPSDiagnostics:
         worst_ttc = self.worst_ttc
         if worst_ttc is not None:
             lines.append(f"Worst TTC: {worst_ttc:.1%}")
+
+        worst_bc = self.worst_bc_sigmaS
+        if worst_bc is not None:
+            lines.append(f"Worst judge-space A_B: {worst_bc:.2f}")
+
+        if self.boundary_cards:
+            refuse_level = [
+                policy
+                for policy, card in self.boundary_cards.items()
+                if card.get("status") == "REFUSE-LEVEL"
+            ]
+            if refuse_level:
+                lines.append(f"REFUSE-LEVEL: {', '.join(sorted(refuse_level))}")
 
         if self.is_calibrated:
             lines.append(f"Calibration RMSE: {self.calibration_rmse:.3f}")
@@ -640,9 +700,45 @@ class CJEDiagnostics:
 
     @classmethod
     def from_ips_diagnostics(cls, ips: IPSDiagnostics) -> "CJEDiagnostics":
-        """Create from IPSDiagnostics."""
-        # Assess coverage risk (simplified - would need boundary detection in practice)
-        coverage_risk = "low"  # Default, would compute from actual boundary metrics
+        """Create from IPSDiagnostics.
+
+        coverage_risk is derived from the per-policy boundary cards (the
+        paper's coverage badge): any REFUSE-LEVEL card => "critical" (and
+        refuse_level_claims=True); any CAUTION card => "high"; all OK =>
+        "low". When no boundary cards were computed, coverage_risk is
+        "unknown" — NEVER a hardcoded "low" — so can_make_level_claims is
+        False until coverage has actually been checked.
+        """
+        # Assess coverage risk from the boundary cards (coverage badge)
+        coverage_risk = "unknown"
+        boundary_risk_scores: Dict[str, float] = {}
+        extrapolation_rate: Optional[float] = None
+        oracle_range: Optional[Tuple[float, float]] = None
+        if ips.boundary_cards:
+            statuses = [
+                card.get("status", "OK") for card in ips.boundary_cards.values()
+            ]
+            if "REFUSE-LEVEL" in statuses:
+                coverage_risk = "critical"
+            elif "CAUTION" in statuses:
+                coverage_risk = "high"
+            else:
+                coverage_risk = "low"
+            out_of_ranges = [
+                float(card.get("out_of_range", 0.0))
+                for card in ips.boundary_cards.values()
+            ]
+            if out_of_ranges:
+                extrapolation_rate = max(out_of_ranges)
+            boundary_risk_scores = {
+                policy: min(100.0, 100.0 * float(card.get("out_of_range", 0.0)) / 0.05)
+                for policy, card in ips.boundary_cards.items()
+            }
+            for card in ips.boundary_cards.values():
+                s_range = card.get("oracle_s_range")
+                if s_range is not None:
+                    oracle_range = (float(s_range[0]), float(s_range[1]))
+                    break
 
         # Assess variance risk based on ESS and tail indices
         variance_risk = "low"
@@ -679,6 +775,9 @@ class CJEDiagnostics:
             estimates=ips.estimates,
             standard_errors=ips.standard_errors,
             coverage_risk=coverage_risk,
+            oracle_range=oracle_range,
+            extrapolation_rate=extrapolation_rate,
+            boundary_risk_scores=boundary_risk_scores,
             variance_risk=variance_risk,
             weight_ess=ips.weight_ess,
             ess_per_policy=ips.ess_per_policy,

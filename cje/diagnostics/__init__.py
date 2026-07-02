@@ -87,10 +87,17 @@ from .overlap import (
     OverlapMetrics,
     CLEDiagnostics,
     hellinger_affinity,
+    bhattacharyya_judge_space,
     compute_ttc,
     compute_overlap_metrics,
     compute_cle_diagnostics,
     diagnose_overlap_problems,
+)
+
+# Reward boundary / coverage badge (paper's REFUSE-LEVEL gate)
+from .reward_boundary import (
+    BoundaryCard,
+    boundary_card,
 )
 
 # Budget optimization / Planning
@@ -169,10 +176,14 @@ __all__ = [
     "OverlapMetrics",
     "CLEDiagnostics",
     "hellinger_affinity",
+    "bhattacharyya_judge_space",
     "compute_ttc",
     "compute_overlap_metrics",
     "compute_cle_diagnostics",
     "diagnose_overlap_problems",
+    # Reward boundary / coverage badge
+    "BoundaryCard",
+    "boundary_card",
     # Budget optimization / Planning
     "CostModel",
     "FittedVarianceModel",

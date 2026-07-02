@@ -3,11 +3,18 @@ Minimal boundary diagnostics for reward calibration extrapolation detection.
 
 Provides a simple 3-signal triage to detect when estimates may be unreliable
 due to extrapolation, WITHOUT requiring ground truth labels.
+
+This implements the paper's coverage badge (arXiv:2512.11150, appendix
+diagnostics): judge-score mass outside the oracle calibration range at or
+above the 5% threshold triggers REFUSE-LEVEL — level (absolute) claims are
+refused while rankings may stand.
 """
 
 from dataclasses import dataclass
 from typing import Optional
 import numpy as np
+
+from .gates import OUT_OF_RANGE_REFUSE_THRESHOLD
 
 
 @dataclass
@@ -82,8 +89,8 @@ def boundary_card(
         # Conservative bound: uncovered mass times boundary value
         pidw = out_lower * R_min + out_upper * (1.0 - R_max)
 
-    # Single gate with clear thresholds
-    if out_of_range >= 0.05:
+    # Single gate with clear thresholds (canonical: gates.py)
+    if out_of_range >= OUT_OF_RANGE_REFUSE_THRESHOLD:
         status = "REFUSE-LEVEL"
         note = "Non-trivial judge mass outside oracle range; do not ship levels."
     elif sat >= 0.20 or (gap is not None and gap >= 0.10):

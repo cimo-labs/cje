@@ -1315,6 +1315,10 @@ class DREstimator(BaseCJEEstimator):
                 hellinger_per_policy=ips_diagnostics.hellinger_per_policy,
                 overlap_quality=ips_diagnostics.overlap_quality,
                 ttc_per_policy=ips_diagnostics.ttc_per_policy,
+                bc_sigmaS_per_policy=self._refine_bc_sigmaS_with_fresh_draws(
+                    ips_diagnostics.bc_sigmaS_per_policy
+                ),
+                boundary_cards=ips_diagnostics.boundary_cards,
                 # Calibration fields (may be None)
                 calibration_rmse=ips_diagnostics.calibration_rmse,
                 calibration_r2=ips_diagnostics.calibration_r2,
@@ -1363,6 +1367,43 @@ class DREstimator(BaseCJEEstimator):
             )
 
         return diagnostics
+
+    def _refine_bc_sigmaS_with_fresh_draws(
+        self, bc_from_ips: Optional[Dict[str, float]]
+    ) -> Optional[Dict[str, float]]:
+        """Recompute judge-space A_B from fresh-draw judge scores.
+
+        The internal IPS estimator can only approximate the π' judge-score
+        marginal by reweighting logged scores. DR has actual samples from π'
+        (fresh draws), which is the paper's preferred estimate: compare the
+        logged S histogram against the fresh-draw S histogram directly.
+        Policies without fresh draws keep the IPS (weighted-histogram) value.
+        """
+        refined: Dict[str, float] = dict(bc_from_ips or {})
+        if not self._fresh_draws:
+            return refined if refined else None
+        try:
+            logged_scores = self.sampler.get_judge_scores()
+            if logged_scores is None or len(logged_scores) == 0:
+                return refined if refined else None
+
+            from ..diagnostics.overlap import bhattacharyya_judge_space
+
+            for policy, fresh in self._fresh_draws.items():
+                target_scores = np.array(
+                    [s.judge_score for s in fresh.samples if s.judge_score is not None],
+                    dtype=float,
+                )
+                if len(target_scores) == 0:
+                    continue
+                bc = bhattacharyya_judge_space(
+                    logged_scores, judge_scores_target=target_scores
+                )
+                if np.isfinite(bc):
+                    refined[policy] = float(bc)
+        except Exception as e:
+            logger.debug(f"Could not refine judge-space A_B from fresh draws: {e}")
+        return refined if refined else None
 
     def _store_sample_indices(self, policy: str, data: Any) -> None:
         """Store sample indices for IF alignment in stacking.

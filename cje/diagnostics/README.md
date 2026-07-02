@@ -13,9 +13,11 @@ The diagnostics system is now consolidated into a single cohesive module at `cje
 ```
 cje/diagnostics/
 ├── __init__.py             # Public API exports
+├── gates.py                # Canonical gate thresholds + status helpers (single source of truth)
 ├── models.py               # Data models (IPSDiagnostics, DRDiagnostics, CJEDiagnostics, Status, GateState)
 ├── weights.py              # Weight diagnostic computations (ESS, Hill, etc.)
-├── overlap.py              # Overlap metrics (Hellinger affinity, auto-tuning, σ(S) floors)
+├── overlap.py              # Overlap metrics (action-space E[√w], judge-space A_B / σ(S) floors, TTC, CLE)
+├── reward_boundary.py      # Coverage badge (boundary_card, the paper's REFUSE-LEVEL gate)
 ├── dr.py                   # DR-specific diagnostics
 ├── transport.py            # Transportability auditing
 ├── display.py              # Display and formatting utilities
@@ -101,10 +103,12 @@ Unified diagnostics for paper-ready reporting. Simplifies IPSDiagnostics and DRD
 2. **Are CIs honest?** (sampling/variance risk)
 
 **Key fields**:
-- `coverage_risk`: "low", "medium", "high", or "critical"
+- `coverage_risk`: "unknown", "low", "medium", "high", or "critical" — derived from the per-policy `boundary_cards` (REFUSE-LEVEL ⇒ "critical", CAUTION ⇒ "high", OK ⇒ "low"; "unknown" when no boundary card could be computed)
 - `variance_risk`: "low", "medium", "high", or "critical"
-- `refuse_level_claims`: Boolean gate for point estimates
+- `refuse_level_claims`: Boolean gate for level claims (True when coverage_risk is "critical")
 - `refuse_inference`: Boolean gate for CI reliability
+
+Note: `can_make_level_claims` is False while `coverage_risk` is "unknown" — level claims are only certified once coverage has actually been checked.
 
 **Key properties**:
 - `can_make_level_claims` - Whether point estimates are reliable
@@ -164,14 +168,32 @@ Gate criteria use combinations of ESS, weight concentration, and coefficient of 
 
 ## Key Diagnostic Metrics
 
-### Hellinger Affinity (Bhattacharyya Coefficient)
-Measures structural overlap between policies. **Cannot be improved by calibration.**
+### Hellinger Affinity (Action-Space Bhattacharyya, E[√w])
+Measures structural overlap between policies over the full action space. **Cannot be improved by calibration.**
 - **Affinity > 50%**: Good overlap
 - **Affinity 35-50%**: Marginal overlap
 - **Affinity 20-35%**: Poor overlap (consider DR or better logging; calibration won’t fix overlap)
 - **Affinity < 20%**: Catastrophic mismatch (refuse estimation)
 
 Key insight: Hellinger tells us whether to give up, ESS tells us how hard to try.
+
+**This is NOT the paper's judge-space gate** — see the next section. By the data-processing inequality the judge-space A_B upper-bounds this action-space value, which is why the two use different ladders.
+
+### Judge-Space Bhattacharyya Affinity (A_B, the paper's overlap gate)
+`bhattacharyya_judge_space` computes the paper's binned A_B = Σ_b √(p_b(π₀)·p_b(π')) between judge-score marginals. Canonical gates (`cje.diagnostics.gates`):
+- **A_B ≥ 0.85**: passes the paper's gate for reliable IPS (GOOD)
+- **A_B 0.5-0.85**: below the gate (WARNING)
+- **A_B < 0.5**: severe distribution mismatch (CRITICAL)
+
+Two estimation modes: with fresh draws, the logged-S histogram is compared against the fresh-draw-S histogram (DR estimators do this automatically); logs-only, the π' marginal is the raw-importance-weight-weighted histogram of logged S (CalibratedIPS does this automatically). Populated as `diagnostics.bc_sigmaS_per_policy` and folded into `weight_status`. `OverlapMetrics.bc_sigmaS`/`aessf_sigmaS` (= A_B², the σ(S) structural ceiling on achievable ESS fraction) are populated when `compute_overlap_metrics` receives `judge_scores`.
+
+### Coverage Badge (`boundary_card`, the paper's REFUSE-LEVEL gate)
+Judge scores outside the oracle calibration range are the primary identification threat to *level* claims: the calibrator must extrapolate there. `boundary_card` implements the paper's badge:
+- **out_of_range ≥ 5%** → status `REFUSE-LEVEL`: do not ship level (absolute) claims; rankings may stand
+- **saturation ≥ 20%** or large estimator gap → `CAUTION`
+- otherwise → `OK`
+
+`CalibratedIPS` computes a per-policy card automatically (attached as `diagnostics.boundary_cards` and `result.metadata["boundary_cards"]`, with a loud warning on REFUSE-LEVEL), and `CJEDiagnostics.coverage_risk` / `refuse_level_claims` are derived from it — `coverage_risk` is `"unknown"` (level claims not certified) when no card could be computed, never a hardcoded `"low"`.
 
 ### TTC (Target-Typicality Coverage)
 TTC measures the logging policy's coverage of the *target-typical* region T (samples whose mean per-token surprisal under π' is below the target-distribution q_0.9 quantile — so α = 0.9 by construction). It is computed from `(base_logprobs, target_logprobs)` and is **not** the same as Hellinger affinity (`hellinger_affinity(weights) = E[√w]`).
