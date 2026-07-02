@@ -687,21 +687,22 @@ def _plot_summary_table(
     headers = ["Policy", "ESS", "Status", "Recommendation"]
     rows = []
 
+    from ..diagnostics.gates import ess_status
+    from ..diagnostics.models import Status
+
     for policy in policies:
         m = metrics[policy]
         ess_frac = m["ess_cal_frac"] if use_calibrated else m["ess_raw_frac"]
         ess_val = m["ess_cal"] if use_calibrated else m["ess_raw"]
 
-        # Status based on ESS
-        if ess_frac > 0.5:
-            status = "Excellent"
-            rec = "Ready for production"
-        elif ess_frac > 0.2:
+        # Status based on the canonical ESS ladder (paper ship-gate at 30%)
+        ess_st = ess_status(ess_frac)
+        if ess_st == Status.GOOD:
             status = "Good"
-            rec = "Usable with caution"
-        elif ess_frac > 0.1:
+            rec = "Meets 30% ship-gate"
+        elif ess_st == Status.WARNING:
             status = "Marginal"
-            rec = "Consider more data"
+            rec = "Below 30% ship-gate"
         else:
             status = "Poor"
             rec = "Insufficient overlap"
@@ -737,18 +738,17 @@ def _plot_summary_table(
         table[(0, i)].set_facecolor("#E8E8E8")
         table[(0, i)].set_text_props(weight="bold")
 
-    # Color code by status
+    # Color code by status (same canonical ladder as the status column)
     for i, policy in enumerate(policies):
         ess_frac = (
             metrics[policy]["ess_cal_frac"]
             if use_calibrated
             else metrics[policy]["ess_raw_frac"]
         )
-        if ess_frac > 0.5:
+        ess_st = ess_status(ess_frac)
+        if ess_st == Status.GOOD:
             color = "#90EE90"  # Light green
-        elif ess_frac > 0.2:
-            color = "#FFFACD"  # Light yellow
-        elif ess_frac > 0.1:
+        elif ess_st == Status.WARNING:
             color = "#FFE4B5"  # Light orange
         else:
             color = "#FFB6C1"  # Light red

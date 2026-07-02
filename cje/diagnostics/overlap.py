@@ -52,9 +52,14 @@ class OverlapMetrics:
     # Auto-tuning info
     auto_tuned_threshold: Optional[float] = None  # ESS threshold for target CI
 
-    # σ(S) structural floors
+    # σ(S) structural floors (populated when judge scores are provided)
+    # bc_sigmaS: binned Bhattacharyya affinity A_B between the judge-score
+    #   marginals under pi_0 and pi' (the paper's gate: A_B >= 0.85).
+    # aessf_sigmaS: A-ESSF = A_B^2, a structural ceiling on the ESS fraction
+    #   achievable by ANY weight function measurable in sigma(S)
+    #   (Cauchy-Schwarz: 1 = E[w] <= sqrt(E[w^{3/2}] E[w^{1/2}]) and
+    #   Jensen give ESS/n = 1/E[w^2] <= (E[sqrt(w)])^2).
     aessf_sigmaS: Optional[float] = None  # A-ESSF on judge marginal σ(S)
-    aessf_sigmaS_lcb: Optional[float] = None  # Lower confidence bound for A-ESSF
     bc_sigmaS: Optional[float] = None  # Bhattacharyya coefficient on σ(S)
 
     def summary(self) -> str:
@@ -79,7 +84,6 @@ class OverlapMetrics:
             "confidence_penalty": self.confidence_penalty,
             "auto_tuned_threshold": self.auto_tuned_threshold,
             "aessf_sigmaS": self.aessf_sigmaS,
-            "aessf_sigmaS_lcb": self.aessf_sigmaS_lcb,
             "bc_sigmaS": self.bc_sigmaS,
         }
         return {k: v for k, v in d.items() if v is not None}  # Filter None values
@@ -87,10 +91,18 @@ class OverlapMetrics:
 
 def hellinger_affinity(weights: np.ndarray, epsilon: float = 1e-10) -> float:
     """
-    Compute Bhattacharyya coefficient (Hellinger affinity).
+    Compute the ACTION-SPACE Bhattacharyya coefficient (Hellinger affinity).
 
-    This measures the overlap between two distributions. For importance weights
-    w = p'/p, the affinity is E[√w] under the base distribution.
+    This measures the overlap between two policies over the full action
+    space. For importance weights w = p'/p, the affinity is E[√w] under the
+    base distribution.
+
+    .. note::
+        This is NOT the paper's judge-space overlap gate. The paper gates on
+        the binned Bhattacharyya affinity A_B computed between judge-score
+        marginals (``bhattacharyya_judge_space``, gate A_B >= 0.85). By the
+        data-processing inequality the judge-space A_B is an UPPER bound on
+        this action-space value, so the two use different grading ladders.
 
     Key properties:
     - Value in (0, 1] where 1 indicates perfect overlap
@@ -133,6 +145,90 @@ def hellinger_affinity(weights: np.ndarray, epsilon: float = 1e-10) -> float:
     # Theoretical bound: affinity ∈ (0, 1] for mean-1 weights
     # In practice might slightly exceed 1 due to numerics
     return min(affinity, 1.0)
+
+
+def bhattacharyya_judge_space(
+    judge_scores_logged: np.ndarray,
+    weights: Optional[np.ndarray] = None,
+    judge_scores_target: Optional[np.ndarray] = None,
+    n_bins: int = 20,
+) -> float:
+    """Binned Bhattacharyya affinity A_B in JUDGE-SCORE space.
+
+    This is the paper's overlap gate (arXiv:2512.11150, appendix
+    diagnostics): A_B = Σ_b sqrt(p_b(π₀) · p_b(π')) over binned
+    judge-score densities, with **gate A_B >= 0.85** for reliable IPS and
+    A_B < 0.5 indicating severe distribution mismatch. It is a DIFFERENT
+    quantity from ``hellinger_affinity(weights) = E[sqrt(w)]``, which is the
+    action-space affinity: by the data-processing inequality the judge-space
+    A_B upper-bounds the action-space value, so the two are graded on
+    different ladders (see ``cje.diagnostics.gates``).
+
+    Two estimation modes for the π' judge-score marginal:
+
+    1. **Fresh draws available** (preferred): pass ``judge_scores_target``,
+       the judge scores of fresh draws sampled from π'.
+    2. **Logs only**: pass ``weights`` (RAW importance weights π'/π₀ for the
+       logged samples). The π' marginal is estimated as the weight-weighted
+       histogram of the logged judge scores.
+
+    Args:
+        judge_scores_logged: Judge scores S of logged samples (under π₀)
+        weights: Raw importance weights aligned with judge_scores_logged
+            (used when judge_scores_target is not provided)
+        judge_scores_target: Judge scores of fresh draws from π' (preferred)
+        n_bins: Number of histogram bins (default 20)
+
+    Returns:
+        A_B ∈ [0, 1]; NaN when it cannot be computed.
+    """
+    logged = np.asarray(judge_scores_logged, dtype=float)
+    valid_logged = np.isfinite(logged)
+
+    if judge_scores_target is not None:
+        target = np.asarray(judge_scores_target, dtype=float)
+        target = target[np.isfinite(target)]
+        logged = logged[valid_logged]
+        if len(logged) == 0 or len(target) == 0:
+            return float(np.nan)
+        lo = min(float(np.min(logged)), float(np.min(target)))
+        hi = max(float(np.max(logged)), float(np.max(target)))
+        if hi <= lo:
+            return 1.0  # All scores identical: distributions coincide
+        edges = np.linspace(lo, hi, n_bins + 1)
+        p, _ = np.histogram(logged, bins=edges)
+        q, _ = np.histogram(target, bins=edges)
+        p_norm = p / p.sum()
+        q_norm = q / q.sum()
+    elif weights is not None:
+        w = np.asarray(weights, dtype=float)
+        if len(w) != len(np.asarray(judge_scores_logged)):
+            raise ValueError(
+                f"weights length ({len(w)}) does not match judge scores "
+                f"length ({len(np.asarray(judge_scores_logged))})"
+            )
+        w = w[valid_logged]
+        logged = logged[valid_logged]
+        keep = np.isfinite(w) & (w >= 0)
+        logged, w = logged[keep], w[keep]
+        if len(logged) == 0 or w.sum() <= 0:
+            return float(np.nan)
+        lo, hi = float(np.min(logged)), float(np.max(logged))
+        if hi <= lo:
+            return 1.0
+        edges = np.linspace(lo, hi, n_bins + 1)
+        p, _ = np.histogram(logged, bins=edges)
+        q, _ = np.histogram(logged, bins=edges, weights=w)
+        p_norm = p / p.sum()
+        q_norm = q / q.sum()
+    else:
+        raise ValueError(
+            "bhattacharyya_judge_space requires either judge_scores_target "
+            "(fresh draws) or weights (logs-only mode)"
+        )
+
+    affinity = float(np.sum(np.sqrt(p_norm * q_norm)))
+    return min(max(affinity, 0.0), 1.0)
 
 
 def compute_auto_tuned_threshold(
@@ -181,14 +277,18 @@ def compute_overlap_metrics(
     n_samples: Optional[int] = None,
     compute_tail_index: bool = True,
     auto_tune_threshold: bool = False,
+    judge_scores: Optional[np.ndarray] = None,
 ) -> OverlapMetrics:
     """
     Compute comprehensive overlap diagnostics.
 
-    This function computes three complementary metrics:
-    1. Hellinger affinity: Structural overlap (cannot be improved)
+    This function computes complementary metrics:
+    1. Hellinger affinity: Action-space structural overlap (cannot be improved)
     2. ESS fraction: Statistical efficiency (can be improved by calibration)
     3. Tail index: Pathological behavior (partially improvable)
+    4. When ``judge_scores`` is provided: the paper's judge-space
+       Bhattacharyya affinity A_B (``bc_sigmaS``, gate A_B >= 0.85) and the
+       σ(S) structural ESS ceiling (``aessf_sigmaS = A_B²``)
 
     Args:
         weights: Importance weights (will be normalized to mean 1)
@@ -196,6 +296,8 @@ def compute_overlap_metrics(
         n_samples: Sample size (defaults to len(weights))
         compute_tail_index: Whether to compute Hill tail index
         auto_tune_threshold: Whether to compute auto-tuned ESS threshold
+        judge_scores: Optional judge scores aligned with weights, used to
+            populate the σ(S) fields (bc_sigmaS, aessf_sigmaS)
 
     Returns:
         OverlapMetrics with diagnostics and recommendations
@@ -258,6 +360,18 @@ def compute_overlap_metrics(
         quality = "good"
         can_calibrate = True
 
+    # σ(S) structural floors when judge scores are available
+    bc_sigmaS: Optional[float] = None
+    aessf_sigmaS: Optional[float] = None
+    if judge_scores is not None:
+        try:
+            bc_value = bhattacharyya_judge_space(judge_scores, weights=weights)
+            if np.isfinite(bc_value):
+                bc_sigmaS = float(bc_value)
+                aessf_sigmaS = float(bc_value**2)
+        except ValueError as e:
+            logger.debug(f"Could not compute judge-space Bhattacharyya: {e}")
+
     # Compute efficiency loss (how much data we're wasting)
     efficiency_loss = 1.0 - ess_fraction
 
@@ -268,19 +382,21 @@ def compute_overlap_metrics(
     else:
         confidence_penalty = np.inf
 
-    # Recommendation engine based on all metrics
+    # Recommendation engine based on all metrics (canonical ESS ladder)
+    from .gates import ESS_GOOD_THRESHOLD, ESS_WARNING_THRESHOLD
+
     if quality == "catastrophic":
         recommended = "refuse"
-    elif tail_index and tail_index < 1.5:
+    elif tail_index is not None and np.isfinite(tail_index) and tail_index < 1.5:
         # Extremely heavy tails - need bias correction
         recommended = "dr"
-    elif ess_fraction < 0.10:
+    elif ess_fraction < ESS_WARNING_THRESHOLD:
         # Low ESS - depends on overlap quality
         if quality == "poor":
             recommended = "refuse"
         else:
             recommended = "dr"
-    elif ess_fraction < 0.30 and can_calibrate:
+    elif ess_fraction < ESS_GOOD_THRESHOLD and can_calibrate:
         # Moderate ESS with decent overlap - calibration can help
         recommended = "calibrated-ips"
     else:
@@ -297,6 +413,8 @@ def compute_overlap_metrics(
         recommended_method=recommended,
         confidence_penalty=confidence_penalty,
         auto_tuned_threshold=auto_tuned_threshold,
+        aessf_sigmaS=aessf_sigmaS,
+        bc_sigmaS=bc_sigmaS,
     )
 
 
@@ -353,7 +471,13 @@ def diagnose_overlap_problems(
 
     # Add specific warnings about tail behavior
     if metrics.tail_index is not None:
-        if metrics.tail_index < 1:
+        if np.isnan(metrics.tail_index):
+            msgs.append(
+                "⚠️  Tail index could not be estimated (α=n/a)\n"
+                "   Weights are too degenerate for the Hill estimator - "
+                "treat tail risk as unknown, not light."
+            )
+        elif metrics.tail_index < 1:
             msgs.append(
                 f"⚠️  Extremely heavy tails (α={metrics.tail_index:.2f})\n"
                 f"   Infinite mean - estimates are unreliable!"
@@ -407,47 +531,112 @@ def diagnose_overlap_problems(
 # =============================================================================
 
 
+def _target_typical_region(
+    base_logprobs: np.ndarray,
+    target_logprobs: np.ndarray,
+    target_typical_mass: float,
+    token_counts: Optional[np.ndarray],
+) -> np.ndarray:
+    """Boolean mask of logged samples inside the target-typical region T.
+
+    T = {(x,a) : surprisal(a|x) <= q_{target_typical_mass}} where the
+    quantile is taken under the TARGET distribution (estimated from the
+    logged sample via self-normalized importance weights) and surprisal is
+    the mean per-token surprisal -log pi'(a|x) / |a| when a length
+    normalizer is available, else total sequence surprisal.
+    """
+    from scipy.special import logsumexp
+
+    n = len(base_logprobs)
+
+    # Importance weights give the target distribution over logged samples
+    log_weights = target_logprobs - base_logprobs
+    normalized_log_weights = log_weights - logsumexp(log_weights)
+    target_weights = np.exp(normalized_log_weights)
+
+    # Surprisal under the target policy, per-token when lengths are known
+    target_surprisal = -target_logprobs
+    if token_counts is not None:
+        token_counts = np.asarray(token_counts, dtype=float)
+        if len(token_counts) != n:
+            raise ValueError(
+                f"token_counts length ({len(token_counts)}) does not match "
+                f"logprobs length ({n})"
+            )
+        if not np.all(np.isfinite(token_counts)) or np.any(token_counts <= 0):
+            raise ValueError("token_counts must be finite and positive")
+        target_surprisal = target_surprisal / token_counts
+
+    # Threshold = target-distribution quantile of surprisal at target_typical_mass
+    sorted_idx = np.argsort(target_surprisal)
+    cumulative = np.cumsum(target_weights[sorted_idx])
+    idx = int(np.searchsorted(cumulative, target_typical_mass))
+    threshold = target_surprisal[sorted_idx[min(idx, n - 1)]]
+
+    # T = samples with target surprisal <= threshold (where target concentrates)
+    result: np.ndarray = target_surprisal <= threshold
+    return result
+
+
 def compute_ttc(
     base_logprobs: np.ndarray,
     target_logprobs: np.ndarray,
-    target_typical_mass: float = 0.8,
+    target_typical_mass: float = 0.9,
+    token_counts: Optional[np.ndarray] = None,
 ) -> float:
     """
     Compute Target-Typicality Coverage (TTC).
 
-    From the CJE paper:
-    > TTC (Target-Typicality Coverage) = β̂ = logger coverage of target-typical regions.
-    > If TTC < 0.7, logs-only IPS will fail; prefer Direct or DR methods.
+    From the CJE paper (arXiv:2512.11150, setup):
+    > T = {(x,a) : mean per-token surprisal under π' <= q_0.9 of per-token
+    > surprisal under π'}, so α = 0.9 by construction. TTC = β̂ = the
+    > empirical fraction of LOGGED samples falling in T.
+    > Gate: if TTC < 0.7, logs-only IPS will fail; prefer Direct or DR.
 
     TTC measures how well the logging policy covers the regions where the target
     policy concentrates. It is computed as:
 
-    1. Define T = target-typical region containing target_typical_mass of target mass
-       (found via target surprisal threshold)
-    2. TTC = β = P_π₀(T) = logger mass on T = fraction of samples in T
+    1. Define T = target-typical region containing target_typical_mass of target
+       mass (via a per-token surprisal threshold when lengths are available)
+    2. TTC = β = P_π₀(T) = logger mass on T = fraction of logged samples in T
 
     Low TTC means the logger rarely generates what the target wants,
     setting a hard precision floor that logs-only methods cannot beat.
 
+    .. warning::
+        The paper's statistic normalizes surprisal by the TOKEN count |a|.
+        The Sample schema stores only sequence-level logprobs, so callers
+        should pass ``token_counts`` when available (e.g. a
+        ``response_token_count`` metadata field). Callers in the estimation
+        pipeline fall back to response length in characters as a length
+        normalizer — a documented proxy that approximates the paper's
+        statistic (it removes the length confound but with character rather
+        than token units). With ``token_counts=None`` the statistic degrades
+        to TOTAL sequence surprisal, which confounds typicality with
+        response length; the 0.7 gate was calibrated for the per-token
+        construction.
+
     Note: TTC is distinct from Bhattacharyya affinity (hellinger_affinity).
     TTC measures coverage in action space (does logger cover target-typical regions?);
-    Bhattacharyya measures shape mismatch in surrogate space (how concentrated are weights?).
+    Bhattacharyya measures shape mismatch of the weight/judge distributions.
     Both are CLE diagnostics but for different components of the bound.
 
     Args:
         base_logprobs: Log probabilities under logging policy, log π₀(a|x)
         target_logprobs: Log probabilities under target policy, log π'(a|x)
         target_typical_mass: Fraction of target mass to define T.
-            Default 0.8 means T contains 80% of target probability mass.
+            Default 0.9 matches the paper (α = 0.9 by construction).
+        token_counts: Optional per-sample response lengths (tokens preferred;
+            characters acceptable as a proxy) used to compute mean per-token
+            surprisal. Without it, total sequence surprisal is used (see
+            warning above).
 
     Returns:
         TTC ∈ (0, 1] where:
-        - TTC > 0.7: Good coverage, IPS may work
-        - TTC ∈ [0.3, 0.7]: Marginal, consider DR
+        - TTC >= 0.7: Good coverage, IPS may work
+        - TTC ∈ [0.3, 0.7): Marginal, consider DR
         - TTC < 0.3: Poor coverage, IPS will fail regardless of ESS
     """
-    from scipy.special import logsumexp
-
     base_logprobs = np.asarray(base_logprobs)
     target_logprobs = np.asarray(target_logprobs)
     n = len(base_logprobs)
@@ -455,28 +644,12 @@ def compute_ttc(
     if n == 0:
         return 0.0
 
-    # Compute importance weights to get target distribution
-    log_weights = target_logprobs - base_logprobs
-    normalized_log_weights = log_weights - logsumexp(log_weights)
-    target_weights = np.exp(normalized_log_weights)
-
-    # Define T = target-typical region containing target_typical_mass
-    # Use target surprisal to find where target concentrates
-    target_surprisal = -target_logprobs
-
-    # Sort by target surprisal, find threshold for target_typical_mass
-    sorted_idx = np.argsort(target_surprisal)
-    cumulative = np.cumsum(target_weights[sorted_idx])
-    idx = int(np.searchsorted(cumulative, target_typical_mass))
-    threshold = target_surprisal[sorted_idx[min(idx, n - 1)]]
-
-    # T = samples with target surprisal <= threshold (where target concentrates)
-    in_T = target_surprisal <= threshold
+    in_T = _target_typical_region(
+        base_logprobs, target_logprobs, target_typical_mass, token_counts
+    )
 
     # TTC = β = logger mass on T (fraction of samples, since samples are from logger)
-    ttc = float(np.mean(in_T))
-
-    return ttc
+    return float(np.mean(in_T))
 
 
 @dataclass
@@ -506,12 +679,17 @@ class CLEDiagnostics:
 
     **TTC vs Bhattacharyya**:
     - TTC (β): Coverage in **action space** - logger coverage of target-typical regions
-    - Bhattacharyya (E[√w]): Shape mismatch in **surrogate space** - weight concentration
+    - Bhattacharyya (E[√w]): Shape mismatch of the **importance weights**
+      (action space; the paper's judge-space gate A_B >= 0.85 is the separate
+      ``bhattacharyya_judge_space`` metric)
 
     Attributes:
         ttc: Target-Typicality Coverage = β = logger mass on T
-        bhattacharyya: Bhattacharyya coefficient = E[√w] (surrogate space shape)
-        alpha: Target mass on T (≈ target_typical_mass by construction)
+        bhattacharyya: Bhattacharyya coefficient = E[√w] over importance
+            weights (ACTION-space affinity; not the paper's judge-space A_B,
+            see ``bhattacharyya_judge_space``)
+        alpha: Target mass on T (≈ target_typical_mass by construction;
+            default 0.9, matching the paper's q_0.9 construction)
         beta: Same as TTC (alias for clarity in CLE bound)
         coverage_penalty: α/√β (the CLE coverage factor)
         chi_squared_T: Var(w) **inside T only** (shape mismatch where it matters)
@@ -522,8 +700,8 @@ class CLEDiagnostics:
     """
 
     ttc: float  # β = logger mass on T (the key diagnostic!)
-    bhattacharyya: float  # E[√w] (surrogate space shape)
-    alpha: float  # Target mass on T (≈0.8 by construction)
+    bhattacharyya: float  # E[√w] over importance weights (action space)
+    alpha: float  # Target mass on T (≈ target_typical_mass by construction)
     beta: float  # Alias for ttc
     coverage_penalty: float
     chi_squared_T: float  # Computed inside T only
@@ -571,7 +749,8 @@ class CLEDiagnostics:
 def compute_cle_diagnostics(
     base_logprobs: np.ndarray,
     target_logprobs: np.ndarray,
-    target_typical_mass: float = 0.8,
+    target_typical_mass: float = 0.9,
+    token_counts: Optional[np.ndarray] = None,
 ) -> CLEDiagnostics:
     """
     Compute Coverage-Limited Efficiency (CLE) diagnostics.
@@ -584,18 +763,24 @@ def compute_cle_diagnostics(
 
     Where:
     - T = target-typical region (containing target_typical_mass of target mass)
-    - α = target mass on T (≈ target_typical_mass by construction)
+    - α = target mass on T (≈ target_typical_mass by construction;
+      default 0.9, matching the paper's q_0.9 construction)
     - β = logger mass on T = TTC (the key diagnostic!)
     - χ²_T = weight variance inside T
 
     **Key insight**: TTC = β (logger coverage), not α!
     - Low TTC means logger rarely covers where target concentrates → IPS fails
 
+    See ``compute_ttc`` for the per-token-surprisal construction and the
+    caveats that apply when ``token_counts`` is unavailable.
+
     Args:
         base_logprobs: Log probabilities under logging policy, log π₀(a|x)
         target_logprobs: Log probabilities under target policy, log π'(a|x)
         target_typical_mass: Fraction of target mass to define T.
-            Default 0.8 means T contains 80% of target probability mass.
+            Default 0.9 matches the paper (α = 0.9 by construction).
+        token_counts: Optional per-sample response lengths used to compute
+            mean per-token surprisal (see ``compute_ttc``).
 
     Returns:
         CLEDiagnostics with all CLE bound components
@@ -643,20 +828,13 @@ def compute_cle_diagnostics(
     ess_fraction = ess / n
 
     # --- Define T = target-typical region ---
-    # T contains target_typical_mass of target mass
-    # Use target surprisal to find where target concentrates
+    # T contains target_typical_mass of target mass, thresholded on
+    # (per-token, when lengths available) target surprisal
     normalized_log_weights = log_weights - logsumexp(log_weights)
     target_weights = np.exp(normalized_log_weights)
-    target_surprisal = -target_logprobs
-
-    # Sort by target surprisal, find threshold for target_typical_mass
-    sorted_idx = np.argsort(target_surprisal)
-    cumulative = np.cumsum(target_weights[sorted_idx])
-    idx = int(np.searchsorted(cumulative, target_typical_mass))
-    threshold = target_surprisal[sorted_idx[min(idx, n - 1)]]
-
-    # T = samples with target surprisal <= threshold (where target concentrates)
-    in_T = target_surprisal <= threshold
+    in_T = _target_typical_region(
+        base_logprobs, target_logprobs, target_typical_mass, token_counts
+    )
 
     # --- α = target mass on T ---
     alpha = float(np.sum(target_weights[in_T]))

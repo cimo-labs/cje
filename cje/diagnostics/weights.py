@@ -6,7 +6,7 @@ import numpy as np
 from typing import Dict, Any, Optional, List
 import logging
 
-from .models import Status
+from .gates import ess_status, tail_status, worst_status
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,12 @@ def hill_tail_index(
 
     Returns:
         Estimated tail index α. Lower values = heavier tails.
-        Returns np.inf if estimation fails.
+        Returns np.nan when estimation FAILS (too few samples, degenerate
+        weights such as >~95% exact zeros, or numerical issues) — callers
+        must treat NaN as "unknown", never as a light tail.
+        Returns np.inf only for genuinely uniform tails (the lightest
+        possible tail, where the estimator is undefined but the weights
+        are provably non-pathological).
 
     References:
         Hill, B. M. (1975). A simple general approach to inference about
@@ -83,7 +88,7 @@ def hill_tail_index(
     n = len(weights)
     if n < min_k:
         logger.warning(f"Too few samples ({n}) for Hill estimator, need >= {min_k}")
-        return float(np.inf)
+        return float(np.nan)
 
     # Determine k (number of order statistics to use)
     k = max(min_k, int(n * k_fraction))
@@ -98,7 +103,7 @@ def hill_tail_index(
     # Check for degenerate cases
     if sorted_weights[k] <= 0 or sorted_weights[0] <= 0:
         logger.warning("Zero or negative weights in tail, cannot estimate tail index")
-        return float(np.inf)
+        return float(np.nan)
 
     # Hill estimator: α̂ = 1/k * Σ(log(X_i) - log(X_{k+1}))
     # where X_i are the top k order statistics
@@ -107,20 +112,21 @@ def hill_tail_index(
     # Check for numerical issues
     if not np.all(np.isfinite(log_ratios)):
         logger.warning("Numerical issues in Hill estimator (inf/nan in log ratios)")
-        return float(np.inf)
+        return float(np.nan)
 
     # Check for zero sum (would cause division by zero)
     log_ratio_sum = np.sum(log_ratios)
     if abs(log_ratio_sum) < 1e-10:
+        # Genuinely uniform tail: the lightest possible tail, NOT a failure.
         logger.debug("Hill estimator undefined (uniform weights in tail)")
-        return float(np.inf)  # Undefined for uniform weights
+        return float(np.inf)
 
     hill_estimate = k / log_ratio_sum
 
     # Sanity check the estimate
     if hill_estimate <= 0 or not np.isfinite(hill_estimate):
         logger.warning(f"Invalid Hill estimate: {hill_estimate}")
-        return float(np.inf)
+        return float(np.nan)
 
     return float(hill_estimate)
 
@@ -152,11 +158,12 @@ def hill_tail_index_stable(
             estimates.append(est)
 
     if not estimates:
+        # No k value produced a finite estimate: estimation failed.
         return {
-            "estimate": float(np.inf),
-            "min": float(np.inf),
-            "max": float(np.inf),
-            "std": 0.0,
+            "estimate": float(np.nan),
+            "min": float(np.nan),
+            "max": float(np.nan),
+            "std": float(np.nan),
         }
 
     estimates_array = np.array(estimates)
@@ -179,6 +186,12 @@ def compute_weight_diagnostics(
     """Compute weight diagnostics for a single policy.
 
     Returns dict with: ess_fraction, max_weight, tail_index (if computed), status
+
+    Status uses the canonical gate ladder from ``cje.diagnostics.gates``
+    (ESS/n >= 0.30 GOOD per the paper's ship-gate, >= 0.10 WARNING, else
+    CRITICAL) combined with tail-index grading. A NaN tail index means
+    estimation failed and is treated as "unknown" (WARNING when ESS is
+    also below the ship-gate), never as a light tail.
     """
     n = len(weights)
     ess = effective_sample_size(weights)
@@ -190,19 +203,11 @@ def compute_weight_diagnostics(
     else:
         tail_index = None
 
-    # Determine status based on ESS and tail index
-    if ess_fraction < 0.01:
-        status = Status.CRITICAL
-    elif tail_index is not None and tail_index < 1:
-        # Very heavy tail - infinite mean risk
-        status = Status.CRITICAL
-    elif ess_fraction < 0.1:
-        status = Status.WARNING
-    elif tail_index is not None and tail_index < 2:
-        # Heavy tail - infinite variance risk
-        status = Status.WARNING
-    else:
-        status = Status.GOOD
+    # Determine status via the canonical gates (same verdict everywhere)
+    status = worst_status(
+        ess_status(ess_fraction),
+        tail_status(tail_index, ess_fraction),
+    )
 
     result = {
         "ess_fraction": ess_fraction,

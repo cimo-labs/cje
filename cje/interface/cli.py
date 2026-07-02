@@ -119,6 +119,78 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _unreliable_policies(results: object) -> set:
+    """Policies flagged unreliable by the refusal gates or CRITICAL status."""
+    flagged = set()
+
+    metadata = getattr(results, "metadata", None)
+    if isinstance(metadata, dict):
+        gates = metadata.get("reliability_gates") or {}
+        for policy, info in gates.items():
+            if isinstance(info, dict) and info.get("flagged"):
+                flagged.add(policy)
+
+    diagnostics = getattr(results, "diagnostics", None)
+    status_per_policy = getattr(diagnostics, "status_per_policy", None)
+    if status_per_policy:
+        for policy, status in status_per_policy.items():
+            value = getattr(status, "value", status)
+            if value == "critical":
+                flagged.add(policy)
+
+    return flagged
+
+
+def best_policy_lines(results: object) -> list:
+    """Build the best-policy announcement, demoting unreliable argmaxes.
+
+    The raw argmax previously earned the trophy line even when the winning
+    policy had been flagged UNRELIABLE by the refusal gates (verified on
+    the bundled arena sample, where the adversarial 'unhelpful' policy
+    won). The trophy now goes only to a policy that passed the gates; a
+    flagged argmax is demoted to a warning line.
+    """
+    import numpy as np
+
+    estimates = getattr(results, "estimates", None)
+    metadata = getattr(results, "metadata", None)
+    target_policies = metadata.get("target_policies", []) if metadata else []
+    if estimates is None or len(estimates) == 0 or not target_policies:
+        return []
+
+    estimates = np.asarray(estimates, dtype=float)
+    if np.all(np.isnan(estimates)):
+        return [
+            "⚠️ No usable estimates: every policy was refused as unreliable "
+            "(see diagnostics)."
+        ]
+
+    best_idx = int(np.nanargmax(estimates))
+    best_policy = target_policies[best_idx]
+    flagged = _unreliable_policies(results)
+
+    if best_policy not in flagged:
+        return [f"🏆 Best policy: {best_policy}"]
+
+    lines = [
+        f"⚠️ Best by point estimate: {best_policy} " f"(UNRELIABLE — see diagnostics)"
+    ]
+    reliable = [
+        (float(estimates[i]), policy)
+        for i, policy in enumerate(target_policies)
+        if policy not in flagged and not np.isnan(estimates[i])
+    ]
+    if reliable:
+        _, best_reliable = max(reliable)
+        lines.append(f"🏆 Best reliable policy: {best_reliable}")
+    else:
+        lines.append(
+            "No policy passed the reliability gates; do not pick a winner "
+            "from this run."
+        )
+    return lines
+
+
 def run_analysis(args: argparse.Namespace) -> int:
     """Run the analysis command."""
     from .analysis import analyze_dataset  # Same module, this is fine
@@ -169,11 +241,13 @@ def run_analysis(args: argparse.Namespace) -> int:
                 se = results.standard_errors[i]
                 print(f"  {policy}: {estimate:.3f} ± {se:.3f}")
 
-            # Best policy
-            if len(results.estimates) > 0:
-                best_idx = results.estimates.argmax()
-                best_policy = target_policies[best_idx]
-                print(f"\n🏆 Best policy: {best_policy}")
+            # Best policy (reliability-aware: an argmax that failed the
+            # refusal gates is demoted instead of crowned)
+            lines = best_policy_lines(results)
+            if lines:
+                print()
+                for line in lines:
+                    print(line)
 
         # Save results if requested
         if args.output:

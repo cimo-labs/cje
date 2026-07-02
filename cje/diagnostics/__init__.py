@@ -18,6 +18,25 @@ from .models import (
     GateState,
 )
 
+# Canonical gate thresholds and status helpers (single source of truth)
+from .gates import (
+    ESS_GOOD_THRESHOLD,
+    ESS_WARNING_THRESHOLD,
+    TTC_GOOD_THRESHOLD,
+    TTC_CRITICAL_THRESHOLD,
+    BHATTACHARYYA_GOOD_THRESHOLD,
+    BHATTACHARYYA_SEVERE_THRESHOLD,
+    TAIL_INDEX_CRITICAL,
+    TAIL_INDEX_WARNING,
+    OUT_OF_RANGE_REFUSE_THRESHOLD,
+    ess_status,
+    ttc_status,
+    bhattacharyya_status,
+    tail_status,
+    worst_status,
+    format_tail_index,
+)
+
 # Weight diagnostics
 from .weights import (
     compute_weight_diagnostics,
@@ -68,10 +87,17 @@ from .overlap import (
     OverlapMetrics,
     CLEDiagnostics,
     hellinger_affinity,
+    bhattacharyya_judge_space,
     compute_ttc,
     compute_overlap_metrics,
     compute_cle_diagnostics,
     diagnose_overlap_problems,
+)
+
+# Reward boundary / coverage badge (paper's REFUSE-LEVEL gate)
+from .reward_boundary import (
+    BoundaryCard,
+    boundary_card,
 )
 
 # Budget optimization / Planning
@@ -100,6 +126,22 @@ __all__ = [
     "CJEDiagnostics",
     "Status",
     "GateState",
+    # Canonical gates
+    "ESS_GOOD_THRESHOLD",
+    "ESS_WARNING_THRESHOLD",
+    "TTC_GOOD_THRESHOLD",
+    "TTC_CRITICAL_THRESHOLD",
+    "BHATTACHARYYA_GOOD_THRESHOLD",
+    "BHATTACHARYYA_SEVERE_THRESHOLD",
+    "TAIL_INDEX_CRITICAL",
+    "TAIL_INDEX_WARNING",
+    "OUT_OF_RANGE_REFUSE_THRESHOLD",
+    "ess_status",
+    "ttc_status",
+    "bhattacharyya_status",
+    "tail_status",
+    "worst_status",
+    "format_tail_index",
     # Weight diagnostics
     "compute_weight_diagnostics",
     "effective_sample_size",
@@ -134,10 +176,14 @@ __all__ = [
     "OverlapMetrics",
     "CLEDiagnostics",
     "hellinger_affinity",
+    "bhattacharyya_judge_space",
     "compute_ttc",
     "compute_overlap_metrics",
     "compute_cle_diagnostics",
     "diagnose_overlap_problems",
+    # Reward boundary / coverage badge
+    "BoundaryCard",
+    "boundary_card",
     # Budget optimization / Planning
     "CostModel",
     "FittedVarianceModel",

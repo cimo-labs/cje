@@ -13,9 +13,11 @@ The diagnostics system is now consolidated into a single cohesive module at `cje
 ```
 cje/diagnostics/
 ├── __init__.py             # Public API exports
+├── gates.py                # Canonical gate thresholds + status helpers (single source of truth)
 ├── models.py               # Data models (IPSDiagnostics, DRDiagnostics, CJEDiagnostics, Status, GateState)
 ├── weights.py              # Weight diagnostic computations (ESS, Hill, etc.)
-├── overlap.py              # Overlap metrics (Hellinger affinity, auto-tuning, σ(S) floors)
+├── overlap.py              # Overlap metrics (action-space E[√w], judge-space A_B / σ(S) floors, TTC, CLE)
+├── reward_boundary.py      # Coverage badge (boundary_card, the paper's REFUSE-LEVEL gate)
 ├── dr.py                   # DR-specific diagnostics
 ├── transport.py            # Transportability auditing
 ├── display.py              # Display and formatting utilities
@@ -48,7 +50,7 @@ cje/diagnostics/
 
 1. **Diagnostics are data, not behavior** - Dataclasses with computed properties
 2. **Push-based flow** - Created during estimation, not on-demand
-3. **Fail-fast with NaN** - Critical issues return NaN estimates, not exceptions
+3. **Warn by default, refuse on request** - Gate failures always warn loudly and are recorded (`result.metadata["reliability_gates"]`, statuses); numeric estimates are still returned unless `refuse_unreliable=True`, in which case gated policies get NaN
 4. **Hierarchical status** - Multiple layers of safety checks
 5. **Self-describing** - Objects know how to validate, summarize, and serialize themselves
 
@@ -101,10 +103,12 @@ Unified diagnostics for paper-ready reporting. Simplifies IPSDiagnostics and DRD
 2. **Are CIs honest?** (sampling/variance risk)
 
 **Key fields**:
-- `coverage_risk`: "low", "medium", "high", or "critical"
+- `coverage_risk`: "unknown", "low", "medium", "high", or "critical" — derived from the per-policy `boundary_cards` (REFUSE-LEVEL ⇒ "critical", CAUTION ⇒ "high", OK ⇒ "low"; "unknown" when no boundary card could be computed)
 - `variance_risk`: "low", "medium", "high", or "critical"
-- `refuse_level_claims`: Boolean gate for point estimates
+- `refuse_level_claims`: Boolean gate for level claims (True when coverage_risk is "critical")
 - `refuse_inference`: Boolean gate for CI reliability
+
+Note: `can_make_level_claims` is False while `coverage_risk` is "unknown" — level claims are only certified once coverage has actually been checked.
 
 **Key properties**:
 - `can_make_level_claims` - Whether point estimates are reliable
@@ -164,8 +168,8 @@ Gate criteria use combinations of ESS, weight concentration, and coefficient of 
 
 ## Key Diagnostic Metrics
 
-### Hellinger Affinity (Bhattacharyya Coefficient)
-Measures structural overlap between policies. **Cannot be improved by calibration.**
+### Hellinger Affinity (Action-Space Bhattacharyya, E[√w])
+Measures structural overlap between policies over the full action space. **Cannot be improved by calibration.**
 - **Affinity > 50%**: Good overlap
 - **Affinity 35-50%**: Marginal overlap
 - **Affinity 20-35%**: Poor overlap (consider DR or better logging; calibration won’t fix overlap)
@@ -173,13 +177,35 @@ Measures structural overlap between policies. **Cannot be improved by calibratio
 
 Key insight: Hellinger tells us whether to give up, ESS tells us how hard to try.
 
-### TTC (Target-Typicality Coverage)
-TTC measures what fraction of the target distribution’s *typical* mass falls in regions where the logger has meaningful coverage. It is computed from `(base_logprobs, target_logprobs)` and is **not** the same as Hellinger affinity (`hellinger_affinity(weights) = E[√w]`).
+**This is NOT the paper's judge-space gate** — see the next section. By the data-processing inequality the judge-space A_B upper-bounds this action-space value, which is why the two use different ladders.
 
-**Decision rule:** If TTC < 0.7, logs-only IPS will fail regardless of weight stabilization.
-- **TTC > 0.7**: Good overlap, IPS may work
-- **TTC 0.3-0.7**: Marginal, consider DR methods
-- **TTC < 0.3**: Poor overlap, IPS will fail
+### Judge-Space Bhattacharyya Affinity (A_B, the paper's overlap gate)
+`bhattacharyya_judge_space` computes the paper's binned A_B = Σ_b √(p_b(π₀)·p_b(π')) between judge-score marginals. Canonical gates (`cje.diagnostics.gates`):
+- **A_B ≥ 0.85**: passes the paper's gate for reliable IPS (GOOD)
+- **A_B 0.5-0.85**: below the gate (WARNING)
+- **A_B < 0.5**: severe distribution mismatch (CRITICAL)
+
+Two estimation modes: with fresh draws, the logged-S histogram is compared against the fresh-draw-S histogram (DR estimators do this automatically); logs-only, the π' marginal is the raw-importance-weight-weighted histogram of logged S (CalibratedIPS does this automatically). Populated as `diagnostics.bc_sigmaS_per_policy` and folded into `weight_status`. `OverlapMetrics.bc_sigmaS`/`aessf_sigmaS` (= A_B², the σ(S) structural ceiling on achievable ESS fraction) are populated when `compute_overlap_metrics` receives `judge_scores`.
+
+### Coverage Badge (`boundary_card`, the paper's REFUSE-LEVEL gate)
+Judge scores outside the oracle calibration range are the primary identification threat to *level* claims: the calibrator must extrapolate there. `boundary_card` implements the paper's badge:
+- **out_of_range ≥ 5%** → status `REFUSE-LEVEL`: do not ship level (absolute) claims; rankings may stand
+- **saturation ≥ 20%** or large estimator gap → `CAUTION`
+- otherwise → `OK`
+
+`CalibratedIPS` computes a per-policy card automatically (attached as `diagnostics.boundary_cards` and `result.metadata["boundary_cards"]`, with a loud warning on REFUSE-LEVEL), and `CJEDiagnostics.coverage_risk` / `refuse_level_claims` are derived from it — `coverage_risk` is `"unknown"` (level claims not certified) when no card could be computed, never a hardcoded `"low"`.
+
+### TTC (Target-Typicality Coverage)
+TTC measures the logging policy's coverage of the *target-typical* region T (samples whose mean per-token surprisal under π' is below the target-distribution q_0.9 quantile — so α = 0.9 by construction). It is computed from `(base_logprobs, target_logprobs)` and is **not** the same as Hellinger affinity (`hellinger_affinity(weights) = E[√w]`).
+
+**TTC is computed automatically**: `CalibratedIPS` (and the DR estimators through their internal IPS component) populate `diagnostics.ttc_per_policy`, fold TTC into `weight_status` / `status_per_policy` via the canonical gates (WARNING below 0.70, CRITICAL below 0.30), and record which length normalizer was used in `result.metadata["ttc_diagnostics"]`.
+
+**Length normalization caveat**: the paper's statistic normalizes surprisal by token count. The pipeline uses a `response_token_count` metadata field when every sample has one; otherwise it falls back to response length in characters as a documented proxy (`length_normalizer: "response_chars"`). Passing `token_counts=None` to `compute_ttc` directly degrades to total sequence surprisal, which confounds typicality with response length.
+
+**Decision rule (paper gate, `cje.diagnostics.gates`):** If TTC < 0.7, logs-only IPS will fail regardless of weight stabilization.
+- **TTC ≥ 0.7**: Good overlap, IPS may work
+- **TTC 0.3-0.7**: Marginal, consider DR methods (WARNING)
+- **TTC < 0.3**: Poor overlap, IPS will fail (CRITICAL)
 
 ```python
 import numpy as np
@@ -189,14 +215,15 @@ from cje.diagnostics import compute_ttc, compute_cle_diagnostics
 # data = sampler.get_data_for_policy(policy)
 base_lp = np.array([d["base_policy_logprob"] for d in data])
 target_lp = np.array([d["policy_logprob"] for d in data])
+token_counts = np.array([d["response_token_count"] for d in data])  # or char lengths
 
-# Quick TTC check
-ttc = compute_ttc(base_lp, target_lp)
+# Quick TTC check (also available as diagnostics.ttc_per_policy after estimation)
+ttc = compute_ttc(base_lp, target_lp, token_counts=token_counts)
 if ttc < 0.7:
     print("Use Direct or DR methods instead of IPS")
 
 # Full CLE diagnostics
-cle = compute_cle_diagnostics(base_lp, target_lp)
+cle = compute_cle_diagnostics(base_lp, target_lp, token_counts=token_counts)
 print(cle.summary())
 ```
 
@@ -216,9 +243,11 @@ Components:
 
 ### Effective Sample Size (ESS)
 Measures how many "effective" samples remain after weighting. **Can be improved by calibration.**
-- **ESS > 30%**: Good overlap
-- **ESS 10-30%**: Moderate overlap issues  
-- **ESS < 10%**: Severe overlap problems
+
+The canonical ladder lives in `cje.diagnostics.gates` (`ess_status`) and is the ONLY ESS ladder in the library — every surface (estimator gates, `Status` grading, display tables, dashboards) uses it, so a policy at ESS 25% gets the same WARNING verdict everywhere:
+- **ESS ≥ 30%**: GOOD — the paper's ship-gate for reliable IPS
+- **ESS 10-30%**: WARNING — moderate overlap issues
+- **ESS < 10%**: CRITICAL — severe overlap problems
 
 ### Auto-Tuned ESS Thresholds
 Instead of fixed thresholds, compute based on desired CI width using variance bounds for bounded rewards [0,1]:
@@ -236,6 +265,9 @@ Estimates tail behavior of importance weights (k = 5% of samples).
 - **α ≥ 2**: Finite variance, acceptable
 - **α ∈ [1, 2)**: Infinite variance, WARNING
 - **α < 1**: Infinite mean, CRITICAL
+- **α = NaN**: Estimation FAILED (e.g. >~95% exact-zero weights). Treated as *unknown* — escalated to WARNING when ESS is also below the 30% ship-gate, and displayed as "n/a". `+inf` is reserved for genuinely uniform tails.
+
+The tail index feeds `weight_status` (WARNING/CRITICAL as above); it is **not** a NaN-refusal gate.
 
 ### Calibration R²
 Measures judge-to-oracle calibration quality.
@@ -317,16 +349,33 @@ with open("diagnostics.json", "w") as f:
 
 ## Diagnostic Gates
 
-The system implements automatic gates that refuse estimation when critical issues are detected:
+Estimators evaluate reliability gates during estimation. **By default gate failures WARN loudly and numeric estimates are still returned** — a non-NaN estimate does NOT mean the gates passed. Per-policy gate outcomes are recorded in `result.metadata["reliability_gates"]` (`{"flagged": bool, "refused": bool, "reasons": [...]}`) and reflected in `diagnostics.weight_status` / `status_per_policy`; the CLI uses them to demote unreliable "best policy" winners.
 
-### CalibratedIPS Gates
-The estimator refuses to provide estimates (returns NaN) when:
-- ESS < 30% (less than 30% effective sample size)
-- raw_near_zero > 85% (more than 85% of raw weights near zero)  
+To make gate failures return NaN instead (refuse-rather-than-mislead), set `refuse_unreliable=True`. It is exposed through the public API:
+
+```python
+from cje import analyze_dataset
+
+results = analyze_dataset(
+    "data.jsonl",
+    estimator="calibrated-ips",
+    estimator_config={"refuse_unreliable": True},
+)
+# Gated policies now have NaN estimates and NaN standard errors
+```
+
+The flag reaches `CalibratedIPS` directly and every DR estimator's internal IPS component (`dr-cpo`, `mrdr`, `tmle`, and the `stacked-dr` components). Note that for DR estimators the flag governs the internal IPS component; the DR point estimate still combines the outcome model with the weights (DR is the recommended mitigation for poor overlap, so it does not auto-refuse on IPS gates).
+
+### CalibratedIPS Gate Criteria (thresholds in `cje.diagnostics.gates`)
+A policy is flagged (warned by default; NaN with `refuse_unreliable=True`) when:
+- ESS < 30% (the paper's ship-gate)
+- raw_near_zero > 85% (more than 85% of raw weights near zero)
 - top_5pct_weight > 30% AND cv_weights > 2.0 (high concentration with high variability)
 
+The Hill tail index is **not** a refusal gate: it feeds `weight_status` (WARNING for α < 2, CRITICAL for α < 1, "unknown" for NaN failures).
+
 ### DR Estimator Gates
-DR estimators inherit IPS gates and add warnings (but continue) when:
+DR estimators inherit IPS gate recording and add warnings (but continue) when:
 - Outcome model R² < 0 (indicates misspecification)
 - Influence function tail ratio > 100 (heavy-tailed influence functions)
 
@@ -349,24 +398,26 @@ Display utilities in `display.py` format diagnostics for tables and comparisons.
 
 ### When to Trust Results
 
+These bands use the same canonical thresholds as `cje.diagnostics.gates` (ESS ship-gate 30%, warning floor 10%):
+
 ✅ **High Confidence**:
 - Overall status: GOOD
-- ESS > 50%
-- Hill index > 2.5
+- ESS ≥ 30% (paper ship-gate)
+- Hill index ≥ 2.0
 - Calibration R² > 0.8
 - DR: Balanced DM/IPS contributions
 
 ⚠️ **Use with Caution**:
 - Overall status: WARNING
-- ESS 20-50%
-- Hill index 2.0-2.5
+- ESS 10-30%
+- Hill index 1.0-2.0 (or NaN: estimation failed, tail risk unknown)
 - Calibration R² 0.5-0.8
 - DR: One component dominates
 
 🔴 **Do Not Trust**:
 - Overall status: CRITICAL
-- ESS < 20%
-- Hill index < 2.0
+- ESS < 10%
+- Hill index < 1.0
 - Calibration R² < 0.5
 - DR: Negative R² values
 
@@ -1135,7 +1186,7 @@ r2 = correlation_to_r2(0.8, "monotone")  # Monotone nonlinear: ~0.82
 
 The CJE diagnostics system provides:
 - **Comprehensive monitoring** of all causal inference assumptions
-- **Automatic safety gates** to prevent unreliable estimates
+- **Loud safety gates** that warn by default and refuse with NaN when `refuse_unreliable=True`
 - **Clear status indicators** (GOOD/WARNING/CRITICAL)
 - **Detailed metrics** for debugging issues
 - **Export capabilities** for further analysis

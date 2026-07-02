@@ -542,6 +542,9 @@ class CalibratedIPS(BaseCJEEstimator):
         n_samples_used = {}
         influence_functions = {}
         df_info = {}  # Track degrees of freedom per policy
+        # Per-policy refusal-gate outcomes (consumed by the CLI and users who
+        # need to know whether a numeric estimate passed the gates)
+        reliability_gates: Dict[str, Dict[str, Any]] = {}
 
         # Compute estimates for each policy
         for policy in self.sampler.target_policies:
@@ -550,6 +553,11 @@ class CalibratedIPS(BaseCJEEstimator):
                 estimates.append(np.nan)
                 standard_errors.append(np.nan)
                 n_samples_used[policy] = 0
+                reliability_gates[policy] = {
+                    "flagged": True,
+                    "refused": True,
+                    "reasons": ["no_overlap"],
+                }
                 logger.warning(f"Policy '{policy}' has no overlap - returning NaN")
                 continue
 
@@ -602,26 +610,45 @@ class CalibratedIPS(BaseCJEEstimator):
             # We use percentage-based gates because they measure distribution overlap quality,
             # not just statistical power. Poor overlap means the estimate is dominated by
             # a small subset of data, making it practically unreliable even if statistically valid.
+            # Thresholds come from the canonical gates module so every surface
+            # (this gate, diagnostics statuses, displays, docs) agrees.
+            from ..diagnostics.gates import (
+                ESS_GOOD_THRESHOLD,
+                RAW_NEAR_ZERO_CRITICAL,
+                TOP_5PCT_CONCENTRATION_WARNING,
+                WEIGHT_CV_WARNING,
+            )
+
             refuse = False
             reasons = []
 
-            if ess < 0.30:  # Less than 30% effective sample size
+            if ess < ESS_GOOD_THRESHOLD:  # Below the paper's 30% ship-gate
                 refuse = True
                 reasons.append(f"ESS={ess:.1%}")
 
-            if raw_near_zero > 0.85:  # More than 85% of raw weights near zero
+            if raw_near_zero > RAW_NEAR_ZERO_CRITICAL:  # >85% raw weights near zero
                 refuse = True
                 reasons.append(f"raw_near_zero={raw_near_zero:.1%}")
 
             if (
-                top_5pct_weight > 0.30 and cv_weights > 2.0
+                top_5pct_weight > TOP_5PCT_CONCENTRATION_WARNING
+                and cv_weights > WEIGHT_CV_WARNING
             ):  # High concentration AND high variability
                 refuse = True
                 reasons.append(f"top_5%={top_5pct_weight:.1%} with CV={cv_weights:.1f}")
 
+            # Record the gate outcome regardless of refuse_unreliable so
+            # downstream consumers (CLI, users) can tell whether a numeric
+            # estimate actually passed the gates.
+            reliability_gates[policy] = {
+                "flagged": bool(refuse),
+                "refused": bool(refuse and self.refuse_unreliable),
+                "reasons": list(reasons),
+            }
+
             if refuse:
                 # Build warning message that clarifies calibrated vs raw overlap issues
-                if raw_near_zero > 0.85 and ess > 0.30:
+                if raw_near_zero > RAW_NEAR_ZERO_CRITICAL and ess > ESS_GOOD_THRESHOLD:
                     # Calibration helped but raw overlap is poor
                     warning_msg = (
                         f"Policy '{policy}' has poor raw overlap ({raw_near_zero:.1%} of raw weights near-zero) "
@@ -889,6 +916,7 @@ class CalibratedIPS(BaseCJEEstimator):
                 "ess_floor": self.ess_floor,
                 "var_cap": self.var_cap,
                 "calibration_info": self._calibration_info,  # TODO: Move to diagnostics
+                "reliability_gates": reliability_gates,
                 "degrees_of_freedom": (
                     df_info if df_info else None
                 ),  # Store DF per policy
@@ -1132,6 +1160,10 @@ class CalibratedIPS(BaseCJEEstimator):
         tail_indices = {}
         status_per_policy = {}
         hellinger_per_policy = {}  # New: Hellinger affinity per policy
+        ttc_per_policy: Dict[str, float] = {}  # Target-Typicality Coverage
+        ttc_meta: Dict[str, Dict[str, Any]] = {}
+        bc_sigmaS_per_policy: Dict[str, float] = {}  # Judge-space A_B (paper gate)
+        boundary_cards: Dict[str, Dict[str, Any]] = {}  # Coverage badges
         overall_ess = 0.0
         total_n = 0
 
@@ -1156,6 +1188,30 @@ class CalibratedIPS(BaseCJEEstimator):
 
                     hellinger_per_policy[policy] = hellinger_affinity(raw_weights)
 
+                # Judge-space Bhattacharyya affinity A_B (paper gate >= 0.85):
+                # logged S under pi0 vs raw-weight-weighted S (pi' marginal)
+                bc_value = self._compute_policy_bc_sigmaS(policy)
+                if bc_value is not None:
+                    bc_sigmaS_per_policy[policy] = bc_value
+
+                # Target-Typicality Coverage (paper gate: >= 0.70) from the
+                # logprobs available at estimation time
+                ttc_info = self._compute_policy_ttc(policy)
+                if ttc_info is not None:
+                    ttc_per_policy[policy] = ttc_info[0]
+                    ttc_meta[policy] = {
+                        "ttc": ttc_info[0],
+                        "length_normalizer": ttc_info[1],
+                    }
+
+                # Coverage badge (paper REFUSE-LEVEL gate): judge-score mass
+                # outside the oracle calibration range
+                card = self._compute_policy_boundary_card(
+                    policy, estimates_dict.get(policy)
+                )
+                if card is not None:
+                    boundary_cards[policy] = card
+
                 # Track overall
                 n = len(weights)
                 overall_ess += w_diag["ess_fraction"] * n
@@ -1179,23 +1235,94 @@ class CalibratedIPS(BaseCJEEstimator):
             else:
                 overlap_quality = "good"
 
-        # Determine status based on ESS, Hellinger, and tail indices
-        worst_tail_idx = min(
-            (idx for idx in tail_indices.values() if idx is not None),
-            default=float("inf"),
+        # Determine status via the canonical gates (ESS ladder, tail indices,
+        # Hellinger overlap, TTC, judge-space A_B). NaN tail indices mean the
+        # Hill estimator FAILED (degenerate weights) and are treated as
+        # unknown, never as light.
+        from ..diagnostics.gates import (
+            bhattacharyya_status,
+            ess_status,
+            tail_status,
+            ttc_status,
+            worst_status,
         )
 
-        # Include Hellinger in status determination
-        if overlap_quality == "catastrophic" or weight_ess < 0.01:
-            weight_status = Status.CRITICAL
-        elif worst_tail_idx < 1.5:  # Very heavy tails
-            weight_status = Status.CRITICAL
-        elif overlap_quality == "poor" or weight_ess < 0.1:
-            weight_status = Status.WARNING
-        elif worst_tail_idx < 2.0:  # Heavy tails (infinite variance)
-            weight_status = Status.WARNING
+        finite_tails = [
+            idx for idx in tail_indices.values() if idx is not None and np.isfinite(idx)
+        ]
+        has_failed_tail = any(
+            idx is not None and np.isnan(idx) for idx in tail_indices.values()
+        )
+        worst_tail_idx: Optional[float]
+        if finite_tails:
+            worst_tail_idx = min(finite_tails)
+        elif has_failed_tail:
+            worst_tail_idx = float("nan")  # All estimable tails failed: unknown
         else:
-            weight_status = Status.GOOD
+            worst_tail_idx = None
+
+        # Hellinger (action-space E[sqrt(w)]) status: structural overlap
+        if overlap_quality == "catastrophic":
+            hellinger_status: Optional[Status] = Status.CRITICAL
+        elif overlap_quality == "poor":
+            hellinger_status = Status.WARNING
+        else:
+            hellinger_status = None
+
+        # TTC status (paper gate: WARNING below 0.70, CRITICAL below 0.30).
+        # Fold into both per-policy statuses and the overall weight status.
+        worst_ttc_status: Optional[Status] = None
+        for policy, ttc_value in ttc_per_policy.items():
+            policy_ttc_status = ttc_status(ttc_value)
+            if policy in status_per_policy:
+                status_per_policy[policy] = worst_status(
+                    status_per_policy[policy], policy_ttc_status
+                )
+            worst_ttc_status = worst_status(worst_ttc_status, policy_ttc_status)
+            if policy_ttc_status != Status.GOOD:
+                logger.warning(
+                    f"TTC={ttc_value:.1%} for policy '{policy}' is below the "
+                    f"paper's 70% gate: the logging policy rarely covers the "
+                    f"target-typical region, so logs-only IPS is unreliable "
+                    f"even when ESS looks healthy. Prefer Direct/DR methods."
+                )
+
+        # Judge-space A_B status (paper gate: >= 0.85 pass, < 0.5 severe)
+        worst_bc_status: Optional[Status] = None
+        for policy, bc_value in bc_sigmaS_per_policy.items():
+            policy_bc_status = bhattacharyya_status(bc_value)
+            if policy in status_per_policy:
+                status_per_policy[policy] = worst_status(
+                    status_per_policy[policy], policy_bc_status
+                )
+            worst_bc_status = worst_status(worst_bc_status, policy_bc_status)
+            if policy_bc_status != Status.GOOD:
+                logger.warning(
+                    f"Judge-space Bhattacharyya A_B={bc_value:.3f} for policy "
+                    f"'{policy}' is below the paper's 0.85 gate for reliable "
+                    f"IPS" + (" (severe mismatch)." if bc_value < 0.5 else ".")
+                )
+
+        # Coverage badges: REFUSE-LEVEL means level claims must not ship
+        # (this gates identification, not variance, so it is surfaced via
+        # CJEDiagnostics.coverage_risk rather than weight_status)
+        for policy, card in boundary_cards.items():
+            if card.get("status") == "REFUSE-LEVEL":
+                logger.warning(
+                    f"REFUSE-LEVEL for policy '{policy}': "
+                    f"{card.get('out_of_range', 0.0):.1%} of judge scores fall "
+                    f"outside the oracle calibration range. Do not ship level "
+                    f"(absolute) claims for this policy; rankings may stand. "
+                    f"Collect oracle labels covering the missing score range."
+                )
+
+        weight_status = worst_status(
+            ess_status(weight_ess),
+            tail_status(worst_tail_idx, weight_ess),
+            hellinger_status,
+            worst_ttc_status,
+            worst_bc_status,
+        )
 
         # Get calibration info if available
         calibration_rmse = None
@@ -1212,6 +1339,14 @@ class CalibratedIPS(BaseCJEEstimator):
         # Store tail indices in result metadata
         if tail_indices:
             result.metadata["tail_indices"] = tail_indices
+
+        # Store TTC details (value + which length normalizer was used)
+        if ttc_meta:
+            result.metadata["ttc_diagnostics"] = ttc_meta
+
+        # Store coverage badges (per-policy BoundaryCard status)
+        if boundary_cards:
+            result.metadata["boundary_cards"] = boundary_cards
 
         # Create IPSDiagnostics with new overlap metrics
         diagnostics = IPSDiagnostics(
@@ -1234,6 +1369,11 @@ class CalibratedIPS(BaseCJEEstimator):
             hellinger_affinity=overall_hellinger,
             hellinger_per_policy=hellinger_per_policy if hellinger_per_policy else None,
             overlap_quality=overlap_quality,
+            ttc_per_policy=ttc_per_policy if ttc_per_policy else None,
+            bc_sigmaS_per_policy=(
+                bc_sigmaS_per_policy if bc_sigmaS_per_policy else None
+            ),
+            boundary_cards=boundary_cards if boundary_cards else None,
             # Calibration fields
             calibration_rmse=calibration_rmse,
             calibration_r2=calibration_r2,
@@ -1241,6 +1381,176 @@ class CalibratedIPS(BaseCJEEstimator):
         )
 
         return diagnostics
+
+    def _compute_policy_bc_sigmaS(self, policy: str) -> Optional[float]:
+        """Judge-space binned Bhattacharyya affinity A_B for one policy.
+
+        Logs-only estimate: the π' judge-score marginal is the RAW-importance-
+        weight-weighted histogram of logged judge scores (raw weights estimate
+        dπ'/dπ₀; calibrated weights would distort the marginal).
+        """
+        try:
+            raw_weights = self.get_raw_weights(policy)
+            if raw_weights is None or len(raw_weights) == 0:
+                return None
+            data = self.sampler.get_data_for_policy(policy)
+            if not data or len(data) != len(raw_weights):
+                return None
+            judge_scores = np.array(
+                [
+                    d["judge_score"] if d.get("judge_score") is not None else np.nan
+                    for d in data
+                ],
+                dtype=float,
+            )
+            if not np.any(np.isfinite(judge_scores)):
+                return None
+
+            from ..diagnostics.overlap import bhattacharyya_judge_space
+
+            bc = bhattacharyya_judge_space(judge_scores, weights=raw_weights)
+            return float(bc) if np.isfinite(bc) else None
+        except Exception as e:
+            logger.debug(
+                f"Could not compute judge-space A_B for policy '{policy}': {e}"
+            )
+            return None
+
+    def _compute_policy_boundary_card(
+        self, policy: str, estimate: Optional[float]
+    ) -> Optional[Dict[str, Any]]:
+        """Coverage badge (paper REFUSE-LEVEL gate) for one policy.
+
+        Compares the policy's judge scores against the oracle calibration
+        S-range; >= 5% out-of-range mass refuses level claims. The reward
+        range comes from the calibrator's oracle-slice predictions
+        (calibration_info f_min/f_max) with an oracle-label fallback.
+        """
+        try:
+            dataset = getattr(self.sampler, "dataset", None)
+            if dataset is None:
+                return None
+
+            # Oracle-slice judge scores (the calibrator's support)
+            S_oracle = np.array(
+                [
+                    s.judge_score
+                    for s in dataset.samples
+                    if s.oracle_label is not None and s.judge_score is not None
+                ],
+                dtype=float,
+            )
+            if len(S_oracle) == 0:
+                return None
+
+            data = self.sampler.get_data_for_policy(policy)
+            if not data:
+                return None
+            S_policy = np.array(
+                [
+                    d["judge_score"] if d.get("judge_score") is not None else np.nan
+                    for d in data
+                ],
+                dtype=float,
+            )
+            S_policy = S_policy[np.isfinite(S_policy)]
+            R_policy = np.array([d["reward"] for d in data], dtype=float)
+            if len(S_policy) == 0 or len(R_policy) == 0:
+                return None
+
+            # Reward range on the oracle calibration set
+            cal_info = getattr(dataset, "metadata", {}).get("calibration_info", {})
+            r_min = cal_info.get("f_min")
+            r_max = cal_info.get("f_max")
+            if (
+                r_min is None
+                or r_max is None
+                or not (np.isfinite(r_min) and np.isfinite(r_max))
+            ):
+                oracle_labels = np.array(
+                    [
+                        s.oracle_label
+                        for s in dataset.samples
+                        if s.oracle_label is not None
+                    ],
+                    dtype=float,
+                )
+                if len(oracle_labels) == 0:
+                    return None
+                r_min = float(np.min(oracle_labels))
+                r_max = float(np.max(oracle_labels))
+
+            from dataclasses import asdict
+
+            from ..diagnostics.reward_boundary import boundary_card
+
+            card = boundary_card(
+                S_policy=S_policy,
+                S_oracle=S_oracle,
+                R_policy=R_policy,
+                R_min=float(r_min),
+                R_max=float(r_max),
+                est_calips=estimate,
+            )
+            card_dict: Dict[str, Any] = asdict(card)
+            card_dict["oracle_s_range"] = [
+                float(np.min(S_oracle)),
+                float(np.max(S_oracle)),
+            ]
+            return card_dict
+        except Exception as e:
+            logger.debug(f"Could not compute boundary card for policy '{policy}': {e}")
+            return None
+
+    def _compute_policy_ttc(self, policy: str) -> Optional[Tuple[float, str]]:
+        """Compute Target-Typicality Coverage for one policy.
+
+        The paper's TTC uses mean PER-TOKEN surprisal under the target
+        policy. Token counts are read from a ``response_token_count``
+        metadata field when every sample provides one; otherwise response
+        length in characters is used as a documented length-normalizer
+        proxy (recorded in the returned tuple and in
+        ``result.metadata["ttc_diagnostics"]``).
+
+        Returns:
+            (ttc, length_normalizer) or None when logprobs are unavailable.
+        """
+        try:
+            data = self.sampler.get_data_for_policy(policy)
+            if not data:
+                return None
+
+            base_lp = np.array(
+                [d.get("base_policy_logprob") for d in data], dtype=float
+            )
+            target_lp = np.array([d.get("policy_logprob") for d in data], dtype=float)
+            if not (np.all(np.isfinite(base_lp)) and np.all(np.isfinite(target_lp))):
+                return None
+
+            token_counts_raw = [d.get("response_token_count") for d in data]
+            length_normalizer = "response_token_count"
+            token_counts: Optional[np.ndarray]
+            if all(
+                isinstance(tc, (int, float)) and float(tc) > 0
+                for tc in token_counts_raw
+            ):
+                token_counts = np.array(token_counts_raw, dtype=float)
+            else:
+                # Proxy: response length in characters (approximates the
+                # paper's per-token normalization; see compute_ttc docstring)
+                length_normalizer = "response_chars"
+                token_counts = np.array(
+                    [max(len(d.get("response") or ""), 1) for d in data],
+                    dtype=float,
+                )
+
+            from ..diagnostics.overlap import compute_ttc
+
+            ttc = compute_ttc(base_lp, target_lp, token_counts=token_counts)
+            return float(ttc), length_normalizer
+        except Exception as e:
+            logger.debug(f"Could not compute TTC for policy '{policy}': {e}")
+            return None
 
     def get_diagnostics(self) -> Optional[IPSDiagnostics]:
         """Get the diagnostics object."""
