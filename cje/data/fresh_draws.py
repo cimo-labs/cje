@@ -382,111 +382,124 @@ def load_fresh_draws_auto(
         data_dir / "fresh_draws" / f"{policy}.jsonl",
     ]
 
-    # Try to load from each possible location
+    # Try to load from each possible location. Once an existing file is found,
+    # parse errors propagate loudly (with file/line context) instead of being
+    # swallowed and misreported as "no fresh draw file found".
     for file_path in possible_files:
-        if file_path.exists():
-            if verbose:
-                logger.info(f"Loading fresh draws from {file_path}")
+        if not file_path.exists():
+            continue
 
-            try:
-                # Load the file
-                fresh_samples = []
-                with open(file_path, "r") as f:
-                    for idx, line in enumerate(f):
-                        data = json.loads(line)
+        if verbose:
+            logger.info(f"Loading fresh draws from {file_path}")
 
-                        # Get prompt_id - check top-level first, then metadata, then auto-generate
-                        prompt_id = data.get("prompt_id") or data.get(
-                            "metadata", {}
-                        ).get("prompt_id")
-                        if prompt_id is None:
-                            # Auto-generate from prompt hash for consistency with logged data
-                            # This ensures fresh draws will map to the same prompt_id
-                            prompt = data.get("prompt", "")
-                            if prompt:
-                                import hashlib
+        # Load the file
+        fresh_samples = []
+        with open(file_path, "r") as f:
+            for idx, line in enumerate(f):
+                try:
+                    data = json.loads(line)
 
-                                # Use first 12 chars of SHA256 for readable but unique ID
-                                prompt_hash = hashlib.sha256(
-                                    prompt.encode()
-                                ).hexdigest()[:12]
-                                prompt_id = f"prompt_{prompt_hash}"
-                            else:
-                                # Fallback to index if no prompt either
-                                prompt_id = f"fresh_{policy}_{idx:06d}"
-                                logger.warning(
-                                    f"Fresh draw record {idx} for policy '{policy}' missing both "
-                                    f"'prompt_id' and 'prompt'. Using index-based ID '{prompt_id}'. "
-                                    f"This will NOT align with logged data for DR mode. "
-                                    f"Add explicit prompt_id or prompt text for stability."
-                                )
+                    # Get prompt_id - check top-level first, then metadata,
+                    # then auto-generate. Explicit None checks: falsy but
+                    # valid ids like 0 or "" must not be hash-replaced.
+                    prompt_id = data.get("prompt_id")
+                    if prompt_id is None:
+                        prompt_id = data.get("metadata", {}).get("prompt_id")
+                    if prompt_id is None:
+                        # Auto-generate from prompt hash for consistency with logged data
+                        # This ensures fresh draws will map to the same prompt_id
+                        prompt = data.get("prompt", "")
+                        if prompt:
+                            import hashlib
 
-                        # Handle different formats
-                        # Check for judge_score properly - don't use 'or' for numeric fields
-                        if "judge_score" in data and data["judge_score"] is not None:
-                            judge_score = data["judge_score"]
-                        elif (
-                            "metadata" in data
-                            and "judge_score" in data["metadata"]
-                            and data["metadata"]["judge_score"] is not None
-                        ):
-                            judge_score = data["metadata"]["judge_score"]
+                            # Use first 12 chars of SHA256 for readable but unique ID
+                            prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[
+                                :12
+                            ]
+                            prompt_id = f"prompt_{prompt_hash}"
                         else:
-                            # Never fabricate missing data - fail clearly
-                            raise ValueError(
-                                f"Missing judge_score for prompt_id={prompt_id} "
-                                f"in {file_path}. Fresh draws require judge scores."
+                            # Fallback to index if no prompt either
+                            prompt_id = f"fresh_{policy}_{idx:06d}"
+                            logger.warning(
+                                f"Fresh draw record {idx} for policy '{policy}' missing both "
+                                f"'prompt_id' and 'prompt'. Using index-based ID '{prompt_id}'. "
+                                f"This will NOT align with logged data for DR mode. "
+                                f"Add explicit prompt_id or prompt text for stability."
                             )
 
-                        # Extract oracle_label if present (for calibration)
-                        oracle_label = None
-                        if "oracle_label" in data and data["oracle_label"] is not None:
-                            oracle_label = data["oracle_label"]
-                        elif (
-                            "metadata" in data
-                            and "oracle_label" in data["metadata"]
-                            and data["metadata"]["oracle_label"] is not None
-                        ):
-                            oracle_label = data["metadata"]["oracle_label"]
-
-                        fresh_sample = FreshDrawSample(
-                            prompt_id=str(prompt_id),
-                            target_policy=policy,
-                            response=data.get("response", ""),
-                            judge_score=judge_score,
-                            oracle_label=oracle_label,
-                            draw_idx=data.get("draw_idx", 0),
-                            fold_id=data.get("fold_id"),
+                    # Handle different formats
+                    # Check for judge_score properly - don't use 'or' for numeric fields
+                    if "judge_score" in data and data["judge_score"] is not None:
+                        judge_score = data["judge_score"]
+                    elif (
+                        "metadata" in data
+                        and "judge_score" in data["metadata"]
+                        and data["metadata"]["judge_score"] is not None
+                    ):
+                        judge_score = data["metadata"]["judge_score"]
+                    else:
+                        # Never fabricate missing data - fail clearly
+                        raise ValueError(
+                            f"Missing judge_score for prompt_id={prompt_id}. "
+                            f"Fresh draws require judge scores."
                         )
-                        fresh_samples.append(fresh_sample)
 
-                # Create dataset
-                fresh_dataset = FreshDrawDataset(
-                    target_policy=policy,
-                    draws_per_prompt=1,  # Will be updated based on actual data
-                    samples=fresh_samples,
-                )
+                    # Extract oracle_label if present (for calibration)
+                    oracle_label = None
+                    if "oracle_label" in data and data["oracle_label"] is not None:
+                        oracle_label = data["oracle_label"]
+                    elif (
+                        "metadata" in data
+                        and "oracle_label" in data["metadata"]
+                        and data["metadata"]["oracle_label"] is not None
+                    ):
+                        oracle_label = data["metadata"]["oracle_label"]
 
-                # Update draws_per_prompt based on actual data
-                prompt_counts: Dict[str, int] = {}
-                for sample in fresh_samples:
-                    prompt_counts[sample.prompt_id] = (
-                        prompt_counts.get(sample.prompt_id, 0) + 1
+                    fresh_sample = FreshDrawSample(
+                        prompt_id=str(prompt_id),
+                        target_policy=policy,
+                        response=data.get("response", ""),
+                        judge_score=judge_score,
+                        oracle_label=oracle_label,
+                        draw_idx=data.get("draw_idx", 0),
+                        fold_id=data.get("fold_id"),
                     )
-                if prompt_counts:
-                    fresh_dataset.draws_per_prompt = max(prompt_counts.values())
+                except ValueError as e:
+                    # Covers json.JSONDecodeError and pydantic ValidationError
+                    # (both subclass ValueError). Add file/line context.
+                    raise ValueError(
+                        f"Invalid fresh draw record at {file_path}:{idx + 1} "
+                        f"for policy '{policy}': {e}"
+                    ) from e
+                fresh_samples.append(fresh_sample)
 
-                if verbose:
-                    logger.info(
-                        f"Loaded {len(fresh_samples)} fresh draws for {policy} "
-                        f"({len(prompt_counts)} unique prompts)"
-                    )
+        if not fresh_samples:
+            raise ValueError(
+                f"Fresh draw file {file_path} exists but contains no records "
+                f"for policy '{policy}'."
+            )
 
-                return fresh_dataset
+        # Create dataset
+        fresh_dataset = FreshDrawDataset(
+            target_policy=policy,
+            draws_per_prompt=1,  # Will be updated based on actual data
+            samples=fresh_samples,
+        )
 
-            except Exception as e:
-                logger.warning(f"Failed to load {file_path}: {e}")
-                continue
+        # Update draws_per_prompt based on actual data
+        prompt_counts: Dict[str, int] = {}
+        for sample in fresh_samples:
+            prompt_counts[sample.prompt_id] = prompt_counts.get(sample.prompt_id, 0) + 1
+        if prompt_counts:
+            fresh_dataset.draws_per_prompt = max(prompt_counts.values())
+
+        if verbose:
+            logger.info(
+                f"Loaded {len(fresh_samples)} fresh draws for {policy} "
+                f"({len(prompt_counts)} unique prompts)"
+            )
+
+        return fresh_dataset
 
     # No file found - raise error with helpful message
     searched_paths = "\n  ".join(str(p) for p in possible_files)

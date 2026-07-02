@@ -72,7 +72,27 @@ def validate_cje_data(
     # Check evaluation fields - scan a larger sample for robustness
     # Check up to 100 samples or 10% of data, whichever is smaller
     sample_size = min(100, max(10, len(data) // 10))
-    has_reward = reward_field and reward_field in sample
+
+    # Reward field: scan the same window as the judge/oracle checks (not just
+    # data[0]) and require the value to be present AND non-None.
+    has_reward = False
+    if reward_field:
+        reward_window = data[:sample_size]
+        n_reward_present = sum(
+            1 for rec in reward_window if rec.get(reward_field) is not None
+        )
+        has_reward = 0 < n_reward_present == len(reward_window)
+        if 0 < n_reward_present < len(reward_window):
+            n_reward_missing = len(reward_window) - n_reward_present
+            issues.append(
+                f"Reward field '{reward_field}' is missing or None in "
+                f"{n_reward_missing}/{len(reward_window)} of the first "
+                f"{len(reward_window)} records "
+                f"({n_reward_missing / len(reward_window):.0%} missing). "
+                f"Pre-computed rewards must be present for all records; "
+                f"otherwise drop the reward field and calibrate from judge "
+                f"scores and oracle labels."
+            )
 
     # Check for judge field - accept it either at top level or in metadata
     # Also validate that values are numeric and non-None
