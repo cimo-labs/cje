@@ -839,10 +839,11 @@ class AnalysisService:
         Oracle labels attach to RESPONSES, not prompts: several sources (or
         several policies' fresh draws) can legitimately contribute different
         pairs for the same prompt_id, and ALL of them are kept as calibration
-        pairs. Only true duplicates — same source, same prompt, identical
-        judge and oracle values — are deduped. Cross-source disagreements on
-        the same prompt (oracle diff > 0.05) are reported as conflicts but
-        both pairs still enter calibration.
+        pairs. Only true duplicates — same response identity (source; for
+        fresh draws also policy and draw index), same prompt, identical judge
+        and oracle values — are deduped. Cross-source disagreements on the
+        same prompt (oracle diff > 0.05) are reported as conflicts but both
+        pairs still enter calibration.
 
         Args:
             calibration_dataset: Optional calibration dataset with oracle labels
@@ -867,13 +868,28 @@ class AnalysisService:
         def _add_pair(
             prompt_id: str, source: str, judge_val: float, oracle_val: float
         ) -> bool:
-            """Add a calibration pair; returns False for true duplicates."""
+            """Add a calibration pair; returns False for true duplicates.
+
+            The source string identifies the response, not just the source
+            family: fresh-draw pairs arrive as "fresh_draws:<policy>:draw<i>",
+            so distinct policies' (or draws') labels for one prompt never
+            collapse even when their (judge, oracle) values coincide — which
+            is common with binary or rubric scores. Conflicts are still
+            detected at the source-FAMILY level (calibration_data vs
+            fresh_draws vs logged_data): different responses within one
+            family legitimately earn different labels.
+            """
             key = (source, prompt_id, judge_val, oracle_val)
             if key in seen_pairs:
                 return False
-            # Cross-source conflict check (pairs are kept either way)
+            # Cross-source-family conflict check (pairs are kept either way)
+            source_family = source.split(":", 1)[0]
             for prev_source, prev_oracle in oracle_by_prompt.get(prompt_id, []):
-                if prev_source != source and abs(prev_oracle - oracle_val) > 0.05:
+                prev_family = prev_source.split(":", 1)[0]
+                if (
+                    prev_family != source_family
+                    and abs(prev_oracle - oracle_val) > 0.05
+                ):
                     conflicts.append(
                         {
                             "prompt_id": prompt_id,
@@ -924,9 +940,14 @@ class AnalysisService:
                         fd_sample.oracle_label is not None
                         and fd_sample.judge_score is not None
                     ):
+                        # Identify the response (policy + draw), not just the
+                        # family: a bare "fresh_draws" source collapsed
+                        # distinct policies' draws for one prompt whenever
+                        # their (judge, oracle) values coincided.
+                        draw_idx = getattr(fd_sample, "draw_idx", 0)
                         if _add_pair(
                             fd_sample.prompt_id,
-                            "fresh_draws",
+                            f"fresh_draws:{policy}:draw{draw_idx}",
                             float(fd_sample.judge_score),
                             float(fd_sample.oracle_label),
                         ):

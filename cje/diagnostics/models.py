@@ -197,8 +197,12 @@ class IPSDiagnostics:
             if max_w > 100:
                 issues.append(f"Extreme max weight for {policy}: {max_w:.1f}")
 
-        # Check for heavy tails using Hill index (NaN = estimation failed)
+        # Check for heavy tails using Hill index (NaN = estimation failed).
+        # Thresholds come from the canonical gates module: α < 1 risks an
+        # infinite mean, α < 2 an infinite variance.
         if self.tail_indices:
+            from .gates import TAIL_INDEX_CRITICAL, TAIL_INDEX_WARNING
+
             for policy, tail_idx in self.tail_indices.items():
                 if tail_idx is not None:
                     if np.isnan(tail_idx):
@@ -206,13 +210,13 @@ class IPSDiagnostics:
                             f"Tail index estimation failed for {policy} "
                             f"(degenerate weights; tail risk unknown)"
                         )
-                    elif tail_idx < 1.5:
+                    elif tail_idx < TAIL_INDEX_CRITICAL:
                         issues.append(
-                            f"Extremely heavy tail for {policy}: α={tail_idx:.2f} (infinite mean risk)"
+                            f"Extremely heavy tail for {policy}: α={tail_idx:.2f} (infinite-mean risk)"
                         )
-                    elif tail_idx < 2.0:
+                    elif tail_idx < TAIL_INDEX_WARNING:
                         issues.append(
-                            f"Heavy tail for {policy}: α={tail_idx:.2f} (infinite variance)"
+                            f"Heavy tail for {policy}: α={tail_idx:.2f} (infinite-variance risk)"
                         )
 
         # Check Target-Typicality Coverage against the paper's gates

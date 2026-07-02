@@ -447,7 +447,13 @@ class TestEstimatorStress:
         )
 
         sampler = PrecomputedSampler(calibrated)
-        estimator = CalibratedIPS(sampler)
+        # Pass the reward calibrator (canonical usage) so the oracle-
+        # uncertainty jackknife applies: the "higher uncertainty due to
+        # limited oracle data" this test asserts IS the OUA contribution.
+        # Without it the SE floor below only passed on <=0.2.25 because the
+        # old (double-subtracting) Hajek IF formula inflated SEs, masking
+        # the missing OUA term.
+        estimator = CalibratedIPS(sampler, reward_calibrator=cal_result.calibrator)
         results = estimator.fit_and_estimate()
 
         # Should still work but with higher uncertainty

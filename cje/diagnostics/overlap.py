@@ -383,12 +383,17 @@ def compute_overlap_metrics(
         confidence_penalty = np.inf
 
     # Recommendation engine based on all metrics (canonical ESS ladder)
-    from .gates import ESS_GOOD_THRESHOLD, ESS_WARNING_THRESHOLD
+    from .gates import ESS_GOOD_THRESHOLD, ESS_WARNING_THRESHOLD, TAIL_INDEX_WARNING
 
     if quality == "catastrophic":
         recommended = "refuse"
-    elif tail_index is not None and np.isfinite(tail_index) and tail_index < 1.5:
-        # Extremely heavy tails - need bias correction
+    elif (
+        tail_index is not None
+        and np.isfinite(tail_index)
+        and tail_index < TAIL_INDEX_WARNING
+    ):
+        # Heavy tails (α < 2: infinite-variance risk) - need DR's bias
+        # correction rather than logs-only IPS
         recommended = "dr"
     elif ess_fraction < ESS_WARNING_THRESHOLD:
         # Low ESS - depends on overlap quality

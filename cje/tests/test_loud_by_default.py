@@ -204,6 +204,23 @@ class TestFreshDrawLoadErrors:
         with pytest.raises(FileNotFoundError, match="No fresh draw file found"):
             load_fresh_draws_auto(tmp_path, "pi")
 
+    def test_blank_lines_are_skipped(self, tmp_path: Path) -> None:
+        """A trailing newline (or interior blank line) must not crash the
+        loud parse-error path; the logged-data loader already skips blanks."""
+        from cje.data.fresh_draws import load_fresh_draws_auto
+
+        file_path = tmp_path / "pi_responses.jsonl"
+        file_path.write_text(
+            '{"prompt_id": "p1", "judge_score": 0.5, "draw_idx": 0}\n'
+            "\n"
+            '{"prompt_id": "p2", "judge_score": 0.7, "draw_idx": 0}\n'
+            "\n"
+        )
+
+        fresh = load_fresh_draws_auto(tmp_path, "pi")
+        assert len(fresh.samples) == 2
+        assert sorted(s.prompt_id for s in fresh.samples) == ["p1", "p2"]
+
 
 class TestPromptIdHandling:
     """Falsy-but-valid prompt_ids (0, \"\") used to be hash-replaced, and
@@ -566,11 +583,43 @@ class TestCombineOracleSourcesKeepsAllPairs:
         )
         assert judge_scores == [0.4, 0.8]
 
+    def test_identical_scores_across_policies_do_not_collapse(self) -> None:
+        """Respin M1: with binary/rubric scores, different policies' draws for
+        one prompt collide on (judge, oracle); the pair key must identify the
+        response (policy + draw), not just the "fresh_draws" family."""
+        from cje.interface.service import AnalysisService
+
+        fresh_draws = {
+            "policy_a": self._fresh_draw("policy_a", "p1", judge=1.0, oracle=1.0),
+            "policy_b": self._fresh_draw("policy_b", "p1", judge=1.0, oracle=1.0),
+        }
+
+        combined, metadata = AnalysisService()._combine_oracle_sources(
+            None,
+            None,
+            fresh_draws,
+            ["policy_a", "policy_b"],
+            "judge_score",
+            "oracle_label",
+        )
+
+        assert combined.n_samples == 2
+        assert metadata["fresh_draws"]["n_oracle"] == 2
+        # No cross-policy false "conflicts" either: fresh draws are one family
+        assert metadata["n_conflicts"] == 0
+        sources = sorted(s.metadata["source"] for s in combined.samples)
+        assert sources == [
+            "fresh_draws:policy_a:draw0",
+            "fresh_draws:policy_b:draw0",
+        ]
+
     def test_true_duplicates_are_deduped(self) -> None:
         from cje.data.fresh_draws import FreshDrawDataset, FreshDrawSample
         from cje.interface.service import AnalysisService
 
-        # Same source + prompt + identical judge & oracle values -> one pair
+        # Distinct draws (draw_idx 0 and 1) are distinct responses: identical
+        # (judge, oracle) values keep BOTH pairs. Only a re-ingested copy of
+        # the same draw (same policy + prompt + draw_idx + values) dedupes.
         fd = FreshDrawDataset(
             target_policy="policy_a",
             draws_per_prompt=2,
@@ -584,7 +633,7 @@ class TestCombineOracleSourcesKeepsAllPairs:
                     response=None,
                     fold_id=None,
                 )
-                for i in range(2)
+                for i in (0, 1, 1)  # draw 1 ingested twice -> true duplicate
             ],
         )
 
@@ -597,8 +646,8 @@ class TestCombineOracleSourcesKeepsAllPairs:
             "oracle_label",
         )
 
-        assert combined.n_samples == 1
-        assert metadata["fresh_draws"]["n_oracle"] == 1
+        assert combined.n_samples == 2
+        assert metadata["fresh_draws"]["n_oracle"] == 2
 
     def test_cross_source_conflict_warned_but_both_pairs_kept(
         self, caplog: pytest.LogCaptureFixture

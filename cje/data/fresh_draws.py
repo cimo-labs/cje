@@ -396,6 +396,11 @@ def load_fresh_draws_auto(
         fresh_samples = []
         with open(file_path, "r") as f:
             for idx, line in enumerate(f):
+                # Skip blank/whitespace-only lines (e.g. a trailing newline),
+                # matching the logged-data loader; only real records should
+                # hit the loud parse-error path below.
+                if not line.strip():
+                    continue
                 try:
                     data = json.loads(line)
 
