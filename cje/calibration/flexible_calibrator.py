@@ -456,8 +456,12 @@ class FlexibleCalibrator:
                 if preds:
                     return np.asarray(np.mean(preds, axis=0))
                 else:
-                    # Ultimate fallback: return mean of training labels
-                    return np.full_like(S, 0.5)
+                    # No fitted models at all: fail loudly rather than
+                    # fabricate a constant reward.
+                    raise RuntimeError(
+                        "FlexibleCalibrator has no fitted two-stage models — "
+                        "call fit() before predict()."
+                    )
         else:
             # OOF prediction
             Y_hat = np.zeros_like(S)
@@ -497,8 +501,15 @@ class FlexibleCalibrator:
                     elif self._full_monotone_model is not None:
                         Y_hat[mask] = self._full_monotone_model.predict(S[mask])
                     else:
-                        # Ultimate fallback
-                        Y_hat[mask] = np.mean(S[mask])
+                        # No model for this fold and no full-model fallback:
+                        # fail loudly rather than fabricate rewards from the
+                        # mean of raw judge scores.
+                        raise RuntimeError(
+                            f"FlexibleCalibrator has no fitted model for fold "
+                            f"{k} and no full model to fall back on — call "
+                            f"fit() before predict(). Fitted folds: "
+                            f"{sorted(self._iso_models.keys())}."
+                        )
             return Y_hat
 
     def _select_best_mode(

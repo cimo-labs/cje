@@ -19,6 +19,51 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _index_mask_to_bool(
+    indices: np.ndarray, oracle_labels: np.ndarray, n_total: int
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Convert an integer index mask to a boolean mask, keeping labels aligned.
+
+    Boolean fancy-indexing (``judge_scores[bool_mask]``) returns scores in
+    ascending index order. If the caller passed unsorted indices, the labels
+    must be reordered identically or every (score, label) pair silently
+    misaligns.
+
+    Args:
+        indices: Integer indices of oracle-labeled samples (caller order)
+        oracle_labels: Oracle labels in the same caller order as ``indices``
+        n_total: Total number of samples
+
+    Returns:
+        Tuple of (bool_mask, oracle_labels reordered to ascending-index order)
+
+    Raises:
+        ValueError: If indices contain duplicates or lengths mismatch
+    """
+    indices = np.asarray(indices)
+    oracle_labels = np.asarray(oracle_labels)
+
+    unique_indices, counts = np.unique(indices, return_counts=True)
+    if np.any(counts > 1):
+        duplicated = unique_indices[counts > 1]
+        raise ValueError(
+            f"oracle_mask contains duplicate indices "
+            f"{duplicated[:5].tolist()}{'...' if duplicated.size > 5 else ''}; "
+            f"each sample may be indexed at most once."
+        )
+    if len(oracle_labels) != len(indices):
+        raise ValueError(
+            f"oracle_labels length ({len(oracle_labels)}) must match the "
+            f"number of oracle_mask indices ({len(indices)})."
+        )
+
+    bool_mask = np.zeros(n_total, dtype=bool)
+    bool_mask[indices] = True
+
+    order = np.argsort(indices)
+    return bool_mask, oracle_labels[order]
+
+
 @dataclass
 class CalibrationResult:
     """Result of judge calibration."""
@@ -148,10 +193,11 @@ class JudgeCalibrator:
 
             # Check if mask is indices (integers) or boolean
             if oracle_mask_array.dtype in [np.int32, np.int64, int]:
-                # Convert indices to boolean mask
-                bool_mask = np.zeros(n_total, dtype=bool)
-                bool_mask[oracle_mask_array] = True
-                oracle_mask = bool_mask
+                # Convert indices to a boolean mask, reordering labels to the
+                # ascending-index order produced by boolean fancy-indexing.
+                oracle_mask, oracle_labels = _index_mask_to_bool(
+                    oracle_mask_array, oracle_labels, n_total
+                )
             else:
                 # Already boolean
                 oracle_mask = oracle_mask_array.astype(bool)
@@ -242,6 +288,7 @@ class JudgeCalibrator:
             # Standard monotone calibration
             self._final_calibrator = IsotonicRegression(out_of_bounds="clip")
             self._final_calibrator.fit(oracle_scores, oracle_y)
+            self._warn_if_constant_monotone_fit(oracle_scores, oracle_y)
 
             # Apply calibration to all samples using full model
             # Clip to [0,1] to ensure rewards stay in valid range even if oracle labels exceed bounds
@@ -268,6 +315,28 @@ class JudgeCalibrator:
             calibrator=self,
             fold_ids=self._fold_ids,
         )
+
+    def _warn_if_constant_monotone_fit(
+        self, oracle_scores: np.ndarray, oracle_y: np.ndarray
+    ) -> None:
+        """Warn loudly when monotone calibration collapses to a constant.
+
+        Isotonic regression on a judge that is anti-correlated with the
+        oracle fits a single constant (the oracle mean): every calibrated
+        reward becomes identical and all policy differences vanish silently.
+        """
+        if self._final_calibrator is None:
+            return
+        fitted = np.asarray(self._final_calibrator.predict(oracle_scores))
+        if len(np.unique(fitted)) == 1 and len(np.unique(np.asarray(oracle_y))) > 1:
+            logger.warning(
+                f"Monotone calibration collapsed to a constant "
+                f"({fitted[0]:.3f}, the oracle mean) even though oracle labels "
+                f"vary. All calibrated rewards will be identical, erasing "
+                f"policy differences. The judge scale may be inverted "
+                f"(anti-correlated with the oracle) — check the judge score "
+                f"orientation or use calibration_mode='auto'."
+            )
 
     def predict(
         self, judge_scores: np.ndarray, covariates: Optional[np.ndarray] = None
@@ -344,10 +413,11 @@ class JudgeCalibrator:
 
             # Check if mask is indices (integers) or boolean
             if oracle_mask_array.dtype in [np.int32, np.int64, int]:
-                # Convert indices to boolean mask
-                bool_mask = np.zeros(n_total, dtype=bool)
-                bool_mask[oracle_mask_array] = True
-                oracle_mask = bool_mask
+                # Convert indices to a boolean mask, reordering labels to the
+                # ascending-index order produced by boolean fancy-indexing.
+                oracle_mask, oracle_labels = _index_mask_to_bool(
+                    oracle_mask_array, oracle_labels, n_total
+                )
             else:
                 # Already boolean
                 oracle_mask = oracle_mask_array.astype(bool)
@@ -481,6 +551,7 @@ class JudgeCalibrator:
             # Use standard monotone calibration
             self._final_calibrator = IsotonicRegression(out_of_bounds="clip")
             self._final_calibrator.fit(oracle_scores, oracle_y)
+            self._warn_if_constant_monotone_fit(oracle_scores, oracle_y)
             # Clip to [0,1] to ensure rewards stay in valid range even if oracle labels exceed bounds
             calibrated_scores = np.clip(
                 self._final_calibrator.predict(judge_scores), 0.0, 1.0
@@ -675,6 +746,19 @@ class JudgeCalibrator:
 
         judge_scores = np.asarray(judge_scores)
         fold_ids = np.asarray(fold_ids)
+
+        # Fold ids without a fitted model must fail loudly: zero-filling them
+        # would silently fabricate reward predictions of 0.0.
+        fitted_folds = sorted(self._fold_models.keys())
+        unknown_folds = [
+            int(f) for f in np.unique(fold_ids) if f not in self._fold_models
+        ]
+        if unknown_folds:
+            raise ValueError(
+                f"predict_oof received fold ids {unknown_folds} with no fitted "
+                f"model; fitted folds are {fitted_folds}. Fold ids must match "
+                f"those used in fit_cv."
+            )
 
         predictions = np.zeros_like(judge_scores)
         for fold_id, model in self._fold_models.items():

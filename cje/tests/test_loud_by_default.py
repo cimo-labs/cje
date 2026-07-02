@@ -354,3 +354,160 @@ class TestDuplicatePromptIdRewards:
         assert output[0]["reward"] == pytest.approx(expected_low)
         assert output[1]["reward"] == pytest.approx(expected_high)
         assert output[0]["reward"] != output[1]["reward"]
+
+
+class TestIndexMaskAlignment:
+    """Integer (index) oracle_mask with unsorted indices used to silently
+    misalign oracle labels: boolean fancy-indexing returns scores in ascending
+    index order while labels stayed in caller order."""
+
+    @staticmethod
+    def _make_data() -> tuple:
+        rng = np.random.default_rng(3)
+        n = 200
+        judge = rng.uniform(0.0, 1.0, n)
+        oracle = np.clip(judge + rng.normal(0.0, 0.05, n), 0.0, 1.0)
+        return judge, oracle
+
+    def test_shuffled_index_mask_matches_sorted_fit_transform(self) -> None:
+        from cje.calibration.judge import JudgeCalibrator
+
+        judge, oracle = self._make_data()
+        idx_sorted = np.arange(100)
+        idx_shuffled = np.random.default_rng(5).permutation(idx_sorted)
+
+        result_sorted = JudgeCalibrator(calibration_mode="monotone").fit_transform(
+            judge, oracle[idx_sorted], oracle_mask=idx_sorted
+        )
+        result_shuffled = JudgeCalibrator(calibration_mode="monotone").fit_transform(
+            judge, oracle[idx_shuffled], oracle_mask=idx_shuffled
+        )
+
+        np.testing.assert_allclose(
+            result_shuffled.calibrated_scores, result_sorted.calibrated_scores
+        )
+        assert result_shuffled.calibration_rmse == pytest.approx(
+            result_sorted.calibration_rmse
+        )
+
+    def test_shuffled_index_mask_matches_sorted_fit_cv(self) -> None:
+        from cje.calibration.judge import JudgeCalibrator
+
+        judge, oracle = self._make_data()
+        idx_sorted = np.arange(100)
+        idx_shuffled = np.random.default_rng(5).permutation(idx_sorted)
+
+        result_sorted = JudgeCalibrator(calibration_mode="monotone").fit_cv(
+            judge, oracle[idx_sorted], oracle_mask=idx_sorted, n_folds=5
+        )
+        result_shuffled = JudgeCalibrator(calibration_mode="monotone").fit_cv(
+            judge, oracle[idx_shuffled], oracle_mask=idx_shuffled, n_folds=5
+        )
+
+        np.testing.assert_allclose(
+            result_shuffled.calibrated_scores, result_sorted.calibrated_scores
+        )
+        assert result_shuffled.oof_rmse == pytest.approx(result_sorted.oof_rmse)
+
+    def test_duplicate_indices_rejected(self) -> None:
+        from cje.calibration.judge import JudgeCalibrator
+
+        judge, oracle = self._make_data()
+        idx = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 8])
+        with pytest.raises(ValueError, match="duplicate indices"):
+            JudgeCalibrator(calibration_mode="monotone").fit_transform(
+                judge, oracle[idx], oracle_mask=idx
+            )
+
+
+class TestNoFabricatedCalibratorFallbacks:
+    """predict_oof used to zero-fill folds without a model, and
+    FlexibleCalibrator fabricated constant/mean-of-scores rewards when no
+    models were fitted."""
+
+    def test_predict_oof_unknown_fold_raises(self) -> None:
+        from cje.calibration.judge import JudgeCalibrator
+
+        judge = np.linspace(0.0, 1.0, 50)
+        calibrator = JudgeCalibrator(calibration_mode="monotone")
+        calibrator.fit_cv(judge, judge, n_folds=5)
+
+        with pytest.raises(ValueError, match=r"fold ids \[7\].*no fitted"):
+            calibrator.predict_oof(np.array([0.5]), np.array([7]))
+
+    def test_predict_oof_known_folds_still_works(self) -> None:
+        from cje.calibration.judge import JudgeCalibrator
+
+        judge = np.linspace(0.0, 1.0, 50)
+        calibrator = JudgeCalibrator(calibration_mode="monotone")
+        calibrator.fit_cv(judge, judge, n_folds=5)
+
+        predictions = calibrator.predict_oof(np.array([0.2, 0.8]), np.array([0, 4]))
+        assert predictions.shape == (2,)
+        assert np.all((predictions >= 0) & (predictions <= 1))
+
+    def test_unfitted_flexible_calibrator_raises_full_model_path(self) -> None:
+        from cje.calibration.flexible_calibrator import FlexibleCalibrator
+
+        calibrator = FlexibleCalibrator(mode="two_stage")
+        with pytest.raises(RuntimeError, match="no fitted"):
+            calibrator.predict(np.array([0.5]), folds=None)
+
+    def test_unfitted_flexible_calibrator_raises_oof_path(self) -> None:
+        from cje.calibration.flexible_calibrator import FlexibleCalibrator
+
+        calibrator = FlexibleCalibrator(mode="two_stage")
+        with pytest.raises(RuntimeError, match="no fitted"):
+            calibrator.predict(np.array([0.5]), folds=np.array([0]))
+
+
+class TestAntiCorrelatedJudgeWarning:
+    """An anti-correlated judge in monotone mode used to silently collapse
+    all calibrated rewards to the oracle mean (std=0, no warning)."""
+
+    def test_anti_correlated_judge_warns_fit_transform(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        judge = np.linspace(0.0, 1.0, 50)
+        oracle = 1.0 - judge
+
+        from cje.calibration.judge import JudgeCalibrator
+
+        with caplog.at_level(logging.WARNING):
+            JudgeCalibrator(calibration_mode="monotone").fit_transform(judge, oracle)
+
+        assert any(
+            "collapsed to a constant" in record.message and "inverted" in record.message
+            for record in caplog.records
+        )
+
+    def test_anti_correlated_judge_warns_fit_cv(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        judge = np.linspace(0.0, 1.0, 50)
+        oracle = 1.0 - judge
+
+        from cje.calibration.judge import JudgeCalibrator
+
+        with caplog.at_level(logging.WARNING):
+            JudgeCalibrator(calibration_mode="monotone").fit_cv(
+                judge, oracle, n_folds=5
+            )
+
+        assert any(
+            "collapsed to a constant" in record.message for record in caplog.records
+        )
+
+    def test_correlated_judge_does_not_warn(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        judge = np.linspace(0.0, 1.0, 50)
+
+        from cje.calibration.judge import JudgeCalibrator
+
+        with caplog.at_level(logging.WARNING):
+            JudgeCalibrator(calibration_mode="monotone").fit_transform(judge, judge)
+
+        assert not any(
+            "collapsed to a constant" in record.message for record in caplog.records
+        )
