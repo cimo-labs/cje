@@ -1002,6 +1002,7 @@ class StackedDREstimator(BaseCJEEstimator):
     def _build_metadata(self, valid_estimators: List[str]) -> Dict[str, Any]:
         """Build metadata for the result."""
         metadata = {
+            "target_policies": list(self.sampler.target_policies),
             "stacking_weights": self.weights_per_policy,
             "stacking_diagnostics": self.diagnostics_per_policy,
             "valid_estimators": valid_estimators,
@@ -1028,6 +1029,25 @@ class StackedDREstimator(BaseCJEEstimator):
 
         if if_sample_indices:
             metadata["if_sample_indices"] = if_sample_indices
+
+        # Propagate per-policy gate/overlap metadata from a component. All
+        # components share the same sampler and importance weights, so their
+        # internal CalibratedIPS gate outcomes are identical; dr-cpo is the
+        # canonical source, with any other valid component as fallback.
+        # Without this, stacked results carried no reliability_gates and the
+        # CLI's demote-unreliable logic was inert on the CLI's default
+        # estimator.
+        source_order = ["dr-cpo"] + [n for n in valid_estimators if n != "dr-cpo"]
+        for key in ("reliability_gates", "ttc_diagnostics", "boundary_cards"):
+            for name in source_order:
+                comp = self.component_results.get(name)
+                if (
+                    comp is not None
+                    and isinstance(comp.metadata, dict)
+                    and comp.metadata.get(key)
+                ):
+                    metadata[key] = comp.metadata[key]
+                    break
 
         return metadata
 
@@ -1188,6 +1208,25 @@ class StackedDREstimator(BaseCJEEstimator):
                     )
                     break  # Found weight diagnostics, use them
 
+        # Per-policy status: worst across components. The components run
+        # CalibratedIPS internally on the same sampler, so their statuses
+        # normally agree; taking the worst is the conservative aggregate.
+        # Without this, stacked results had status_per_policy=None and the
+        # CLI's CRITICAL-based demotion could never fire on stacked-dr.
+        severity = {Status.GOOD: 0, Status.WARNING: 1, Status.CRITICAL: 2}
+        status_per_policy: Dict[str, Status] = {}
+        for comp_result in self.component_results.values():
+            if comp_result and comp_result.diagnostics:
+                comp_statuses = getattr(
+                    comp_result.diagnostics, "status_per_policy", None
+                )
+                if not comp_statuses:
+                    continue
+                for policy, status in comp_statuses.items():
+                    current = status_per_policy.get(policy)
+                    if current is None or severity[status] > severity[current]:
+                        status_per_policy[policy] = status
+
         # Create DRDiagnostics
         estimates_dict = {p: result.estimates[i] for i, p in enumerate(policies)}
         se_dict = {p: result.standard_errors[i] for i, p in enumerate(policies)}
@@ -1215,6 +1254,7 @@ class StackedDREstimator(BaseCJEEstimator):
             weight_status=weight_status,
             ess_per_policy=ess_per_policy,
             max_weight_per_policy=max_weight_per_policy,
+            status_per_policy=status_per_policy if status_per_policy else None,
             # DR-specific metrics (weighted averages)
             dr_cross_fitted=True,
             dr_n_folds=self.n_folds,

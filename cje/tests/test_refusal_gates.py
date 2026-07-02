@@ -715,3 +715,150 @@ class TestCLIBestPolicy:
         results = self._make_results([float("nan"), float("nan")], ["a", "b"])
         lines = best_policy_lines(results)
         assert any("every policy was refused" in line for line in lines)
+
+
+# ---------------------------------------------------------------------------
+# Gate propagation to the DR family and StackedDR (release-respin H1)
+# ---------------------------------------------------------------------------
+
+
+def _two_policy_dr_setup(n: int = 300, seed: int = 11) -> Tuple[Any, Any, dict]:
+    """Two-policy DGP where 'bad' has catastrophic overlap AND wins the argmax.
+
+    'bad' concentrates its weight mass on the top 4% of judge scores
+    (log w = log 25 for S > 0.96, else -50) and its fresh draws land in that
+    region, so both the IPS correction and the DM term put its estimate above
+    'ok' (mild mean-one tilt w(S) = 0.4 + 1.2 S, value ~0.55).
+    """
+    from cje.data.fresh_draws import FreshDrawDataset, FreshDrawSample
+
+    rng = np.random.default_rng(seed)
+    samples = []
+    for i in range(n):
+        s = float(rng.uniform())
+        y = float(np.clip(0.25 + 0.5 * s + rng.normal(0, 0.08), 0, 1))
+        bad_log_w = float(np.log(25.0)) if s > 0.96 else -50.0
+        samples.append(
+            Sample(
+                prompt_id=f"p{i}",
+                prompt=f"question {i}",
+                response=f"answer {i}",
+                reward=None,
+                base_policy_logprob=-10.0,
+                target_policy_logprobs={
+                    "bad": -10.0 + bad_log_w,
+                    "ok": -10.0 + float(np.log(0.4 + 1.2 * s)),
+                },
+                judge_score=s,
+                oracle_label=y if rng.uniform() < 0.5 else None,
+            )
+        )
+    dataset = Dataset(samples=samples, target_policies=["bad", "ok"])
+    calibrated, cal_result = calibrate_dataset(
+        dataset,
+        judge_field="judge_score",
+        oracle_field="oracle_label",
+        enable_cross_fit=True,
+        n_folds=5,
+    )
+    sampler = PrecomputedSampler(calibrated)
+
+    def _tilted_draw() -> float:
+        while True:
+            s = float(rng.uniform())
+            if rng.uniform(0, 1.6) <= 0.4 + 1.2 * s:
+                return s
+
+    fresh = {}
+    for policy, draw in (
+        ("bad", lambda: float(rng.uniform(0.96, 1.0))),
+        ("ok", _tilted_draw),
+    ):
+        fresh_samples = [
+            FreshDrawSample(
+                prompt_id=f"p{i}",
+                judge_score=draw(),
+                oracle_label=None,
+                response=None,
+                fold_id=None,
+                target_policy=policy,
+                draw_idx=0,
+            )
+            for i in range(n)
+        ]
+        fresh[policy] = FreshDrawDataset(
+            samples=fresh_samples, target_policy=policy, draws_per_prompt=1
+        )
+    return sampler, cal_result.calibrator, fresh
+
+
+@pytest.fixture(scope="module")
+def stacked_dr_flagged_argmax() -> Any:
+    """One stacked-dr run on the flagged-argmax DGP (shared across tests)."""
+    from cje.estimators.stacking import StackedDREstimator
+
+    sampler, calibrator, fresh = _two_policy_dr_setup()
+    est = StackedDREstimator(
+        sampler, reward_calibrator=calibrator, n_folds=5, parallel=False
+    )
+    for policy, fd in fresh.items():
+        est.add_fresh_draws(policy, fd)
+    result = est.fit_and_estimate()
+    return est, result
+
+
+class TestGatePropagationToDRFamily:
+    """Release-respin H1: reliability gates must reach DR and stacked results.
+
+    The gates run inside CalibratedIPS.estimate(); before the fix only
+    CalibratedIPS results carried metadata["reliability_gates"], DR results
+    dropped them, and StackedDR built DRDiagnostics without status_per_policy
+    — so the CLI's demote-unreliable logic was inert on the CLI's default
+    estimator (stacked-dr).
+    """
+
+    @pytest.mark.parametrize("component", ["dr-cpo", "tmle", "mrdr"])
+    def test_dr_component_copies_reliability_gates(
+        self, stacked_dr_flagged_argmax: Any, component: str
+    ) -> None:
+        est, _ = stacked_dr_flagged_argmax
+        comp_result = est.component_results[component]
+        assert comp_result is not None
+        gates = comp_result.metadata["reliability_gates"]
+        assert gates["bad"]["flagged"] is True
+        assert gates["bad"]["reasons"]
+        assert gates["ok"]["flagged"] is False
+        # Copied verbatim from the internal CalibratedIPS result
+        internal = est.component_estimators[component]._ips_result
+        assert gates == internal.metadata["reliability_gates"]
+
+    def test_stacked_result_exposes_gates_and_statuses(
+        self, stacked_dr_flagged_argmax: Any
+    ) -> None:
+        _, result = stacked_dr_flagged_argmax
+        gates = result.metadata["reliability_gates"]
+        assert gates["bad"]["flagged"] is True
+        assert gates["ok"]["flagged"] is False
+
+        assert result.diagnostics is not None
+        spp = result.diagnostics.status_per_policy
+        assert spp is not None
+        assert spp["bad"] is Status.CRITICAL
+        assert "ok" in spp
+
+    def test_cli_demotes_flagged_stacked_argmax(
+        self, stacked_dr_flagged_argmax: Any
+    ) -> None:
+        from cje.interface.cli import best_policy_lines
+
+        _, result = stacked_dr_flagged_argmax
+        estimates = dict(zip(result.metadata["target_policies"], result.estimates))
+        assert estimates["bad"] > estimates["ok"]  # flagged policy wins argmax
+
+        lines = best_policy_lines(result)
+        assert any(
+            "Best by point estimate: bad" in line and "UNRELIABLE" in line
+            for line in lines
+        )
+        assert not any(line.startswith("🏆 Best policy:") for line in lines)
+        assert any("Best reliable policy: ok" in line for line in lines)

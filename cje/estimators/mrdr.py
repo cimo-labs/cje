@@ -683,6 +683,10 @@ class MRDREstimator(DREstimator):
         if hasattr(self, "_if_sample_indices"):
             metadata["if_sample_indices"] = self._if_sample_indices
 
+        # Propagate the internal IPS estimator's gate/overlap metadata
+        # (reliability_gates, ttc_diagnostics, boundary_cards)
+        self._propagate_ips_gate_metadata(metadata)
+
         result = EstimationResult(
             estimates=np.array(estimates, dtype=float),
             standard_errors=np.array(standard_errors, dtype=float),
