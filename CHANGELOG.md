@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Fix OUA jackknife variance understated by a factor of K** in `base_estimator._apply_oua_jackknife` and `stacking._apply_stacked_oua` (mean over folds instead of the delete-one-fold jackknife sum, paper Alg. 6). With the default K=5, the calibration-uncertainty contribution to reported standard errors was ~2.24x too small for calibrated-ips, calibrated direct (jackknife path), TMLE, MRDR, and stacked-dr. All OUA sites now share one `oracle_jackknife_variance()` helper. Reported CIs widen by design.
+- **Fix OUA jackknife predictions for two-stage calibrators**: leave-one-fold reward predictions in `CalibratedIPS`, `DREstimator`, and `CalibratedDirectEstimator` fed raw judge scores to per-fold isotonic models that expect the ECDF rank index, corrupting jackknife replicates whenever `two_stage` calibration was active (auto-selectable by default; always active with covariates). All jackknife paths now route through `reward_calibrator.predict_oof(...)`, and `CalibratedIPS` gained covariate support in its jackknife.
+
 ## 0.2.25
 
 - Remove the experimental multi-policy EIF implementation and standardize Direct-mode bootstrap on per-policy residual correction.

@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 
 from .calibrated_ips import CalibratedIPS
-from .base_estimator import BaseCJEEstimator
+from .base_estimator import BaseCJEEstimator, oracle_jackknife_variance
 from .outcome_models import IsotonicOutcomeModel, CalibratorBackedOutcomeModel
 from ..data.models import EstimationResult
 from ..diagnostics import DRDiagnostics, IPSDiagnostics
@@ -889,8 +889,7 @@ class DREstimator(BaseCJEEstimator):
                 jack = self.get_oracle_jackknife(policy)
                 if jack is not None and len(jack) >= 2:
                     K = len(jack)
-                    mu = float(np.mean(jack))
-                    se_oracle = float(np.sqrt((K - 1) / K * np.sum((jack - mu) ** 2)))
+                    se_oracle = float(np.sqrt(oracle_jackknife_variance(jack)))
                     logger.debug(
                         f"Oracle SE for {policy}: {se_oracle:.6f} from {K} folds"
                     )
@@ -1377,7 +1376,9 @@ class DREstimator(BaseCJEEstimator):
             Array of K jackknife estimates, or None if not applicable
 
         Note:
-            The jackknife variance is computed as: var_oracle = (K-1)/K * Var(estimates)
+            The jackknife variance is computed as:
+            var_oracle = (K-1)/K * Σ_k (estimate_k − mean)²
+            (delete-one-fold jackknife, sum over folds — not the mean).
             This represents the additional uncertainty from learning f: judge → oracle
             from a finite sample of oracle labels.
         """
@@ -1492,9 +1493,19 @@ class DREstimator(BaseCJEEstimator):
                         1.0,
                     )
                 else:
-                    # No covariates - use fold model directly
+                    # No covariates - still route through predict_oof so that
+                    # mode-specific transforms are applied (two-stage calibrators
+                    # need g(S) -> ECDF -> isotonic; the raw fold model would be
+                    # fed judge scores where it expects the rank index).
+                    fold_ids_logged = np.full(
+                        len(judge_scores_logged), fold_id, dtype=int
+                    )
                     logged_rewards_loo = np.clip(
-                        fold_model.predict(judge_scores_logged), 0.0, 1.0
+                        self.reward_calibrator.predict_oof(
+                            judge_scores_logged, fold_ids_logged
+                        ),
+                        0.0,
+                        1.0,
                     )
 
                 # Compute per-prompt fresh draw means (like main estimate() does)
@@ -1528,9 +1539,12 @@ class DREstimator(BaseCJEEstimator):
                                 fresh_covariates_array,
                             )
                         else:
-                            # No covariates - use fold model directly
-                            prompt_preds = fold_model.predict(
-                                np.array(prompt_fresh_scores)
+                            # No covariates - route through predict_oof (see above)
+                            fresh_fold_ids = np.full(
+                                len(prompt_fresh_scores), fold_id, dtype=int
+                            )
+                            prompt_preds = self.reward_calibrator.predict_oof(
+                                np.array(prompt_fresh_scores), fresh_fold_ids
                             )
                         prompt_preds = np.clip(prompt_preds, 0.0, 1.0)
                         g_fresh_means.append(prompt_preds.mean())

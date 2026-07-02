@@ -1019,12 +1019,41 @@ class CalibratedIPS(BaseCJEEstimator):
             if len(judge_scores) != len(weights):
                 return None
 
+            # Covariates (e.g. two-stage '+cov' calibrators) must flow through
+            # predict_oof; the raw fold models expect the rank index, not S.
+            covariate_names: List[str] = []
+            if hasattr(self.reward_calibrator, "covariate_names"):
+                covariate_names = self.reward_calibrator.covariate_names or []
+            covariates_array: Optional[np.ndarray] = None
+            if covariate_names:
+                covariate_rows = []
+                for d in data:
+                    row = []
+                    for cov_name in covariate_names:
+                        cov_value = d.get(cov_name)
+                        if cov_value is None:
+                            raise ValueError(
+                                f"Covariate '{cov_name}' not found in logged data "
+                                f"for policy '{policy}' during oracle-jackknife inference"
+                            )
+                        row.append(float(cov_value))  # type: ignore[arg-type]
+                    covariate_rows.append(row)
+                covariates_array = np.array(covariate_rows)
+
             jack: List[float] = []
-            for fold_id, fold_model in fold_models.items():
-                # Recompute rewards under leave-one-fold reward_calibrator
-                # For FlexibleCalibrator two-stage, fold_model is already IsotonicRegression
-                # For FlexibleCalibrator monotone or standard isotonic, it's IsotonicRegression
-                rewards_loo = np.clip(fold_model.predict(judge_scores), 0.0, 1.0)
+            for fold_id in fold_models.keys():
+                # Recompute rewards under the leave-one-fold reward_calibrator.
+                # Route through predict_oof so mode-specific transforms are
+                # applied (two-stage: g(S) -> ECDF -> isotonic); a constant fold
+                # id yields leave-that-fold-out predictions for every sample.
+                fold_ids = np.full(len(judge_scores), fold_id, dtype=int)
+                rewards_loo = np.clip(
+                    self.reward_calibrator.predict_oof(
+                        judge_scores, fold_ids, covariates_array
+                    ),
+                    0.0,
+                    1.0,
+                )
 
                 # Oracle jackknife: only recompute with a different calibrator, no bias augmentation
                 contrib = weights * rewards_loo
@@ -1032,7 +1061,10 @@ class CalibratedIPS(BaseCJEEstimator):
 
             return np.asarray(jack, dtype=float) if jack else None
         except Exception as e:
-            logger.debug(f"get_oracle_jackknife failed for {policy}: {e}")
+            if self.oua_jackknife:
+                logger.warning(f"get_oracle_jackknife failed for {policy}: {e}")
+            else:
+                logger.debug(f"get_oracle_jackknife failed for {policy}: {e}")
             return None
 
     def get_calibration_info(self, target_policy: str) -> Optional[Dict]:

@@ -5,7 +5,7 @@ import logging
 from typing import List, Dict, Optional, Tuple, Any, cast
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from cje.estimators.base_estimator import BaseCJEEstimator
+from cje.estimators.base_estimator import BaseCJEEstimator, oracle_jackknife_variance
 from cje.data.models import EstimationResult
 from cje.data.precomputed_sampler import PrecomputedSampler
 from cje.diagnostics.robust_inference import cluster_robust_se
@@ -197,7 +197,8 @@ class StackedDREstimator(BaseCJEEstimator):
         """Augment stacked SEs with the oracle jackknife via linear combination.
 
         For fixed stacking weights w, the stacked jackknife path is ψ_stack^(−f) = Σ w_k ψ_k^(−f).
-        We compute var_oracle_stack = (K-1)/K * Var_f(ψ_stack^(−f)) and add it to standard_errors in-place.
+        We compute var_oracle_stack = (K-1)/K * Σ_f (ψ_stack^(−f) − ψ̄_stack)² (delete-one-fold
+        jackknife, paper Alg. 6) and add it to standard_errors in-place.
         """
         # Skip the oracle jackknife at 100% oracle coverage
         try:
@@ -288,10 +289,7 @@ class StackedDREstimator(BaseCJEEstimator):
                         stacked_jack = np.zeros(K, dtype=float)
                         for w, arr in jack_list:
                             stacked_jack += w * arr[:K]
-                        mu = float(np.mean(stacked_jack))
-                        var_oracle = ((K - 1) / K) * float(
-                            np.mean((stacked_jack - mu) ** 2)
-                        )
+                        var_oracle = oracle_jackknife_variance(stacked_jack)
 
             # Update standard_errors in-place with oracle variance
             if (
