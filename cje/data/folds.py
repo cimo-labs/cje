@@ -33,9 +33,9 @@ def get_fold(prompt_id: str, n_folds: int = 5, seed: int = 42) -> int:
 
     Example:
         >>> get_fold("prompt_123")  # Always returns same fold
-        2
+        3
         >>> get_fold("prompt_123", n_folds=10)  # Different for different n_folds
-        7
+        6
     """
     if not prompt_id:
         raise ValueError("prompt_id cannot be empty")

@@ -32,10 +32,10 @@ class SimcalConfig:
         ess_floor: Minimum ESS as fraction of n (e.g., 0.2 => ESS >= 0.2 * n)
         var_cap: Maximum allowed variance of calibrated weights (default 1.0 = no variance increase)
         epsilon: Small constant for numerical stability
-        include_baseline: Whether to include raw weights in the stack (default True)
+        include_baseline: Whether to include raw weights in the stack (default False)
         ridge_lambda: Ridge regularization for covariance matrix (default 1e-8)
         n_folds: Number of folds for OOF if fold_ids not provided (default 5)
-        baseline_shrink: Shrinkage toward baseline for stability (default 0.05)
+        baseline_shrink: Shrinkage toward baseline for stability (default 0.0)
         random_seed: Random seed for KFold when fold_ids not provided (default 42)
     """
 

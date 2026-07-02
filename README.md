@@ -11,7 +11,7 @@
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb)
 [![Docs](https://img.shields.io/badge/docs-cimolabs.com-blue)](https://cimolabs.com/cje)
 [![Python](https://img.shields.io/badge/python-3.9%E2%80%933.12-blue)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-passing-green)](https://github.com/cimo-labs/cje/actions)
+[![Tests](https://github.com/cimo-labs/cje/actions/workflows/ci.yml/badge.svg)](https://github.com/cimo-labs/cje/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/cje-eval?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/cje-eval)
 
@@ -62,7 +62,7 @@ We ran CJE on 29,511 physician-labeled HealthBench records with two LLM judges. 
 
 <div align="center">
   <img src="images/forest_plot_n1000_oracle25.png" alt="CJE forest plot showing calibrated policy estimates with confidence intervals" width="80%">
-  <br><em>Example output: calibrated estimates with valid confidence intervals</em>
+  <br><em>Example output: calibrated estimates with confidence intervals (valid under the calibration and transport checks CJE runs by default)</em>
 </div>
 
 ---
@@ -78,7 +78,7 @@ We ran CJE on 29,511 physician-labeled HealthBench records with two LLM judges. 
 | **[Planning Notebook](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_planning.ipynb)** | Optimize your evaluation budget with pilot data |
 | **[Full Docs](https://cimolabs.com/cje)** | Installation, assumptions, API reference, research notes |
 
-**Bridges:** Already running evals in [Promptfoo, TruLens, LangSmith, OpenCompass, or Inspect AI](scripts/cje_bridges/README.md)? Convert those outputs into CJE format with one command.
+**Bridges:** Already running evals in [Promptfoo, TruLens, LangSmith, or OpenCompass](scripts/cje_bridges/README.md)? Convert those outputs into CJE format with one command.
 
 **Technical deep dives:** [Calibration methods](cje/calibration/README.md) · [Diagnostics](cje/diagnostics/README.md) · [Estimators](cje/estimators/README.md) · [Interface/API](cje/interface/README.md) · [Experiments](experiments/README.md)
 

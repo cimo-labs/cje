@@ -749,7 +749,7 @@ class StackedDREstimator(BaseCJEEstimator):
                     # Add more detailed error info to help debugging
                     import traceback
 
-                    # Always log the full traceback for debugging oc-dr-cpo and tr-cpo-e issues
+                    # Always log the full traceback for debugging component failures
                     full_traceback = traceback.format_exc()
                     logger.error(f"Full traceback for {est_name}:\n{full_traceback}")
                     self.component_results[est_name] = None
@@ -768,7 +768,7 @@ class StackedDREstimator(BaseCJEEstimator):
                 # Add more detailed error info to help debugging
                 import traceback
 
-                # Always log the full traceback for debugging oc-dr-cpo and tr-cpo-e issues
+                # Always log the full traceback for debugging component failures
                 full_traceback = traceback.format_exc()
                 logger.error(f"Full traceback for {est_name}:\n{full_traceback}")
                 self.component_results[est_name] = None
@@ -953,15 +953,12 @@ class StackedDREstimator(BaseCJEEstimator):
     def _harmonize_if_scales(
         self, IF_matrix: np.ndarray, used_names: List[str]
     ) -> np.ndarray:
-        """Ensure all IFs are on the same scale."""
-        # Simple check: if SEs differ by more than 50%, there might be a scale issue
-        for i in range(IF_matrix.shape[1]):
-            col_se = np.std(IF_matrix[:, i], ddof=1) / np.sqrt(len(IF_matrix[:, i]))
-            expected_se = col_se  # This would come from component metadata
+        """Pass-through placeholder: no scale harmonization is performed.
 
-            # For now, we trust that components are providing correctly scaled IFs
-            # Could add more sophisticated checks here if needed
-
+        Components are trusted to provide correctly scaled influence
+        functions; this hook exists so a real cross-component scale check
+        could be added without touching call sites.
+        """
         return IF_matrix
 
     def _aggregate_mc_variance(

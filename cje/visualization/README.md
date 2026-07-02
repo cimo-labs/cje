@@ -233,7 +233,7 @@ plot_weight_dashboard_summary(..., figsize=(16, 14))
 ### "Missing diagnostics object"
 Ensure estimator was run with diagnostics enabled:
 ```python
-result = estimator.fit_and_estimate(compute_diagnostics=True)
+result = estimator.fit_and_estimate()
 ```
 
 ## Performance

@@ -676,11 +676,8 @@ class AnalysisService:
             elif chosen_estimator in {
                 "stacked-dr",
                 "dr-cpo",
-                "oc-dr-cpo",
                 "mrdr",
                 "tmle",
-                "tr-cpo",
-                "tr-cpo-e",
             }:
                 detected_mode = "dr"
 
@@ -706,11 +703,8 @@ class AnalysisService:
         # Estimators that can use fresh draws
         dr_estimators = {
             "dr-cpo",
-            "oc-dr-cpo",
             "mrdr",
             "tmle",
-            "tr-cpo",
-            "tr-cpo-e",
             "stacked-dr",
         }
 

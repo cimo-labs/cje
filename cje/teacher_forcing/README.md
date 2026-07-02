@@ -60,6 +60,9 @@ Different models use different formatting for chat conversations. Templates hand
 
 ## Common Interface
 
+All API functions below require the optional teacher-forcing extra:
+`pip install "cje-eval[teacher-forcing]"` (Fireworks client + transformers).
+
 ### Basic Teacher Forcing
 ```python
 from cje.teacher_forcing import compute_teacher_forced_logprob
