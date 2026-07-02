@@ -41,15 +41,29 @@ from cje import analyze_dataset
 results = analyze_dataset(fresh_draws_dir="responses/")
 
 # Alternative: In-memory data (no file I/O needed)
+# CJE needs at least 10 oracle-labeled samples pooled across policies
+# (2 per calibration fold) — label 5-25% of your data in practice.
 results = analyze_dataset(
     fresh_draws_data={
         "policy_a": [
-            {"prompt_id": "q1", "judge_score": 0.85, "oracle_label": 0.9},
-            {"prompt_id": "q2", "judge_score": 0.72},  # oracle_label optional
+            {"prompt_id": "q1", "judge_score": 0.85, "oracle_label": 0.90},
+            {"prompt_id": "q2", "judge_score": 0.72, "oracle_label": 0.70},
+            {"prompt_id": "q3", "judge_score": 0.91, "oracle_label": 0.88},
+            {"prompt_id": "q4", "judge_score": 0.64, "oracle_label": 0.55},
+            {"prompt_id": "q5", "judge_score": 0.77, "oracle_label": 0.74},
+            {"prompt_id": "q6", "judge_score": 0.88, "oracle_label": 0.92},
+            {"prompt_id": "q7", "judge_score": 0.68},  # oracle_label optional
+            {"prompt_id": "q8", "judge_score": 0.79},
         ],
         "policy_b": [
             {"prompt_id": "q1", "judge_score": 0.70, "oracle_label": 0.75},
-            {"prompt_id": "q2", "judge_score": 0.82},
+            {"prompt_id": "q2", "judge_score": 0.81, "oracle_label": 0.79},
+            {"prompt_id": "q3", "judge_score": 0.86, "oracle_label": 0.84},
+            {"prompt_id": "q4", "judge_score": 0.59, "oracle_label": 0.52},
+            {"prompt_id": "q5", "judge_score": 0.74, "oracle_label": 0.71},
+            {"prompt_id": "q6", "judge_score": 0.90, "oracle_label": 0.87},
+            {"prompt_id": "q7", "judge_score": 0.75},
+            {"prompt_id": "q8", "judge_score": 0.82},
         ],
     }
 )
