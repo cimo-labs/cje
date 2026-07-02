@@ -735,6 +735,10 @@ class TMLEEstimator(DREstimator):
             metadata["mc_variance_diagnostics"] = self._mc_diagnostics
             metadata["mc_variance_included"] = False
 
+        # Propagate the internal IPS estimator's gate/overlap metadata
+        # (reliability_gates, ttc_diagnostics, boundary_cards)
+        self._propagate_ips_gate_metadata(metadata)
+
         result = EstimationResult(
             estimates=np.array(estimates, dtype=float),
             standard_errors=np.array(standard_errors, dtype=float),

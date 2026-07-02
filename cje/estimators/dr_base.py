@@ -1131,6 +1131,11 @@ class DREstimator(BaseCJEEstimator):
         if self._se_diagnostics:
             metadata["_se_diagnostics"] = self._se_diagnostics
 
+        # Propagate the internal IPS estimator's gate/overlap metadata so
+        # gate-aware consumers (the CLI's best-policy demotion, users) see
+        # reliability_gates on DR results too.
+        self._propagate_ips_gate_metadata(metadata)
+
         # Get IPS diagnostics if available
         ips_diag = None
         if hasattr(self.ips_estimator, "get_diagnostics"):
@@ -1245,6 +1250,24 @@ class DREstimator(BaseCJEEstimator):
         # variance enters each policy's SE exactly once.
 
         return base_result
+
+    def _propagate_ips_gate_metadata(self, metadata: Dict[str, Any]) -> None:
+        """Copy per-policy gate/overlap metadata from the internal IPS result.
+
+        The refusal gates run inside ``CalibratedIPS.estimate()`` (cached as
+        ``self._ips_result`` during ``fit``), which writes
+        ``reliability_gates`` / ``ttc_diagnostics`` / ``boundary_cards`` into
+        its own result metadata. Without this copy, DR-family results carried
+        none of them and gate-aware consumers (e.g. the CLI's best-policy
+        demotion) were inert on DR estimators.
+        """
+        ips_result = getattr(self, "_ips_result", None)
+        if ips_result is None or not isinstance(ips_result.metadata, dict):
+            return
+        for key in ("reliability_gates", "ttc_diagnostics", "boundary_cards"):
+            value = ips_result.metadata.get(key)
+            if value and key not in metadata:
+                metadata[key] = value
 
     def _build_dr_diagnostics(
         self,
