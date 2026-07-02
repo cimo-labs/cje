@@ -454,7 +454,8 @@ class JudgeCalibrator:
         if n_oracle < n_folds * 2:
             raise ValueError(
                 f"Too few oracle samples ({n_oracle}) for {n_folds}-fold CV. "
-                f"Need at least {n_folds * 2}."
+                f"Need at least {n_folds * 2} (2 per fold). To fix: add "
+                f"oracle_label values to more samples, or pass a smaller n_folds."
             )
 
         # Step 1: Assign fold IDs to all samples first (unified approach)
