@@ -318,6 +318,8 @@ class TMLEEstimator(DREstimator):
         estimates: List[float] = []
         standard_errors: List[float] = []
         n_samples_used: Dict[str, int] = {}
+        df_info: Dict[str, Dict[str, Any]] = {}
+        se_parts_by_policy: Dict[str, Dict[str, Any]] = {}
         self._tmle_info = {}
 
         for policy in self.sampler.target_policies:
@@ -396,6 +398,7 @@ class TMLEEstimator(DREstimator):
             fresh_dataset = self._fresh_draws[policy]
             g_fresh0_all = []
             fresh_var_all = []
+            draws_per_prompt_list: List[int] = []
             g_fresh_draws_all: List[np.ndarray] = []
             fresh_scores_all: List[np.ndarray] = []
 
@@ -422,14 +425,20 @@ class TMLEEstimator(DREstimator):
                 g_fresh0_all.append(g_fresh_prompt.mean())
                 g_fresh_draws_all.append(np.asarray(g_fresh_prompt, dtype=float))
                 fresh_scores_all.append(np.asarray(fresh_scores, dtype=float))
+                draws_per_prompt_list.append(len(fresh_scores))
 
                 if len(g_fresh_prompt) > 1:
-                    fresh_var_all.append(g_fresh_prompt.var())
+                    fresh_var_all.append(g_fresh_prompt.var(ddof=1))
                 else:
                     fresh_var_all.append(0.0)
 
             g_fresh0 = np.array(g_fresh0_all)
             fresh_var = np.array(fresh_var_all)
+
+            # Store fresh-draw stats for MC diagnostics (metadata only)
+            self._store_fresh_draw_stats(
+                policy, fresh_var, np.array(draws_per_prompt_list)
+            )
 
             # 3) Targeting step: solve for ε and update Q0 → Q* everywhere.
             # The clever covariate must be a function of the judge score so it
@@ -466,22 +475,33 @@ class TMLEEstimator(DREstimator):
             ips_corr = float(np.mean(ips_corr_total))
             psi = dm_term + ips_corr
 
+            # Store components for diagnostics (like parent DR does).
+            # Must happen before _compute_policy_se: the oracle jackknife
+            # reads self._outcome_predictions[policy].
+            self._dm_component[policy] = g_fresh0
+            self._ips_correction[policy] = ips_corr_total
+            self._fresh_rewards[policy] = rewards  # Actually logged rewards
+            self._outcome_predictions[policy] = g_logged0
+
             # 5) Standard error via empirical IF
             if_contrib = g_fresh_star + ips_corr_total - psi
 
             # IIC removed - use influence functions directly
 
-            se = (
-                float(np.std(if_contrib, ddof=1) / np.sqrt(len(if_contrib)))
-                if len(if_contrib) > 1
-                else 0.0
+            # Unified DR-family SE (shared with DR-CPO and MRDR):
+            # cluster-robust IF SE on outcome folds + oracle-jackknife
+            # variance, with t-based df metadata. No separate MC term: the
+            # IF variance already contains fresh-draw MC noise.
+            se, df_entry, se_parts = self._compute_policy_se(
+                policy, if_contrib, fold_ids
             )
+            df_info[policy] = df_entry
+            se_parts_by_policy[policy] = se_parts
 
-            # Store components for diagnostics (like parent DR does)
-            self._dm_component[policy] = g_fresh0
-            self._ips_correction[policy] = ips_corr_total
-            self._fresh_rewards[policy] = rewards  # Actually logged rewards
-            self._outcome_predictions[policy] = g_logged0
+            # Fresh-draw MC diagnostics (metadata only; per-prompt variances
+            # come from the untargeted per-draw predictions, a close proxy
+            # for the targeted ones entering the IF)
+            self._record_mc_diagnostics(policy, g_fresh_star, se_parts["se_if"])
 
             # Store influence functions (always needed for proper inference)
             self._influence_functions[policy] = if_contrib
@@ -515,7 +535,11 @@ class TMLEEstimator(DREstimator):
         # Use base class to compute DR diagnostics (with our modifications)
         # We'll override _compute_dr_diagnostics to use original predictions
         base_result = self._create_base_result(
-            estimates, standard_errors, n_samples_used
+            estimates,
+            standard_errors,
+            n_samples_used,
+            df_info=df_info,
+            se_parts_by_policy=se_parts_by_policy,
         )
 
         # Add TMLE-specific metadata
@@ -541,6 +565,8 @@ class TMLEEstimator(DREstimator):
         estimates: List[float],
         standard_errors: List[float],
         n_samples_used: Dict[str, int],
+        df_info: Optional[Dict[str, Dict[str, Any]]] = None,
+        se_parts_by_policy: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> EstimationResult:
         """Create base result with DR diagnostics computed on ORIGINAL predictions."""
 
@@ -689,14 +715,25 @@ class TMLEEstimator(DREstimator):
         )
 
         # Create metadata without influence functions (they're first-class now)
-        metadata = {
+        metadata: Dict[str, Any] = {
             "cross_fitted": True,
             "n_folds": self.n_folds,
+            "target_policies": list(self.sampler.target_policies),
             "fresh_draws_policies": list(self._fresh_draws.keys()),
             "dr_diagnostics": dr_diagnostics_per_policy,  # Keep for backward compatibility
             "dr_overview": dr_overview,
             "dr_calibration_data": dr_calibration_data,
         }
+
+        # Unified SE metadata (same basis as DR-CPO and MRDR)
+        if df_info:
+            metadata["degrees_of_freedom"] = df_info
+        metadata["se_components"] = self._build_se_components_metadata(
+            se_parts_by_policy or {}
+        )
+        if self._mc_diagnostics:
+            metadata["mc_variance_diagnostics"] = self._mc_diagnostics
+            metadata["mc_variance_included"] = False
 
         result = EstimationResult(
             estimates=np.array(estimates, dtype=float),
@@ -708,8 +745,10 @@ class TMLEEstimator(DREstimator):
             metadata=metadata,
         )
 
-        # Apply oracle-jackknife inference using the base class method
-        self._apply_oua_jackknife(result)
+        # Oracle-jackknife variance is already included by _compute_policy_se
+        # (se_components["includes_oracle_uncertainty"] is True), so
+        # _apply_oua_jackknife must not be called here — the oracle variance
+        # enters each policy's SE exactly once.
 
         return result
 

@@ -460,6 +460,8 @@ class MRDREstimator(DREstimator):
         estimates: List[float] = []
         standard_errors: List[float] = []
         n_samples_used: Dict[str, int] = {}
+        df_info: Dict[str, Dict[str, Any]] = {}
+        se_parts_by_policy: Dict[str, Dict[str, Any]] = {}
 
         # Store components for diagnostics
         self._dm_component: Dict[str, np.ndarray] = {}
@@ -546,6 +548,8 @@ class MRDREstimator(DREstimator):
 
             # Get predictions on fresh draws
             g_fresh_all = []
+            fresh_var_all = []
+            draws_per_prompt_list: List[int] = []
             for i, prompt_id in enumerate(prompt_ids):
                 fresh_scores = fresh_dataset.get_scores_for_prompt_id(prompt_id)
                 fresh_prompts = [prompts[i]] * len(fresh_scores)
@@ -567,8 +571,18 @@ class MRDREstimator(DREstimator):
                     covariates=fresh_covariates,
                 )
                 g_fresh_all.append(g_fresh_prompt.mean())
+                draws_per_prompt_list.append(len(fresh_scores))
+                if len(g_fresh_prompt) > 1:
+                    fresh_var_all.append(g_fresh_prompt.var(ddof=1))
+                else:
+                    fresh_var_all.append(0.0)
 
             g_fresh = np.array(g_fresh_all)
+
+            # Store fresh-draw stats for MC diagnostics (metadata only)
+            self._store_fresh_draw_stats(
+                policy, np.array(fresh_var_all), np.array(draws_per_prompt_list)
+            )
 
             # Compute DR estimate with oracle augmentation
             dm_term = float(g_fresh.mean())
@@ -592,11 +606,18 @@ class MRDREstimator(DREstimator):
 
             # IIC removed - use influence functions directly
 
-            se = (
-                float(np.std(if_contrib, ddof=1) / np.sqrt(len(if_contrib)))
-                if len(if_contrib) > 1
-                else 0.0
+            # Unified DR-family SE (shared with DR-CPO and TMLE):
+            # cluster-robust IF SE on outcome folds + oracle-jackknife
+            # variance, with t-based df metadata. No separate MC term: the
+            # IF variance already contains fresh-draw MC noise.
+            se, df_entry, se_parts = self._compute_policy_se(
+                policy, if_contrib, fold_ids
             )
+            df_info[policy] = df_entry
+            se_parts_by_policy[policy] = se_parts
+
+            # Fresh-draw MC diagnostics (metadata only; never added to the SE)
+            self._record_mc_diagnostics(policy, g_fresh, se_parts["se_if"])
 
             # Store influence functions (always needed for proper inference)
             self._influence_functions[policy] = if_contrib
@@ -638,14 +659,25 @@ class MRDREstimator(DREstimator):
         )
 
         # Create result with MRDR metadata (no influence functions here - they're first-class)
-        metadata = {
+        metadata: Dict[str, Any] = {
             "omega_mode": self.omega_mode,
             "min_sample_weight": self.min_sample_weight,
             "use_policy_specific_models": self.use_policy_specific_models,
             "n_policy_models": len(self._policy_models),
             "cross_fitted": True,
             "n_folds": self.n_folds,
+            "target_policies": list(self.sampler.target_policies),
         }
+
+        # Unified SE metadata (same basis as DR-CPO and TMLE)
+        if df_info:
+            metadata["degrees_of_freedom"] = df_info
+        metadata["se_components"] = self._build_se_components_metadata(
+            se_parts_by_policy
+        )
+        if self._mc_diagnostics:
+            metadata["mc_variance_diagnostics"] = self._mc_diagnostics
+            metadata["mc_variance_included"] = False
 
         # Add sample indices for IF alignment in stacking
         if hasattr(self, "_if_sample_indices"):
@@ -661,7 +693,9 @@ class MRDREstimator(DREstimator):
             metadata=metadata,
         )
 
-        # Apply oracle-jackknife inference using the base class method
-        self._apply_oua_jackknife(result)
+        # Oracle-jackknife variance is already included by _compute_policy_se
+        # (se_components["includes_oracle_uncertainty"] is True), so
+        # _apply_oua_jackknife must not be called here — the oracle variance
+        # enters each policy's SE exactly once.
 
         return result

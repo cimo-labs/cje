@@ -2,6 +2,7 @@
 
 import numpy as np
 import logging
+import warnings
 from typing import List, Dict, Optional, Tuple, Any, cast
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -81,13 +82,25 @@ class StackedDREstimator(BaseCJEEstimator):
         self.use_calibrated_weights = kwargs.pop("use_calibrated_weights", True)
         self.weight_mode = kwargs.pop("weight_mode", "hajek")
 
-        # MC-aware stacking configuration (optional)
-        # If enabled, incorporate per-component MC variance from fresh draws
-        # into the stacking objective (rank-1 update). See _compute_optimal_weights.
-        self.include_mc_in_objective: bool = bool(
-            kwargs.pop("include_mc_in_objective", True)
-        )
-        self.mc_lambda: float = float(kwargs.pop("mc_lambda", 1.0))
+        # Deprecated MC-aware stacking configuration. Component influence
+        # functions are built from per-prompt fresh-draw MEANS, so their
+        # variance already contains the Monte Carlo noise from finite fresh
+        # draws: a separate MC term in the objective or the stacked SE
+        # double-counts it. Worse, only components that reported MC
+        # diagnostics were penalized in the weight QP, tilting weights for
+        # reasons unrelated to efficiency. The kwargs are accepted (and
+        # ignored) so existing configs don't crash.
+        if "include_mc_in_objective" in kwargs or "mc_lambda" in kwargs:
+            kwargs.pop("include_mc_in_objective", None)
+            kwargs.pop("mc_lambda", None)
+            warnings.warn(
+                "include_mc_in_objective and mc_lambda are deprecated and "
+                "ignored: component influence functions already include "
+                "fresh-draw Monte Carlo noise, so no separate MC term enters "
+                "the stacking objective or the stacked SE.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
         # Storage for results
         self.component_results: Dict[str, Optional[EstimationResult]] = {}
@@ -517,9 +530,12 @@ class StackedDREstimator(BaseCJEEstimator):
             "n_clusters": int(res_if.get("n_clusters", len(stacked_if))),
         }
 
-        # Add MC variance if present
+        # Fresh-draw MC variance is aggregated for DIAGNOSTICS ONLY. The
+        # stacked IF combines component IFs built from per-prompt fresh-draw
+        # means, so se_if already contains the MC noise; composing mc_var
+        # again would double-count it.
         mc_var = self._aggregate_mc_variance(policy, used_names, weights)
-        se = float(np.sqrt(se_if**2 + mc_var))
+        se = se_if
 
         # Compute point estimate
         component_estimates = []
@@ -603,49 +619,13 @@ class StackedDREstimator(BaseCJEEstimator):
             }
             return w, diagnostics
 
-        # Compute covariance matrix
+        # Compute covariance matrix. The objective uses ONLY the IF
+        # covariance: component IFs already contain fresh-draw MC noise, and
+        # any separate MC penalty applied from reported diagnostics would
+        # penalize components asymmetrically (they all average the same
+        # fresh draws).
         centered_IF = IF_matrix - IF_matrix.mean(axis=0, keepdims=True)
         Sigma = np.cov(centered_IF.T)
-
-        # Optionally incorporate per-component Monte Carlo variance as a
-        # rank-1 update: Σ_total = Σ_IF + n · λ_mc · (s s^T), where s_k = sqrt(mc_var_k)
-        mc_used = False
-        if self.include_mc_in_objective and K > 0:
-            try:
-                s_vals: List[float] = []
-                for name in used_names:
-                    v = 0.0
-                    comp_res = self.component_results.get(name)
-                    if (
-                        comp_res
-                        and hasattr(comp_res, "metadata")
-                        and isinstance(comp_res.metadata, dict)
-                    ):
-                        mcd = comp_res.metadata.get("mc_variance_diagnostics", {}) or {}
-                        if (
-                            isinstance(mcd, dict)
-                            and policy in mcd
-                            and isinstance(mcd[policy], dict)
-                            and "mc_var" in mcd[policy]
-                        ):
-                            v = float(mcd[policy]["mc_var"]) or 0.0
-                        else:
-                            v = float(
-                                comp_res.metadata.get("mc_variance", {}).get(
-                                    policy, 0.0
-                                )
-                            )
-                    s_vals.append(max(0.0, v) ** 0.5)
-
-                # If all zeros, this has no effect; otherwise add rank-1 term
-                s_vec = np.asarray(s_vals, dtype=float).reshape(-1, 1)
-                n_rows = IF_matrix.shape[0]
-                Sigma = Sigma + (max(1, n_rows) * float(self.mc_lambda)) * (
-                    s_vec @ s_vec.T
-                )
-                mc_used = True
-            except Exception:
-                mc_used = False
 
         # Check condition number before regularization (for diagnostics)
         eigenvalues = np.linalg.eigvalsh(Sigma)
@@ -735,8 +715,6 @@ class StackedDREstimator(BaseCJEEstimator):
             "effective_estimators": int(
                 sum(1 for weight in w if weight > 0.05)
             ),  # Estimators with meaningful weight
-            "mc_aware": bool(mc_used),
-            "mc_lambda": float(self.mc_lambda),
         }
 
         return w, diagnostics
@@ -985,7 +963,11 @@ class StackedDREstimator(BaseCJEEstimator):
     def _aggregate_mc_variance(
         self, policy: str, used_names: List[str], weights: np.ndarray
     ) -> float:
-        """Aggregate Monte Carlo variance from components.
+        """Aggregate fresh-draw Monte Carlo variance for DIAGNOSTICS ONLY.
+
+        This value is never composed into the stacked SE: the stacked
+        influence function already contains the MC noise from finite fresh
+        draws (component IFs are built from per-prompt fresh-draw means).
 
         Conservative assumption: perfect correlation across components
         (they share the same fresh draws).
