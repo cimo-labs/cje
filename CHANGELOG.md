@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix the README and interface-README Quick Start examples, which crashed verbatim because they provided fewer than the 10 oracle labels required by 5-fold cross-fitted calibration; document the 10-label minimum next to the labeling guidance.
+
 ## 0.2.25
 
 - Remove the experimental multi-policy EIF implementation and standardize Direct-mode bootstrap on per-policy residual correction.
