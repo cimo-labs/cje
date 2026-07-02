@@ -59,7 +59,8 @@ def analyze_dataset(
         combine_oracle_sources: Whether to pool oracle labels from all sources
             (calibration_data + logged_data + fresh_draws). Default True for data efficiency.
             Set False to use ONLY calibration_data_path for learning calibration.
-            Priority order when combining: calibration_data > fresh_draws > logged_data.
+            When combining, every source's (judge, oracle) pair enters calibration
+            (labels attach to responses); only true duplicates are deduped.
         estimator: Estimator type. Options:
             - "auto" (default): Automatically select based on available data
             - "direct" / "calibrated-direct": On-policy evaluation (requires fresh_draws_dir

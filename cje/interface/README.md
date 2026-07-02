@@ -266,15 +266,16 @@ print(results.metadata["oracle_sources"])
 # {
 #   "calibration_data": {"n_oracle": 500, "coverage": 1.0},
 #   "logged_data": {"n_oracle": 100, "coverage": 0.01},
-#   "total_oracle": 600,  # Auto-combined for efficiency
-#   "priority_order": ["calibration_data", "fresh_draws", "logged_data"]
+#   "fresh_draws": {"n_oracle": 0, "coverage": None},
+#   "total_oracle": 600,  # Every pair enters calibration
+#   "n_conflicts": 0
 # }
 ```
 
 **Key features**:
 - **Auto-combining** (default): Pools oracle labels from calibration_data + logged_data + fresh_draws for maximum data efficiency
-- **Priority ordering**: calibration_data (highest) > fresh_draws > logged_data (lowest)
-- **Conflict detection**: Warns if duplicate prompt_ids have different oracle values (>5% difference)
+- **Keep-all-pairs**: Oracle labels attach to responses, so every source's (judge, oracle) pair enters calibration — including several policies' fresh draws for the same prompt. Only true duplicates (same response, identical values) are deduped
+- **Conflict detection**: Warns if sources disagree on a prompt's oracle value (>5% difference); all pairs are still kept
 
 **Use cases**:
 1. **Curated calibration sets**: You have expensive human labels in a separate file
@@ -293,7 +294,7 @@ results = analyze_dataset(
 
 **Metadata outputs**:
 - `oracle_sources`: Breakdown of oracle labels by source
-- `distribution_mismatch`: KS test comparing calibration vs. evaluation judge score distributions
+- `oracle_sources["distribution_mismatch"]`: KS test comparing calibration vs. evaluation judge score distributions
 
 ### Transportability Auditing
 
