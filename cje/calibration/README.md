@@ -47,7 +47,7 @@ reward calibration maps cheap LLM judge scores to expensive oracle labels with a
 
 Auto mode detects non-monotonicity by comparing regional performance and selects the appropriate method. The selected mode is stored in metadata for transparency. This automatic selection is a key feature of reward calibration.
 
-**Why isotonic?** Isotonic regression is the default because it imposes exactly the right inductive bias (monotonicity) while making minimal assumptions, preserves oracle KPI levels by construction, and is highly efficient with small label budgets (5-10% coverage often sufficient). See the detailed rationale below.
+**Why isotonic?** Isotonic regression is the default because it imposes exactly the right inductive bias (monotonicity) while making minimal assumptions, preserves oracle KPI levels by construction, and is highly efficient with small label budgets (5-25% coverage recommended). See the detailed rationale below.
 
 ### 2. Weight stabilization (`SIMCalibrator`)
 Stabilizes importance weights through surrogate-indexed monotone projection:
@@ -77,7 +77,7 @@ Least-squares isotonic regression is the orthogonal projection onto the monotone
 Your oracle KPI level stays on the right scale automatically—critical for unbiased estimation without post-hoc adjustments.
 
 ### Small-Label Efficiency
-With few oracle labels (5-10% coverage is often sufficient), shape constraints buy stability:
+With few oracle labels (5-25% coverage recommended), shape constraints buy stability:
 - **No overfitting**: Can't create spurious non-monotone regions
 - **Adaptive complexity**: Naturally produces piecewise-constant regions when data supports them
 - **Edge robustness**: Flattens at boundaries (explains why edge-slope diagnostics are so informative)
@@ -120,7 +120,7 @@ When the true E[Y|S] is monotone, f̂ is L²-consistent. When it's not, the two-
    - Isotonic imposes exactly "higher risk index ⇒ no worse KPI"
 
 3. **Mean-preserve & cross-fit**
-   - We recentre so the oracle mean matches
+   - The terminal isotonic stage is mean-preserving on the oracle slice by construction (PAVA preserves the slice mean; there is no separate recentering step)
    - We cross-fit so selection noise and kinks are handled
    - calibration-aware jackknife then measures calibrator variance honestly
 
@@ -272,7 +272,7 @@ where Var(w_final) ≤ ρ·Var(raw)
 - **Solution**: Closed-form via quadratic formula
 
 ### Stacked weight stabilization
-Combines K=3 candidates by minimizing OOF influence variance:
+Combines the candidate weight maps (increasing + decreasing isotonic; K=2 by default, K=3 with `include_baseline=True`) by minimizing OOF influence variance:
 ```
 min_π π'Σπ s.t. π ≥ 0, Σπ = 1
 ```
@@ -375,14 +375,12 @@ from cje.estimators import CalibratedIPS
 # Default: calibration-aware jackknife for oracle uncertainty (recommended)
 estimator = CalibratedIPS(sampler, oua_jackknife=True)  # Default
 result = estimator.fit_and_estimate()
-# Result has both standard_errors and robust_standard_errors
+# standard_errors already include the oracle-jackknife component when enabled
 
-# Check oracle uncertainty via calibration-aware jackknife (if enabled)
-if result.robust_standard_errors is not None:
-    print(f"Standard SE: {result.standard_errors[0]:.4f}")
-    print(f"calibration-aware-adjusted SE: {result.robust_standard_errors[0]:.4f}")
-    oracle_var = result.robust_standard_errors[0]**2 - result.standard_errors[0]**2
-    print(f"Oracle uncertainty contribution: {oracle_var:.6f}")
+# Inspect the decomposition via metadata
+comps = result.metadata.get("se_components", {})
+print(f"Total SE: {result.standard_errors[0]:.4f}")
+print(f"Oracle variance per policy: {comps.get('oracle_variance_per_policy')}")
 ```
 
 ## Configuration Options
@@ -425,7 +423,7 @@ When the ordering index has ties (common with discrete judge scores):
 
 ### Memory Efficiency
 - Isotonic regression is O(n log n) time, O(n) space
-- Stacked calibration builds K=3 candidates
+- Stacked calibration builds K=2 candidates by default (K=3 with `include_baseline=True`)
 - Cross-fitting stores K models but applies one at a time
 
 ## Common Issues and Solutions
@@ -478,7 +476,7 @@ poetry run pytest cje/tests/ -k calibration
 ### Computational Complexity
 - **Isotonic regression**: O(n log n) via PAV
 - **Exact projection**: ~30-40 PAV calls (still O(n log n))
-- **Stacked weight stabilization**: O(nK²) time, O(K²) memory (K=3 candidates)
+- **Stacked weight stabilization**: O(nK²) time, O(K²) memory (K=2-3 candidates)
 - **Cross-fitting**: K × isotonic regression cost
 
 

@@ -1,0 +1,90 @@
+"""Keep documentation code snippets honest.
+
+Extracts every ```python block from the repo READMEs and checks it at two
+levels:
+
+1. SYNTAX: every snippet must compile() — catches broken example code.
+2. IMPORTS: every `import`/`from` line in every snippet is executed — catches
+   references to modules/functions that do not exist (the review found several
+   snippets importing from the wrong module or using deleted APIs).
+
+Snippets are not executed end-to-end (most need data files or API keys), but
+attribute chains on cje modules referenced by the imports are verified, which
+is where docs historically drifted.
+"""
+
+import ast
+import re
+from pathlib import Path
+from typing import Iterator, List, Tuple
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+README_PATHS = sorted(
+    p
+    for p in [
+        REPO_ROOT / "README.md",
+        *(REPO_ROOT / "cje").glob("*/README.md"),
+    ]
+    if p.exists()
+)
+
+_FENCE_RE = re.compile(r"```python\n(.*?)```", re.DOTALL)
+
+
+def _snippets() -> Iterator[Tuple[str, int, str]]:
+    for path in README_PATHS:
+        text = path.read_text()
+        for match in _FENCE_RE.finditer(text):
+            line = text[: match.start()].count("\n") + 2
+            yield (str(path.relative_to(REPO_ROOT)), line, match.group(1))
+
+
+SNIPPETS: List[Tuple[str, int, str]] = list(_snippets())
+IDS = [f"{path}:{line}" for path, line, _ in SNIPPETS]
+
+
+def test_readmes_found() -> None:
+    assert len(README_PATHS) >= 5, README_PATHS
+    assert len(SNIPPETS) >= 10
+
+
+@pytest.mark.parametrize("path,line,code", SNIPPETS, ids=IDS)
+def test_snippet_compiles(path: str, line: int, code: str) -> None:
+    try:
+        compile(code, f"{path}:{line}", "exec")
+    except SyntaxError as e:  # pragma: no cover - failure path
+        pytest.fail(f"{path}:{line} snippet has a syntax error: {e}")
+
+
+@pytest.mark.parametrize("path,line,code", SNIPPETS, ids=IDS)
+def test_snippet_imports_resolve(path: str, line: int, code: str) -> None:
+    """Execute only the import statements of each snippet."""
+    tree = ast.parse(code)
+    import_nodes: List[ast.stmt] = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
+    if not import_nodes:
+        pytest.skip("snippet has no imports")
+    module = ast.Module(body=import_nodes, type_ignores=[])
+    try:
+        exec(compile(module, f"{path}:{line}", "exec"), {})
+    except ImportError as e:  # pragma: no cover - failure path
+        # Optional-extra dependencies are allowed to be absent in the dev env;
+        # docs for those modules state the required extra explicitly.
+        msg = str(e)
+        optional_markers = (
+            "fireworks",
+            "transformers",
+            "matplotlib",
+            "seaborn",
+            "hydra",
+            "teacher_forcing",
+        )
+        if any(marker in msg for marker in optional_markers):
+            pytest.skip(f"optional extra not installed: {msg}")
+        pytest.fail(f"{path}:{line} snippet import fails: {e}")

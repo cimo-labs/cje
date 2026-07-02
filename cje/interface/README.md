@@ -153,9 +153,9 @@ responses/
 
 **Note:** Policy name is inferred from filename (e.g., `clone_responses.jsonl` → policy `"clone"`). Do NOT include a `"policy"` field in the records.
 
-**Reward calibration in Direct mode**: If any fresh draws have `oracle_label`, Direct mode automatically learns the judge→oracle mapping and uses calibrated rewards. Otherwise, it uses raw judge scores. More oracle labels = better calibration (5-10% is often sufficient).
+**Reward calibration in Direct mode**: If any fresh draws have `oracle_label`, Direct mode automatically learns the judge→oracle mapping and uses calibrated rewards. Otherwise, it uses raw judge scores. More oracle labels = better calibration (label 5-25% of samples).
 
-Advanced: IPS/DR logged-data schema and counterfactual diagnostics are documented in `cje/estimators/README.md`.
+Advanced: the IPS/DR logged-data schema is documented in `cje/data/README.md`; counterfactual diagnostics in `cje/diagnostics/README.md`.
 
 **Working example:** See [`examples/arena_sample/`](../../examples/arena_sample/) for complete dataset examples.
 
@@ -192,7 +192,7 @@ def analyze_dataset(
     include_response_length: bool = False,
     estimator_config: Optional[Dict[str, Any]] = None,
     verbose: bool = False,
-) -> EstimationResult:
+) -> EstimationResult: ...
 ```
 
 **Parameters:**

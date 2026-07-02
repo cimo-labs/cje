@@ -107,7 +107,7 @@ def hellinger_affinity(weights: np.ndarray, epsilon: float = 1e-10) -> float:
     Key properties:
     - Value in (0, 1] where 1 indicates perfect overlap
     - Cannot be improved by weight calibration (measures structural mismatch)
-    - Related to Hellinger distance: H = √(1 - A²)
+    - Related to Hellinger distance: H = √(1 - A)
 
     Args:
         weights: Importance weights (will be normalized to mean 1)

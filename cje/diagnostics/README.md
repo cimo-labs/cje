@@ -255,7 +255,7 @@ Instead of fixed thresholds, compute based on desired CI width using variance bo
 # For bounded rewards: Var(V_IPS) ≤ 1/(4n·ESS_fraction)  
 # 95% CI halfwidth: ≈ 1.96/(2√(n·ESS_fraction))
 # Solving: ESS_fraction ≥ (1.96/2)²/(n·target²) = 0.9604/(n·target²)
-threshold = 0.9604 / (n * target_ci_halfwidth²)
+threshold = 0.9604 / (n * target_ci_halfwidth**2)
 ```
 For n=10,000 and ±1% target: threshold = 96%  
 For n=100,000 and ±1% target: threshold = 9.6%
@@ -693,7 +693,7 @@ where G is the number of clusters and n is the total number of rows.
 
 **What it captures:** Uncertainty from learning the calibration function f(S) on a finite oracle slice.
 
-**Why it matters:** When oracle size is small (common: 5-10% coverage), treating the calibrator as fixed drastically understates total uncertainty. calibration-aware properly accounts for this.
+**Why it matters:** When oracle size is small (common: 5-25% coverage), treating the calibrator as fixed drastically understates total uncertainty. calibration-aware properly accounts for this.
 
 **Computing calibration-aware variance:**
 
@@ -850,22 +850,17 @@ def construct_ci(estimate, Var_CR, Var_cal, df_CR, df_cal, alpha=0.05):
 from cje import analyze_dataset
 
 # Analyze with cluster-robust inference
-result = analyze_dataset(
-    fresh_draws_dir="responses/",
-    cluster_id_field="user_id",  # Enable cluster-robust SEs
-    n_oracle_folds=5              # calibration-aware jackknife folds (default)
-)
+result = analyze_dataset(fresh_draws_dir="responses/")
 
-# Access two-component variance decomposition
-print(f"Cluster-robust variance: {result.var_cluster_robust:.4f}")
-print(f"calibration-aware variance: {result.var_oua:.4f}")
-print(f"calibration uncertainty share: {result.oua_share:.1%}")
+# SE decomposition lives in metadata["se_components"] when available
+comps = result.metadata.get("se_components", {})
+print(f"IF SE per policy: {comps.get('se_if_per_policy')}")
+print(f"Oracle (calibration) variance per policy: {comps.get('oracle_variance_per_policy')}")
 
-# Confidence intervals use SE_total = √(Var_CR + Var_cal)
-for policy, est in result.estimates.items():
-    se = result.standard_errors[policy]  # SE_total
-    ci_lower, ci_upper = est - 1.96*se, est + 1.96*se
-    print(f"{policy}: {est:.3f} [{ci_lower:.3f}, {ci_upper:.3f}]")
+# Confidence intervals combine both components: SE_total = sqrt(Var_IF + Var_cal)
+lo, hi = result.confidence_interval(alpha=0.05)
+for i, policy in enumerate(result.metadata["target_policies"]):
+    print(f"{policy}: {result.estimates[i]:.3f} [{lo[i]:.3f}, {hi[i]:.3f}]")
 ```
 
 ### Transport-Aware Bootstrap (calibration_policy_idx)
@@ -886,7 +881,10 @@ When `calibration_policy_idx` is set:
 **Usage:**
 
 ```python
-from cje.diagnostics import cluster_bootstrap_direct_with_refit, make_calibrator_factory
+from cje.diagnostics.robust_inference import (
+    cluster_bootstrap_direct_with_refit,
+    make_calibrator_factory,
+)
 
 # calibration_policy_idx=0 means: fit calibrator only on policy 0 (base)
 result = cluster_bootstrap_direct_with_refit(
@@ -935,7 +933,7 @@ The final estimate for each policy is: `mean(f̂(S)) + residual_correction`, whi
 
 **❌ Using i.i.d. SEs with clustered data**
 - Result: Severe undercoverage (86.9% instead of 95% observed empirically)
-- Fix: Always specify `cluster_id_field` when rows have dependence
+- Fix: CJE's estimators compute cluster-robust SEs over calibration folds automatically; keep `prompt_id` stable so rows that share a prompt share a cluster
 
 **❌ Ignoring calibration-aware with small oracle slices**
 - Result: CIs too narrow, overconfidence in precision
@@ -1112,7 +1110,7 @@ for policy_name, probe_data in target_probes.items():
     diag = audit_transportability(result.calibrator, probe_data, group_label=policy_name)
     if diag.status == "FAIL":
         print(f"Warning: calibrator may not transfer to {policy_name}")
-        print(f"  δ̂ = {diag.delta_hat:+.3f} (CI: [{diag.ci_lower:+.3f}, {diag.ci_upper:+.3f}])")
+        print(f"  δ̂ = {diag.delta_hat:+.3f} (CI: [{diag.delta_ci[0]:+.3f}, {diag.delta_ci[1]:+.3f}])")
 ```
 
 ### Simulation-Based Planning (No Pilot Data Required)

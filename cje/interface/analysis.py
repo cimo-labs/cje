@@ -93,8 +93,8 @@ def analyze_dataset(
 
         New metadata fields when using calibration_data_path:
         - results.metadata["oracle_sources"]: Breakdown of oracle labels by source
-        - results.metadata["oracle_conflicts"]: Prompts with conflicting oracle values
-        - results.metadata["distribution_mismatch"]: KS test results
+        - results.metadata["oracle_sources"]["conflicts"]: Cross-source oracle disagreements
+        - results.metadata["oracle_sources"]["distribution_mismatch"]: KS test results
 
     Raises:
         ValueError: If required data is missing for the selected estimator

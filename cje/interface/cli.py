@@ -239,7 +239,9 @@ def run_analysis(args: argparse.Namespace) -> int:
             for i, policy in enumerate(target_policies):
                 estimate = results.estimates[i]
                 se = results.standard_errors[i]
-                print(f"  {policy}: {estimate:.3f} ± {se:.3f}")
+                print(
+                    f"  {policy}: {estimate:.3f} ± {se:.3f} (1 SE; 95% CI ≈ ±1.96·SE)"
+                )
 
             # Best policy (reliability-aware: an argmax that failed the
             # refusal gates is demoted instead of crowned)

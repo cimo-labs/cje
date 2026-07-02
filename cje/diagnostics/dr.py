@@ -46,7 +46,7 @@ def compute_orthogonality_score(
         - 'passes_test': Boolean, True if CI contains 0
 
     References:
-        Section 9.3 of the CJE paper on orthogonality diagnostics.
+        The CJE paper's discussion of orthogonality diagnostics (arXiv:2512.11150).
     """
     n = len(weights)
 

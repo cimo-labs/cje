@@ -54,7 +54,7 @@ def detect_analysis_mode(
     Examples:
         >>> # Case 1: Logged data, no fresh draws → IPS mode
         >>> dataset = load_dataset("logs.jsonl")
-        >>> mode, msg = detect_analysis_mode(dataset, None)
+        >>> mode, msg, logprob_coverage = detect_analysis_mode(dataset, None)
         >>> # Returns: ("ips", "IPS mode: Reweighting logged samples...")
 
         >>> # Case 2: Logged data + fresh draws → DR mode

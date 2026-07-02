@@ -74,7 +74,7 @@ factory = DatasetFactory()
 dataset = factory.create_from_jsonl("data.jsonl")
 
 # From raw dictionaries
-data = [{"prompt": "...", "response": "...", ...}, ...]
+data = [{"prompt": "...", "response": "..."}]  # plus judge_score, logprobs, etc.
 dataset = factory.create_from_data(data)
 ```
 
@@ -168,8 +168,12 @@ Every sample must have:
 - `prompt_id`: Unique identifier (optional - auto-generated from prompt hash if missing)
 - `prompt`: Input text/context
 - `response`: Generated output
+
+For IPS/DR (logged-data) modes only:
 - `base_policy_logprob`: Log probability under logging policy
 - `target_policy_logprobs`: Dict of log probs for target policies
+
+Direct mode (fresh draws) needs no logprobs — only `prompt_id`, `judge_score`, and `oracle_label` on a slice.
 
 **prompt_id auto-generation:** If `prompt_id` is missing, CJE automatically generates one:
 1. Checks top-level field, then `metadata.prompt_id`

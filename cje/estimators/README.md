@@ -94,7 +94,9 @@ influence = result.influence_functions # For inference
 
 ## Default Recommendation
 
-**Use StackedDREstimator** - Combines multiple DR methods via optimal weighting to minimize variance. Requires fresh draws. Provides modest improvements (1-5% SE reduction) over best single method.
+**Default to Direct mode** (`CalibratedDirectEstimator` via `analyze_dataset`) when you can generate fresh responses on a shared prompt set — it needs no overlap assumption and achieves the best ranking accuracy in the paper's benchmark. Reach for IPS/DR only when you truly need off-policy estimation from logs, and check the overlap gates first.
+
+**Within DR mode, use StackedDREstimator** - Combines multiple DR methods via optimal weighting to minimize variance. Requires fresh draws. Provides modest improvements (1-5% SE reduction) over best single method.
 
 **Default estimators**: `dr-cpo`, `tmle`, `mrdr` (3 core methods)
 
@@ -393,4 +395,4 @@ Always computed and stored for proper inference, policy comparison, and diagnost
 
 ## Summary
 
-Comprehensive toolkit for causal inference on LLM outputs, from simple importance sampling to sophisticated multiply-robust methods. All estimators follow the same interface, compute influence functions, and provide transparent diagnostics for reliability assessment. **StackedDREstimator is recommended for production use** when fresh draws are available.
+Comprehensive toolkit for causal inference on LLM outputs, from simple importance sampling to sophisticated multiply-robust methods. All estimators follow the same interface, compute influence functions, and provide transparent diagnostics for reliability assessment. **Default to Direct mode when fresh draws are available; within DR mode, StackedDREstimator is the recommended production choice.**
