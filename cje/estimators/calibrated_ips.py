@@ -730,6 +730,17 @@ class CalibratedIPS(BaseCJEEstimator):
                 )
                 R_oof = rewards.copy()
 
+            # At 100% oracle coverage the estimate consumes raw oracle labels
+            # (no calibration), so the IF must use those same rewards —
+            # substituting smoothed calibrator predictions here removes the
+            # reward-noise term from the variance and understates the SE.
+            try:
+                sampler_coverage = getattr(self.sampler, "oracle_coverage", None)
+                if sampler_coverage is not None and sampler_coverage >= 1.0:
+                    R_oof = rewards.copy()
+            except Exception:
+                pass
+
             # Check if we should use honest IFs with outer CV
             calib_info = self._calibration_info.get(policy, {})
             if self.use_outer_cv and "outer_fold_ids" in calib_info:
@@ -758,23 +769,25 @@ class CalibratedIPS(BaseCJEEstimator):
                     w_test = weights[test_mask]
                     r_oof_test = R_oof[test_mask]
 
-                    # Hajek ratio IF with training mean weight (not test mean)
+                    # Hajek ratio IF with training mean weight (not test mean):
+                    # φ_i = w_i (R_i − ψ) / mean_w. Note w(R−ψ) already carries
+                    # the denominator correction of the ratio estimator —
+                    # subtracting ψ(w − mean_w) again double-counts it.
                     denom_train = mean_w_train if mean_w_train > 0 else 1.0
 
                     influence[test_mask] = (
-                        w_test * (r_oof_test - train_estimate)
-                        - train_estimate
-                        * (w_test - mean_w_train)  # Use train mean weight
-                    ) / denom_train
+                        w_test * (r_oof_test - train_estimate) / denom_train
+                    )
             else:
                 # Standard single-pass influence functions
-                # Ratio IF for Hajek term (use the same weights used in ψ̂_w)
-                # φ^H_i = [w_i (R_oof_i - ψ̂_w) - ψ̂_w (w_i - mean_w)] / mean_w
+                # Ratio IF for the Hajek estimator ψ̂ = Σ w R / Σ w:
+                # φ^H_i = w_i (R_oof_i - ψ̂_w) / mean_w
+                # (delta method: (a_i − ψ b_i)/E[w] with a=wR, b=w collapses to
+                # w(R−ψ)/E[w]; subtracting ψ(w − mean_w) again double-counts
+                # the denominator correction and understates the variance).
                 # Normalization by mean_w is critical for raw weights; harmless for Hájek (mean≈1)
                 denom = mean_w if mean_w > 0 else 1.0
-                ratio_if = (
-                    weights * (R_oof - psi_w) - psi_w * (weights - mean_w)
-                ) / denom
+                ratio_if = weights * (R_oof - psi_w) / denom
 
                 # No bias augmentation; the oracle jackknife handles calibration uncertainty
                 influence = ratio_if
