@@ -12,7 +12,7 @@ Covers:
   into weight_status.
 """
 
-from typing import Callable, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 import numpy as np
 import pytest
@@ -513,3 +513,205 @@ class TestBoundaryCard:
         assert unified.refuse_level_claims is True
         # validate() names the problem
         assert any("REFUSE-LEVEL" in issue for issue in diag.validate())
+
+
+def _catastrophic_overlap_records(n: int = 200) -> list:
+    """96% of samples have near-zero raw importance weight (log w = -50)."""
+    rng = np.random.default_rng(8)
+    records = []
+    for i in range(n):
+        s = float(rng.uniform())
+        log_w = float(np.log(25.0)) if s > 0.96 else -50.0
+        metadata = {"judge_score": s}
+        if rng.uniform() < 0.25:
+            metadata["oracle_label"] = float(
+                np.clip(0.25 + 0.5 * s + rng.normal(0, 0.08), 0, 1)
+            )
+        records.append(
+            {
+                "prompt_id": f"p{i}",
+                "prompt": f"question {i}",
+                "response": f"answer {i}",
+                "base_policy_logprob": -10.0,
+                "target_policy_logprobs": {POLICY: -10.0 + log_w},
+                "metadata": metadata,
+            }
+        )
+    return records
+
+
+class TestRefuseUnreliablePlumbing:
+    """Finding #30: refuse_unreliable must be reachable from analyze_dataset
+    and reach DR's internal ips_estimator."""
+
+    def test_analyze_dataset_default_warns_but_estimates(self, tmp_path: Any) -> None:
+        import json
+
+        from cje import analyze_dataset
+
+        path = tmp_path / "catastrophic.jsonl"
+        with open(path, "w") as f:
+            for record in _catastrophic_overlap_records():
+                f.write(json.dumps(record) + "\n")
+
+        results = analyze_dataset(
+            logged_data_path=str(path), estimator="calibrated-ips"
+        )
+        # Default: numeric estimate returned, but the gate outcome is recorded
+        assert not np.isnan(results.estimates[0])
+        gates = results.metadata["reliability_gates"]
+        assert gates[POLICY]["flagged"] is True
+        assert gates[POLICY]["refused"] is False
+        assert gates[POLICY]["reasons"]
+
+    def test_analyze_dataset_refuse_unreliable_returns_nan(self, tmp_path: Any) -> None:
+        import json
+
+        from cje import analyze_dataset
+
+        path = tmp_path / "catastrophic.jsonl"
+        with open(path, "w") as f:
+            for record in _catastrophic_overlap_records():
+                f.write(json.dumps(record) + "\n")
+
+        results = analyze_dataset(
+            logged_data_path=str(path),
+            estimator="calibrated-ips",
+            estimator_config={"refuse_unreliable": True},
+        )
+        assert np.isnan(results.estimates[0])
+        assert np.isnan(results.standard_errors[0])
+        gates = results.metadata["reliability_gates"]
+        assert gates[POLICY]["refused"] is True
+
+    def test_factory_forwards_to_dr_internal_ips(self) -> None:
+        from cje.interface.factory import create_estimator
+
+        rng = np.random.default_rng(9)
+        dataset = _tilted_dataset(120, rng, lambda s: 0.4 + 1.2 * s)
+        calibrated, _ = calibrate_dataset(
+            dataset, judge_field="judge_score", oracle_field="oracle_label"
+        )
+        sampler = PrecomputedSampler(calibrated)
+
+        for name in ["dr-cpo", "mrdr", "tmle"]:
+            estimator = create_estimator(
+                name, sampler, {"refuse_unreliable": True}, None, False
+            )
+            assert estimator.ips_estimator.refuse_unreliable is True, name
+
+        estimator = create_estimator(
+            "calibrated-ips", sampler, {"refuse_unreliable": True}, None, False
+        )
+        assert estimator.refuse_unreliable is True
+
+        estimator = create_estimator(
+            "raw-ips", sampler, {"refuse_unreliable": True}, None, False
+        )
+        assert estimator.refuse_unreliable is True
+
+        estimator = create_estimator(
+            "stacked-dr", sampler, {"refuse_unreliable": True}, None, False
+        )
+        assert estimator.refuse_unreliable is True
+
+
+class TestCLIBestPolicy:
+    """Finding #8: the CLI must not crown a gate-flagged policy."""
+
+    @staticmethod
+    def _make_results(
+        estimates: list,
+        policies: list,
+        gates: Optional[dict] = None,
+        diagnostics: Optional[Any] = None,
+    ) -> EstimationResult:
+        metadata: dict = {"target_policies": policies}
+        if gates is not None:
+            metadata["reliability_gates"] = gates
+        return EstimationResult(
+            estimates=np.array(estimates, dtype=float),
+            standard_errors=np.full(len(estimates), 0.05),
+            n_samples_used={p: 100 for p in policies},
+            method="calibrated_ips",
+            influence_functions={},
+            diagnostics=diagnostics,
+            metadata=metadata,
+        )
+
+    def test_reliable_argmax_gets_trophy(self) -> None:
+        from cje.interface.cli import best_policy_lines
+
+        results = self._make_results(
+            [0.5, 0.7],
+            ["base", "good"],
+            gates={
+                "base": {"flagged": False, "refused": False, "reasons": []},
+                "good": {"flagged": False, "refused": False, "reasons": []},
+            },
+        )
+        lines = best_policy_lines(results)
+        assert lines == ["🏆 Best policy: good"]
+
+    def test_flagged_argmax_is_demoted(self) -> None:
+        from cje.interface.cli import best_policy_lines
+
+        # The verified repro: adversarial 'unhelpful' wins the raw argmax
+        # while flagged UNRELIABLE by the refusal gates
+        results = self._make_results(
+            [0.771, 0.756, 0.763],
+            ["unhelpful", "base", "clone"],
+            gates={
+                "unhelpful": {
+                    "flagged": True,
+                    "refused": False,
+                    "reasons": ["raw_near_zero=90.2%"],
+                },
+                "base": {"flagged": False, "refused": False, "reasons": []},
+                "clone": {"flagged": False, "refused": False, "reasons": []},
+            },
+        )
+        lines = best_policy_lines(results)
+        assert any(
+            "Best by point estimate: unhelpful" in line and "UNRELIABLE" in line
+            for line in lines
+        )
+        assert not any(line.startswith("🏆 Best policy:") for line in lines)
+        # The best RELIABLE policy is named
+        assert any("Best reliable policy: clone" in line for line in lines)
+
+    def test_critical_status_also_demotes(self) -> None:
+        from cje.interface.cli import best_policy_lines
+
+        diag = _make_ips_diagnostics(
+            policies=["bad", "ok"],
+            estimates={"bad": 0.9, "ok": 0.6},
+            standard_errors={"bad": 0.1, "ok": 0.05},
+            ess_per_policy={"bad": 0.05, "ok": 0.6},
+            status_per_policy={"bad": Status.CRITICAL, "ok": Status.GOOD},
+        )
+        results = self._make_results([0.9, 0.6], ["bad", "ok"], diagnostics=diag)
+        lines = best_policy_lines(results)
+        assert any("UNRELIABLE" in line for line in lines)
+        assert any("Best reliable policy: ok" in line for line in lines)
+
+    def test_all_flagged_no_winner(self) -> None:
+        from cje.interface.cli import best_policy_lines
+
+        results = self._make_results(
+            [0.9, 0.6],
+            ["a", "b"],
+            gates={
+                "a": {"flagged": True, "refused": False, "reasons": ["ESS=5%"]},
+                "b": {"flagged": True, "refused": False, "reasons": ["ESS=8%"]},
+            },
+        )
+        lines = best_policy_lines(results)
+        assert any("do not pick a winner" in line for line in lines)
+
+    def test_all_nan_estimates(self) -> None:
+        from cje.interface.cli import best_policy_lines
+
+        results = self._make_results([float("nan"), float("nan")], ["a", "b"])
+        lines = best_policy_lines(results)
+        assert any("every policy was refused" in line for line in lines)

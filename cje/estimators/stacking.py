@@ -81,6 +81,8 @@ class StackedDREstimator(BaseCJEEstimator):
         self.reward_calibrator = kwargs.pop("reward_calibrator", None)
         self.use_calibrated_weights = kwargs.pop("use_calibrated_weights", True)
         self.weight_mode = kwargs.pop("weight_mode", "hajek")
+        # Forwarded to each component's internal CalibratedIPS
+        self.refuse_unreliable = kwargs.pop("refuse_unreliable", False)
 
         # Deprecated MC-aware stacking configuration. Component influence
         # functions are built from per-prompt fresh-draw MEANS, so their
@@ -799,6 +801,7 @@ class StackedDREstimator(BaseCJEEstimator):
                 omega_mode="w",  # Use weights for omega
                 use_calibrated_weights=self.use_calibrated_weights,
                 weight_mode=self.weight_mode,
+                refuse_unreliable=self.refuse_unreliable,
                 # MRDR doesn't take oua_jackknife
             )
         else:
@@ -810,6 +813,7 @@ class StackedDREstimator(BaseCJEEstimator):
                 use_calibrated_weights=self.use_calibrated_weights,
                 weight_mode=self.weight_mode,
                 oua_jackknife=self.oua_jackknife,
+                refuse_unreliable=self.refuse_unreliable,
             )
 
         # Pass fresh draws if available

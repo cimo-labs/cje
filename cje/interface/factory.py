@@ -73,7 +73,12 @@ def _build_raw_ips(
     verbose: bool,
 ) -> CalibratedIPS:
     clip_weight = config.get("clip_weight", 100.0)
-    return CalibratedIPS(sampler, calibrate_weights=False, clip_weight=clip_weight)
+    return CalibratedIPS(
+        sampler,
+        calibrate_weights=False,
+        clip_weight=clip_weight,
+        refuse_unreliable=config.get("refuse_unreliable", False),
+    )
 
 
 def _build_dr_cpo(
@@ -83,13 +88,17 @@ def _build_dr_cpo(
     verbose: bool,
 ) -> DRCPOEstimator:
     n_folds = config.get("n_folds", 5)
+    refuse_unreliable = config.get("refuse_unreliable", False)
     if calibration_result and getattr(calibration_result, "calibrator", None):
         if verbose:
             logger.info("Using calibration models for DR outcome model")
         return DRCPOEstimator(
-            sampler, n_folds=n_folds, reward_calibrator=calibration_result.calibrator
+            sampler,
+            n_folds=n_folds,
+            reward_calibrator=calibration_result.calibrator,
+            refuse_unreliable=refuse_unreliable,
         )
-    return DRCPOEstimator(sampler, n_folds=n_folds)
+    return DRCPOEstimator(sampler, n_folds=n_folds, refuse_unreliable=refuse_unreliable)
 
 
 def _build_mrdr(
@@ -100,6 +109,7 @@ def _build_mrdr(
 ) -> MRDREstimator:
     n_folds = config.get("n_folds", 5)
     omega_mode = config.get("omega_mode", "snips")
+    refuse_unreliable = config.get("refuse_unreliable", False)
     if calibration_result and getattr(calibration_result, "calibrator", None):
         if verbose:
             logger.info("Using calibration models for MRDR")
@@ -108,8 +118,14 @@ def _build_mrdr(
             n_folds=n_folds,
             omega_mode=omega_mode,
             reward_calibrator=calibration_result.calibrator,
+            refuse_unreliable=refuse_unreliable,
         )
-    return MRDREstimator(sampler, n_folds=n_folds, omega_mode=omega_mode)
+    return MRDREstimator(
+        sampler,
+        n_folds=n_folds,
+        omega_mode=omega_mode,
+        refuse_unreliable=refuse_unreliable,
+    )
 
 
 def _build_tmle(
@@ -120,6 +136,7 @@ def _build_tmle(
 ) -> TMLEEstimator:
     n_folds = config.get("n_folds", 5)
     link = config.get("link", "logit")
+    refuse_unreliable = config.get("refuse_unreliable", False)
     if calibration_result and getattr(calibration_result, "calibrator", None):
         if verbose:
             logger.info("Using calibration models for TMLE")
@@ -128,8 +145,11 @@ def _build_tmle(
             n_folds=n_folds,
             link=link,
             reward_calibrator=calibration_result.calibrator,
+            refuse_unreliable=refuse_unreliable,
         )
-    return TMLEEstimator(sampler, n_folds=n_folds, link=link)
+    return TMLEEstimator(
+        sampler, n_folds=n_folds, link=link, refuse_unreliable=refuse_unreliable
+    )
 
 
 def _build_stacked_dr(
@@ -157,6 +177,7 @@ def _build_stacked_dr(
         "covariance_regularization": covariance_regularization,
         "use_calibrated_weights": use_calibrated_weights,
         "weight_mode": weight_mode,
+        "refuse_unreliable": config.get("refuse_unreliable", False),
     }
     if calibration_result and getattr(calibration_result, "calibrator", None):
         if verbose:

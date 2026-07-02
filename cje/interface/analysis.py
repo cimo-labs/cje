@@ -81,7 +81,11 @@ def analyze_dataset(
             Computed as len(response.split()). Requires all samples (logged data, fresh draws,
             and calibration data) to have a 'response' field. If True, 'response_length' is
             automatically prepended to calibration_covariates. Convenient for handling length bias.
-        estimator_config: Optional configuration dict for the estimator
+        estimator_config: Optional configuration dict for the estimator.
+            Notable keys: {"refuse_unreliable": True} makes gate-failing
+            policies return NaN instead of the default warn-and-estimate
+            behavior (reaches CalibratedIPS and the DR estimators' internal
+            IPS component).
         verbose: Whether to print progress messages
 
     Returns:

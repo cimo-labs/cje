@@ -50,7 +50,7 @@ cje/diagnostics/
 
 1. **Diagnostics are data, not behavior** - Dataclasses with computed properties
 2. **Push-based flow** - Created during estimation, not on-demand
-3. **Fail-fast with NaN** - Critical issues return NaN estimates, not exceptions
+3. **Warn by default, refuse on request** - Gate failures always warn loudly and are recorded (`result.metadata["reliability_gates"]`, statuses); numeric estimates are still returned unless `refuse_unreliable=True`, in which case gated policies get NaN
 4. **Hierarchical status** - Multiple layers of safety checks
 5. **Self-describing** - Objects know how to validate, summarize, and serialize themselves
 
@@ -349,16 +349,33 @@ with open("diagnostics.json", "w") as f:
 
 ## Diagnostic Gates
 
-The system implements automatic gates that refuse estimation when critical issues are detected:
+Estimators evaluate reliability gates during estimation. **By default gate failures WARN loudly and numeric estimates are still returned** — a non-NaN estimate does NOT mean the gates passed. Per-policy gate outcomes are recorded in `result.metadata["reliability_gates"]` (`{"flagged": bool, "refused": bool, "reasons": [...]}`) and reflected in `diagnostics.weight_status` / `status_per_policy`; the CLI uses them to demote unreliable "best policy" winners.
 
-### CalibratedIPS Gates
-The estimator refuses to provide estimates (returns NaN) when:
-- ESS < 30% (less than 30% effective sample size)
-- raw_near_zero > 85% (more than 85% of raw weights near zero)  
+To make gate failures return NaN instead (refuse-rather-than-mislead), set `refuse_unreliable=True`. It is exposed through the public API:
+
+```python
+from cje import analyze_dataset
+
+results = analyze_dataset(
+    "data.jsonl",
+    estimator="calibrated-ips",
+    estimator_config={"refuse_unreliable": True},
+)
+# Gated policies now have NaN estimates and NaN standard errors
+```
+
+The flag reaches `CalibratedIPS` directly and every DR estimator's internal IPS component (`dr-cpo`, `mrdr`, `tmle`, and the `stacked-dr` components). Note that for DR estimators the flag governs the internal IPS component; the DR point estimate still combines the outcome model with the weights (DR is the recommended mitigation for poor overlap, so it does not auto-refuse on IPS gates).
+
+### CalibratedIPS Gate Criteria (thresholds in `cje.diagnostics.gates`)
+A policy is flagged (warned by default; NaN with `refuse_unreliable=True`) when:
+- ESS < 30% (the paper's ship-gate)
+- raw_near_zero > 85% (more than 85% of raw weights near zero)
 - top_5pct_weight > 30% AND cv_weights > 2.0 (high concentration with high variability)
 
+The Hill tail index is **not** a refusal gate: it feeds `weight_status` (WARNING for α < 2, CRITICAL for α < 1, "unknown" for NaN failures).
+
 ### DR Estimator Gates
-DR estimators inherit IPS gates and add warnings (but continue) when:
+DR estimators inherit IPS gate recording and add warnings (but continue) when:
 - Outcome model R² < 0 (indicates misspecification)
 - Influence function tail ratio > 100 (heavy-tailed influence functions)
 
@@ -1169,7 +1186,7 @@ r2 = correlation_to_r2(0.8, "monotone")  # Monotone nonlinear: ~0.82
 
 The CJE diagnostics system provides:
 - **Comprehensive monitoring** of all causal inference assumptions
-- **Automatic safety gates** to prevent unreliable estimates
+- **Loud safety gates** that warn by default and refuse with NaN when `refuse_unreliable=True`
 - **Clear status indicators** (GOOD/WARNING/CRITICAL)
 - **Detailed metrics** for debugging issues
 - **Export capabilities** for further analysis

@@ -542,6 +542,9 @@ class CalibratedIPS(BaseCJEEstimator):
         n_samples_used = {}
         influence_functions = {}
         df_info = {}  # Track degrees of freedom per policy
+        # Per-policy refusal-gate outcomes (consumed by the CLI and users who
+        # need to know whether a numeric estimate passed the gates)
+        reliability_gates: Dict[str, Dict[str, Any]] = {}
 
         # Compute estimates for each policy
         for policy in self.sampler.target_policies:
@@ -550,6 +553,11 @@ class CalibratedIPS(BaseCJEEstimator):
                 estimates.append(np.nan)
                 standard_errors.append(np.nan)
                 n_samples_used[policy] = 0
+                reliability_gates[policy] = {
+                    "flagged": True,
+                    "refused": True,
+                    "reasons": ["no_overlap"],
+                }
                 logger.warning(f"Policy '{policy}' has no overlap - returning NaN")
                 continue
 
@@ -628,6 +636,15 @@ class CalibratedIPS(BaseCJEEstimator):
             ):  # High concentration AND high variability
                 refuse = True
                 reasons.append(f"top_5%={top_5pct_weight:.1%} with CV={cv_weights:.1f}")
+
+            # Record the gate outcome regardless of refuse_unreliable so
+            # downstream consumers (CLI, users) can tell whether a numeric
+            # estimate actually passed the gates.
+            reliability_gates[policy] = {
+                "flagged": bool(refuse),
+                "refused": bool(refuse and self.refuse_unreliable),
+                "reasons": list(reasons),
+            }
 
             if refuse:
                 # Build warning message that clarifies calibrated vs raw overlap issues
@@ -899,6 +916,7 @@ class CalibratedIPS(BaseCJEEstimator):
                 "ess_floor": self.ess_floor,
                 "var_cap": self.var_cap,
                 "calibration_info": self._calibration_info,  # TODO: Move to diagnostics
+                "reliability_gates": reliability_gates,
                 "degrees_of_freedom": (
                     df_info if df_info else None
                 ),  # Store DF per policy
@@ -1280,7 +1298,7 @@ class CalibratedIPS(BaseCJEEstimator):
             worst_bc_status = worst_status(worst_bc_status, policy_bc_status)
             if policy_bc_status != Status.GOOD:
                 logger.warning(
-                    f"Judge-space Bhattacharyya A_B={bc_value:.2f} for policy "
+                    f"Judge-space Bhattacharyya A_B={bc_value:.3f} for policy "
                     f"'{policy}' is below the paper's 0.85 gate for reliable "
                     f"IPS" + (" (severe mismatch)." if bc_value < 0.5 else ".")
                 )

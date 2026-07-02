@@ -49,6 +49,10 @@ class DREstimator(BaseCJEEstimator):
         use_calibrated_weights: If True, use score-indexed weight stabilization; if False, use raw weights (default True)
         weight_mode: "hajek" for mean-one normalized weights, "raw" for unnormalized (default "hajek")
         reward_calibrator: Optional reward calibrator for CalibratorBackedOutcomeModel (always use if available)
+        refuse_unreliable: Forwarded to the internal CalibratedIPS: when True, the
+            IPS component returns NaN for gate-failing policies (default False).
+            The DR estimate itself still combines outcome model + weights; the
+            flag governs the IPS component's own estimates/diagnostics.
         **kwargs: Additional arguments passed to the base class (e.g., oracle_slice_config)
 
     Monte Carlo Variance Handling:
@@ -80,6 +84,7 @@ class DREstimator(BaseCJEEstimator):
         reward_calibrator: Optional[Any] = None,
         random_seed: int = 42,
         run_diagnostics: bool = True,
+        refuse_unreliable: bool = False,
         **kwargs: Any,
     ):
         # Extract oua_jackknife BEFORE passing kwargs to parent
@@ -118,6 +123,7 @@ class DREstimator(BaseCJEEstimator):
             "weight_mode": weight_mode,
             "run_diagnostics": run_diagnostics,
             "suppress_overlap_warnings": True,  # DR handles poor overlap, suppress IPS warnings
+            "refuse_unreliable": refuse_unreliable,
             "n_outer_folds": n_folds,  # Align with DR outcome folds
             "outer_cv_seed": random_seed,  # Align fold seeds for one-way clustering
         }
