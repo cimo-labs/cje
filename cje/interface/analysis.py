@@ -14,6 +14,21 @@ from .service import AnalysisService
 
 logger = logging.getLogger(__name__)
 
+# Exact migration copy for the removed OPE (IPS/DR) entry point. Single source
+# for the API and the CLI; pinned verbatim by test_migration_errors.py.
+LOGGED_DATA_PATH_REMOVED_MESSAGE = """\
+Off-policy evaluation was removed in cje-eval 0.4.0; 'logged_data_path' is no longer accepted.
+
+CJE is now Direct-mode only: generate fresh draws from each policy, judge them,
+and label a small oracle slice.
+
+  * Have fresh draws?  Pass fresh_draws_dir=... or fresh_draws_data=... .
+  * Your logged data has judge_score + oracle_label?  It still works as the
+    calibration source: pass calibration_data_path="<your logged data>.jsonl".
+  * Need IPS/DR from logged propensities?  Pin the frozen OPE line:
+        pip install "cje-eval==0.3.*"
+    (maintained on the 0.3.x branch; docs at the v0.3.0 tag)."""
+
 
 def analyze_dataset(
     logged_data_path: Optional[str] = None,
@@ -40,9 +55,9 @@ def analyze_dataset(
 
     Args:
         logged_data_path: REMOVED in 0.4.0 along with the OPE (IPS/DR) modes.
-            Passing a value raises a ValueError pointing at the migration path.
-            Logged data with judge scores and oracle labels can still be used
-            for calibration via calibration_data_path.
+            Accepted only so that passing a value raises a ValueError with the
+            migration guidance. Logged data with judge scores and oracle labels
+            still works as the calibration source via calibration_data_path.
         fresh_draws_dir: Directory containing fresh draw response files.
         fresh_draws_data: In-memory alternative to fresh_draws_dir. Dict mapping policy names
             to lists of records. Each record needs: prompt_id, judge_score. Optional: oracle_label.
@@ -99,12 +114,7 @@ def analyze_dataset(
         >>> print(f"Oracle sources: {results.metadata['oracle_sources']}")
     """
     if logged_data_path is not None:
-        # NOTE(WP2): the exact migration copy is owned by WP2 and pinned by
-        # test_migration_errors.
-        raise ValueError(
-            "logged_data_path was removed in 0.4.0 — full migration message "
-            'coming in WP2. For IPS/DR modes pin pip install "cje-eval==0.3.*".'
-        )
+        raise ValueError(LOGGED_DATA_PATH_REMOVED_MESSAGE)
 
     # Validate that at least one data source is provided
     if fresh_draws_dir is None and fresh_draws_data is None:
@@ -112,9 +122,10 @@ def analyze_dataset(
             "Must provide at least one of: fresh_draws_dir, fresh_draws_data"
         )
 
-    # Delegate to the AnalysisService with typed config
+    # Delegate to the AnalysisService with typed config (logged_data_path is
+    # accepted above solely to raise the migration error; the config never
+    # sees it).
     cfg = AnalysisConfig(
-        logged_data_path=logged_data_path,
         fresh_draws_dir=fresh_draws_dir,
         fresh_draws_data=fresh_draws_data,
         calibration_data_path=calibration_data_path,

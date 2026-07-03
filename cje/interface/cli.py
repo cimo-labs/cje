@@ -9,6 +9,7 @@ import sys
 import argparse
 import json
 import logging
+from pathlib import Path
 
 # Set up logging
 logging.basicConfig(
@@ -22,7 +23,10 @@ def create_parser() -> argparse.ArgumentParser:
     """Create the argument parser for CJE CLI."""
     parser = argparse.ArgumentParser(
         prog="cje",
-        description="Causal Judge Evaluation - Unbiased LLM evaluation using causal inference",
+        description=(
+            "Causal Judge Evaluation - calibrated Direct-mode evaluation of "
+            "LLM policies from judge-scored fresh draws"
+        ),
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -30,22 +34,35 @@ def create_parser() -> argparse.ArgumentParser:
     # Analyze command
     analyze_parser = subparsers.add_parser(
         "analyze",
-        help="Run CJE analysis on a dataset",
-        description="Analyze a dataset using CJE estimation methods",
+        help="Run Direct-mode CJE analysis on fresh draws",
+        description=(
+            "Estimate per-policy values from judge-scored fresh draws "
+            "(Direct mode). PATH is a directory of per-policy response files "
+            "(e.g. <policy>_responses.jsonl) or a single JSONL file whose "
+            "records carry a target_policy field."
+        ),
     )
 
     analyze_parser.add_argument(
-        "dataset",
-        help="Path to JSONL dataset file",
+        "path",
+        nargs="?",
+        help=(
+            "Fresh draws: directory of per-policy response files, or a "
+            "single JSONL file with a target_policy field per record"
+        ),
     )
 
-    from .factory import get_estimator_names
-
+    # Names are validated by the interface factory so that removed 0.3.x OPE
+    # estimators surface the full migration error instead of an argparse
+    # choices message.
     analyze_parser.add_argument(
         "--estimator",
-        choices=list(get_estimator_names()),
         default="calibrated-direct",
-        help="Estimation method. Default: calibrated-direct.",
+        help=(
+            "Estimation method: 'calibrated-direct' (default) or 'direct'. "
+            "OPE names removed in 0.4.0 (calibrated-ips, dr-cpo, ...) raise "
+            "a migration error pointing at the 0.3.x line."
+        ),
     )
 
     analyze_parser.add_argument(
@@ -56,7 +73,15 @@ def create_parser() -> argparse.ArgumentParser:
 
     analyze_parser.add_argument(
         "--fresh-draws-dir",
-        help="Directory containing fresh draw response files (Direct mode)",
+        help="Alias for PATH (kept for 0.3.x compatibility)",
+    )
+
+    analyze_parser.add_argument(
+        "--calibration-data",
+        help=(
+            "JSONL file with judge_score + oracle_label pairs used to learn "
+            "the judge->oracle calibration (your old logged data works here)"
+        ),
     )
 
     # Note: We intentionally do not expose oracle_coverage here.
@@ -188,9 +213,109 @@ def best_policy_lines(results: object) -> list:
     return lines
 
 
+# Logged-data logprob fields. In fresh draws they are ignored (Direct mode
+# needs none); a file of records WITHOUT target_policy but WITH these fields
+# is an 0.3.x logged dataset and gets the migration error.
+_LOGPROB_FIELDS = (
+    "base_policy_logprob",
+    "target_policy_logprobs",
+    "logprob",
+    "logprobs",
+    "total_logprob",
+    "token_logprobs",
+)
+
+# Cap per-file scanning for logprob detection (uniform record shapes make
+# the first few records representative).
+_LOGPROB_SCAN_LIMIT = 100
+
+
+def _read_jsonl_records(path: Path) -> list:
+    """Read a JSONL file into a list of dict records (blank lines skipped)."""
+    records = []
+    with open(path) as f:
+        for line_num, line in enumerate(f, 1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON at {path}:{line_num}: {e}") from e
+            if not isinstance(record, dict):
+                raise ValueError(
+                    f"Expected a JSON object at {path}:{line_num}, "
+                    f"got {type(record).__name__}"
+                )
+            records.append(record)
+    if not records:
+        raise ValueError(f"No records found in {path}")
+    return records
+
+
+def _records_have_logprob_fields(records: list) -> bool:
+    return any(
+        field in record
+        for record in records[:_LOGPROB_SCAN_LIMIT]
+        for field in _LOGPROB_FIELDS
+    )
+
+
+def _dir_has_logprob_fields(directory: Path) -> bool:
+    """Scan the leading records of each JSONL file in a fresh-draws dir."""
+    for file_path in sorted(directory.rglob("*.jsonl")):
+        with open(file_path) as f:
+            for i, line in enumerate(f):
+                if i >= _LOGPROB_SCAN_LIMIT:
+                    break
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    break  # Leave loud parsing errors to the real loader
+                if isinstance(record, dict) and any(
+                    field in record for field in _LOGPROB_FIELDS
+                ):
+                    return True
+    return False
+
+
+def _fresh_draws_data_from_file(path: Path) -> dict:
+    """Group a single fresh-draws JSONL file by target_policy.
+
+    A file whose records have logged-data logprob fields but no
+    target_policy is an 0.3.x logged dataset: raise the migration error.
+    """
+    from .analysis import LOGGED_DATA_PATH_REMOVED_MESSAGE
+
+    records = _read_jsonl_records(path)
+
+    if not any("target_policy" in record for record in records):
+        if _records_have_logprob_fields(records):
+            # The old `cje analyze logged_data.jsonl` invocation.
+            raise ValueError(LOGGED_DATA_PATH_REMOVED_MESSAGE)
+        raise ValueError(
+            f"{path} does not look like fresh draws: no record has a "
+            f"'target_policy' field. Fresh-draws records need at least "
+            f"prompt_id, judge_score, and target_policy — or pass a "
+            f"directory of per-policy response files instead."
+        )
+
+    fresh_draws_data: dict = {}
+    for idx, record in enumerate(records):
+        policy = record.get("target_policy")
+        if not policy:
+            raise ValueError(
+                f"Record {idx} in {path} is missing 'target_policy' "
+                f"(other records have it — refusing to guess)."
+            )
+        fresh_draws_data.setdefault(str(policy), []).append(record)
+    return fresh_draws_data
+
+
 def run_analysis(args: argparse.Namespace) -> int:
     """Run the analysis command."""
-    from .analysis import analyze_dataset  # Same module, this is fine
+    from .analysis import LOGGED_DATA_PATH_REMOVED_MESSAGE, analyze_dataset
 
     # Set logging level
     if args.quiet:
@@ -199,6 +324,18 @@ def run_analysis(args: argparse.Namespace) -> int:
         logging.getLogger().setLevel(logging.DEBUG)
 
     try:
+        # Resolve the fresh-draws path (positional, or the 0.3.x-compatible
+        # --fresh-draws-dir alias). Both together is the removed 0.3.x OPE
+        # invocation (logged positional + fresh draws): migration error.
+        if args.path and args.fresh_draws_dir:
+            raise ValueError(LOGGED_DATA_PATH_REMOVED_MESSAGE)
+        path = args.path or args.fresh_draws_dir
+        if not path:
+            raise ValueError(
+                "Provide fresh draws: 'cje analyze PATH' (directory or "
+                "JSONL file) or --fresh-draws-dir PATH."
+            )
+
         # Prepare kwargs
         estimator_choice = args.estimator
         if estimator_choice in (None, "auto"):
@@ -213,15 +350,29 @@ def run_analysis(args: argparse.Namespace) -> int:
         if args.estimator_config:
             kwargs["estimator_config"] = args.estimator_config
 
-        if args.fresh_draws_dir:
-            kwargs["fresh_draws_dir"] = args.fresh_draws_dir
+        if args.calibration_data:
+            kwargs["calibration_data_path"] = args.calibration_data
+
+        path_obj = Path(path)
+        if path_obj.is_dir():
+            if _dir_has_logprob_fields(path_obj):
+                logger.info("logprob fields present and ignored (Direct mode)")
+            kwargs["fresh_draws_dir"] = str(path_obj)
+        elif path_obj.is_file():
+            fresh_draws_data = _fresh_draws_data_from_file(path_obj)
+            all_records = [r for recs in fresh_draws_data.values() for r in recs]
+            if _records_have_logprob_fields(all_records):
+                logger.info("logprob fields present and ignored (Direct mode)")
+            kwargs["fresh_draws_data"] = fresh_draws_data
+        else:
+            raise FileNotFoundError(path)
 
         # Run analysis
         if not args.quiet:
-            print(f"Running CJE analysis on {args.dataset}")
+            print(f"Running CJE analysis on {path}")
             print("=" * 50)
 
-        results = analyze_dataset(logged_data_path=args.dataset, **kwargs)
+        results = analyze_dataset(**kwargs)
 
         # Display results
         if not args.quiet:
@@ -256,7 +407,7 @@ def run_analysis(args: argparse.Namespace) -> int:
         return 0
 
     except FileNotFoundError as e:
-        print(f"❌ Error: Dataset file not found: {e}", file=sys.stderr)
+        print(f"❌ Error: Fresh draws path not found: {e}", file=sys.stderr)
         return 1
     except ValueError as e:
         print(f"❌ Error: {e}", file=sys.stderr)

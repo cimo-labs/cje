@@ -109,3 +109,25 @@ if _viz_available:
             "plot_policy_estimates",
         ]
     )
+
+
+# OPE classes removed in 0.4.0. A module __getattr__ turns
+# `from cje.advanced import CalibratedIPS` (and plain attribute access)
+# into an informative ImportError instead of a bare AttributeError.
+_REMOVED_IN_0_4_0 = (
+    "CalibratedIPS",
+    "PrecomputedSampler",
+    "DRCPOEstimator",
+    "MRDREstimator",
+    "TMLEEstimator",
+    "StackedDREstimator",
+)
+
+
+def __getattr__(name: str) -> object:
+    if name in _REMOVED_IN_0_4_0:
+        raise ImportError(
+            f"cje.advanced.{name} was removed in 0.4.0 — "
+            f'pip install "cje-eval==0.3.*" for OPE'
+        )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
