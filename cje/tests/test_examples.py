@@ -28,7 +28,8 @@ def _prepare_notebook_for_local_repo_execution(nb: Any) -> Any:
     for cell in nb.cells:
         if (
             cell.cell_type == "code"
-            and "pip install -q --upgrade cje-eval" in cell.source
+            and "pip install" in cell.source
+            and "cje-eval" in cell.source
         ):
             cell.source = bootstrap_local_repo
 

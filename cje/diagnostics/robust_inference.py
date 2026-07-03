@@ -633,6 +633,10 @@ def cluster_bootstrap_direct_with_refit(
                     if boot_covariates is not None
                     else None
                 ),
+                # Per-replicate refits log at DEBUG: at n_bootstrap=2000 the
+                # INFO fit lines are a ~4k-line stderr flood. The one-time
+                # full-data fit above keeps its INFO log.
+                quiet=True,
             )
         except Exception as e:
             logger.debug(f"Bootstrap replicate {attempt} calibration failed: {e}")
