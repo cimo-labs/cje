@@ -489,16 +489,6 @@ results = analyze_dataset(
 )
 ```
 
-### Hydra Support
-For complex configurations, use Hydra:
-```bash
-python -m cje.interface.hydra_entry \
-  dataset=logs.jsonl \
-  estimator=direct \
-  fresh_draws_dir=responses/ \
-  estimator_config.inference_method=bootstrap
-```
-
 ## Summary
 
 **Default mode: Direct.**

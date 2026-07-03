@@ -1,7 +1,16 @@
 # Changelog
 
-## Unreleased
+## Unreleased (0.4.0)
 
+CJE 0.4.0 focuses the library on what the paper's own results support: calibrated Direct-mode evaluation of policies from judge-scored fresh draws. The off-policy (IPS/DR) machinery — which requires teacher-forced logprobs no realistic user has, and which the paper shows mostly failing for LLM policies — is removed. **0.3.x remains available for OPE workflows: `pip install "cje-eval==0.3.*"`.** Removal bullets (full migration guide lands with the release):
+
+- **Removed the off-policy estimators**: `CalibratedIPS`, `DRCPOEstimator`, `MRDREstimator`, `TMLEEstimator`, `StackedDREstimator`, and the outcome models. `estimator=` names `calibrated-ips`, `raw-ips`, `dr-cpo`, `mrdr`, `tmle`, `stacked-dr` now raise a migration error pointing at the 0.3.x releases.
+- **Removed `logged_data_path` and OPE mode routing**: `analyze_dataset` is Direct-only; passing `logged_data_path` raises a migration error. Logged data with judge scores and oracle labels still works for calibration via `calibration_data_path`.
+- **Removed teacher forcing** (`cje.teacher_forcing`) and the `teacher-forcing` extra: no logprob computation ships with the library. Logprob fields in input data are ignored.
+- **Removed `PrecomputedSampler`** and the sampler dependency in the estimator base class.
+- **Removed the OPE weight/overlap diagnostics**: weight ESS/tail-index computation, TTC and CLE diagnostics, judge-space Bhattacharyya overlap gates, weight/DR dashboards, and the extreme-weights analysis. The Direct-relevant diagnostics (transportability audits, coverage badge/boundary cards, cluster bootstrap, planning) survive.
+- **Removed weight-stabilization (SIMCal) and oracle-slice calibration**; judge→oracle reward calibration is unchanged.
+- **Removed the Hydra entry point** and the `hydra` extra, the auto mode detection, and `cje.research`.
 - **Fix planning measurement-grid construction for large oracle pools**: `fit_variance_model` derived its calibration levels as fractions of the *full* oracle pool, so a pilot with many labels relative to `n_grid` (e.g. 480 labels with `n_grid=[100, 200]` → m ∈ {120, 240}) produced m values that exceeded most n; the `m < n` filter then collapsed the grid below 2 unique values per dimension and every planning run raised "Grid has insufficient variation" (broken since ≤0.2.25). The m levels now derive from the grid's own scale — `n_ref = min(max(n_grid), n_oracle_available)` — and are capped at 90% of `min(n_grid)`, so every n in the grid retains every m level and the design stays fully orthogonal (same fix keeps small-pool grids unchanged). The insufficient-variation error message now prints sorted lists instead of raw set literals (was `n={200}, m={120}`). NNLS/variance-model math untouched. The five slow planning tests (`test_planning.py` ×4, `test_planning_viz.py` dashboard E2E) pass again, plus new fast grid-construction unit tests.
 
 ## 0.3.0

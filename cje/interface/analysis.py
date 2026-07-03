@@ -30,47 +30,38 @@ def analyze_dataset(
     verbose: bool = False,
 ) -> EstimationResult:
     """
-    Analyze policies using logged data and/or fresh draws.
+    Analyze policies using fresh draws (Direct mode).
 
     This high-level function handles:
     - Data loading and validation
     - Automatic reward calibration (judge → oracle mapping)
     - Oracle source combining (pooling labels from multiple sources)
-    - Estimator selection and configuration
-    - Fresh draw loading for DR/Direct estimators
     - Complete analysis workflow
 
     Args:
-        logged_data_path: Path to logged data JSONL file (responses from base/production policy).
-            Required for: IPS mode (must have logprobs), DR mode.
-            Optional for: Direct mode (if provided, used for calibration only).
+        logged_data_path: REMOVED in 0.4.0 along with the OPE (IPS/DR) modes.
+            Passing a value raises a ValueError pointing at the migration path.
+            Logged data with judge scores and oracle labels can still be used
+            for calibration via calibration_data_path.
         fresh_draws_dir: Directory containing fresh draw response files.
-            Required for: DR mode, Direct mode.
-            Optional for: IPS mode (ignored).
         fresh_draws_data: In-memory alternative to fresh_draws_dir. Dict mapping policy names
             to lists of records. Each record needs: prompt_id, judge_score. Optional: oracle_label.
             Example: {"policy_a": [{"prompt_id": "1", "judge_score": 0.8}, ...], ...}
-            Direct mode only — combining with logged_data_path is not yet supported
-            (write draws to disk and pass fresh_draws_dir instead).
         calibration_data_path: Path to dedicated calibration dataset with oracle labels.
             Use this to learn judge→oracle mapping from a curated oracle set separate
             from your evaluation data. If combine_oracle_sources=True (default), will
-            pool with oracle labels from logged_data and fresh_draws for maximum efficiency.
+            pool with oracle labels from fresh_draws for maximum efficiency.
         combine_oracle_sources: Whether to pool oracle labels from all sources
-            (calibration_data + logged_data + fresh_draws). Default True for data efficiency.
+            (calibration_data + fresh_draws). Default True for data efficiency.
             Set False to use ONLY calibration_data_path for learning calibration.
             When combining, every source's (judge, oracle) pair enters calibration
             (labels attach to responses); only true duplicates are deduped.
         estimator: Estimator type. Options:
-            - "auto" (default): Automatically select based on available data
+            - "auto" (default): resolves to "direct"
             - "direct" / "calibrated-direct": On-policy evaluation (requires fresh_draws_dir
               or fresh_draws_data)
-            - "calibrated-ips": Importance sampling (requires logged_data_path with logprobs)
-            - "raw-ips": Uncalibrated IPS baseline
-            - "dr-cpo": DR estimator with calibrated outcome model
-            - "mrdr": More robust DR estimator
-            - "tmle": Targeted maximum likelihood estimator
-            - "stacked-dr": Doubly robust (requires both logged_data_path and fresh_draws_dir)
+            Removed OPE names (calibrated-ips, raw-ips, dr-cpo, mrdr, tmle,
+            stacked-dr) raise a ValueError pointing at the 0.3.x releases.
         judge_field: Metadata field containing judge scores (default "judge_score")
         oracle_field: Metadata field containing oracle labels (default "oracle_label")
         calibration_covariates: Optional list of metadata field names to use as covariates
@@ -79,14 +70,10 @@ def analyze_dataset(
             outcomes based on observable features like response length or domain.
             Only works with two_stage or auto calibration mode.
         include_response_length: Automatically include response length (word count) as a covariate.
-            Computed as len(response.split()). Requires all samples (logged data, fresh draws,
+            Computed as len(response.split()). Requires all samples (fresh draws
             and calibration data) to have a 'response' field. If True, 'response_length' is
             automatically prepended to calibration_covariates. Convenient for handling length bias.
         estimator_config: Optional configuration dict for the estimator.
-            Notable keys: {"refuse_unreliable": True} makes gate-failing
-            policies return NaN instead of the default warn-and-estimate
-            behavior (reaches CalibratedIPS and the DR estimators' internal
-            IPS component).
         verbose: Whether to print progress messages
 
     Returns:
@@ -95,54 +82,34 @@ def analyze_dataset(
         New metadata fields when using calibration_data_path:
         - results.metadata["oracle_sources"]: Breakdown of oracle labels by source
         - results.metadata["oracle_sources"]["conflicts"]: Cross-source oracle disagreements
-        - results.metadata["oracle_sources"]["distribution_mismatch"]: KS test results
 
     Raises:
         ValueError: If required data is missing for the selected estimator
 
     Example - Basic usage:
-        >>> # IPS mode: Logged data only
-        >>> results = analyze_dataset(logged_data_path="logs.jsonl")
-
-        >>> # DR mode: Both logged data and fresh draws
-        >>> results = analyze_dataset(
-        ...     logged_data_path="logs.jsonl",
-        ...     fresh_draws_dir="responses/"
-        ... )
-
         >>> # Direct mode: Fresh draws only
-        >>> results = analyze_dataset(
-        ...     fresh_draws_dir="responses/",
-        ...     estimator="direct"
-        ... )
+        >>> results = analyze_dataset(fresh_draws_dir="responses/")
 
     Example - Dedicated calibration set:
         >>> # Learn calibration from curated oracle set
         >>> results = analyze_dataset(
-        ...     logged_data_path="production_logs.jsonl",
+        ...     fresh_draws_dir="responses/",
         ...     calibration_data_path="human_labels.jsonl",  # 1000 samples, high quality
-        ...     estimator="calibrated-ips"
         ... )
         >>> print(f"Oracle sources: {results.metadata['oracle_sources']}")
-
-    Example - Combined oracle sources:
-        >>> # Pool oracle labels from multiple sources
-        >>> results = analyze_dataset(
-        ...     logged_data_path="eval_data.jsonl",           # 100 oracle labels
-        ...     fresh_draws_dir="responses/",                  # 200 oracle labels
-        ...     calibration_data_path="certified_labels.jsonl", # 500 oracle labels
-        ...     combine_oracle_sources=True,                   # Use all 800 labels
-        ...     verbose=True
-        ... )
     """
-    # Validate that at least one data source is provided
-    if (
-        logged_data_path is None
-        and fresh_draws_dir is None
-        and fresh_draws_data is None
-    ):
+    if logged_data_path is not None:
+        # NOTE(WP2): the exact migration copy is owned by WP2 and pinned by
+        # test_migration_errors.
         raise ValueError(
-            "Must provide at least one of: logged_data_path, fresh_draws_dir, fresh_draws_data"
+            "logged_data_path was removed in 0.4.0 — full migration message "
+            'coming in WP2. For IPS/DR modes pin pip install "cje-eval==0.3.*".'
+        )
+
+    # Validate that at least one data source is provided
+    if fresh_draws_dir is None and fresh_draws_data is None:
+        raise ValueError(
+            "Must provide at least one of: fresh_draws_dir, fresh_draws_data"
         )
 
     # Delegate to the AnalysisService with typed config

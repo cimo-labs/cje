@@ -1,14 +1,11 @@
-"""CJE: Causal Judge Evaluation - Unbiased LLM Policy Evaluation.
+"""CJE: Causal Judge Evaluation - Calibrated LLM Policy Evaluation.
 
-Simple API for off-policy evaluation with judge scores.
+Simple API for evaluating policies from fresh draws with judge scores.
 
 Example:
     from cje import analyze_dataset
 
-    results = analyze_dataset(
-        "data.jsonl",
-        estimator="calibrated-ips",
-    )
+    results = analyze_dataset(fresh_draws_dir="responses/")
     print(results.summary())
 """
 
@@ -47,9 +44,6 @@ try:
     from .visualization import (
         plot_policy_estimates,
         plot_calibration_comparison,
-        plot_weight_dashboard_summary,
-        plot_weight_dashboard_detailed,
-        plot_dr_dashboard,
         plot_planning_dashboard,
     )
 
@@ -87,9 +81,6 @@ if _has_visualization:
         [
             "plot_policy_estimates",
             "plot_calibration_comparison",
-            "plot_weight_dashboard_summary",
-            "plot_weight_dashboard_detailed",
-            "plot_dr_dashboard",
             "plot_planning_dashboard",
         ]
     )

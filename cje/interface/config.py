@@ -9,8 +9,11 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class AnalysisConfig(BaseModel):
+    # NOTE(WP2): this field is dropped entirely once the service merges to the
+    # single Direct flow; for now any non-None value raises the migration error.
     logged_data_path: Optional[str] = Field(
-        None, description="Path to logged data JSONL (from base/production policy)"
+        None,
+        description="REMOVED in 0.4.0 (OPE modes). Non-None values raise a migration error.",
     )
     fresh_draws_dir: Optional[str] = Field(
         None, description="Directory with fresh draws from target policies"
@@ -33,10 +36,7 @@ class AnalysisConfig(BaseModel):
     )
     estimator: str = Field(
         "auto",
-        description=(
-            "Estimator name: auto, direct/calibrated-direct, calibrated-ips, raw-ips, "
-            "dr-cpo, mrdr, tmle, stacked-dr."
-        ),
+        description="Estimator name: auto (resolves to direct), direct/calibrated-direct.",
     )
     judge_field: str = Field("judge_score")
     oracle_field: str = Field("oracle_label")

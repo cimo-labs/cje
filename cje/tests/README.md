@@ -2,25 +2,21 @@
 
 ## Overview
 
-The CJE test suite focuses on end-to-end testing with real data. The suite consists of 19 test files providing comprehensive coverage of critical functionality.
+The CJE test suite focuses on end-to-end testing with real data. The suite provides comprehensive coverage of the Direct-mode functionality.
 
 ## File Structure
 
 ```
 tests/
 ├── conftest.py                           # Shared fixtures and arena data loaders
-├── run_all_tests.py                      # Test runner script
 │
 ├── E2E Tests (User Workflows)
-│   ├── test_e2e_estimators.py            # Complete pipelines for all estimators
-│   ├── test_e2e_features.py              # Weight stabilization, cross-fitting, calibration-aware inference
-│   ├── test_interface_integration.py     # High-level API testing
+│   ├── test_e2e_features.py              # Cross-fitting fold plumbing on arena data
+│   ├── test_interface_integration.py     # High-level API testing (Direct mode)
 │   └── test_examples.py                  # Tutorial notebook and quickstart validation
 │
 ├── Core Tests (Infrastructure)
-│   ├── test_infrastructure.py            # Critical infrastructure and edge cases
-│   ├── test_unified_folds.py             # Comprehensive fold management
-│   └── test_reproducibility.py           # Determinism and seed propagation
+│   └── test_unified_folds.py             # Comprehensive fold management
 │
 ├── Feature Tests
 │   ├── test_bootstrap_inference.py       # Bootstrap UQ for Direct mode
@@ -31,7 +27,7 @@ tests/
 │   ├── test_oua_at_full_coverage.py      # Calibration-aware inference skipped at 100% coverage
 │   ├── test_transport_diagnostics.py     # Transportability probe protocol
 │   ├── test_transport_bootstrap.py       # Transport bootstrap testing
-│   ├── test_cle_diagnostics.py           # CLE and TTC diagnostics
+│   ├── test_mc_coverage.py               # Monte Carlo CI coverage harness (slow layer)
 │   ├── test_planning.py                  # Budget planning features
 │   ├── test_planning_viz.py              # Planning visualization
 │   └── test_simulation_planning.py       # Simulation-based planning
@@ -43,7 +39,7 @@ tests/
 
 ### 1. End-to-End Focus
 Instead of testing individual functions, we test complete pipelines:
-- Load data → Calibrate → Create sampler → Estimate → Validate results
+- Load data → Calibrate → Estimate → Validate results
 - All E2E tests use real Arena data for authentic testing
 - Tests verify user-visible outcomes, not implementation details
 
@@ -51,7 +47,7 @@ Instead of testing individual functions, we test complete pipelines:
 Real subset from Arena 5K evaluation:
 - 1000 samples with actual judge scores and oracle labels
 - 4 target policies: base, clone, parallel_universe_prompt, unhelpful
-- Fresh draws for each policy enabling DR estimation
+- Fresh draws for each policy enabling Direct estimation
 - Ground truth for validation (48% oracle coverage in base policy for reward calibration)
 
 **Note**: The same arena sample data is used in `examples/arena_sample/` for the tutorial notebook and quickstart script.
@@ -85,7 +81,6 @@ poetry run pytest cje/tests/
 poetry run pytest cje/tests/test_e2e*.py -q
 
 # Run specific test files
-poetry run pytest cje/tests/test_e2e_estimators.py -v
 poetry run pytest cje/tests/test_unified_folds.py
 poetry run pytest cje/tests/test_examples.py  # Validate tutorial and examples
 
@@ -97,7 +92,7 @@ poetry run pytest cje/tests -m "not slow"
 poetry run pytest --cov=cje --cov-report=html cje/tests/
 
 # Quick health check (single E2E test)
-poetry run pytest cje/tests/test_e2e_estimators.py::TestE2EEstimators::test_calibrated_ips_pipeline -v
+poetry run pytest cje/tests/test_interface_integration.py::test_direct_only_mode_works -v
 ```
 
 ## Writing New Tests
@@ -110,7 +105,7 @@ When adding tests, follow these guidelines:
 4. **Document intent** - Clear test names and docstrings
 
 ```python
-def test_new_feature_workflow(arena_sample):
+def test_new_feature_workflow(arena_sample, arena_fresh_draws):
     """Test that new feature improves estimates."""
     # 1. Calibrate dataset
     calibrated, cal_result = calibrate_dataset(
@@ -118,15 +113,18 @@ def test_new_feature_workflow(arena_sample):
         judge_field="judge_score",
         oracle_field="oracle_label"
     )
-    
-    # 2. Create sampler
-    sampler = PrecomputedSampler(calibrated)
-    
-    # 3. Run estimation with new feature
-    estimator = YourEstimator(sampler, new_feature=True)
+
+    # 2. Run estimation with new feature
+    estimator = YourEstimator(
+        target_policies=list(arena_fresh_draws),
+        reward_calibrator=cal_result.calibrator,
+        new_feature=True,
+    )
+    for policy, fresh in arena_fresh_draws.items():
+        estimator.add_fresh_draws(policy, fresh)
     results = estimator.fit_and_estimate()
-    
-    # 4. Validate results
+
+    # 3. Validate results
     assert len(results.estimates) == 4  # 4 policies
     assert all(0 <= e <= 1 for e in results.estimates)
     # Test that new feature had expected effect
@@ -193,4 +191,4 @@ Test execution tips:
 
 ## Summary
 
-The CJE test suite validates real workflows with real data across 20 test files. This approach catches integration issues, runs fast, and provides comprehensive coverage of all estimators, calibration methods, diagnostic tools, bootstrap inference, covariates, data loading, auto-normalization, planning, and reproducibility guarantees. The `test_examples.py` file ensures the tutorial notebook and quickstart script remain accurate and functional.
+The CJE test suite validates real workflows with real data. This approach catches integration issues, runs fast, and provides comprehensive coverage of the Direct estimator, calibration methods, diagnostic tools, bootstrap inference, covariates, data loading, auto-normalization, and planning. The `test_examples.py` file ensures the tutorial notebook and quickstart script remain accurate and functional.

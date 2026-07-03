@@ -14,7 +14,6 @@ import pytest
 
 from cje import analyze_dataset
 from cje.data.models import Dataset, Sample
-from cje.interface.mode_detection import detect_analysis_mode
 
 
 def _make_sample(
@@ -44,7 +43,8 @@ def _make_logged_dataset(n: int = 20) -> Dataset:
 
 
 class TestFreshDrawsDataWithLoggedData:
-    """fresh_draws_data used to be silently ignored when logged_data_path was set."""
+    """logged_data_path was removed in 0.4.0 and must fail loudly, never be
+    silently ignored (as OPE modes once silently ignored fresh_draws_data)."""
 
     def test_fresh_draws_data_with_logged_data_path_raises(self) -> None:
         fresh_draws_data = {
@@ -52,10 +52,7 @@ class TestFreshDrawsDataWithLoggedData:
         }
         with pytest.raises(
             ValueError,
-            match=(
-                "fresh_draws_data together with logged_data_path is not yet "
-                "supported; write draws to disk and pass fresh_draws_dir"
-            ),
+            match="logged_data_path was removed in 0.4.0",
         ):
             analyze_dataset(
                 logged_data_path="logged.jsonl",
@@ -64,24 +61,12 @@ class TestFreshDrawsDataWithLoggedData:
 
 
 class TestNonexistentFreshDrawsDir:
-    """A typo'd fresh_draws_dir used to silently downgrade auto mode DR -> IPS."""
+    """A typo'd fresh_draws_dir must fail loudly, not silently degrade."""
 
     def test_nonexistent_fresh_draws_dir_raises(self, tmp_path: Path) -> None:
-        dataset = _make_logged_dataset()
         missing_dir = str(tmp_path / "no_such_responses_dir")
-        with pytest.raises(FileNotFoundError, match="no_such_responses_dir"):
-            detect_analysis_mode(dataset, missing_dir)
-
-    def test_none_fresh_draws_dir_still_selects_ips(self) -> None:
-        dataset = _make_logged_dataset()
-        mode, _, coverage = detect_analysis_mode(dataset, None)
-        assert mode == "ips"
-        assert coverage == 1.0
-
-    def test_existing_fresh_draws_dir_selects_dr(self, tmp_path: Path) -> None:
-        dataset = _make_logged_dataset()
-        mode, _, _ = detect_analysis_mode(dataset, str(tmp_path))
-        assert mode == "dr"
+        with pytest.raises(ValueError, match="no_such_responses_dir"):
+            analyze_dataset(fresh_draws_dir=missing_dir)
 
 
 class TestZeroOracleDirectMode:
@@ -685,69 +670,3 @@ class TestCombineOracleSourcesKeepsAllPairs:
         assert any(
             "conflicting oracle labels" in record.message for record in caplog.records
         )
-
-
-class TestDuplicatePromptIdOofFallback:
-    """CalibratedIPS.fit: the duplicate-prompt_id branch left ds_idx unbound;
-    the UnboundLocalError was swallowed by a blanket except, silently skipping
-    the fold-based OOF fallback (Option 2)."""
-
-    class _StubCalibrator:
-        """Calibrator stub exposing both OOF interfaces."""
-
-        def __init__(self) -> None:
-            self.oof_by_index_called = False
-            self.oof_called = False
-
-        def predict_oof_by_index(self, ds_idx: np.ndarray) -> np.ndarray:
-            self.oof_by_index_called = True
-            return np.full(len(ds_idx), 0.5)
-
-        def predict_oof(
-            self, judge_scores: np.ndarray, fold_ids: np.ndarray
-        ) -> np.ndarray:
-            self.oof_called = True
-            return np.clip(np.asarray(judge_scores, dtype=float), 0.0, 1.0)
-
-    @staticmethod
-    def _dataset_with_duplicate_prompt_ids() -> Dataset:
-        rng = np.random.default_rng(13)
-        samples = []
-        for i in range(20):
-            # Two samples share prompt_id "p0"
-            prompt_id = "p0" if i in (0, 1) else f"p{i}"
-            judge = float(rng.uniform(0.1, 0.9))
-            samples.append(
-                Sample(
-                    prompt_id=prompt_id,
-                    prompt=f"prompt {i}",
-                    response=f"response {i}",
-                    base_policy_logprob=-10.0,
-                    target_policy_logprobs={"pi_target": -10.0 + 0.1 * (i % 5)},
-                    judge_score=judge,
-                    oracle_label=None,
-                    reward=judge,
-                )
-            )
-        return Dataset(samples=samples, target_policies=["pi_target"])
-
-    def test_duplicate_prompt_ids_fall_through_to_fold_based_oof(self) -> None:
-        from cje.data.precomputed_sampler import PrecomputedSampler
-        from cje.estimators.calibrated_ips import CalibratedIPS
-
-        dataset = self._dataset_with_duplicate_prompt_ids()
-        sampler = PrecomputedSampler(dataset)
-        stub = self._StubCalibrator()
-
-        estimator = CalibratedIPS(
-            sampler,
-            reward_calibrator=stub,
-            use_outer_cv=False,
-            oua_jackknife=False,
-        )
-        estimator.fit()
-
-        # With duplicate prompt_ids, Option 1 (index-based OOF) must be
-        # skipped and control must FALL THROUGH to Option 2 (fold-based OOF).
-        assert not stub.oof_by_index_called
-        assert stub.oof_called

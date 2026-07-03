@@ -197,66 +197,10 @@ class IPSDiagnostics:
             if max_w > 100:
                 issues.append(f"Extreme max weight for {policy}: {max_w:.1f}")
 
-        # Check for heavy tails using Hill index (NaN = estimation failed).
-        # Thresholds come from the canonical gates module: α < 1 risks an
-        # infinite mean, α < 2 an infinite variance.
-        if self.tail_indices:
-            from .gates import TAIL_INDEX_CRITICAL, TAIL_INDEX_WARNING
-
-            for policy, tail_idx in self.tail_indices.items():
-                if tail_idx is not None:
-                    if np.isnan(tail_idx):
-                        issues.append(
-                            f"Tail index estimation failed for {policy} "
-                            f"(degenerate weights; tail risk unknown)"
-                        )
-                    elif tail_idx < TAIL_INDEX_CRITICAL:
-                        issues.append(
-                            f"Extremely heavy tail for {policy}: α={tail_idx:.2f} (infinite-mean risk)"
-                        )
-                    elif tail_idx < TAIL_INDEX_WARNING:
-                        issues.append(
-                            f"Heavy tail for {policy}: α={tail_idx:.2f} (infinite-variance risk)"
-                        )
-
-        # Check Target-Typicality Coverage against the paper's gates
-        if self.ttc_per_policy:
-            from .gates import TTC_GOOD_THRESHOLD, TTC_CRITICAL_THRESHOLD
-
-            for policy, ttc in self.ttc_per_policy.items():
-                if ttc is None:
-                    continue
-                if ttc < TTC_CRITICAL_THRESHOLD:
-                    issues.append(
-                        f"TTC {ttc:.1%} for {policy}: logger coverage of "
-                        f"target-typical region is poor; logs-only IPS will fail"
-                    )
-                elif ttc < TTC_GOOD_THRESHOLD:
-                    issues.append(
-                        f"TTC {ttc:.1%} for {policy} below the 70% gate; "
-                        f"prefer Direct/DR over logs-only IPS"
-                    )
-
-        # Check judge-space Bhattacharyya affinity against the paper's gates
-        if self.bc_sigmaS_per_policy:
-            from .gates import (
-                BHATTACHARYYA_GOOD_THRESHOLD,
-                BHATTACHARYYA_SEVERE_THRESHOLD,
-            )
-
-            for policy, bc in self.bc_sigmaS_per_policy.items():
-                if bc is None:
-                    continue
-                if bc < BHATTACHARYYA_SEVERE_THRESHOLD:
-                    issues.append(
-                        f"Judge-space A_B {bc:.2f} for {policy}: severe "
-                        f"distribution mismatch (< 0.5)"
-                    )
-                elif bc < BHATTACHARYYA_GOOD_THRESHOLD:
-                    issues.append(
-                        f"Judge-space A_B {bc:.2f} for {policy} below the "
-                        f"0.85 gate for reliable IPS"
-                    )
+        # NOTE(WP3): the tail-index / TTC / Bhattacharyya validation ladders
+        # were removed with the OPE weight diagnostics; the fields themselves
+        # (tail_indices, ttc_per_policy, bc_sigmaS_per_policy) die with the
+        # DirectDiagnostics redesign.
 
         # Check coverage badges (level-claim identification risk)
         if self.boundary_cards:

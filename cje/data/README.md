@@ -39,8 +39,7 @@ data/
 ├── models.py             # Pydantic data models (Sample, Dataset, etc.)
 ├── loaders.py            # Data loading utilities (DatasetLoader, DataSource)
 ├── factory.py            # Factory pattern for Dataset creation
-├── precomputed_sampler.py # Sampler wrapper for estimators
-├── fresh_draws.py        # Fresh draw models for DR
+├── fresh_draws.py        # Fresh draw models for Direct mode
 ├── folds.py              # Unified fold management for cross-validation
 ├── validation.py         # Data validation functions
 └── reward_utils.py       # Reward manipulation utilities
@@ -76,24 +75,6 @@ dataset = factory.create_from_jsonl("data.jsonl")
 # From raw dictionaries
 data = [{"prompt": "...", "response": "..."}]  # plus judge_score, logprobs, etc.
 dataset = factory.create_from_data(data)
-```
-
-### Using PrecomputedSampler
-```python
-from cje.data import PrecomputedSampler
-
-# Create sampler (requires rewards)
-sampler = PrecomputedSampler(dataset)
-
-# Or directly from JSONL
-sampler = PrecomputedSampler.from_jsonl("calibrated_data.jsonl")
-
-# Access data
-n_samples = sampler.n_valid_samples
-policies = sampler.target_policies
-
-# Check oracle coverage (affects calibration-aware jackknife when < 1.0)
-oracle_coverage = sampler.oracle_coverage  # Float in [0, 1]: fraction with oracle labels
 ```
 
 ### Working with EstimationResult

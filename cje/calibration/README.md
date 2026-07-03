@@ -32,10 +32,7 @@ calibration/
 ├── __init__.py          # Public API exports
 ├── dataset.py           # High-level dataset calibration workflows
 ├── flexible_calibrator.py # Flexible calibration for non-monotone relationships
-├── isotonic.py          # Core isotonic regression and variance control
-├── judge.py             # Judge score calibration to oracle labels
-├── oracle_slice.py      # Oracle slice configuration
-└── simcal.py            # Weight stabilization implementation (`SIMCalibrator`)
+└── judge.py             # Judge score calibration to oracle labels
 ```
 
 ## Core Concepts
@@ -48,12 +45,6 @@ reward calibration maps cheap LLM judge scores to expensive oracle labels with a
 Auto mode detects non-monotonicity by comparing regional performance and selects the appropriate method. The selected mode is stored in metadata for transparency. This automatic selection is a key feature of reward calibration.
 
 **Why isotonic?** Isotonic regression is the default because it imposes exactly the right inductive bias (monotonicity) while making minimal assumptions, preserves oracle KPI levels by construction, and is highly efficient with small label budgets (5-25% coverage recommended). See the detailed rationale below.
-
-### 2. Weight stabilization (`SIMCalibrator`)
-Stabilizes importance weights through surrogate-indexed monotone projection:
-- Projects weights to be monotone with an ordering index
-- Enforces variance constraints via blending
-- Maintains mean-1 property for unbiasedness
 
 ### 3. Cross-Fitted Models
 For doubly robust methods, provides out-of-fold predictions to maintain orthogonality between nuisance functions.
@@ -195,26 +186,6 @@ Handles non-monotone judge→oracle relationships via two-stage approach:
 - Fallback to monotone for small samples (<20)
 - Clipping to [0,1] ensures valid reward range
 
-### `isotonic.py` - Isotonic Weight Calibration
-Core mathematical operations for weight calibration:
-- `calibrate_to_target_mean()`: Main entry point for weight calibration
-- `_pav_mean1_projection_sorted()`: Pool Adjacent Violators with mean preservation
-- `_variance_safe_blend_closed_form()`: Optimal blending for variance control
-- Uses "exact" mode (bisection) for consistency
-- Handles ordering by arbitrary index (e.g., judge scores)
-
-### `simcal.py` - Weight stabilization stack
-Advanced weight calibration through stacking:
-- `SIMCalibrator`: Combines {baseline, increasing, decreasing} candidates
-- Out-of-fold (OOF) influence function minimization
-- Quadratic program on simplex for optimal mixture
-- Uniform blending for ESS/variance constraints
-- Configurable via `SimcalConfig` dataclass
-- **New**: Supports fit/predict separation for honest inference
-  - `fit()`: Learn isotonic models and mixture weights on training data
-  - `predict()`: Apply learned calibration to new data with score clipping
-  - `fit_transform()`: Backward-compatible single-pass method
-
 ## Key Design Decisions
 
 ### 1. **Separation of Concerns**
@@ -311,45 +282,6 @@ print(f"Coverage: {cal_result.coverage_at_01:.1%}")
 print(f"Selected mode: {calibrated_dataset.metadata.get('calibration_info', {}).get('selected_mode')}")
 ```
 
-### Weight Calibration (Direct)
-```python
-from cje.calibration import calibrate_to_target_mean
-
-# Calibrate weights with variance control
-calibrated_weights, info = calibrate_to_target_mean(
-    raw_weights,
-    target_mean=1.0,
-    enforce_variance_nonincrease=True,
-    ordering_index=judge_scores,  # Order by judge scores
-    return_diagnostics=True
-)
-
-print(f"Variance reduction: {info['var_before']/info['var_after']:.2f}x")
-```
-
-### Stacked weight stabilization
-```python
-from cje.calibration import SIMCalibrator, SimcalConfig
-
-# Configure stacked calibration
-config = SimcalConfig(
-    ess_floor=0.2,      # Minimum 20% ESS
-    var_cap=1.0,        # No variance increase
-    include_baseline=False,
-)
-
-# Run calibration
-calibrator = SIMCalibrator(config)
-calibrated, info = calibrator.transform(
-    weights, 
-    judge_scores,
-    rewards=rewards  # For IPS influence functions
-)
-
-print(f"Mixture: {info['mixture_weights']}")
-print(f"ESS improvement: {info['ess_after']/info['ess_before']:.2f}x")
-```
-
 ### Cross-Fitted Calibration (for DR)
 ```python
 from cje.calibration import JudgeCalibrator
@@ -370,10 +302,15 @@ oof_predictions = calibrator.predict_oof(judge_scores, fold_ids)
 
 ### Oracle Uncertainty (Default: calibration-aware Jackknife)
 ```python
-from cje.estimators import CalibratedIPS
+from cje.estimators import CalibratedDirectEstimator
 
 # Default: calibration-aware jackknife for oracle uncertainty (recommended)
-estimator = CalibratedIPS(sampler, oua_jackknife=True)  # Default
+estimator = CalibratedDirectEstimator(
+    target_policies=["policy_a"],
+    reward_calibrator=cal_result.calibrator,
+    oua_jackknife=True,  # Default
+)
+estimator.add_fresh_draws("policy_a", fresh_draws)
 result = estimator.fit_and_estimate()
 # standard_errors already include the oracle-jackknife component when enabled
 
@@ -462,7 +399,6 @@ When the ordering index has ties (common with discrete judge scores):
 ## Testing
 
 The calibration module has comprehensive test coverage:
-- `test_stacked_simcal.py`: Weight stabilization functionality
 - Integration tests verify calibration in full pipeline
 - Edge case tests for degenerate inputs
 

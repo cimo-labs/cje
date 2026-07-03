@@ -44,11 +44,8 @@ def create_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument(
         "--estimator",
         choices=list(get_estimator_names()),
-        default="stacked-dr",
-        help=(
-            "Estimation method. Default: stacked-dr (robust ensemble). "
-            "Use calibrated-ips for speed over robustness or if you don't have fresh draws."
-        ),
+        default="calibrated-direct",
+        help="Estimation method. Default: calibrated-direct.",
     )
 
     analyze_parser.add_argument(
@@ -59,7 +56,7 @@ def create_parser() -> argparse.ArgumentParser:
 
     analyze_parser.add_argument(
         "--fresh-draws-dir",
-        help="Directory containing fresh draw response files (for DR estimators)",
+        help="Directory containing fresh draw response files (Direct mode)",
     )
 
     # Note: We intentionally do not expose oracle_coverage here.
@@ -203,12 +200,9 @@ def run_analysis(args: argparse.Namespace) -> int:
 
     try:
         # Prepare kwargs
-        # Determine estimator default based on presence of fresh draws
         estimator_choice = args.estimator
         if estimator_choice in (None, "auto"):
-            estimator_choice = (
-                "stacked-dr" if args.fresh_draws_dir else "calibrated-ips"
-            )
+            estimator_choice = "calibrated-direct"
 
         kwargs = {
             "estimator": estimator_choice,

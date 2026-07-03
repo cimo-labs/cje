@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 from .base_estimator import BaseCJEEstimator
 from ..data.models import EstimationResult
-from ..diagnostics import IPSDiagnostics, Status
+from ..diagnostics.models import IPSDiagnostics, Status
 
 logger = logging.getLogger(__name__)
 
@@ -117,34 +117,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         use_multipolicy_eif: Optional[BoolLike] = None,
         **kwargs: Any,
     ):
-        # Create a minimal dummy sampler for base class compatibility
-        # TODO: Refactor base class to not require sampler
-        from ..data.precomputed_sampler import PrecomputedSampler
-        from ..data.models import Dataset, Sample
-
-        # Create minimal dummy dataset
-        dummy_sample = Sample(
-            prompt_id="dummy",
-            prompt="",
-            response="",
-            reward=0.5,
-            base_policy_logprob=-1.0,
-            target_policy_logprobs={p: -1.0 for p in target_policies},
-            judge_score=None,
-            oracle_label=None,
-            metadata={},
-        )
-        dummy_dataset = Dataset(samples=[dummy_sample], target_policies=target_policies)
-        # Suppress warnings from dummy sampler (we don't actually use it)
-        import logging
-
-        old_level = logging.getLogger("cje.data.precomputed_sampler").level
-        logging.getLogger("cje.data.precomputed_sampler").setLevel(logging.ERROR)
-        dummy_sampler = PrecomputedSampler(dummy_dataset)
-        logging.getLogger("cje.data.precomputed_sampler").setLevel(old_level)
-
         super().__init__(
-            sampler=dummy_sampler,
             run_diagnostics=run_diagnostics,
             reward_calibrator=reward_calibrator,
             oua_jackknife=oua_jackknife,
