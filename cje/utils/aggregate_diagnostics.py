@@ -52,10 +52,7 @@ def aggregate_json_file(path: Path) -> List[Dict[str, Any]]:
     # we rely on per-policy robust SEs being absent (None) in most cases.
 
     diagnostics = data.get("diagnostics", {})
-    ess_per_policy = _get(diagnostics, "ess_per_policy", default={})
-    tail_indices = _get(diagnostics, "tail_indices", default={})
-    hellinger_per_policy = _get(diagnostics, "hellinger_per_policy", default={})
-    hellinger_overall = _float_or_none(diagnostics.get("hellinger_affinity"))
+    boundary_cards = _get(diagnostics, "boundary_cards", default={}) or {}
 
     for idx, policy in enumerate(policies):
         p = per_policy.get(policy, {})
@@ -72,14 +69,10 @@ def aggregate_json_file(path: Path) -> List[Dict[str, Any]]:
             "n_samples": p.get("n_samples"),
         }
 
-        # Overlap/weights diagnostics (if available)
-        row["ess_fraction"] = _float_or_none(ess_per_policy.get(policy))
-        row["tail_index"] = _float_or_none(tail_indices.get(policy))
-        # Prefer per-policy Hellinger when available, else overall
-        hp = hellinger_per_policy.get(policy)
-        row["hellinger_affinity"] = (
-            _float_or_none(hp) if hp is not None else hellinger_overall
-        )
+        # Coverage badge (boundary card) diagnostics, if available
+        card = boundary_cards.get(policy) or {}
+        row["boundary_status"] = card.get("status")
+        row["out_of_range"] = _float_or_none(card.get("out_of_range"))
 
         # Calibration info (global)
         cal_info = metadata.get("calibration_info", {})
@@ -147,6 +140,8 @@ def write_csv(rows: List[Dict[str, Any]], output_path: Path) -> None:
         "ci_lower",
         "ci_upper",
         "n_samples",
+        "boundary_status",
+        "out_of_range",
         "f_min",
         "f_max",
         "n_oracle",

@@ -11,10 +11,19 @@ Synthetic DGP with a KNOWN policy value:
 True policy value: V(pi') = E[w(S) * mu(S)] under U(0,1)
                  = 0.4*0.25 + (0.4*0.5 + 1.2*0.25)*1/2 + 1.2*0.5*1/3 = 0.55.
 
-NOTE(WP3): the fast layer (unbiasedness + SE-calibration assertions that ran
-in CI) covered only the removed OPE estimators; WP3 adds a direct-mode fast
-layer so 0.4.0 ships with an inference regression guard. Until then only the
-SLOW coverage test below exercises this harness.
+The fresh draws are sampled from the tilted density directly, so the Direct
+estimand E[mu(S')] over the draw distribution equals the same TRUE_VALUE.
+
+Two layers:
+
+- FAST (runs in CI, deterministic seeds): R=40 replicates of
+  CalibratedDirectEstimator (cluster_robust inference). Asserts (i) point
+  estimates unbiased within MC tolerance, (ii) mean reported SE within
+  [0.7, 1.3]x of the empirical SD across replicates at 100% oracle coverage
+  (the IF-only regime), (iii) reported SE not understated (ratio >= 0.7) at
+  25% oracle coverage (the OUA /K bug produced ~0.45 here), and (iv) a
+  deterministic boundary-card regression: cards appear in results and fire
+  on out-of-range judge scores.
 
 - SLOW (@pytest.mark.slow, excluded from CI): R=300 replicates; asserts 95%
   CI coverage >= 88% for the direct estimator at 25% oracle coverage.
@@ -169,6 +178,203 @@ def _collect(
         name: {key: np.asarray(vals) for key, vals in cols.items()}
         for name, cols in rows.items()
     }
+
+
+# ---------------------------------------------------------------------------
+# FAST layer: unbiasedness + SE calibration for the direct estimator
+# ---------------------------------------------------------------------------
+
+N_FAST = 800
+R_FAST = 40
+
+
+@pytest.fixture(scope="module")
+def fast_direct_replicates() -> Dict[str, Dict[str, np.ndarray]]:
+    """R_FAST replicates at 25% oracle coverage.
+
+    Total uncertainty = cluster-robust IF variance + oracle (calibration)
+    jackknife variance.
+    """
+    return _collect(
+        ["direct"],
+        n_reps=R_FAST,
+        n=N_FAST,
+        m_draws=1,
+        seed0=20260701,
+    )
+
+
+@pytest.fixture(scope="module")
+def fast_direct_full_oracle_replicates() -> Dict[str, Dict[str, np.ndarray]]:
+    """R_FAST replicates at 100% oracle coverage.
+
+    With every logged sample labeled, the OUA jackknife is skipped by
+    design, so the reported SE is the cluster-robust IF component alone and
+    the empirical SD across replicates is the matching truth. This isolates
+    IF-SE correctness from oracle-jackknife behavior.
+    """
+    return _collect(
+        ["direct"],
+        n_reps=R_FAST,
+        n=N_FAST,
+        m_draws=1,
+        seed0=41_000_000,
+        oracle_frac=1.0,
+    )
+
+
+def test_fast_direct_point_estimate_unbiased(
+    fast_direct_replicates: Dict[str, Dict[str, np.ndarray]],
+) -> None:
+    """The calibrated plug-in mean over tilted draws must hit TRUE_VALUE.
+
+    The DGP encodes the truth in the draw distribution itself: fresh draws
+    are rejection-sampled from w(s), so E[f*(S')] = E[w(S) mu(S)] = 0.55.
+    Tolerance is MC noise plus a small isotonic-boundary allowance.
+    """
+    estimates = fast_direct_replicates["direct"]["estimate"]
+    mc_se_of_mean = float(np.std(estimates, ddof=1) / np.sqrt(len(estimates)))
+    bias = float(np.mean(estimates) - TRUE_VALUE)
+    tol = 4 * mc_se_of_mean + 0.005
+    assert abs(bias) < tol, (
+        f"direct: mean estimate {np.mean(estimates):.4f} deviates from truth "
+        f"{TRUE_VALUE:.4f} by {bias:.4f} (tol {tol:.4f})"
+    )
+
+
+def test_fast_direct_se_matches_empirical_sd_full_oracle(
+    fast_direct_full_oracle_replicates: Dict[str, Dict[str, np.ndarray]],
+) -> None:
+    """At 100% oracle coverage the reported SE is the IF component alone.
+
+    This is the sharp test for the SE composition: a broken cluster-robust
+    computation or a re-added variance term would miss in either direction.
+    """
+    estimates = fast_direct_full_oracle_replicates["direct"]["estimate"]
+    ses = fast_direct_full_oracle_replicates["direct"]["se"]
+    empirical_sd = float(np.std(estimates, ddof=1))
+    ratio = float(np.mean(ses)) / empirical_sd
+    assert 0.7 <= ratio <= 1.3, (
+        f"direct (100% oracle): mean reported SE {np.mean(ses):.5f} vs "
+        f"empirical SD {empirical_sd:.5f} (ratio {ratio:.2f}) outside [0.7, 1.3]"
+    )
+
+
+def test_fast_direct_reported_se_not_understated(
+    fast_direct_replicates: Dict[str, Dict[str, np.ndarray]],
+) -> None:
+    """With 25% oracle coverage, total SE must not understate reality.
+
+    The old OUA jackknife (/K) bug produced ratios ~0.45 here — the exact
+    failure mode OUA exists to prevent. No upper bound: the K=5
+    delete-one-fold jackknife on isotonic calibrators is noisy and
+    right-skewed, so the MEAN reported SE runs conservative in
+    oracle-dominated regimes; the slow coverage test guards the
+    under-coverage direction.
+    """
+    estimates = fast_direct_replicates["direct"]["estimate"]
+    ses = fast_direct_replicates["direct"]["se"]
+    empirical_sd = float(np.std(estimates, ddof=1))
+    ratio = float(np.mean(ses)) / empirical_sd
+    assert ratio >= 0.7, (
+        f"direct: mean reported SE {np.mean(ses):.5f} understates empirical SD "
+        f"{empirical_sd:.5f} (ratio {ratio:.2f} < 0.7)"
+    )
+
+
+def _run_direct_with_fresh_scores(
+    logged_scores: np.ndarray,
+    fresh_scores: np.ndarray,
+    rng: np.random.Generator,
+) -> Any:
+    """Fit calibration on logged data and run Direct on injected draws."""
+    samples = []
+    for i, s in enumerate(logged_scores):
+        y = float(np.clip(_mu(np.array(s)) + rng.normal(0, OUTCOME_NOISE), 0, 1))
+        samples.append(
+            Sample(
+                prompt_id=f"p{i}",
+                prompt=f"question {i}",
+                response=f"answer {i}",
+                reward=None,
+                base_policy_logprob=-10.0,
+                target_policy_logprobs={POLICY: -10.0},
+                judge_score=float(s),
+                oracle_label=y if rng.uniform() < 0.5 else None,
+            )
+        )
+    dataset = Dataset(samples=samples, target_policies=[POLICY])
+    _, cal_result = calibrate_dataset(
+        dataset,
+        judge_field="judge_score",
+        oracle_field="oracle_label",
+        enable_cross_fit=True,
+        n_folds=5,
+    )
+
+    fresh_samples = [
+        FreshDrawSample(
+            prompt_id=f"p{i % len(logged_scores)}",
+            judge_score=float(s),
+            oracle_label=None,
+            response=None,
+            fold_id=None,
+            target_policy=POLICY,
+            draw_idx=0,
+        )
+        for i, s in enumerate(fresh_scores)
+    ]
+    fresh = FreshDrawDataset(
+        samples=fresh_samples, target_policy=POLICY, draws_per_prompt=1
+    )
+
+    est = CalibratedDirectEstimator(
+        target_policies=[POLICY],
+        reward_calibrator=cal_result.calibrator,
+        inference_method="cluster_robust",
+        oua_jackknife=True,
+    )
+    est.add_fresh_draws(POLICY, fresh)
+    return est.fit_and_estimate()
+
+
+def test_fast_direct_boundary_cards_regression() -> None:
+    """Deterministic pin: boundary cards appear and fire on out-of-range scores.
+
+    Oracle calibration support is S in [0, 0.6]; 10% of the injected fresh
+    draws sit above it -> REFUSE-LEVEL (>= 5% threshold), CRITICAL status,
+    and the reliability-gate flag the CLI trophy logic consumes. An
+    in-range run stays OK and unflagged.
+    """
+    rng = np.random.default_rng(20260702)
+    logged_scores = rng.uniform(0.0, 0.6, 300)
+
+    # Out-of-range run: 10% of fresh-draw judge mass above the oracle range.
+    # The in-range component stays strictly inside the REALIZED oracle
+    # support (labels cover a random half of [0, 0.6]), so only the
+    # injected 10% is out of range.
+    fresh_bad = np.concatenate(
+        [rng.uniform(0.05, 0.55, 270), rng.uniform(0.75, 0.95, 30)]
+    )
+    result = _run_direct_with_fresh_scores(logged_scores, fresh_bad, rng)
+    card = result.diagnostics.boundary_cards[POLICY]
+    assert card["status"] == "REFUSE-LEVEL"
+    assert card["out_of_range"] == pytest.approx(0.10, abs=0.01)
+    assert result.metadata["boundary_cards"][POLICY] == card
+    assert result.diagnostics.status_per_policy[POLICY].value == "critical"
+    gate = result.metadata["reliability_gates"][POLICY]
+    assert gate["flagged"] is True
+    assert gate["refuse_level_claims"] is True
+
+    # In-range control: card computed, OK, unflagged
+    rng = np.random.default_rng(20260702)
+    logged_scores = rng.uniform(0.0, 0.6, 300)
+    fresh_ok = rng.uniform(0.05, 0.55, 300)
+    result = _run_direct_with_fresh_scores(logged_scores, fresh_ok, rng)
+    card = result.diagnostics.boundary_cards[POLICY]
+    assert card["status"] == "OK"
+    assert result.diagnostics.status_per_policy[POLICY].value == "good"
+    assert result.metadata["reliability_gates"][POLICY]["flagged"] is False
 
 
 # ---------------------------------------------------------------------------

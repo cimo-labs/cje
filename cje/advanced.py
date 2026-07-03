@@ -11,7 +11,7 @@ Example:
     from cje.advanced import (
         CalibratedDirectEstimator,
         calibrate_dataset,
-        IPSDiagnostics,
+        DirectDiagnostics,
     )
 
     # Custom pipeline with manual control
@@ -53,8 +53,9 @@ from .calibration import (
     CalibrationResult,
 )
 
-# Diagnostics
+# Diagnostics (IPSDiagnostics is a deprecated alias, removed in 0.5.0)
 from .diagnostics import (
+    DirectDiagnostics,
     IPSDiagnostics,
     Status,
 )
@@ -95,6 +96,7 @@ __all__ = [
     "JudgeCalibrator",
     "CalibrationResult",
     # Diagnostics
+    "DirectDiagnostics",
     "IPSDiagnostics",
     "Status",
     # Utilities

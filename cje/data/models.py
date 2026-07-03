@@ -189,8 +189,8 @@ class EstimationResult(BaseModel):
     )
 
     # Quality metrics
-    diagnostics: Optional[Union["IPSDiagnostics", "DRDiagnostics"]] = Field(
-        None, description="Diagnostic information (IPSDiagnostics or DRDiagnostics)"
+    diagnostics: Optional["DirectDiagnostics"] = Field(
+        None, description="Diagnostic information (DirectDiagnostics)"
     )
 
     # Calibrator for transportability audits
@@ -409,13 +409,8 @@ class EstimationResult(BaseModel):
         # Add diagnostic summary if available
         if self.diagnostics:
             html_parts.append(
-                f'<p style="margin-top: 10px;"><b>Status:</b> {self.diagnostics.overall_status.value}'
+                f'<p style="margin-top: 10px;"><b>Status:</b> {self.diagnostics.overall_status.value}</p>'
             )
-            if hasattr(self.diagnostics, "weight_ess"):
-                html_parts.append(
-                    f" | <b>Weight ESS:</b> {self.diagnostics.weight_ess:.1%}"
-                )
-            html_parts.append("</p>")
 
         html_parts.append("</div>")
         return "".join(html_parts)
@@ -608,7 +603,7 @@ class EstimationResult(BaseModel):
 
 
 # Import at the end to resolve forward references
-from ..diagnostics import IPSDiagnostics, DRDiagnostics
+from ..diagnostics import DirectDiagnostics
 
 # Update forward references - compatible with both Pydantic v1 and v2
 if hasattr(EstimationResult, "model_rebuild"):

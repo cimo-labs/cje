@@ -37,21 +37,15 @@ class BaseCJEEstimator(ABC):
     """Abstract base class for CJE estimators.
 
     All estimators must implement:
-    - fit(): Prepare the estimator (e.g., calibrate weights)
+    - fit(): Prepare the estimator (e.g., calibrate rewards)
     - estimate(): Compute estimates and diagnostics
 
-    The estimate() method must populate EstimationResult.diagnostics
-    with IPSDiagnostics as appropriate.
+    The estimate() method must populate EstimationResult.diagnostics.
     """
-
-    # Concrete estimators set this before estimate() is called.
-    # NOTE(WP3): becomes a required constructor argument when the base class
-    # is redesigned sampler-free.
-    target_policies: List[str]
 
     def __init__(
         self,
-        sampler: Optional[Any] = None,
+        target_policies: List[str],
         run_diagnostics: bool = True,
         diagnostic_config: Optional[Dict[str, Any]] = None,
         reward_calibrator: Optional[Any] = None,
@@ -60,20 +54,17 @@ class BaseCJEEstimator(ABC):
         """Initialize estimator.
 
         Args:
-            sampler: Deprecated placeholder (always None). Kept temporarily so
-                the constructor shape is stable until the WP3 base-class
-                redesign removes it entirely.
+            target_policies: Names of the policies to evaluate
             run_diagnostics: Whether to compute diagnostics (default True)
             diagnostic_config: Optional configuration dict (for future use)
             reward_calibrator: Optional reward calibrator for oracle-jackknife inference
             oua_jackknife: Whether to include calibration uncertainty via the
                 oracle jackknife (default True)
         """
-        self.sampler = sampler
+        self.target_policies = list(target_policies)
         self.run_diagnostics = run_diagnostics
         self.diagnostic_config = diagnostic_config
         self._fitted = False
-        self._weights_cache: Dict[str, np.ndarray] = {}
         self._influence_functions: Dict[str, np.ndarray] = {}
         self._results: Optional[EstimationResult] = None
 
@@ -83,7 +74,7 @@ class BaseCJEEstimator(ABC):
 
     @abstractmethod
     def fit(self) -> None:
-        """Fit the estimator (e.g., calibrate weights)."""
+        """Fit the estimator (e.g., calibrate rewards)."""
         pass
 
     @abstractmethod
@@ -104,12 +95,9 @@ class BaseCJEEstimator(ABC):
         if self.run_diagnostics and result is not None:
             if not hasattr(result, "diagnostics") or result.diagnostics is None:
                 # This shouldn't happen anymore, but log a warning
-                import logging
-
-                logger = logging.getLogger(__name__)
                 logger.warning(
                     f"{self.__class__.__name__} did not create diagnostics. "
-                    "All estimators should create IPSDiagnostics or DRDiagnostics directly."
+                    "All estimators should create diagnostics directly in estimate()."
                 )
 
         return result
@@ -137,17 +125,6 @@ class BaseCJEEstimator(ABC):
 
         return self._influence_functions
 
-    def get_weights(self, target_policy: str) -> Optional[np.ndarray]:
-        """Get importance weights for a target policy.
-
-        Args:
-            target_policy: Name of target policy
-
-        Returns:
-            Array of weights or None if not available
-        """
-        return self._weights_cache.get(target_policy)
-
     @property
     def is_fitted(self) -> bool:
         """Check if estimator has been fitted."""
@@ -168,15 +145,6 @@ class BaseCJEEstimator(ABC):
             return self._results.diagnostics
         return None
 
-    def _is_dr_estimator(self) -> bool:
-        """Check if this is a DR-based estimator.
-
-        Returns:
-            True if this is a DR variant, False otherwise
-        """
-        class_name = self.__class__.__name__
-        return any(x in class_name for x in ["DR", "MRDR", "TMLE"])
-
     def _apply_oua_jackknife(self, result: EstimationResult) -> None:
         """Apply the oracle jackknife for calibration-aware inference.
 
@@ -190,26 +158,10 @@ class BaseCJEEstimator(ABC):
             return
 
         # Skip oracle-jackknife augmentation at 100% oracle coverage
+        # (the calibrator knows its own coverage; at 100% there is no
+        # calibration uncertainty to add)
         try:
-            # Check sampler first (for IPS/DR methods)
-            sampler_coverage = (
-                getattr(self.sampler, "oracle_coverage", None)
-                if hasattr(self, "sampler")
-                else None
-            )
-            # Also check calibrator (for direct method)
-            calibrator_coverage = (
-                getattr(self.reward_calibrator, "oracle_coverage", None)
-                if self.reward_calibrator
-                else None
-            )
-
-            # Use whichever is available
-            coverage = (
-                sampler_coverage
-                if sampler_coverage is not None
-                else calibrator_coverage
-            )
+            coverage = getattr(self.reward_calibrator, "oracle_coverage", None)
 
             if coverage is not None and coverage >= 1.0:
                 if isinstance(result.metadata, dict):
@@ -221,11 +173,12 @@ class BaseCJEEstimator(ABC):
         except Exception:
             pass  # Continue with the default path if we can't check coverage
 
-        # Check if oracle variance is already included (e.g., by DR estimators)
+        # Check if oracle variance is already included (e.g., by the
+        # bootstrap inference path, which refits the calibrator per replicate)
         if isinstance(result.metadata, dict) and result.metadata.get(
             "se_components", {}
         ).get("includes_oracle_uncertainty"):
-            # Oracle variance already included in standard_errors by DR
+            # Oracle variance already included in standard_errors
             return
 
         try:

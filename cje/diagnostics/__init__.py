@@ -1,7 +1,7 @@
 """CJE Diagnostics System.
 
 Consolidated module for all diagnostic functionality:
-- Data models (IPSDiagnostics)
+- Data models (DirectDiagnostics)
 - Transportability auditing
 - Reward boundary / coverage badge
 - Display utilities
@@ -9,21 +9,17 @@ Consolidated module for all diagnostic functionality:
 - Budget planning
 """
 
-# Data models
+# Data models. IPSDiagnostics is a DEPRECATED alias of DirectDiagnostics
+# (0.3.x name); it will be removed in 0.5.0.
 from .models import (
+    DirectDiagnostics,
     IPSDiagnostics,
-    DRDiagnostics,
-    CJEDiagnostics,
     Status,
-    GateState,
 )
 
 # Canonical gate thresholds and status helpers (single source of truth)
 from .gates import (
     OUT_OF_RANGE_REFUSE_THRESHOLD,
-    ESS_GOOD_THRESHOLD,
-    ESS_WARNING_THRESHOLD,
-    ess_status,
     worst_status,
 )
 
@@ -37,8 +33,6 @@ from .transport import (
 
 # Display utilities
 from .display import (
-    create_weight_summary_table,
-    format_dr_diagnostic_summary,
     format_diagnostic_comparison,
 )
 
@@ -78,17 +72,12 @@ from .simulation_planning import (
 )
 
 __all__ = [
-    # Data models
+    # Data models (IPSDiagnostics is a deprecated alias, removed in 0.5.0)
+    "DirectDiagnostics",
     "IPSDiagnostics",
-    "DRDiagnostics",
-    "CJEDiagnostics",
     "Status",
-    "GateState",
     # Canonical gates
     "OUT_OF_RANGE_REFUSE_THRESHOLD",
-    "ESS_GOOD_THRESHOLD",
-    "ESS_WARNING_THRESHOLD",
-    "ess_status",
     "worst_status",
     # Transport
     "TransportDiagnostics",
@@ -96,8 +85,6 @@ __all__ = [
     "compute_residuals",
     "plot_transport_comparison",
     # Display
-    "create_weight_summary_table",
-    "format_dr_diagnostic_summary",
     "format_diagnostic_comparison",
     # Robust inference
     "DirectEvalTable",

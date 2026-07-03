@@ -20,9 +20,7 @@ from typing import List, Dict, Any
 NUM_FIELDS = [
     "estimate",
     "standard_error",
-    "ess_fraction",
-    "hellinger_affinity",
-    "tail_index",
+    "out_of_range",
     "f_min",
     "low_s_cov_b10",
     "low_s_cov_b20",
@@ -94,26 +92,22 @@ def write_matrix(matrix: List[List[float]], fields: List[str], out_path: Path) -
 def simple_proxy_counts(rows: List[Dict[str, Any]]) -> Dict[str, int]:
     import math
 
-    # Proxies for 'do not ship'
+    from ..diagnostics.gates import OUT_OF_RANGE_REFUSE_THRESHOLD
+
+    # Proxies for 'do not ship level claims'
     counts = {
-        "low_overlap": 0,  # Hellinger < 0.20 OR ess_fraction < 0.05
-        "heavy_tail": 0,  # tail_index < 1.0
-        "tail_unknown": 0,  # tail_index is NaN (Hill estimation failed)
+        "refuse_level": 0,  # coverage badge REFUSE-LEVEL (out-of-range >= 5%)
         "cal_floor": 0,  # floor_mass_logged or fresh >= 0.25
     }
     for r in rows:
-        hell = to_float(r.get("hellinger_affinity"))
-        ess = to_float(r.get("ess_fraction"))
-        tail = to_float(r.get("tail_index"))
+        status = r.get("boundary_status")
+        oor = to_float(r.get("out_of_range"))
         fm_l = to_float(r.get("floor_mass_logged"))
         fm_f = to_float(r.get("floor_mass_fresh"))
-        if (not hell or hell < 0.20) or (not ess or ess < 0.05):
-            counts["low_overlap"] += 1
-        if tail is not None and math.isnan(tail):
-            # Estimation failed - unknown tail risk, do NOT count as light
-            counts["tail_unknown"] += 1
-        elif tail and tail < 1.0:
-            counts["heavy_tail"] += 1
+        if status == "REFUSE-LEVEL" or (
+            not math.isnan(oor) and oor >= OUT_OF_RANGE_REFUSE_THRESHOLD
+        ):
+            counts["refuse_level"] += 1
         if (fm_l and fm_l >= 0.25) or (fm_f and fm_f >= 0.25):
             counts["cal_floor"] += 1
     return counts
