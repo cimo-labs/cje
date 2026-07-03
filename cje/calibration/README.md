@@ -32,10 +32,7 @@ calibration/
 ├── __init__.py          # Public API exports
 ├── dataset.py           # High-level dataset calibration workflows
 ├── flexible_calibrator.py # Flexible calibration for non-monotone relationships
-├── isotonic.py          # Core isotonic regression and variance control
-├── judge.py             # Judge score calibration to oracle labels
-├── oracle_slice.py      # Oracle slice configuration
-└── simcal.py            # Weight stabilization implementation (`SIMCalibrator`)
+└── judge.py             # Judge score calibration to oracle labels
 ```
 
 ## Core Concepts
@@ -48,12 +45,6 @@ reward calibration maps cheap LLM judge scores to expensive oracle labels with a
 Auto mode detects non-monotonicity by comparing regional performance and selects the appropriate method. The selected mode is stored in metadata for transparency. This automatic selection is a key feature of reward calibration.
 
 **Why isotonic?** Isotonic regression is the default because it imposes exactly the right inductive bias (monotonicity) while making minimal assumptions, preserves oracle KPI levels by construction, and is highly efficient with small label budgets (5-25% coverage recommended). See the detailed rationale below.
-
-### 2. Weight stabilization (`SIMCalibrator`)
-Stabilizes importance weights through surrogate-indexed monotone projection:
-- Projects weights to be monotone with an ordering index
-- Enforces variance constraints via blending
-- Maintains mean-1 property for unbiasedness
 
 ### 3. Cross-Fitted Models
 For doubly robust methods, provides out-of-fold predictions to maintain orthogonality between nuisance functions.
@@ -194,26 +185,6 @@ Handles non-monotone judge→oracle relationships via two-stage approach:
 - Minimum 5 spline knots to avoid underfitting
 - Fallback to monotone for small samples (<20)
 - Clipping to [0,1] ensures valid reward range
-
-### `isotonic.py` - Isotonic Weight Calibration
-Core mathematical operations for weight calibration:
-- `calibrate_to_target_mean()`: Main entry point for weight calibration
-- `_pav_mean1_projection_sorted()`: Pool Adjacent Violators with mean preservation
-- `_variance_safe_blend_closed_form()`: Optimal blending for variance control
-- Uses "exact" mode (bisection) for consistency
-- Handles ordering by arbitrary index (e.g., judge scores)
-
-### `simcal.py` - Weight stabilization stack
-Advanced weight calibration through stacking:
-- `SIMCalibrator`: Combines {baseline, increasing, decreasing} candidates
-- Out-of-fold (OOF) influence function minimization
-- Quadratic program on simplex for optimal mixture
-- Uniform blending for ESS/variance constraints
-- Configurable via `SimcalConfig` dataclass
-- **New**: Supports fit/predict separation for honest inference
-  - `fit()`: Learn isotonic models and mixture weights on training data
-  - `predict()`: Apply learned calibration to new data with score clipping
-  - `fit_transform()`: Backward-compatible single-pass method
 
 ## Key Design Decisions
 
@@ -428,7 +399,6 @@ When the ordering index has ties (common with discrete judge scores):
 ## Testing
 
 The calibration module has comprehensive test coverage:
-- `test_stacked_simcal.py`: Weight stabilization functionality
 - Integration tests verify calibration in full pipeline
 - Edge case tests for degenerate inputs
 

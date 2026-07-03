@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased (0.4.0)
+
+CJE 0.4.0 focuses the library on what the paper's own results support: calibrated Direct-mode evaluation of policies from judge-scored fresh draws. The off-policy (IPS/DR) machinery — which requires teacher-forced logprobs no realistic user has, and which the paper shows mostly failing for LLM policies — is removed. **0.3.x remains available for OPE workflows: `pip install "cje-eval==0.3.*"`.** Removal bullets (full migration guide lands with the release):
+
+- **Removed the off-policy estimators**: `CalibratedIPS`, `DRCPOEstimator`, `MRDREstimator`, `TMLEEstimator`, `StackedDREstimator`, and the outcome models. `estimator=` names `calibrated-ips`, `raw-ips`, `dr-cpo`, `mrdr`, `tmle`, `stacked-dr` now raise a migration error pointing at the 0.3.x releases.
+- **Removed `logged_data_path` and OPE mode routing**: `analyze_dataset` is Direct-only; passing `logged_data_path` raises a migration error. Logged data with judge scores and oracle labels still works for calibration via `calibration_data_path`.
+- **Removed teacher forcing** (`cje.teacher_forcing`) and the `teacher-forcing` extra: no logprob computation ships with the library. Logprob fields in input data are ignored.
+- **Removed `PrecomputedSampler`** and the sampler dependency in the estimator base class.
+- **Removed the OPE weight/overlap diagnostics**: weight ESS/tail-index computation, TTC and CLE diagnostics, judge-space Bhattacharyya overlap gates, weight/DR dashboards, and the extreme-weights analysis. The Direct-relevant diagnostics (transportability audits, coverage badge/boundary cards, cluster bootstrap, planning) survive.
+- **Removed weight-stabilization (SIMCal) and oracle-slice calibration**; judge→oracle reward calibration is unchanged.
+- **Removed the Hydra entry point** and the `hydra` extra, the auto mode detection, and `cje.research`.
+
 ## 0.3.0
 
 Statistical-correctness and honesty release. Reported confidence intervals CHANGE BY DESIGN relative to 0.2.x: wider where oracle-calibration uncertainty was understated (OUA jackknife x K bug), narrower where Monte Carlo variance was double-counted, and several silent fallbacks now fail loudly. See the entries below and PRs #10-#14.

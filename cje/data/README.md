@@ -39,8 +39,7 @@ data/
 ├── models.py             # Pydantic data models (Sample, Dataset, etc.)
 ├── loaders.py            # Data loading utilities (DatasetLoader, DataSource)
 ├── factory.py            # Factory pattern for Dataset creation
-├── precomputed_sampler.py # Sampler wrapper for estimators
-├── fresh_draws.py        # Fresh draw models for DR
+├── fresh_draws.py        # Fresh draw models for Direct mode
 ├── folds.py              # Unified fold management for cross-validation
 ├── validation.py         # Data validation functions
 └── reward_utils.py       # Reward manipulation utilities

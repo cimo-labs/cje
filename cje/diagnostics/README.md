@@ -723,16 +723,8 @@ def compute_calibration_variance(dataset, oracle_folds, estimator_config):
         # Recompute calibrated rewards
         R_minus_k = f_minus_k(dataset.judge_scores)
 
-        # For IPS/DR: re-select weight stabilization (depends on R)
-        if mode in ["ips", "dr"]:
-            w_tilde = simcal_select(raw_weights, index=S, rewards=R_minus_k)
-
-        # For DR: refit outcome model (depends on R)
-        if mode == "dr":
-            g_hat = crossfit_critic(X, A, R_minus_k)
-
-        # Compute point estimate with refit components
-        theta_k = compute_estimate(R_minus_k, w_tilde, g_hat)
+        # Compute point estimate with the refit calibrator
+        theta_k = compute_estimate(R_minus_k)
         estimates.append(theta_k)
 
     theta_bar = np.mean(estimates)
