@@ -25,7 +25,9 @@ class BoundaryCard:
         status: "OK" | "CAUTION" | "REFUSE-LEVEL"
         out_of_range: Fraction of S outside oracle S-range (primary signal)
         saturation: Fraction of R near reward bounds
-        estimator_gap: |DR - CalIPS| if provided
+        estimator_gap: Optional absolute gap between two estimators' values
+            for the same policy, if the caller computes one. The 0.4.x
+            pipeline never populates it (there is only one estimator).
         partial_id_width: Width of partial-ID band under monotonicity
         note: Brief explanation of status
     """
@@ -56,8 +58,9 @@ def boundary_card(
         R_policy: Calibrated rewards for target policy
         R_min: Minimum reward in oracle calibration set
         R_max: Maximum reward in oracle calibration set
-        est_calips: Optional CalIPS estimate
-        est_dr: Optional DR estimate
+        est_calips: Optional estimate from a second estimator, used only for
+            the cross-estimator gap signal (unused in the 0.4.x pipeline)
+        est_dr: Optional estimate from another estimator (see est_calips)
         band_frac: Fraction of range to consider "near boundary" (default 5%)
 
     Returns:

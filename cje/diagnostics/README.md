@@ -74,7 +74,7 @@ if diagnostics.boundary_cards:
 Judge scores outside the oracle calibration range are the primary identification threat to *level* claims: the calibrator must extrapolate there, and no data exists to check the extrapolation. `boundary_card(S_policy, S_oracle, R_policy, R_min, R_max, ...)` implements the paper's badge (arXiv:2512.11150) with three signals:
 
 - **out_of_range ≥ 5%** (`OUT_OF_RANGE_REFUSE_THRESHOLD`) → status `REFUSE-LEVEL`: do not ship level (absolute) claims; rankings may stand
-- **saturation ≥ 20%** (calibrated rewards piled near the oracle reward bounds) or estimator gap ≥ 0.10 → `CAUTION`
+- **saturation ≥ 20%** (calibrated rewards piled near the oracle reward bounds) or estimator gap ≥ 0.10 (a cross-estimator signal not computed by the 0.4.x pipeline) → `CAUTION`
 - otherwise → `OK`
 
 The returned `BoundaryCard` dataclass carries `status`, `out_of_range`, `saturation`, `estimator_gap`, `partial_id_width` (a conservative partial-identification band under monotonicity), and a human-readable `note`.
