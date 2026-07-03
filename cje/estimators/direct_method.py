@@ -581,6 +581,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         # Store DF info for t-based CIs (computed automatically by EstimationResult.confidence_interval())
         self._store_df_info(result)
 
+        self._results = result
         return result
 
     def _compute_policy_boundary_card(self, policy: str) -> Optional[Dict[str, Any]]:
@@ -1164,4 +1165,5 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
                     f"(95% CI: [{ci_lower:.4f}, {ci_upper:.4f}])"
                 )
 
+        self._results = result
         return result
