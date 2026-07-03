@@ -300,14 +300,19 @@ def fit_variance_model(
     #
     # Design principle: Create a 2D grid with explicit variation in both dimensions
     # rather than using oracle fractions (which create collinearity).
-    # Use the requested oracle fractions to set the distinct calibration levels.
-    # Fractions are converted into fixed m values so the grid still varies n and m
-    # independently, which avoids the collinearity of setting m = frac * n.
+    # Fractions are converted into fixed m values shared across every n, which
+    # avoids the collinearity of setting m = frac * n.
+    #
+    # The m levels are derived from the grid's own scale (n_ref), NOT from the
+    # full oracle pool: with a large pool (e.g. 480 labels vs n_grid=[100, 200]),
+    # pool-based m values exceed most n, the m < n filter kills those points, and
+    # the grid collapses to fewer than 2 unique values per dimension. Each level
+    # is additionally capped at 90% of min(n_grid) so every n in the grid retains
+    # every m level (m < n holds across the whole orthogonal grid).
+    n_ref = min(max(n_grid), n_oracle_available)
+    m_cap = min(n_oracle_available, int(0.9 * min(n_grid)))
     m_values = sorted(
-        set(
-            min(max(15, int(n_oracle_available * frac)), n_oracle_available)
-            for frac in oracle_fraction_grid
-        )
+        set(min(max(15, int(n_ref * frac)), m_cap) for frac in oracle_fraction_grid)
     )
 
     # Build orthogonal grid: vary n at each fixed m, and vary m at each fixed n
@@ -328,7 +333,8 @@ def fit_variance_model(
     unique_m = set(m for n, m in measurement_points)
     if len(unique_n) < 2 or len(unique_m) < 2:
         raise ValueError(
-            f"Grid has insufficient variation (n={unique_n}, m={unique_m}). "
+            f"Grid has insufficient variation "
+            f"(n={sorted(unique_n)}, m={sorted(unique_m)}). "
             f"Need at least 2 unique values in each dimension. "
             f"Collect more pilot data (recommend 200+ prompts with 100+ oracle labels)."
         )

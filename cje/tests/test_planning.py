@@ -30,6 +30,28 @@ pytestmark = [pytest.mark.e2e, pytest.mark.uses_arena_sample]
 ARENA_SAMPLE_DIR = Path(__file__).parent.parent.parent / "examples" / "arena_sample"
 
 
+def _make_fake_pilot_samples(n_oracle: int, n_unlabeled: int) -> list:
+    """Build minimal fake pilot samples for grid-construction tests."""
+    samples = []
+    for i in range(n_oracle):
+        samples.append(
+            SimpleNamespace(
+                prompt_id=f"oracle-{i}",
+                judge_score=0.8,
+                oracle_label=1.0,
+            )
+        )
+    for i in range(n_unlabeled):
+        samples.append(
+            SimpleNamespace(
+                prompt_id=f"judge-{i}",
+                judge_score=0.6,
+                oracle_label=None,
+            )
+        )
+    return samples
+
+
 class TestPlanningWorkflow:
     """Test complete planning workflows with real data via analyze_dataset()."""
 
@@ -536,6 +558,99 @@ class TestFittedVarianceModel:
 
         assert model.n_measurements == 4
         assert calls == [(50, 15), (50, 20), (100, 15), (100, 20)]
+
+    def test_grid_construction_with_large_oracle_pool(self) -> None:
+        """m levels derive from the n_grid scale, not the full oracle pool.
+
+        Regression test: with 480 oracle labels and n_grid=[100, 200], the old
+        pool-based derivation produced m in {120, 240}; the m < n filter then
+        collapsed the grid to a single point and fit_variance_model raised
+        'insufficient variation'.
+        """
+        import cje.diagnostics.planning as planning_module
+
+        calls = []
+
+        def fake_measure_variance_direct(
+            *,
+            fresh_draws: Any,
+            n_prompts: int,
+            m_oracle: int,
+            n_replicates: int = 5,
+            seed: int = 42,
+        ) -> dict[str, Any]:
+            calls.append((n_prompts, m_oracle))
+            return {
+                "variance": 1.0 / n_prompts + 0.5 / m_oracle,
+                "se": 0.1,
+                "n_actual": n_prompts,
+                "m_actual": m_oracle,
+                "n_valid_replicates": n_replicates,
+            }
+
+        fresh_draws = cast(
+            Any,
+            SimpleNamespace(
+                target_policy="base",
+                samples=_make_fake_pilot_samples(n_oracle=480, n_unlabeled=520),
+            ),
+        )
+
+        original_measure_variance_direct = planning_module._measure_variance_direct
+        setattr(
+            planning_module, "_measure_variance_direct", fake_measure_variance_direct
+        )
+
+        try:
+            planning_module.fit_variance_model(
+                fresh_draws,
+                n_grid=[100, 200],
+                oracle_fraction_grid=[0.25, 0.50],
+                n_replicates=1,
+                verbose=False,
+            )
+        finally:
+            setattr(
+                planning_module,
+                "_measure_variance_direct",
+                original_measure_variance_direct,
+            )
+
+        unique_n = sorted(set(n for n, m in calls))
+        unique_m = sorted(set(m for n, m in calls))
+        assert len(unique_n) >= 2, f"Need >=2 unique n, got {unique_n}"
+        assert len(unique_m) >= 2, f"Need >=2 unique m, got {unique_m}"
+        assert all(m < n for n, m in calls), f"All m must be < n, got {calls}"
+        # Fully orthogonal grid: every m level valid at every n
+        # n_ref = min(200, 480) = 200 -> raw m {50, 100}; 100 capped to 0.9*100=90
+        assert calls == [(100, 50), (100, 90), (200, 50), (200, 90)]
+
+    def test_insufficient_variation_error_prints_sorted_lists(self) -> None:
+        """The insufficient-variation error shows sorted lists, not set literals."""
+        import cje.diagnostics.planning as planning_module
+
+        fresh_draws = cast(
+            Any,
+            SimpleNamespace(
+                target_policy="base",
+                samples=_make_fake_pilot_samples(n_oracle=480, n_unlabeled=520),
+            ),
+        )
+
+        # A single oracle fraction yields a single m level -> insufficient
+        # variation in the m dimension (raised before any measurement runs).
+        with pytest.raises(ValueError, match="insufficient variation") as excinfo:
+            planning_module.fit_variance_model(
+                fresh_draws,
+                n_grid=[100, 200],
+                oracle_fraction_grid=[0.25],
+                n_replicates=1,
+                verbose=False,
+            )
+
+        msg = str(excinfo.value)
+        assert "n=[100, 200], m=[50]" in msg
+        assert "{" not in msg, f"Error message should not print raw sets: {msg}"
 
     def test_fit_variance_model_synthetic(self) -> None:
         """Fit model to synthetic data with known parameters."""
