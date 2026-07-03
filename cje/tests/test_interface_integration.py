@@ -105,6 +105,7 @@ def test_mode_selection_metadata_populated() -> None:
     assert mode_sel["estimator"] == "direct"
     assert mode_sel["has_fresh_draws"] is True
     assert mode_sel["has_logged_data"] is False
+    assert mode_sel["reason"] == "Direct mode is the only mode in 0.4.x"
 
 
 def test_direct_estimates_clone_accurately() -> None:

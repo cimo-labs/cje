@@ -90,9 +90,26 @@ class AnalysisService:
         return reduced_folds
 
     def run(self, config: AnalysisConfig) -> EstimationResult:
-        # OPE (IPS/DR) modes were removed in 0.4.0; the service is Direct-only
-        # (analyze_dataset raises the migration error for logged_data_path
-        # before a config is ever built).
+        """Run the single Direct-mode flow.
+
+        validate config -> load draws -> resolve calibration source ->
+        calibrate -> CalibratedDirectEstimator -> covariates -> estimate ->
+        denormalize -> metadata.
+
+        OPE (IPS/DR) modes were removed in 0.4.0; analyze_dataset raises the
+        migration error for logged_data_path before a config is ever built.
+        """
+        from ..data.fresh_draws import (
+            NormalizationInfo,
+            compute_response_covariates,
+            discover_policies_from_fresh_draws,
+            fresh_draws_from_dict,
+            load_fresh_draws_auto,
+        )
+        from ..data.models import Dataset, Sample
+        from ..estimators.direct_method import CalibratedDirectEstimator
+
+        # --- 1. Validate config
         if config.fresh_draws_dir is None and config.fresh_draws_data is None:
             raise ValueError(
                 "Must provide fresh_draws_dir or fresh_draws_data for Direct mode"
@@ -105,89 +122,61 @@ class AnalysisService:
             # Raises the migration error for removed OPE estimator names.
             validate_estimator_name(chosen_estimator)
 
-        return self._run_direct_only(config, chosen_estimator)
-
-    def _run_direct_only(
-        self, config: AnalysisConfig, chosen_estimator: str
-    ) -> EstimationResult:
-        """Run Direct mode without logged data (fresh draws only)."""
-        from ..data.fresh_draws import (
-            discover_policies_from_fresh_draws,
-            load_fresh_draws_auto,
-            fresh_draws_from_dict,
-            NormalizationInfo,
-        )
-        from ..data.models import Dataset, Sample
-
-        if config.verbose:
-            logger.info("Direct mode: Using fresh draws only (no logged data)")
-
-        # Track normalization info for inverse-transforming results
+        # --- 2. Load fresh draws (in-memory dict OR directory); norm_info
+        # tracks auto-normalization for the inverse transform in stage 5
         norm_info: Optional[NormalizationInfo] = None
 
-        # Handle in-memory fresh_draws_data OR file-based fresh_draws_dir
         if config.fresh_draws_data is not None:
-            # In-memory mode: convert dict to FreshDrawDataset objects with auto-normalization
             if config.verbose:
                 logger.info("Using in-memory fresh_draws_data")
             fresh_draws_dict, norm_info = fresh_draws_from_dict(
                 config.fresh_draws_data, verbose=config.verbose, auto_normalize=True
             )
             target_policies = sorted(fresh_draws_dict.keys())
-        elif config.fresh_draws_dir is not None:
-            # File-based mode: discover and load from directory
-            target_policies = discover_policies_from_fresh_draws(
-                Path(config.fresh_draws_dir)
-            )
+        else:
+            assert config.fresh_draws_dir is not None  # validated in stage 1
+            draws_dir = Path(config.fresh_draws_dir)
+            target_policies = discover_policies_from_fresh_draws(draws_dir)
             fresh_draws_dict = {}
             for policy in target_policies:
-                fd = load_fresh_draws_auto(
-                    Path(config.fresh_draws_dir), policy, verbose=config.verbose
+                fresh_draws_dict[policy] = load_fresh_draws_auto(
+                    draws_dir, policy, verbose=config.verbose
                 )
-                fresh_draws_dict[policy] = fd
-        else:
-            raise ValueError(
-                "Direct mode requires either fresh_draws_dir or fresh_draws_data"
-            )
 
         if config.verbose:
             logger.info(
                 f"Found {len(target_policies)} policies: {', '.join(target_policies)}"
             )
 
-        # Collect all fresh draws for calibration
         all_fresh_draws = []
         for fd in fresh_draws_dict.values():
             all_fresh_draws.extend(fd.samples)
 
-        # NEW: Handle calibration_data_path and oracle combining
+        # --- 3. Resolve the calibration source and calibrate:
+        # calibration_data_path (optionally pooled with labeled draws via
+        # _combine_oracle_sources) OR oracle-in-draws
         oracle_sources_metadata = None
         calibration_result = None
-        calibration_dataset_for_rewards = None
-        covariate_names = None  # Initialize before if/else branches
+        covariate_names = None
+        oracle_coverage = 0.0
 
         if config.calibration_data_path:
             if config.verbose:
                 logger.info(
                     f"Loading calibration dataset from {config.calibration_data_path}"
                 )
-
             calibration_dataset = load_dataset_from_jsonl(config.calibration_data_path)
-
             if config.verbose:
                 logger.info(
                     f"Loaded calibration dataset: {calibration_dataset.n_samples} samples"
                 )
 
-            # Combine or use exclusively based on combine_oracle_sources flag
             if config.combine_oracle_sources:
                 if config.verbose:
                     logger.info(
                         "Combining oracle sources from calibration data and fresh draws"
                     )
-
-                # Combine oracle sources (no logged data in Direct mode)
-                combined_dataset, oracle_sources_metadata = (
+                calibration_dataset_for_rewards, oracle_sources_metadata = (
                     self._combine_oracle_sources(
                         calibration_dataset,
                         None,  # No logged dataset in Direct mode
@@ -198,7 +187,6 @@ class AnalysisService:
                         config.verbose,
                     )
                 )
-                calibration_dataset_for_rewards = combined_dataset
             else:
                 # Use ONLY calibration_data_path for learning calibration
                 if config.verbose:
@@ -206,8 +194,6 @@ class AnalysisService:
                         "Using calibration data exclusively (combine_oracle_sources=False)"
                     )
                 calibration_dataset_for_rewards = calibration_dataset
-
-                # Still track metadata
                 n_calib_oracle = sum(
                     1 for s in calibration_dataset.samples if s.oracle_label is not None
                 )
@@ -220,12 +206,11 @@ class AnalysisService:
                     "combine_enabled": False,
                 }
 
-            # Build covariate list (with validation for include_response_length)
+            # Covariate list (validates response fields when
+            # include_response_length is set), then learn the calibration
             covariate_names = self._build_covariate_list(
                 config, calibration_dataset_for_rewards
             )
-
-            # Learn calibration from combined/calibration-only dataset
             n_oracle_for_calibration = sum(
                 1
                 for s in calibration_dataset_for_rewards.samples
@@ -239,9 +224,8 @@ class AnalysisService:
                 n_folds=self._direct_calibration_folds(n_oracle_for_calibration),
                 covariate_names=covariate_names,
             )
-
         else:
-            # Original behavior: Check if fresh draws have oracle labels for calibration
+            # Oracle-in-draws: learn calibration from labeled fresh draws
             n_with_oracle = sum(
                 1 for s in all_fresh_draws if s.oracle_label is not None
             )
@@ -256,10 +240,10 @@ class AnalysisService:
                     )
                     logger.info("Learning calibration from fresh draws")
 
-                # Convert FreshDrawSample to Sample for calibration
+                # Convert FreshDrawSample to Sample (dummy fields) so the
+                # draws can serve as a calibration dataset
                 calibration_samples = []
                 for fd_sample in all_fresh_draws:
-                    # Create dummy Sample with required fields for calibration
                     sample = Sample(
                         prompt_id=fd_sample.prompt_id,
                         prompt="",  # Not needed for calibration
@@ -272,16 +256,11 @@ class AnalysisService:
                         metadata={},
                     )
                     calibration_samples.append(sample)
-
-                # Create temporary dataset from fresh draws for calibration
                 fresh_dataset = Dataset(
                     samples=calibration_samples, target_policies=target_policies
                 )
 
-                # Build covariate list (with validation for include_response_length)
                 covariate_names = self._build_covariate_list(config, fresh_dataset)
-
-                # Learn calibration from fresh draws
                 _, calibration_result = calibrate_dataset(
                     fresh_dataset,
                     judge_field=config.judge_field,
@@ -298,8 +277,8 @@ class AnalysisService:
                     "fresh draws or provide calibration_data_path to calibrate."
                 )
 
-        from ..estimators.direct_method import CalibratedDirectEstimator
-
+        # --- 4. Build the estimator, attach draws (computing covariates
+        # when the calibrator expects them), and estimate
         estimator_obj = CalibratedDirectEstimator(
             target_policies=target_policies,
             reward_calibrator=(
@@ -312,22 +291,16 @@ class AnalysisService:
             **config.estimator_config,
         )
 
-        # Add fresh draws to estimator (use already-loaded fresh_draws_dict)
-        # Compute covariates for fresh draws if needed
-        from ..data.fresh_draws import compute_response_covariates
-
         for policy in target_policies:
             fd = fresh_draws_dict[policy]
-
-            # Compute covariates if calibrator expects them
             if covariate_names:
                 fd = compute_response_covariates(fd, covariate_names=covariate_names)
-
             estimator_obj.add_fresh_draws(policy, fd)
 
         results = estimator_obj.fit_and_estimate()
 
-        # Inverse-transform results back to original scale if normalization was applied
+        # --- 5. Inverse-transform results back to the original scale if
+        # normalization was applied
         if norm_info and norm_info.oracle_label_scale:
             oracle_scale = norm_info.oracle_label_scale
             # Transform estimates and standard errors back to original scale
@@ -384,7 +357,7 @@ class AnalysisService:
                     f"[{judge_scale.min_val}, {judge_scale.max_val}] (no oracle labels)"
                 )
 
-        # Add metadata
+        # --- 6. Metadata (mode/mode_selection keys kept for 0.3.0-output compat)
         results.metadata["mode"] = "direct"
         results.metadata["estimator"] = chosen_estimator
         results.metadata["target_policies"] = target_policies
@@ -405,14 +378,8 @@ class AnalysisService:
             results.metadata["calibration"] = (
                 "from_fresh_draws" if calibration_result else "none"
             )
-            if calibration_result and not config.calibration_data_path:
+            if calibration_result:
                 # Only set oracle_coverage for fresh-draws-only calibration
-                oracle_coverage = (
-                    sum(1 for s in all_fresh_draws if s.oracle_label is not None)
-                    / len(all_fresh_draws)
-                    if all_fresh_draws
-                    else 0
-                )
                 results.metadata["oracle_coverage"] = oracle_coverage
 
         metadata_estimator_config = self._metadata_estimator_config(
@@ -421,18 +388,16 @@ class AnalysisService:
         if metadata_estimator_config:
             results.metadata["estimator_config"] = metadata_estimator_config
 
-        # NEW: Add oracle sources metadata if available
         if oracle_sources_metadata:
             results.metadata["oracle_sources"] = oracle_sources_metadata
 
-        # Add mode_selection metadata
         results.metadata["mode_selection"] = {
             "mode": "direct",
             "estimator": chosen_estimator,
             "logprob_coverage": 0.0,  # Direct-only mode has no logged data
             "has_fresh_draws": True,
             "has_logged_data": False,
-            "reason": "Direct-only mode: Fresh draws without logged data",
+            "reason": "Direct mode is the only mode in 0.4.x",
         }
 
         # Add calibrator for transportability audits
