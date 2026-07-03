@@ -8,6 +8,7 @@ CJE 0.4.0 focuses the library on what the paper's own results support: calibrate
 - **Removed `logged_data_path` and OPE mode routing**: `analyze_dataset` is Direct-only; passing `logged_data_path` raises a migration error. Logged data with judge scores and oracle labels still works for calibration via `calibration_data_path`.
 - **Removed teacher forcing** (`cje.teacher_forcing`) and the `teacher-forcing` extra: no logprob computation ships with the library. Logprob fields in input data are ignored.
 - **Removed `PrecomputedSampler`** and the sampler dependency in the estimator base class.
+- **Sampler-free estimator base class**: `BaseCJEEstimator.__init__` now takes `target_policies` as its first (required) argument; the deprecated `sampler` placeholder, the importance-weight cache (`get_weights`), and the DR-estimator probe are gone. `_apply_oua_jackknife` reads oracle coverage from the reward calibrator only.
 - **Removed the OPE weight/overlap diagnostics**: weight ESS/tail-index computation, TTC and CLE diagnostics, judge-space Bhattacharyya overlap gates, weight/DR dashboards, and the extreme-weights analysis. The Direct-relevant diagnostics (transportability audits, coverage badge/boundary cards, cluster bootstrap, planning) survive.
 - **Removed weight-stabilization (SIMCal) and oracle-slice calibration**; judge→oracle reward calibration is unchanged.
 - **Removed the Hydra entry point** and the `hydra` extra, the auto mode detection, and `cje.research`.

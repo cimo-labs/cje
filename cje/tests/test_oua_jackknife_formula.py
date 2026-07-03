@@ -25,11 +25,11 @@ class _JackknifeStub(BaseCJEEstimator):
 
     def __init__(self, jack: np.ndarray):
         super().__init__(
+            target_policies=["policy_a"],
             run_diagnostics=False,
             reward_calibrator=object(),  # non-None so OUA path runs
             oua_jackknife=True,
         )
-        self.target_policies = ["policy_a"]
         self._jack = np.asarray(jack, dtype=float)
 
     def fit(self) -> None:  # pragma: no cover - not used

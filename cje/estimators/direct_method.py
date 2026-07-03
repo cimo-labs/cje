@@ -115,15 +115,13 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         use_augmented_estimator: bool = True,
         calibration_policy: Optional[str] = None,
         use_multipolicy_eif: Optional[BoolLike] = None,
-        **kwargs: Any,
     ):
         super().__init__(
+            target_policies=target_policies,
             run_diagnostics=run_diagnostics,
             reward_calibrator=reward_calibrator,
             oua_jackknife=oua_jackknife,
-            **kwargs,
         )
-        self.target_policies = target_policies
         self.paired_comparison = paired_comparison
 
         normalized_inference = inference_method.strip().lower()
