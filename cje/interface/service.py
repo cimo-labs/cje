@@ -9,11 +9,9 @@ import logging
 from pathlib import Path
 
 from .config import AnalysisConfig
-from .factory import create_estimator
-from .mode_detection import detect_analysis_mode
+from .factory import validate_estimator_name
 from ..data import load_dataset_from_jsonl
 from ..data.models import Dataset, EstimationResult
-from ..data.precomputed_sampler import PrecomputedSampler
 from ..calibration import calibrate_dataset
 
 logger = logging.getLogger(__name__)
@@ -92,44 +90,28 @@ class AnalysisService:
         return reduced_folds
 
     def run(self, config: AnalysisConfig) -> EstimationResult:
-        # In-memory fresh draws are only wired up for Direct-only mode. With
-        # logged data they used to be silently ignored (no DR, metadata said
-        # has_fresh_draws=False), so fail loudly instead.
-        if config.fresh_draws_data is not None and config.logged_data_path is not None:
+        # OPE (IPS/DR) modes were removed in 0.4.0; the service is Direct-only.
+        if config.logged_data_path is not None:
+            # NOTE(WP2): the exact migration copy (calibration_data_path guidance,
+            # 0.3.x pin) is owned by WP2 and pinned by test_migration_errors.
             raise ValueError(
-                "fresh_draws_data together with logged_data_path is not yet "
-                "supported; write draws to disk and pass fresh_draws_dir"
+                "logged_data_path was removed in 0.4.0 — full migration message "
+                'coming in WP2. For IPS/DR modes pin pip install "cje-eval==0.3.*".'
             )
 
-        # Determine estimator choice early
+        if config.fresh_draws_dir is None and config.fresh_draws_data is None:
+            raise ValueError(
+                "Must provide fresh_draws_dir or fresh_draws_data for Direct mode"
+            )
+
         chosen_estimator = config.estimator.lower() if config.estimator else "auto"
+        if chosen_estimator == "auto":
+            chosen_estimator = "direct"
+        else:
+            # Raises the migration error for removed OPE estimator names.
+            validate_estimator_name(chosen_estimator)
 
-        # Check if we're in Direct-only mode (no logged data)
-        is_direct_only = config.logged_data_path is None and (
-            config.fresh_draws_dir is not None or config.fresh_draws_data is not None
-        )
-
-        if is_direct_only:
-            # Direct-only mode: fresh draws without logged data
-            if chosen_estimator == "auto":
-                chosen_estimator = "direct"
-            elif chosen_estimator not in {"direct", "calibrated-direct"}:
-                raise ValueError(
-                    f"Without logged_data_path, only Direct mode is supported. "
-                    f"Got estimator={chosen_estimator}. Either provide logged_data_path "
-                    f"or use estimator='direct'."
-                )
-
-            return self._run_direct_only(config, chosen_estimator)
-
-        # IPS/DR mode: requires logged data
-        if config.logged_data_path is None:
-            raise ValueError(
-                "Must provide logged_data_path for IPS/DR modes, or "
-                "provide fresh_draws_dir/fresh_draws_data for Direct mode"
-            )
-
-        return self._run_with_logged_data(config, chosen_estimator)
+        return self._run_direct_only(config, chosen_estimator)
 
     def _run_direct_only(
         self, config: AnalysisConfig, chosen_estimator: str
@@ -551,260 +533,6 @@ class AnalysisService:
 
         return results
 
-    def _run_with_logged_data(
-        self, config: AnalysisConfig, chosen_estimator: str
-    ) -> EstimationResult:
-        """Run IPS/DR/Direct mode with logged data."""
-        if config.logged_data_path is None:
-            raise ValueError("logged_data_path is required")
-
-        if config.verbose:
-            logger.info(f"Loading dataset from {config.logged_data_path}")
-
-        dataset = load_dataset_from_jsonl(config.logged_data_path)
-
-        if config.verbose:
-            logger.info(f"Loaded {dataset.n_samples} samples")
-            logger.info(f"Target policies: {', '.join(dataset.target_policies)}")
-
-        # NEW: Handle calibration_data_path and oracle combining
-        oracle_sources_metadata = None
-        calibration_dataset_for_rewards = dataset  # Default: use logged data
-
-        if config.calibration_data_path:
-            if config.verbose:
-                logger.info(
-                    f"Loading calibration dataset from {config.calibration_data_path}"
-                )
-
-            calibration_dataset = load_dataset_from_jsonl(config.calibration_data_path)
-
-            if config.verbose:
-                logger.info(
-                    f"Loaded calibration dataset: {calibration_dataset.n_samples} samples"
-                )
-
-            # If combining oracle sources, load fresh draws early and combine
-            if config.combine_oracle_sources:
-                if config.verbose:
-                    logger.info("Combining oracle sources from all available data")
-
-                # Load fresh draws if available
-                fresh_draws_dict = None
-                if config.fresh_draws_dir:
-                    fresh_draws_dict = self._load_all_fresh_draws(config)
-
-                # Combine oracle sources
-                combined_dataset, oracle_sources_metadata = (
-                    self._combine_oracle_sources(
-                        calibration_dataset,
-                        dataset,
-                        fresh_draws_dict,
-                        dataset.target_policies,
-                        config.judge_field,
-                        config.oracle_field,
-                        config.verbose,
-                    )
-                )
-                calibration_dataset_for_rewards = combined_dataset
-            else:
-                # Use ONLY calibration_data_path for learning calibration
-                if config.verbose:
-                    logger.info(
-                        "Using calibration data exclusively (combine_oracle_sources=False)"
-                    )
-                calibration_dataset_for_rewards = calibration_dataset
-
-                # Still track metadata
-                n_calib_oracle = sum(
-                    1 for s in calibration_dataset.samples if s.oracle_label is not None
-                )
-                oracle_sources_metadata = {
-                    "calibration_data": {
-                        "n_oracle": n_calib_oracle,
-                        "coverage": n_calib_oracle / calibration_dataset.n_samples,
-                    },
-                    "total_oracle": n_calib_oracle,
-                    "combine_enabled": False,
-                }
-
-            # Check for distribution mismatch between calibration and evaluation data
-            if config.verbose:
-                logger.info(
-                    "Checking calibration data distribution vs. evaluation data"
-                )
-
-            distribution_check = self._check_distribution_mismatch(
-                calibration_dataset, dataset, config.judge_field, config.verbose
-            )
-
-            # Add to metadata
-            if oracle_sources_metadata:
-                oracle_sources_metadata["distribution_mismatch"] = distribution_check
-
-        # Build covariate list
-        covariate_names = self._build_covariate_list(
-            config, calibration_dataset_for_rewards
-        )
-
-        calibrated_dataset, calibration_result = self._prepare_rewards(
-            calibration_dataset_for_rewards,
-            config.judge_field,
-            config.oracle_field,
-            covariate_names,
-            config.verbose,
-        )
-
-        # When calibration_data_path supplies the oracle pool, that pool is
-        # ONLY for fitting the calibrator. Estimation (and mode detection)
-        # must run on the logged evaluation dataset, so transfer the fitted
-        # calibrator's rewards onto it. Estimating on the pool itself would
-        # evaluate the wrong dataset — and with combined sources, fabricated
-        # dummy logprobs would make every policy's estimate identical.
-        if calibration_dataset_for_rewards is not dataset:
-            pool_calibration_info = calibrated_dataset.metadata.get("calibration_info")
-            calibrated_dataset = self._apply_fitted_calibrator_to_dataset(
-                dataset,
-                calibration_result,
-                config.judge_field,
-                config.verbose,
-            )
-            if pool_calibration_info is not None:
-                calibrated_dataset.metadata["calibration_info"] = pool_calibration_info
-
-        # Auto mode detection
-        detected_mode: Optional[str] = None
-        logprob_coverage: float = 0.0
-        mode_explanation: str = ""
-        is_auto_mode: bool = chosen_estimator == "auto"
-
-        if is_auto_mode:
-            mode, mode_explanation, logprob_coverage = detect_analysis_mode(
-                calibrated_dataset, config.fresh_draws_dir
-            )
-            detected_mode = mode
-            if config.verbose:
-                logger.info(f"Mode detection: {mode_explanation}")
-
-            # Map mode to default estimator
-            mode_to_estimator = {
-                "ips": "calibrated-ips",
-                "dr": "stacked-dr",
-                "direct": "direct",
-            }
-            chosen_estimator = mode_to_estimator[mode]
-
-            if config.verbose:
-                logger.info(f"Selected estimator: {chosen_estimator} for {mode} mode")
-        else:
-            if config.verbose:
-                logger.info(f"Using explicitly specified estimator: {chosen_estimator}")
-
-            # Infer mode from estimator if manually specified
-            if chosen_estimator in {"direct", "calibrated-direct"}:
-                detected_mode = "direct"
-            elif chosen_estimator in {"calibrated-ips", "raw-ips"}:
-                detected_mode = "ips"
-            elif chosen_estimator in {
-                "stacked-dr",
-                "dr-cpo",
-                "mrdr",
-                "tmle",
-            }:
-                detected_mode = "dr"
-
-        # Branch: Direct mode vs IPS/DR mode
-        if chosen_estimator in {"direct", "calibrated-direct"}:
-            return self._run_direct_with_calibration(
-                config, chosen_estimator, dataset.target_policies, calibration_result
-            )
-
-        # IPS/DR mode: create sampler
-        sampler = PrecomputedSampler(calibrated_dataset)
-        if config.verbose:
-            logger.info(f"Valid samples after filtering: {sampler.n_valid_samples}")
-
-        estimator_obj = create_estimator(
-            chosen_estimator,
-            sampler,
-            config.estimator_config,
-            calibration_result,
-            config.verbose,
-        )
-
-        # Estimators that can use fresh draws
-        dr_estimators = {
-            "dr-cpo",
-            "mrdr",
-            "tmle",
-            "stacked-dr",
-        }
-
-        # DR estimators require fresh draws
-        if chosen_estimator in dr_estimators:
-            from ..data.fresh_draws import (
-                load_fresh_draws_auto,
-                compute_response_covariates,
-            )
-
-            if not config.fresh_draws_dir:
-                raise ValueError(
-                    "DR estimators require fresh draws. Provide fresh_draws_dir."
-                )
-
-            for policy in sampler.target_policies:
-                fd = load_fresh_draws_auto(
-                    Path(config.fresh_draws_dir), policy, verbose=config.verbose
-                )
-
-                # Compute covariates if needed
-                if covariate_names:
-                    fd = compute_response_covariates(
-                        fd, covariate_names=covariate_names
-                    )
-
-                estimator_obj.add_fresh_draws(policy, fd)
-
-        results: EstimationResult = estimator_obj.fit_and_estimate()
-
-        # Minimal metadata enrichment
-        results.metadata["logged_data_path"] = config.logged_data_path
-        results.metadata["estimator"] = chosen_estimator
-        if detected_mode:
-            results.metadata["mode"] = detected_mode
-        results.metadata["target_policies"] = list(sampler.target_policies)
-        metadata_estimator_config = self._metadata_estimator_config(
-            config.estimator_config
-        )
-        if metadata_estimator_config:
-            results.metadata["estimator_config"] = metadata_estimator_config
-        results.metadata["judge_field"] = config.judge_field
-        results.metadata["oracle_field"] = config.oracle_field
-
-        # NEW: Add oracle sources metadata if available
-        if oracle_sources_metadata:
-            results.metadata["oracle_sources"] = oracle_sources_metadata
-
-        # Add mode_selection metadata
-        results.metadata["mode_selection"] = {
-            "mode": detected_mode or "unknown",
-            "estimator": chosen_estimator,
-            "logprob_coverage": logprob_coverage if is_auto_mode else None,
-            "has_fresh_draws": config.fresh_draws_dir is not None,
-            "has_logged_data": True,
-            "reason": (
-                mode_explanation
-                if is_auto_mode
-                else f"Explicitly specified: {chosen_estimator}"
-            ),
-        }
-
-        # Add calibrator for transportability audits
-        if calibration_result:
-            results.calibrator = calibration_result.calibrator
-
-        return results
-
     def _load_all_fresh_draws(self, config: AnalysisConfig) -> Dict[str, Any]:
         """Load fresh draws for all policies (helper for oracle combining)."""
         from ..data.fresh_draws import (
@@ -1156,128 +884,3 @@ class AnalysisService:
                 else None
             ),
         }
-
-    def _prepare_rewards(
-        self,
-        dataset: Dataset,
-        judge_field: str,
-        oracle_field: str,
-        covariate_names: Optional[List[str]],
-        verbose: bool,
-    ) -> tuple[Dataset, Optional[Any]]:
-        n_total = len(dataset.samples)
-        rewards_exist = sum(1 for s in dataset.samples if s.reward is not None)
-
-        if rewards_exist == n_total and n_total > 0:
-            if verbose:
-                logger.info("Using pre-computed rewards for all samples")
-            return dataset, None
-        elif 0 < rewards_exist < n_total:
-            logger.warning(
-                f"Detected partial rewards ({rewards_exist}/{n_total}). "
-                "Recalibrating to produce consistent rewards for all samples."
-            )
-
-        if verbose:
-            logger.info("Calibrating judge scores with oracle labels")
-            if covariate_names:
-                logger.info(f"Using covariates: {covariate_names}")
-
-        calibrated_dataset, cal_result = calibrate_dataset(
-            dataset,
-            judge_field=judge_field,
-            oracle_field=oracle_field,
-            enable_cross_fit=True,
-            n_folds=5,
-            covariate_names=covariate_names,
-        )
-        return calibrated_dataset, cal_result
-
-    def _apply_fitted_calibrator_to_dataset(
-        self,
-        dataset: Dataset,
-        calibration_result: Optional[Any],
-        judge_field: str,
-        verbose: bool,
-    ) -> Dataset:
-        """Apply an already-fitted calibrator to a dataset (fit on A, apply to B).
-
-        Used when calibration_data_path supplies the oracle pool: the
-        calibrator is fitted on the calibration/combined pool, then applied
-        here to the logged evaluation dataset. Rewards use the pooled model
-        (same choice calibrate_dataset makes for point predictions); fold
-        assignments stay consistent downstream because get_fold() hashes
-        prompt_ids.
-        """
-        import numpy as np
-
-        from ..calibration.dataset import AUTO_COMPUTABLE_COVARIATES
-
-        calibrator = (
-            getattr(calibration_result, "calibrator", None)
-            if calibration_result is not None
-            else None
-        )
-        if calibrator is None:
-            raise ValueError(
-                "calibration_data_path was provided but no calibrator was fitted "
-                "(the calibration data appears to already contain precomputed "
-                "rewards). Provide judge scores plus oracle labels in the "
-                "calibration file, or drop calibration_data_path."
-            )
-
-        # Judge scores: same extraction rules as calibrate_dataset
-        judge_scores: List[float] = []
-        for i, sample in enumerate(dataset.samples):
-            if judge_field == "judge_score":
-                value = sample.judge_score
-            else:
-                value = sample.metadata.get(judge_field)
-            if value is None:
-                raise ValueError(
-                    f"Judge field '{judge_field}' not found or is None for "
-                    f"sample {i} (prompt_id={sample.prompt_id}) of the logged "
-                    "dataset; cannot apply the fitted calibrator."
-                )
-            judge_scores.append(float(value))
-        scores = np.array(judge_scores)
-
-        # Covariates: the fitted calibrator dictates which are needed
-        covariates_array: Optional[Any] = None
-        cov_names = list(getattr(calibrator, "covariate_names", None) or [])
-        if cov_names:
-            rows: List[List[float]] = []
-            for i, sample in enumerate(dataset.samples):
-                row: List[float] = []
-                for cov_name in cov_names:
-                    value = sample.metadata.get(cov_name)
-                    if value is None and cov_name in AUTO_COMPUTABLE_COVARIATES:
-                        compute_fn, _required = AUTO_COMPUTABLE_COVARIATES[cov_name]
-                        value = compute_fn(sample)
-                    if value is None:
-                        raise ValueError(
-                            f"Covariate '{cov_name}' required by the fitted "
-                            f"calibrator is missing for sample {i} "
-                            f"(prompt_id={sample.prompt_id}) of the logged dataset."
-                        )
-                    row.append(float(value))
-                rows.append(row)
-            covariates_array = np.array(rows)
-
-        rewards = np.clip(
-            calibrator.predict(scores, covariates=covariates_array), 0.0, 1.0
-        )
-
-        new_samples = [
-            sample.model_copy(update={"reward": float(reward)})
-            for sample, reward in zip(dataset.samples, rewards)
-        ]
-        if verbose:
-            logger.info(
-                f"Applied calibrator fitted on the calibration pool to the "
-                f"logged evaluation dataset ({len(new_samples)} samples)"
-            )
-        updated: Dataset = dataset.model_copy(
-            update={"samples": new_samples, "metadata": dataset.metadata.copy()}
-        )
-        return updated

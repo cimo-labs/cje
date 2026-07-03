@@ -2,13 +2,11 @@
 
 This module contains:
 - Data models: Pydantic models for type safety
-- PrecomputedSampler: Load data with log probs and rewards
 - DatasetFactory: SOLID-compliant data loading with optional calibration
 - DatasetLoader: Pure data loading functionality
 - Reward Utils: Utility functions for calibrated rewards
 """
 
-from .precomputed_sampler import PrecomputedSampler
 from .reward_utils import (
     add_rewards_to_existing_data,
 )
@@ -23,7 +21,6 @@ from .factory import DatasetFactory, default_factory
 from .loaders import DatasetLoader, JsonlDataSource, InMemoryDataSource
 from .validation import (
     validate_cje_data,
-    validate_for_precomputed_sampler,
 )
 from .folds import (
     get_fold,
@@ -55,7 +52,6 @@ def load_dataset_from_jsonl(
 
 __all__ = [
     # Data loading
-    "PrecomputedSampler",
     "DatasetFactory",
     "DatasetLoader",
     "default_factory",
@@ -79,7 +75,6 @@ __all__ = [
     "add_rewards_to_existing_data",
     # Validation
     "validate_cje_data",
-    "validate_for_precomputed_sampler",
     # Fold management
     "get_fold",
     "get_folds_for_prompts",

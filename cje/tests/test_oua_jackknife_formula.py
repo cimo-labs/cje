@@ -7,22 +7,17 @@ The delete-one-fold jackknife variance is
 (sum over folds, paper Alg. 6). A prior implementation divided by K (used the
 mean over folds), understating the oracle-uncertainty variance by exactly a
 factor of K and hence CI width contributions by ~sqrt(K). These tests pin the
-correct formula and that every OUA site uses the single shared helper.
+correct formula.
 """
 
 import numpy as np
 import pytest
 
 from cje.data.models import EstimationResult
-from cje.estimators import base_estimator, dr_base, stacking
 from cje.estimators.base_estimator import (
     BaseCJEEstimator,
     oracle_jackknife_variance,
 )
-
-
-class _StubSampler:
-    target_policies = ["policy_a"]
 
 
 class _JackknifeStub(BaseCJEEstimator):
@@ -30,11 +25,11 @@ class _JackknifeStub(BaseCJEEstimator):
 
     def __init__(self, jack: np.ndarray):
         super().__init__(
-            sampler=_StubSampler(),  # type: ignore[arg-type]
             run_diagnostics=False,
             reward_calibrator=object(),  # non-None so OUA path runs
             oua_jackknife=True,
         )
+        self.target_policies = ["policy_a"]
         self._jack = np.asarray(jack, dtype=float)
 
     def fit(self) -> None:  # pragma: no cover - not used
@@ -116,11 +111,3 @@ def test_apply_oua_jackknife_adds_sum_form_variance() -> None:
         var_orc, rel=1e-12
     )
     assert comps["oracle_jackknife_counts"]["policy_a"] == len(jack)
-
-
-def test_all_oua_sites_share_one_helper() -> None:
-    """stacking.py and dr_base.py must use the same formula as base_estimator."""
-    assert (
-        stacking.oracle_jackknife_variance is base_estimator.oracle_jackknife_variance
-    )
-    assert dr_base.oracle_jackknife_variance is base_estimator.oracle_jackknife_variance

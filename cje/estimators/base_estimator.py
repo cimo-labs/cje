@@ -1,12 +1,11 @@
 """Base class for CJE estimators."""
 
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any
+from typing import List, Optional, Dict, Any
 import numpy as np
 import logging
 
 from ..data.models import EstimationResult
-from ..data.precomputed_sampler import PrecomputedSampler
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +41,17 @@ class BaseCJEEstimator(ABC):
     - estimate(): Compute estimates and diagnostics
 
     The estimate() method must populate EstimationResult.diagnostics
-    with IPSDiagnostics or DRDiagnostics as appropriate.
+    with IPSDiagnostics as appropriate.
     """
+
+    # Concrete estimators set this before estimate() is called.
+    # NOTE(WP3): becomes a required constructor argument when the base class
+    # is redesigned sampler-free.
+    target_policies: List[str]
 
     def __init__(
         self,
-        sampler: PrecomputedSampler,
+        sampler: Optional[Any] = None,
         run_diagnostics: bool = True,
         diagnostic_config: Optional[Dict[str, Any]] = None,
         reward_calibrator: Optional[Any] = None,
@@ -56,7 +60,9 @@ class BaseCJEEstimator(ABC):
         """Initialize estimator.
 
         Args:
-            sampler: Data sampler with precomputed log probabilities
+            sampler: Deprecated placeholder (always None). Kept temporarily so
+                the constructor shape is stable until the WP3 base-class
+                redesign removes it entirely.
             run_diagnostics: Whether to compute diagnostics (default True)
             diagnostic_config: Optional configuration dict (for future use)
             reward_calibrator: Optional reward calibrator for oracle-jackknife inference
@@ -142,23 +148,6 @@ class BaseCJEEstimator(ABC):
         """
         return self._weights_cache.get(target_policy)
 
-    def get_raw_weights(self, target_policy: str) -> Optional[np.ndarray]:
-        """Get raw (uncalibrated) importance weights for a target policy.
-
-        Computes raw weights directly from the sampler. These are the
-        importance weights p_target/p_base without any calibration or clipping.
-
-        Args:
-            target_policy: Name of target policy
-
-        Returns:
-            Array of raw weights or None if not available.
-        """
-        # Get truly raw weights (not Hajek normalized)
-        return self.sampler.compute_importance_weights(
-            target_policy, clip_weight=None, mode="raw"
-        )
-
     @property
     def is_fitted(self) -> bool:
         """Check if estimator has been fitted."""
@@ -243,7 +232,7 @@ class BaseCJEEstimator(ABC):
             var_oracle_map: Dict[str, float] = {}
             jk_counts: Dict[str, int] = {}
 
-            for i, policy in enumerate(self.sampler.target_policies):
+            for i, policy in enumerate(self.target_policies):
                 var_orc = 0.0
                 K = 0
                 jack = self.get_oracle_jackknife(policy)

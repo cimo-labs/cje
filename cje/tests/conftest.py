@@ -18,7 +18,6 @@ from cje.data.models import Dataset, EstimationResult
 from cje.data.fresh_draws import (
     FreshDrawDataset,
 )
-from cje.data.precomputed_sampler import PrecomputedSampler
 from cje import load_dataset_from_jsonl
 
 
@@ -123,17 +122,6 @@ def arena_calibrated(arena_sample: Dataset) -> Dataset:
 
 
 @pytest.fixture
-def arena_sampler(arena_calibrated: Dataset) -> PrecomputedSampler:
-    """Ready-to-use sampler with calibrated arena data.
-
-    For tests that need a fully configured sampler.
-    """
-    from cje.data.precomputed_sampler import PrecomputedSampler
-
-    return PrecomputedSampler(arena_calibrated)
-
-
-@pytest.fixture
 def arena_fresh_draws() -> Dict[str, FreshDrawDataset]:
     """Load real fresh draws from arena sample using the official loader.
 
@@ -213,36 +201,6 @@ def assert_valid_estimation_result(
     if check_diagnostics:
         assert result.diagnostics is not None
         assert result.diagnostics.summary() is not None
-
-
-def assert_weights_calibrated(
-    weights: np.ndarray,
-    target_mean: float = 1.0,
-    tolerance: float = 0.01,
-) -> None:
-    """Assert that importance weights are properly calibrated.
-
-    Args:
-        weights: Array of importance weights
-        target_mean: Expected mean (usually 1.0 for Hajek weights)
-        tolerance: Tolerance for mean comparison
-    """
-    assert weights is not None
-    assert len(weights) > 0
-    assert not np.any(np.isnan(weights)), "Weights contain NaN"
-    assert np.all(weights >= 0), "Weights should be non-negative"
-
-    # Check mean is close to target
-    mean_weight = np.mean(weights)
-    assert (
-        abs(mean_weight - target_mean) < tolerance
-    ), f"Weight mean {mean_weight:.3f} not close to target {target_mean}"
-
-    # Check not all weights are identical (unless n=1)
-    if len(weights) > 1:
-        assert not np.allclose(
-            weights, weights[0]
-        ), "All weights are identical, suggesting no calibration"
 
 
 def assert_dataset_valid(dataset: Dataset) -> None:

@@ -78,24 +78,6 @@ data = [{"prompt": "...", "response": "..."}]  # plus judge_score, logprobs, etc
 dataset = factory.create_from_data(data)
 ```
 
-### Using PrecomputedSampler
-```python
-from cje.data import PrecomputedSampler
-
-# Create sampler (requires rewards)
-sampler = PrecomputedSampler(dataset)
-
-# Or directly from JSONL
-sampler = PrecomputedSampler.from_jsonl("calibrated_data.jsonl")
-
-# Access data
-n_samples = sampler.n_valid_samples
-policies = sampler.target_policies
-
-# Check oracle coverage (affects calibration-aware jackknife when < 1.0)
-oracle_coverage = sampler.oracle_coverage  # Float in [0, 1]: fraction with oracle labels
-```
-
 ### Working with EstimationResult
 ```python
 from cje import analyze_dataset

@@ -2,14 +2,12 @@
 Tests for calibration covariate functionality.
 
 This test suite validates:
-1. Manual covariate specification (calibration_covariates parameter)
-2. Auto-computable covariates (include_response_length flag)
-3. Validation and error handling
-4. Integration across IPS, DR, and Direct modes
+1. Auto-computable covariates (include_response_length flag)
+2. Validation and error handling
+3. Integration with Direct mode
 """
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -19,204 +17,33 @@ from cje.calibration import calibrate_dataset
 from cje.data.models import Dataset
 
 
-def test_include_response_length_flag(tmp_path: Path) -> None:
-    """Test that include_response_length=True auto-computes response_length covariate."""
-
-    # Create data with varying response lengths
-    data = []
-    for i in range(50):
-        # Vary response length: short (3 words) and long (10 words)
-        response = (
-            "short answer here"
-            if i % 2 == 0
-            else "this is a much longer response with many more words here"
-        )
-
-        data.append(
-            {
-                "prompt_id": f"prompt_{i}",
-                "prompt": f"Question {i}",
-                "response": response,
-                "base_policy_logprob": -10.0,
-                "target_policy_logprobs": {"target": -9.5},
-                "judge_score": 0.5 + i * 0.01,
-                "oracle_label": 0.6 + i * 0.01 if i < 20 else None,  # 40% oracle
-            }
-        )
-
-    data_path = tmp_path / "data.jsonl"
-    with open(data_path, "w") as f:
-        for item in data:
-            f.write(json.dumps(item) + "\n")
-
-    # Run with include_response_length=True
-    results = analyze_dataset(
-        logged_data_path=str(data_path),
-        include_response_length=True,
-        estimator="calibrated-ips",
-        verbose=True,
-    )
-
-    # Should complete successfully
-    assert results is not None
-    assert len(results.estimates) == 1
-    assert results.estimates[0] >= 0 and results.estimates[0] <= 1
-
-    print("✅ include_response_length test passed!")
-
-
-def test_include_response_length_missing_field_error(tmp_path: Path) -> None:
-    """Test that include_response_length=True fails gracefully when response field is None."""
-
-    # Create data with response=None (empty string would pass validation)
-    data = []
-    for i in range(20):
-        data.append(
-            {
-                "prompt_id": f"prompt_{i}",
-                "prompt": f"Question {i}",
-                "response": None,  # None should trigger validation error
-                "base_policy_logprob": -10.0,
-                "target_policy_logprobs": {"target": -9.5},
-                "judge_score": 0.5,
-                "oracle_label": 0.6 if i < 10 else None,
-            }
-        )
-
-    data_path = tmp_path / "data.jsonl"
-    with open(data_path, "w") as f:
-        for item in data:
-            f.write(json.dumps(item) + "\n")
-
-    # Should raise ValueError with clear message
-    # Note: The data loader will reject None responses, which is correct behavior
-    with pytest.raises(ValueError):
-        analyze_dataset(
-            logged_data_path=str(data_path),
-            include_response_length=True,
-            estimator="calibrated-ips",
-        )
-
-    print("✅ Missing response field error test passed!")
-
-
-def test_manual_covariate_specification(tmp_path: Path) -> None:
-    """Test manual covariate specification via calibration_covariates parameter."""
-
-    # Create data with custom covariates
-    data = []
-    for i in range(50):
-        data.append(
-            {
-                "prompt_id": f"prompt_{i}",
-                "prompt": f"Question {i}",
-                "response": f"Answer {i}",
-                "base_policy_logprob": -10.0,
-                "target_policy_logprobs": {"target": -9.5},
-                "judge_score": 0.5 + i * 0.01,
-                "oracle_label": 0.6 + i * 0.01 if i < 20 else None,
-                "metadata": {
-                    "domain": float(i % 3),  # 3 domains
-                    "difficulty": float(i % 5) / 5.0,  # 5 difficulty levels
-                },
-            }
-        )
-
-    data_path = tmp_path / "data.jsonl"
-    with open(data_path, "w") as f:
-        for item in data:
-            f.write(json.dumps(item) + "\n")
-
-    # Run with manual covariates
-    results = analyze_dataset(
-        logged_data_path=str(data_path),
-        calibration_covariates=["domain", "difficulty"],
-        estimator="calibrated-ips",
-        verbose=True,
-    )
-
-    assert results is not None
-    assert len(results.estimates) == 1
-
-    print("✅ Manual covariate specification test passed!")
-
-
-def test_combined_manual_and_auto_covariates(tmp_path: Path) -> None:
-    """Test combining include_response_length with manual covariates."""
-
-    # Create data with both response lengths and custom covariates
-    data = []
-    for i in range(50):
-        response = "short" if i % 2 == 0 else "this is a longer response"
-
-        data.append(
-            {
-                "prompt_id": f"prompt_{i}",
-                "prompt": f"Question {i}",
-                "response": response,
-                "base_policy_logprob": -10.0,
-                "target_policy_logprobs": {"target": -9.5},
-                "judge_score": 0.5 + i * 0.01,
-                "oracle_label": 0.6 + i * 0.01 if i < 20 else None,
-                "metadata": {
-                    "domain": float(i % 3),
-                },
-            }
-        )
-
-    data_path = tmp_path / "data.jsonl"
-    with open(data_path, "w") as f:
-        for item in data:
-            f.write(json.dumps(item) + "\n")
-
-    # Combine auto and manual covariates
-    results = analyze_dataset(
-        logged_data_path=str(data_path),
-        include_response_length=True,
-        calibration_covariates=["domain"],  # response_length should be prepended
-        estimator="calibrated-ips",
-        verbose=True,
-    )
-
-    assert results is not None
-    assert len(results.estimates) == 1
-
-    print("✅ Combined auto + manual covariates test passed!")
-
-
-def test_missing_covariate_error_message(tmp_path: Path) -> None:
+def test_missing_covariate_error_message() -> None:
     """Test that missing covariate produces helpful error with available fields."""
+    from cje.data.models import Sample
 
-    data = []
+    samples = []
     for i in range(20):
-        data.append(
-            {
-                "prompt_id": f"prompt_{i}",
-                "prompt": f"Question {i}",
-                "response": f"Answer {i}",
-                "base_policy_logprob": -10.0,
-                "target_policy_logprobs": {"target": -9.5},
-                "judge_score": 0.5,
-                "oracle_label": 0.6 if i < 10 else None,
-                "metadata": {
+        samples.append(
+            Sample(
+                prompt_id=f"prompt_{i}",
+                prompt=f"Question {i}",
+                response=f"Answer {i}",
+                reward=None,
+                base_policy_logprob=-10.0,
+                target_policy_logprobs={"target": -9.5},
+                judge_score=0.5,
+                oracle_label=0.6 if i < 10 else None,
+                metadata={
                     "domain": 1.0,
                     "difficulty": 0.5,
                 },
-            }
+            )
         )
-
-    data_path = tmp_path / "data.jsonl"
-    with open(data_path, "w") as f:
-        for item in data:
-            f.write(json.dumps(item) + "\n")
+    dataset = Dataset(samples=samples, target_policies=["target"])
 
     # Try to use a covariate that doesn't exist
     with pytest.raises(ValueError) as exc_info:
-        analyze_dataset(
-            logged_data_path=str(data_path),
-            calibration_covariates=["nonexistent_field"],
-            estimator="calibrated-ips",
-        )
+        calibrate_dataset(dataset, covariate_names=["nonexistent_field"])
 
     # Check that error message includes helpful info
     error_msg = str(exc_info.value)
@@ -268,95 +95,6 @@ def test_covariates_in_direct_mode(tmp_path: Path) -> None:
     print("✅ Covariates in Direct mode test passed!")
 
 
-def test_covariates_in_dr_mode(tmp_path: Path) -> None:
-    """Test that covariates work in DR mode (both calibration and outcome models)."""
-
-    # Create logged data
-    logged_data = []
-    for i in range(30):
-        response = (
-            "short answer" if i % 2 == 0 else "this is a longer answer with more words"
-        )
-
-        logged_data.append(
-            {
-                "prompt_id": f"prompt_{i}",
-                "prompt": f"Question {i}",
-                "response": response,
-                "base_policy_logprob": -10.0,
-                "target_policy_logprobs": {"target": -9.5},
-                "judge_score": 0.5 + i * 0.01,
-                "oracle_label": 0.6 + i * 0.01 if i < 15 else None,  # 50% oracle
-            }
-        )
-
-    logged_path = tmp_path / "logged.jsonl"
-    with open(logged_path, "w") as f:
-        for item in logged_data:
-            f.write(json.dumps(item) + "\n")
-
-    # Create fresh draws - MUST match ALL logged prompt_ids for DR
-    fresh_draws_dir = tmp_path / "fresh_draws"
-    fresh_draws_dir.mkdir()
-
-    fresh_draws = []
-    for i in range(30):  # Match all 30 logged prompts
-        response = "fresh short" if i % 2 == 0 else "fresh longer response here"
-
-        fresh_draws.append(
-            {
-                "prompt_id": f"prompt_{i}",  # Exact match with logged data
-                "response": response,
-                "judge_score": 0.55 + i * 0.01,
-            }
-        )
-
-    policy_file = fresh_draws_dir / "target_responses.jsonl"
-    with open(policy_file, "w") as f:
-        for item in fresh_draws:
-            f.write(json.dumps(item) + "\n")
-
-    # Run DR mode with include_response_length
-    results = analyze_dataset(
-        logged_data_path=str(logged_path),
-        fresh_draws_dir=str(fresh_draws_dir),
-        include_response_length=True,
-        estimator="stacked-dr",
-        verbose=True,
-    )
-
-    assert results is not None
-    assert len(results.estimates) == 1
-    # DR mode should use metadata from mode detection or explicit
-    assert results.metadata.get("mode") in ["dr", None]
-
-    # REGRESSION TEST: Ensure all three DR estimators work with covariates
-    # This catches bugs where TMLE/MRDR fail to pass covariates to outcome_model.predict()
-    # which causes SplineTransformer feature mismatch errors when use_covariates=True
-    assert (
-        "valid_estimators" in results.metadata
-    ), "Missing 'valid_estimators' in metadata - stacking may have failed"
-    valid_estimators = results.metadata["valid_estimators"]
-    assert set(valid_estimators) == {"dr-cpo", "mrdr", "tmle"}, (
-        f"Expected all three DR estimators to work with covariates, "
-        f"but got: {valid_estimators}. "
-        f"Failed estimators: {results.metadata.get('failed_estimators', [])}"
-    )
-
-    # Verify no estimators failed
-    failed_estimators = results.metadata.get("failed_estimators", [])
-    assert (
-        len(failed_estimators) == 0
-    ), f"Some estimators failed with covariates: {failed_estimators}"
-
-    # Verify stacking actually used all three estimators
-    assert (
-        "stacking_weights" in results.metadata
-    ), "Missing 'stacking_weights' - stacking may have fallen back to single estimator"
-
-    print("✅ Covariates in DR mode test passed!")
-
-
 def test_covariate_auto_computation_stores_in_metadata() -> None:
     """Test that auto-computed covariates are stored in sample metadata."""
 
@@ -405,30 +143,30 @@ def test_covariate_auto_computation_stores_in_metadata() -> None:
     print("✅ Auto-computation stores in metadata test passed!")
 
 
-def test_covariate_validation_all_data_sources(tmp_path: Path) -> None:
-    """Test that include_response_length validates ALL data sources (logged, fresh, calibration)."""
+def test_covariate_validation_calibration_source(tmp_path: Path) -> None:
+    """Test that include_response_length validates the calibration data source."""
+    from typing import Any, Dict, List
 
-    # Create logged data WITH response
-    logged_data = [
+    # Create fresh draws WITH responses
+    fresh_draws_dir = tmp_path / "fresh_draws"
+    fresh_draws_dir.mkdir()
+
+    fresh_draws: List[Dict[str, Any]] = [
         {
             "prompt_id": f"prompt_{i}",
-            "prompt": f"Question {i}",
             "response": f"Answer {i}",
-            "base_policy_logprob": -10.0,
-            "target_policy_logprobs": {"target": -9.5},
-            "judge_score": 0.5,
-            "oracle_label": 0.6 if i < 10 else None,
+            "judge_score": 0.5 + i * 0.01,
         }
         for i in range(20)
     ]
 
-    logged_path = tmp_path / "logged.jsonl"
-    with open(logged_path, "w") as f:
-        for item in logged_data:
+    policy_file = fresh_draws_dir / "target_responses.jsonl"
+    with open(policy_file, "w") as f:
+        for item in fresh_draws:
             f.write(json.dumps(item) + "\n")
 
     # Create calibration data with response=None (data loader will reject this)
-    calibration_data = [
+    calibration_data: List[Dict[str, Any]] = [
         {
             "prompt_id": f"calib_{i}",
             "prompt": f"Calib question {i}",
@@ -450,20 +188,20 @@ def test_covariate_validation_all_data_sources(tmp_path: Path) -> None:
     # The data loader will catch this before our validation
     with pytest.raises(ValueError):
         analyze_dataset(
-            logged_data_path=str(logged_path),
+            fresh_draws_dir=str(fresh_draws_dir),
             calibration_data_path=str(calib_path),
             include_response_length=True,
-            estimator="calibrated-ips",
+            estimator="direct",
         )
 
-    print("✅ Validation across data sources test passed!")
+    print("✅ Validation of calibration data source test passed!")
 
 
 def test_covariate_computation_consistency() -> None:
     """REGRESSION TEST: Ensure calibration and fresh draws compute covariates identically.
 
     This test catches the bug where calibration used word count but fresh draws
-    used log10(character count), causing systematic bias in DR/Direct estimates.
+    used log10(character count), causing systematic bias in Direct estimates.
 
     Bug context: Prior to Oct 2024, this mismatch caused ~0.06 systematic bias
     in all estimators when use_covariates=True.
@@ -548,25 +286,37 @@ def test_covariates_with_real_arena_data(arena_sample: Dataset) -> None:
     """E2E smoke test: Covariates work end-to-end with real arena sample data."""
     from pathlib import Path
 
-    # Use the real arena sample data
+    # Use the real arena sample data as the calibration source
     data_path = (
         Path(__file__).parent.parent.parent
         / "examples"
         / "arena_sample"
         / "logged_data.jsonl"
     )
+    fresh_draws_dir = (
+        Path(__file__).parent.parent.parent
+        / "examples"
+        / "arena_sample"
+        / "fresh_draws"
+    )
+    if not fresh_draws_dir.exists():
+        pytest.skip(f"Fresh draws not found at {fresh_draws_dir}")
 
-    # Run with response_length covariate on real data
+    # Run Direct mode with response_length covariate on real data
+    # (combine_oracle_sources=False: combined-source pairs carry empty
+    # responses, which would degenerate the response_length covariate)
     results = analyze_dataset(
-        logged_data_path=str(data_path),
+        fresh_draws_dir=str(fresh_draws_dir),
+        calibration_data_path=str(data_path),
+        combine_oracle_sources=False,
         include_response_length=True,
-        estimator="calibrated-ips",
+        estimator="direct",
         verbose=False,
     )
 
     # Basic validation
     assert results is not None
-    assert len(results.estimates) == 3  # clone, parallel, unhelpful
+    assert len(results.estimates) == 4  # base, clone, parallel, unhelpful
     assert all(0 <= e <= 1 for e in results.estimates)
 
     print("✅ Arena data E2E smoke test passed!")
@@ -581,15 +331,10 @@ if __name__ == "__main__":
 
         print("\n=== Running Covariate Tests ===\n")
 
-        test_include_response_length_flag(tmp_path)
-        test_include_response_length_missing_field_error(tmp_path)
-        test_manual_covariate_specification(tmp_path)
-        test_combined_manual_and_auto_covariates(tmp_path)
-        test_missing_covariate_error_message(tmp_path)
+        test_missing_covariate_error_message()
         test_covariates_in_direct_mode(tmp_path)
-        test_covariates_in_dr_mode(tmp_path)
         test_covariate_auto_computation_stores_in_metadata()
-        test_covariate_validation_all_data_sources(tmp_path)
+        test_covariate_validation_calibration_source(tmp_path)
         test_covariate_computation_consistency()  # REGRESSION TEST
 
         print("\n=== All Covariate Tests Passed! ===\n")

@@ -1,14 +1,11 @@
-"""CJE: Causal Judge Evaluation - Unbiased LLM Policy Evaluation.
+"""CJE: Causal Judge Evaluation - Calibrated LLM Policy Evaluation.
 
-Simple API for off-policy evaluation with judge scores.
+Simple API for evaluating policies from fresh draws with judge scores.
 
 Example:
     from cje import analyze_dataset
 
-    results = analyze_dataset(
-        "data.jsonl",
-        estimator="calibrated-ips",
-    )
+    results = analyze_dataset(fresh_draws_dir="responses/")
     print(results.summary())
 """
 

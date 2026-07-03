@@ -83,26 +83,6 @@ export_results_csv(
 )
 ```
 
-### Analyze Extreme Weights
-
-```python
-from cje.utils import analyze_extreme_weights
-
-# Debug weight issues
-json_report, text_report = analyze_extreme_weights(
-    dataset=dataset,
-    sampler=sampler,
-    raw_weights_dict=raw_weights,
-    calibrated_weights_dict=calibrated_weights,
-    n_extreme=10,  # Top/bottom 10 samples
-    output_dir=Path("diagnostics/")
-)
-
-# Reports saved to diagnostics/extreme_weights_analysis.{json,txt}
-print(text_report)  # Human-readable summary
-```
-
-
 ### CLI Tools
 
 ```bash

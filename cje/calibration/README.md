@@ -370,10 +370,15 @@ oof_predictions = calibrator.predict_oof(judge_scores, fold_ids)
 
 ### Oracle Uncertainty (Default: calibration-aware Jackknife)
 ```python
-from cje.estimators import CalibratedIPS
+from cje.estimators import CalibratedDirectEstimator
 
 # Default: calibration-aware jackknife for oracle uncertainty (recommended)
-estimator = CalibratedIPS(sampler, oua_jackknife=True)  # Default
+estimator = CalibratedDirectEstimator(
+    target_policies=["policy_a"],
+    reward_calibrator=cal_result.calibrator,
+    oua_jackknife=True,  # Default
+)
+estimator.add_fresh_draws("policy_a", fresh_draws)
 result = estimator.fit_and_estimate()
 # standard_errors already include the oracle-jackknife component when enabled
 

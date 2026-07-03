@@ -9,34 +9,40 @@ Import from here when you need to:
 
 Example:
     from cje.advanced import (
-        PrecomputedSampler,
-        CalibratedIPS,
+        CalibratedDirectEstimator,
         calibrate_dataset,
-        IPSDiagnostics
+        IPSDiagnostics,
     )
 
     # Custom pipeline with manual control
-    dataset = load_dataset_from_jsonl("data.jsonl")
-    calibrated, cal_result = calibrate_dataset(dataset, oracle_coverage=0.1)
-    sampler = PrecomputedSampler(calibrated)
-    estimator = CalibratedIPS(sampler, var_cap=10.0)
+    dataset = load_dataset_from_jsonl("labels.jsonl")
+    calibrated, cal_result = calibrate_dataset(dataset)
+    estimator = CalibratedDirectEstimator(
+        target_policies=["policy_a"],
+        reward_calibrator=cal_result.calibrator,
+    )
+    estimator.add_fresh_draws("policy_a", fresh_draws)
     results = estimator.fit_and_estimate()
 """
 
 # Estimators
 from .estimators import (
     BaseCJEEstimator,
-    CalibratedIPS,
+    CalibratedDirectEstimator,
 )
 
 # Data components
 from .data import (
-    PrecomputedSampler,
     Dataset,
     Sample,
     EstimationResult,
     DatasetFactory,
     default_factory,
+)
+from .data.fresh_draws import (
+    FreshDrawDataset,
+    load_fresh_draws_from_jsonl,
+    load_fresh_draws_auto,
 )
 
 # Calibration
@@ -50,39 +56,18 @@ from .calibration import (
 # Diagnostics
 from .diagnostics import (
     IPSDiagnostics,
-    DRDiagnostics,
     Status,
 )
 
 # Utilities
-from .utils import (
-    create_weight_summary_table,
-    analyze_extreme_weights,
-)
 from .utils.export import (
     export_results_json,
     export_results_csv,
 )
 
-# DR estimators (if available)
-try:
-    from .estimators.dr_base import DRCPOEstimator
-    from .estimators.mrdr import MRDREstimator
-    from .estimators.tmle import TMLEEstimator
-    from .data.fresh_draws import (
-        FreshDrawDataset,
-        load_fresh_draws_from_jsonl,
-        load_fresh_draws_auto,
-    )
-
-    _dr_available = True
-except ImportError:
-    _dr_available = False
-
 # Visualization (if available)
 try:
     from .visualization import (
-        plot_weight_dashboard_summary,
         plot_calibration_comparison,
         plot_policy_estimates,
     )
@@ -94,14 +79,16 @@ except ImportError:
 __all__ = [
     # Estimators
     "BaseCJEEstimator",
-    "CalibratedIPS",
+    "CalibratedDirectEstimator",
     # Data
-    "PrecomputedSampler",
     "Dataset",
     "Sample",
     "EstimationResult",
     "DatasetFactory",
     "default_factory",
+    "FreshDrawDataset",
+    "load_fresh_draws_from_jsonl",
+    "load_fresh_draws_auto",
     # Calibration
     "calibrate_dataset",
     "calibrate_judge_scores",
@@ -109,31 +96,15 @@ __all__ = [
     "CalibrationResult",
     # Diagnostics
     "IPSDiagnostics",
-    "DRDiagnostics",
     "Status",
     # Utilities
-    "create_weight_summary_table",
-    "analyze_extreme_weights",
     "export_results_json",
     "export_results_csv",
 ]
 
-if _dr_available:
-    __all__.extend(
-        [
-            "DRCPOEstimator",
-            "MRDREstimator",
-            "TMLEEstimator",
-            "FreshDrawDataset",
-            "load_fresh_draws_from_jsonl",
-            "load_fresh_draws_auto",
-        ]
-    )
-
 if _viz_available:
     __all__.extend(
         [
-            "plot_weight_dashboard_summary",
             "plot_calibration_comparison",
             "plot_policy_estimates",
         ]
