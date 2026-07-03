@@ -151,6 +151,9 @@ class JudgeCalibrator:
         # the min/max calibrated reward on that slice.
         self.oracle_s_range: Optional[Tuple[float, float]] = None
         self.oracle_reward_range: Optional[Tuple[float, float]] = None
+        # Fit-time quality metrics, exposed via get_calibration_info() for
+        # estimator diagnostics (empty until fit_transform/fit_cv runs).
+        self._calibration_info: Dict[str, Any] = {}
 
     def fit_transform(
         self,
@@ -314,6 +317,12 @@ class JudgeCalibrator:
             f"Calibration complete: {n_oracle} oracle samples, "
             f"RMSE={rmse:.3f}, coverage@0.1={coverage_01:.1%}"
         )
+
+        self._calibration_info = {
+            "rmse": float(rmse),
+            "coverage_at_01": float(coverage_01),
+            "n_oracle_labels": int(n_oracle),
+        }
 
         return CalibrationResult(
             calibrated_scores=calibrated_scores,
@@ -658,6 +667,14 @@ class JudgeCalibrator:
             f"coverage@0.1={coverage_01:.1%} (OOF: {coverage_01_oof:.1%})"
         )
 
+        self._calibration_info = {
+            "rmse": float(rmse),
+            "coverage_at_01": float(coverage_01),
+            "n_oracle_labels": int(n_oracle),
+            "oof_rmse": float(rmse_oof),
+            "oof_coverage_at_01": float(coverage_01_oof),
+        }
+
         return CalibrationResult(
             calibrated_scores=calibrated_scores,
             calibration_rmse=float(rmse),
@@ -707,6 +724,21 @@ class JudgeCalibrator:
             if covariates is not None:
                 raise ValueError("Covariates not supported in monotone mode")
             return judge_scores
+
+    def get_calibration_info(self) -> Dict[str, Any]:
+        """Fit-time calibration quality metrics for estimator diagnostics.
+
+        CalibratedDirectEstimator._build_diagnostics guards on this method
+        to populate calibration_rmse / calibration_coverage /
+        n_oracle_labels — it used to be unimplemented, leaving those
+        diagnostics fields always None.
+
+        Returns:
+            Dict with "rmse", "coverage_at_01" (P(|pred - oracle| <= 0.1)
+            on the oracle slice), "n_oracle_labels", and — after fit_cv —
+            "oof_rmse"/"oof_coverage_at_01". Empty dict before fitting.
+        """
+        return dict(self._calibration_info)
 
     def has_fold_models(self) -> bool:
         """Check if fold models are available for calibration-aware inference.

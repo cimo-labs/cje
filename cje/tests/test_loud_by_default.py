@@ -282,38 +282,36 @@ class TestPromptIdHandling:
         assert any("Skipped 1/2" in r.message for r in caplog.records)
 
 
-class TestValidateRewardScan:
-    """validate_cje_data used to check the reward field only on data[0]."""
+class TestValidateDirectDataScan:
+    """validate_direct_data must scan a window, not just data[0] (the
+    0.3.0 regression was a field checked only on the first record)."""
 
     @staticmethod
-    def _record(with_reward: bool) -> dict:
+    def _record(i: int, with_judge: bool = True) -> dict:
         record = {
-            "prompt_id": "p",
-            "prompt": "prompt",
-            "response": "response",
-            "base_policy_logprob": -10.0,
-            "target_policy_logprobs": {"pi_target": -11.0},
+            "prompt_id": f"p{i}",
+            "oracle_label": 0.5,
         }
-        if with_reward:
-            record["reward"] = 0.5
+        if with_judge:
+            record["judge_score"] = 0.5
         return record
 
-    def test_reward_only_on_first_record_is_invalid(self) -> None:
-        from cje.data.validation import validate_cje_data
+    def test_judge_only_on_first_record_is_invalid(self) -> None:
+        from cje.data.validation import validate_direct_data
 
-        data = [self._record(with_reward=(i == 0)) for i in range(50)]
-        is_valid, issues = validate_cje_data(data, reward_field="reward")
+        data = [self._record(i, with_judge=(i == 0)) for i in range(50)]
+        is_valid, issues = validate_direct_data(data)
 
         assert not is_valid
         assert any(
-            "reward" in issue.lower() and "missing" in issue.lower() for issue in issues
+            "judge_score" in issue and "missing" in issue.lower() for issue in issues
         )
 
-    def test_reward_on_all_records_is_valid(self) -> None:
-        from cje.data.validation import validate_cje_data
+    def test_judge_on_all_records_is_valid(self) -> None:
+        from cje.data.validation import validate_direct_data
 
-        data = [self._record(with_reward=True) for i in range(50)]
-        is_valid, issues = validate_cje_data(data, reward_field="reward")
+        data = [self._record(i, with_judge=True) for i in range(50)]
+        is_valid, issues = validate_direct_data(data)
 
         assert is_valid, issues
 

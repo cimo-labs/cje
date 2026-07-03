@@ -20,7 +20,7 @@ from .models import (
 from .factory import DatasetFactory, default_factory
 from .loaders import DatasetLoader, JsonlDataSource, InMemoryDataSource
 from .validation import (
-    validate_cje_data,
+    validate_direct_data,
 )
 from .folds import (
     get_fold,
@@ -74,7 +74,7 @@ __all__ = [
     # Utilities
     "add_rewards_to_existing_data",
     # Validation
-    "validate_cje_data",
+    "validate_direct_data",
     # Fold management
     "get_fold",
     "get_folds_for_prompts",

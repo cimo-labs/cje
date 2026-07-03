@@ -270,13 +270,22 @@ class FreshDrawLoader:
         if not path_obj.exists():
             raise FileNotFoundError(f"Fresh draws file not found: {path_obj}")
 
-        # Group samples by policy
+        # Group samples by policy. Invalid lines raise with file/line
+        # context (mirroring load_fresh_draws_auto's loud behavior) instead
+        # of being silently skipped; blank/whitespace-only lines (e.g. a
+        # trailing newline) are skipped, not errors.
         samples_by_policy: Dict[str, List[FreshDrawSample]] = defaultdict(list)
 
         with open(path_obj, "r") as f:
             for line_num, line in enumerate(f, 1):
+                if not line.strip():
+                    continue
                 try:
                     data = json.loads(line)
+                    if not isinstance(data, dict):
+                        raise ValueError(
+                            f"expected a JSON object, got {type(data).__name__}"
+                        )
 
                     # Create FreshDrawSample (str() so integer ids like 0
                     # survive validation and join with logged data)
@@ -291,11 +300,19 @@ class FreshDrawLoader:
                         ),  # Default to 0 if not provided
                         fold_id=data.get("fold_id"),  # Optional
                     )
+                except KeyError as e:
+                    raise ValueError(
+                        f"Invalid fresh draw record at {path_obj}:{line_num}: "
+                        f"missing required field {e}"
+                    ) from e
+                except ValueError as e:
+                    # Covers json.JSONDecodeError and pydantic ValidationError
+                    # (both subclass ValueError). Add file/line context.
+                    raise ValueError(
+                        f"Invalid fresh draw record at {path_obj}:{line_num}: {e}"
+                    ) from e
 
-                    samples_by_policy[sample.target_policy].append(sample)
-
-                except (json.JSONDecodeError, KeyError, ValueError) as e:
-                    logger.warning(f"Skipping invalid line {line_num}: {e}")
+                samples_by_policy[sample.target_policy].append(sample)
 
         # Create FreshDrawDataset for each policy
         datasets = {}

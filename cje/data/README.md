@@ -128,11 +128,13 @@ See [`visualization/README.md`](../visualization/README.md) for all visualizatio
 
 ### Data Validation
 ```python
-from cje.data import validate_cje_data
+from cje.data import validate_direct_data
 
-# Check if data has required fields
-is_valid, issues = validate_cje_data(
-    data,
+# Check raw parsed JSONL records (no Dataset round-trip): prompt_id,
+# numeric judge scores, oracle-label counts, per-policy consistency.
+# Entries starting with "Note:" are informational (e.g. ignored logprobs).
+is_valid, issues = validate_direct_data(
+    records,
     judge_field="judge_score",
     oracle_field="oracle_label"
 )

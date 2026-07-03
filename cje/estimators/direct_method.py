@@ -304,6 +304,74 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             f"Expected one of: {', '.join(sorted(self._VALID_INFERENCE_METHODS))}"
         )
 
+    def _eval_oracle_count(self) -> int:
+        """Number of oracle-labeled samples in the evaluation fresh draws."""
+        return sum(
+            1
+            for fd in self._fresh_draws.values()
+            for sample in fd.samples
+            if sample.oracle_label is not None
+        )
+
+    def _oracle_coverage_for_oua(self) -> Optional[float]:
+        """The 100%-coverage OUA skip applies only when the oracle labels
+        live in THIS evaluation data.
+
+        The skip exists because rewards on labeled eval rows are the
+        labels themselves, so the IF variance already carries the reward
+        noise. With a separate calibration source and label-free fresh
+        draws, the calibrator's coverage describes the calibration
+        dataset, not the eval set: eval rewards are f̂(S_eval) and the
+        calibrator's finite-sample uncertainty must still be added via
+        the jackknife — so report no coverage and keep the OUA active.
+        """
+        coverage = super()._oracle_coverage_for_oua()
+        if coverage is not None and coverage >= 1.0 and self._eval_oracle_count() == 0:
+            return None
+        return coverage
+
+    def _bootstrap_fallback_reason(self) -> Optional[str]:
+        """Why bootstrap cannot run on this data (None when it can).
+
+        The bootstrap path refits the calibrator on the EVALUATION data's
+        oracle labels. With calibration_data_path only and NO oracle
+        labels in the fresh draws, its eval table has zero oracle rows:
+        the full-data refit fails and every replicate is skipped below
+        min_oracle_per_replicate, so NaN estimates came back quietly
+        (pre-0.4.0 behavior).
+
+        Falling back to cluster-robust + oracle-jackknife is statistically
+        sound here: with a separate calibration source and zero eval-oracle
+        rows, calibration and evaluation are independent samples, so the
+        calibration/evaluation covariance term the bootstrap exists to
+        capture is exactly zero. The additive decomposition — cluster-robust
+        evaluation variance plus the oracle jackknife (which carries the
+        calibrator's oracle uncertainty via its cross-fitted fold models) —
+        is then the correct SE.
+        """
+        if self._eval_oracle_count() > 0:
+            return None
+
+        if self.reward_calibrator is not None:
+            logger.warning(
+                "bootstrap requires oracle labels in the evaluation data; "
+                "falling back to cluster-robust SEs with oracle-jackknife "
+                "(the fresh draws carry no oracle labels, so the bootstrap "
+                "refit would skip every replicate and return NaN estimates; "
+                "the fitted calibrator's oracle uncertainty is included via "
+                "the jackknife)"
+            )
+            return "no_oracle_labels_in_evaluation_data"
+
+        # No calibrator either (naive mode reached via inference "auto"):
+        # there is nothing to refit, so bootstrap is equally impossible.
+        logger.warning(
+            "bootstrap requires oracle labels in the evaluation data; "
+            "falling back to cluster-robust SEs (no oracle labels and no "
+            "fitted calibrator — results are uncalibrated judge-score means)"
+        )
+        return "no_oracle_labels_and_no_calibrator"
+
     def fit(self) -> None:
         """Prepare data for each policy using fresh draws.
 
@@ -418,10 +486,15 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         """
         self._validate_fitted()
 
-        # Check if bootstrap should be used
+        # Check if bootstrap should be used — and whether it CAN run on
+        # this data (zero eval-oracle rows would skip every replicate and
+        # quietly return NaN estimates; see _bootstrap_fallback_reason).
         use_bootstrap, bootstrap_reason = self._should_use_bootstrap()
+        bootstrap_fallback: Optional[str] = None
         if use_bootstrap:
-            return self._estimate_with_bootstrap(bootstrap_reason)
+            bootstrap_fallback = self._bootstrap_fallback_reason()
+            if bootstrap_fallback is None:
+                return self._estimate_with_bootstrap(bootstrap_reason)
 
         # Standard estimation path (cluster-robust SE + oracle jackknife)
         estimates = []
@@ -545,6 +618,15 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             "n_clusters": getattr(self, "_n_clusters", {}),
         }
 
+        # Record a bootstrap-to-cluster-robust downgrade so the SE basis
+        # is visible in results, not just in a log line
+        if bootstrap_fallback is not None:
+            metadata["inference"] = {
+                "method": "cluster_robust",
+                "requested_method": self.inference_method,
+                "fallback_reason": bootstrap_fallback,
+            }
+
         # Check if prompts are aligned across policies
         if self.paired_comparison and len(self._policy_data) > 1:
             prompt_sets = [set(pd.prompt_ids) for pd in self._policy_data.values()]
@@ -653,7 +735,10 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             p: float(se) for p, se in zip(policies, standard_errors) if not np.isnan(se)
         }
 
-        # Get calibration info (if calibrator was provided)
+        # Get calibration info (if calibrator was provided).
+        # JudgeCalibrator implements get_calibration_info() since 0.4.0;
+        # before that this guard never fired and the calibration fields
+        # below were always None.
         cal_info = {}
         if self.reward_calibrator and hasattr(
             self.reward_calibrator, "get_calibration_info"
@@ -702,9 +787,9 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             n_samples_used=n_samples_used,
             status_per_policy=status_per_policy,
             boundary_cards=boundary_cards if boundary_cards else None,
-            # Calibration metrics (if available)
+            # Calibration metrics (fit-time, if a calibrator was provided)
             calibration_rmse=cal_info.get("rmse"),
-            calibration_coverage=cal_info.get("oracle_coverage"),
+            calibration_coverage=cal_info.get("coverage_at_01"),
             n_oracle_labels=cal_info.get("n_oracle_labels"),
         )
 

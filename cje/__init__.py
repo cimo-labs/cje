@@ -20,6 +20,9 @@ from .data import Dataset, Sample, EstimationResult
 # Simple data loading
 from .data import load_dataset_from_jsonl
 
+# Array-first primitive (single-policy calibrated mean + transport audit)
+from .array_api import CalibratedMeanResult, calibrated_mean_ci, transport_audit
+
 # Budget planning
 from .diagnostics.planning import (
     CostModel,
@@ -39,18 +42,6 @@ from .diagnostics.simulation_planning import (
     correlation_to_r2,
 )
 
-# Visualization functions (optional - requires matplotlib)
-try:
-    from .visualization import (
-        plot_policy_estimates,
-        plot_calibration_comparison,
-        plot_planning_dashboard,
-    )
-
-    _has_visualization = True
-except ImportError:
-    _has_visualization = False
-
 __all__ = [
     # Simple API
     "analyze_dataset",
@@ -60,6 +51,10 @@ __all__ = [
     "EstimationResult",
     # Data loading
     "load_dataset_from_jsonl",
+    # Array-first primitive
+    "CalibratedMeanResult",
+    "calibrated_mean_ci",
+    "transport_audit",
     # Budget planning
     "CostModel",
     "FittedVarianceModel",
@@ -75,12 +70,28 @@ __all__ = [
     "correlation_to_r2",
 ]
 
-# Add visualization functions to __all__ if available
-if _has_visualization:
-    __all__.extend(
-        [
-            "plot_policy_estimates",
-            "plot_calibration_comparison",
-            "plot_planning_dashboard",
-        ]
-    )
+# Visualization functions (optional - requires the viz extra). Resolved
+# lazily so a no-viz install imports cje without warnings; accessing a
+# plot_* name without matplotlib raises an ImportError with the install
+# hint (from cje.visualization) instead of an AttributeError.
+_VIZ_EXPORTS = (
+    "plot_policy_estimates",
+    "plot_calibration_comparison",
+    "plot_planning_dashboard",
+)
+
+
+def __getattr__(name: str) -> object:
+    if name in _VIZ_EXPORTS:
+        from . import visualization
+
+        return getattr(visualization, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# Advertise the plot_* names in __all__ only when the viz extra is
+# installed (checked without importing matplotlib, which is slow).
+from importlib.util import find_spec as _find_spec
+
+if _find_spec("matplotlib") is not None:
+    __all__.extend(_VIZ_EXPORTS)

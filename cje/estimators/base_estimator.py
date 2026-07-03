@@ -159,9 +159,11 @@ class BaseCJEEstimator(ABC):
 
         # Skip oracle-jackknife augmentation at 100% oracle coverage
         # (the calibrator knows its own coverage; at 100% there is no
-        # calibration uncertainty to add)
+        # calibration uncertainty to add). Estimators can override
+        # _oracle_coverage_for_oua when the calibrator's coverage
+        # describes a different dataset than the evaluation data.
         try:
-            coverage = getattr(self.reward_calibrator, "oracle_coverage", None)
+            coverage = self._oracle_coverage_for_oua()
 
             if coverage is not None and coverage >= 1.0:
                 if isinstance(result.metadata, dict):
@@ -217,6 +219,19 @@ class BaseCJEEstimator(ABC):
                 )
         except Exception as e:
             logger.debug(f"Calibration-aware oracle jackknife failed: {e}")
+
+    def _oracle_coverage_for_oua(self) -> Optional[float]:
+        """Oracle coverage consulted by the 100%-coverage OUA skip.
+
+        Defaults to the calibrator's own coverage (fraction of its
+        training data with oracle labels). Estimators whose evaluation
+        data is disjoint from the calibration data (e.g. Direct mode with
+        a separate calibration source) override this: the calibrator's
+        coverage then describes a different dataset, and returning None
+        keeps the jackknife active.
+        """
+        coverage = getattr(self.reward_calibrator, "oracle_coverage", None)
+        return float(coverage) if coverage is not None else None
 
     def get_oracle_jackknife(self, policy: str) -> Optional[np.ndarray]:
         """Compute leave-one-oracle-fold jackknife estimates.
