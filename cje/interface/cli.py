@@ -122,13 +122,30 @@ def create_parser() -> argparse.ArgumentParser:
     # Validate command
     validate_parser = subparsers.add_parser(
         "validate",
-        help="Validate a CJE dataset",
-        description="Check dataset format and completeness",
+        help="Validate Direct-mode data (fresh draws or calibration file)",
+        description=(
+            "Check that data is ready for 'cje analyze'. PATH is a fresh-draws "
+            "directory of per-policy response files, a single fresh-draws JSONL "
+            "file with a target_policy field per record, or a calibration JSONL "
+            "file with judge_score + oracle_label pairs."
+        ),
     )
 
     validate_parser.add_argument(
         "dataset",
-        help="Path to JSONL dataset file",
+        help="Path to a fresh-draws directory or a JSONL file",
+    )
+
+    validate_parser.add_argument(
+        "--judge-field",
+        default="judge_score",
+        help="Field containing judge scores (default: judge_score)",
+    )
+
+    validate_parser.add_argument(
+        "--oracle-field",
+        default="oracle_label",
+        help="Field containing oracle labels (default: oracle_label)",
     )
 
     validate_parser.add_argument(
@@ -421,73 +438,142 @@ def run_analysis(args: argparse.Namespace) -> int:
         return 1
 
 
+def _resolve_policy_file(directory: Path, policy: str) -> Path:
+    """Locate the per-policy fresh-draws file for a discovered policy."""
+    for candidate in (
+        directory / f"{policy}_responses.jsonl",
+        directory / f"{policy}.jsonl",
+    ):
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(
+        f"No fresh-draws file found for policy '{policy}' in {directory} "
+        f"(expected {policy}_responses.jsonl or {policy}.jsonl)"
+    )
+
+
+def _read_fresh_draws_dir(directory: Path) -> list:
+    """Read every per-policy file in a fresh-draws directory.
+
+    Records are tagged with the policy from the filename (an explicit
+    target_policy field in a record wins), so validation can run its
+    per-policy checks and report per-policy counts.
+    """
+    from ..data.fresh_draws import discover_policies_from_fresh_draws
+
+    records = []
+    for policy in discover_policies_from_fresh_draws(directory):
+        file_path = _resolve_policy_file(directory, policy)
+        for record in _read_jsonl_records(file_path):
+            record.setdefault("target_policy", policy)
+            records.append(record)
+    return records
+
+
 def validate_data(args: argparse.Namespace) -> int:
-    """Run the validate command using existing validation utilities."""
-    from .. import load_dataset_from_jsonl
-    from ..data.validation import validate_cje_data
+    """Run the validate command on the RAW parsed JSONL records.
+
+    Validates the file(s) exactly as parsed — no Dataset round-trip. The
+    0.2.x-era implementation converted records to a Dataset first, which
+    regenerated prompt_ids and relocated judge/oracle fields, so `cje
+    validate` false-failed ALL valid data.
+    """
+    from ..data.validation import NOTE_PREFIX, read_record_field, validate_direct_data
+
+    path = Path(args.dataset)
 
     try:
-        if not args.verbose:
-            print(f"Validating {args.dataset}...")
+        print(f"Validating {path}...")
 
-        # Load dataset
-        dataset = load_dataset_from_jsonl(args.dataset)
+        if path.is_dir():
+            records = _read_fresh_draws_dir(path)
+        elif path.is_file():
+            records = _read_jsonl_records(path)
+        else:
+            raise FileNotFoundError(args.dataset)
 
-        # Convert to list of dicts for validation (backward compatibility)
-        data_list = []
-        for sample in dataset.samples:
-            record = {
-                "prompt": sample.prompt,
-                "response": sample.response,
-                "base_policy_logprob": sample.base_policy_logprob,
-                "target_policy_logprobs": sample.target_policy_logprobs,
-                "metadata": sample.metadata,
-            }
-            if sample.reward is not None:
-                record["reward"] = sample.reward
-            data_list.append(record)
-
-        # Use existing validation function
-        is_valid, issues = validate_cje_data(
-            data_list,
-            reward_field="reward",
-            judge_field="judge_score",
-            oracle_field="oracle_label",
+        is_valid, findings = validate_direct_data(
+            records,
+            judge_field=args.judge_field,
+            oracle_field=args.oracle_field,
         )
+        issues = [f for f in findings if not f.startswith(NOTE_PREFIX)]
+        notes = [f for f in findings if f.startswith(NOTE_PREFIX)]
 
-        # Display results
-        print(f"✓ Loaded {dataset.n_samples} samples")
-        print(f"✓ Target policies: {', '.join(dataset.target_policies)}")
+        def _oracle_count(recs: list) -> int:
+            return sum(
+                1
+                for r in recs
+                if isinstance(read_record_field(r, args.oracle_field), (int, float))
+            )
 
-        # Check rewards
-        n_with_rewards = sum(1 for s in dataset.samples if s.reward is not None)
-        if n_with_rewards > 0:
-            print(f"✓ Rewards: {n_with_rewards}/{dataset.n_samples} samples")
+        print(f"✓ Loaded {len(records)} records")
+
+        # Per-policy sample + oracle counts (fresh draws); a file without
+        # target_policy is a single pool (calibration source)
+        by_policy: dict = {}
+        for record in records:
+            policy = record.get("target_policy")
+            if policy is not None:
+                by_policy.setdefault(str(policy), []).append(record)
+
+        if by_policy:
+            print(
+                f"✓ Target policies ({len(by_policy)}): {', '.join(sorted(by_policy))}"
+            )
+            for policy in sorted(by_policy):
+                recs = by_policy[policy]
+                print(
+                    f"  {policy}: {len(recs)} samples, "
+                    f"{_oracle_count(recs)} oracle labels"
+                )
+
+        n_oracle_total = _oracle_count(records)
+        print(f"✓ Oracle labels: {n_oracle_total}/{len(records)} records")
 
         if issues:
             print("\n⚠️  Issues found:")
             for issue in issues:
                 print(f"  - {issue}")
-        else:
-            print("\n✓ Dataset is valid and ready for analysis")
+        for note in notes:
+            print(f"  {note}")
+
+        if is_valid:
+            if by_policy:
+                print("\n✓ Data is valid and ready for analysis")
+                print(f"  Next: cje analyze {path}")
+            else:
+                # Logged-style / calibration file: judge + oracle pairs
+                # without target_policy — valid as a calibration source
+                print(
+                    "\n✓ Data is valid as a calibration source "
+                    "(judge + oracle pairs; no target_policy field) and "
+                    "ready for use with --calibration-data"
+                )
+                print(f"  Next: cje analyze FRESH_DRAWS --calibration-data {path}")
 
         if args.verbose:
-            # Detailed statistics
+            import numpy as np
+
             print("\nDetailed Statistics:")
             print("-" * 40)
 
-            # Judge scores and oracle labels
-            judge_scores = []
-            oracle_labels = []
-            for s in dataset.samples:
-                if s.judge_score is not None:
-                    judge_scores.append(s.judge_score)
-                if s.oracle_label is not None:
-                    oracle_labels.append(s.oracle_label)
+            judge_scores = [
+                float(v)
+                for r in records
+                if isinstance(
+                    (v := read_record_field(r, args.judge_field)), (int, float)
+                )
+            ]
+            oracle_labels = [
+                float(v)
+                for r in records
+                if isinstance(
+                    (v := read_record_field(r, args.oracle_field)), (int, float)
+                )
+            ]
 
             if judge_scores:
-                import numpy as np
-
                 print(f"Judge scores: {len(judge_scores)} samples")
                 print(f"  Range: [{min(judge_scores):.3f}, {max(judge_scores):.3f}]")
                 print(f"  Mean: {np.mean(judge_scores):.3f}")
@@ -497,21 +583,13 @@ def validate_data(args: argparse.Namespace) -> int:
                 print(f"  Range: [{min(oracle_labels):.3f}, {max(oracle_labels):.3f}]")
                 print(f"  Mean: {np.mean(oracle_labels):.3f}")
 
-            # Valid samples per policy
-            print("\nValid samples per policy:")
-            for policy in dataset.target_policies:
-                n_valid = sum(
-                    1
-                    for s in dataset.samples
-                    if s.base_policy_logprob is not None
-                    and s.target_policy_logprobs.get(policy) is not None
-                )
-                print(f"  {policy}: {n_valid}/{dataset.n_samples}")
-
         return 0 if is_valid else 1
 
     except FileNotFoundError as e:
-        print(f"❌ Error: Dataset file not found: {e}", file=sys.stderr)
+        print(f"❌ Error: Dataset path not found: {e}", file=sys.stderr)
+        return 1
+    except ValueError as e:
+        print(f"❌ Error validating dataset: {e}", file=sys.stderr)
         return 1
     except Exception as e:
         print(f"❌ Error validating dataset: {e}", file=sys.stderr)

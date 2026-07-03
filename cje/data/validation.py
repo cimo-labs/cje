@@ -1,228 +1,222 @@
-"""Data validation utilities for CJE.
+"""Data validation utilities for Direct-mode CJE.
 
-This module provides functions to validate that input data has the required
-fields for different CJE use cases.
+Validates RAW parsed JSONL records (lists of dicts, exactly as
+``json.loads`` produces them) before any Dataset/FreshDrawDataset
+conversion.
+
+Operating on raw records is deliberate: the historical ``cje validate``
+bug (0.2.x through 0.3.0) came from round-tripping records through the
+Dataset model before validating. That round-trip replaces missing
+top-level ``prompt_id`` with generated hashes, relocates judge/oracle
+fields between metadata and the top level, and requires OPE logprob
+fields — so validation reported "Missing required field: prompt_id" and
+"No evaluation field found" on perfectly valid data.
 """
 
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
 
+#: Entries in the returned issues list that start with this prefix are
+#: informational notes and do not affect validity.
+NOTE_PREFIX = "Note:"
 
-def validate_cje_data(
-    data: List[Dict[str, Any]],
-    reward_field: Optional[str] = None,
-    judge_field: Optional[str] = None,
-    oracle_field: Optional[str] = None,
+# Logged-data logprob fields. Direct mode (0.4.0) does not consume them;
+# their presence earns an informational note, never an issue.
+_LOGPROB_FIELDS = (
+    "base_policy_logprob",
+    "target_policy_logprobs",
+    "logprob",
+    "logprobs",
+    "total_logprob",
+    "token_logprobs",
+)
+
+# Cap for the logprob-presence scan (record shapes are uniform in
+# practice, so the leading records are representative).
+_LOGPROB_SCAN_LIMIT = 100
+
+
+def read_record_field(record: Dict[str, Any], field: str) -> Any:
+    """Read a field from the top level first, then from metadata.
+
+    Mirrors the loaders' lookup order so validation accepts exactly the
+    shapes the loaders accept. Falsy-but-valid values (0, "") are
+    returned as-is; only absent/None counts as missing.
+    """
+    value = record.get(field)
+    if value is not None:
+        return value
+    metadata = record.get("metadata")
+    if isinstance(metadata, dict):
+        return metadata.get(field)
+    return None
+
+
+def _window_size(n: int) -> int:
+    """Window-scan size: min(100, max(10, n // 10))."""
+    return min(100, max(10, n // 10))
+
+
+def _is_numeric(value: Any) -> bool:
+    return isinstance(value, (int, float))
+
+
+def validate_direct_data(
+    records: List[Dict[str, Any]],
+    judge_field: str = "judge_score",
+    oracle_field: str = "oracle_label",
 ) -> Tuple[bool, List[str]]:
-    """Validate that data has required fields for CJE analysis.
+    """Validate raw Direct-mode records (fresh draws or calibration data).
 
-    This function checks that the data has the core required fields
-    (prompt, response, base_policy_logprob, target_policy_logprobs)
-    and appropriate evaluation fields (either reward or judge scores).
+    Checks, on the raw parsed JSONL dicts:
+
+    - ``prompt_id`` present (top level or metadata) over a leading window
+      of min(100, max(10, n // 10)) records;
+    - a numeric judge score (top level or metadata) over the same window;
+    - oracle-label counts over ALL records: 0 or fewer than 10 valid
+      labels is an issue, 10-49 earns an informational note (50-100+
+      recommended);
+    - if ``target_policy`` is present, every record must have it, and the
+      window/oracle checks run per policy;
+    - NO logprob checks: logprob fields are ignored by Direct mode, and
+      their presence earns only an informational note.
 
     Args:
-        data: List of data records to validate
-        reward_field: Field name containing pre-calibrated rewards
-        judge_field: Field name containing judge scores
-        oracle_field: Field name containing oracle labels
+        records: Raw parsed JSONL records (list of dicts).
+        judge_field: Field containing judge scores.
+        oracle_field: Field containing oracle labels.
 
     Returns:
-        Tuple of (is_valid, list_of_issues)
+        Tuple of (is_valid, issues). Entries starting with ``"Note:"``
+        are informational and do not affect ``is_valid``.
 
     Example:
-        >>> data = load_jsonl("data.jsonl")
-        >>> is_valid, issues = validate_cje_data(
-        ...     data,
-        ...     judge_field="judge_score",
-        ...     oracle_field="oracle_label"
-        ... )
+        >>> records = [json.loads(line) for line in open("draws.jsonl")]
+        >>> is_valid, issues = validate_direct_data(records)
         >>> if not is_valid:
         ...     for issue in issues:
         ...         print(f"⚠️  {issue}")
     """
-    issues = []
+    issues: List[str] = []
+    notes: List[str] = []
 
-    if not data:
-        issues.append("Data is empty")
-        return False, issues
+    if not records:
+        return False, ["Data is empty"]
 
-    # Check core fields in first sample (assume homogeneous)
-    sample = data[0]
-    core_fields = [
-        "prompt_id",
-        "prompt",
-        "response",
-        "base_policy_logprob",
-        "target_policy_logprobs",
-    ]
+    n = len(records)
 
-    for field in core_fields:
-        if field not in sample:
-            issues.append(f"Missing required field: {field}")
-
-    # Check that target_policy_logprobs is a dict
-    if "target_policy_logprobs" in sample:
-        if not isinstance(sample["target_policy_logprobs"], dict):
-            issues.append("target_policy_logprobs must be a dictionary")
-        elif not sample["target_policy_logprobs"]:
-            issues.append("target_policy_logprobs cannot be empty")
-
-    # Check evaluation fields - scan a larger sample for robustness
-    # Check up to 100 samples or 10% of data, whichever is smaller
-    sample_size = min(100, max(10, len(data) // 10))
-
-    # Reward field: scan the same window as the judge/oracle checks (not just
-    # data[0]) and require the value to be present AND non-None.
-    has_reward = False
-    if reward_field:
-        reward_window = data[:sample_size]
-        n_reward_present = sum(
-            1 for rec in reward_window if rec.get(reward_field) is not None
+    # --- target_policy consistency (refuse to guess for mixed files)
+    n_with_policy = sum(
+        1 for record in records if record.get("target_policy") is not None
+    )
+    if 0 < n_with_policy < n:
+        issues.append(
+            f"{n - n_with_policy}/{n} records are missing 'target_policy' "
+            f"while other records have it. Give every record a "
+            f"target_policy, or none (per-policy files)."
         )
-        has_reward = 0 < n_reward_present == len(reward_window)
-        if 0 < n_reward_present < len(reward_window):
-            n_reward_missing = len(reward_window) - n_reward_present
+
+    # Group per policy when target_policy is present; otherwise validate
+    # all records as one group.
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    if n_with_policy:
+        for record in records:
+            policy = record.get("target_policy")
+            key = str(policy) if policy is not None else "<missing target_policy>"
+            groups.setdefault(key, []).append(record)
+    else:
+        groups[""] = list(records)
+
+    # --- window scan per group: prompt_id + numeric judge scores
+    for policy, group in sorted(groups.items()):
+        label = f" for policy '{policy}'" if policy else ""
+        window = group[: _window_size(len(group))]
+
+        n_missing_prompt_id = sum(
+            1 for record in window if read_record_field(record, "prompt_id") is None
+        )
+        if n_missing_prompt_id:
             issues.append(
-                f"Reward field '{reward_field}' is missing or None in "
-                f"{n_reward_missing}/{len(reward_window)} of the first "
-                f"{len(reward_window)} records "
-                f"({n_reward_missing / len(reward_window):.0%} missing). "
-                f"Pre-computed rewards must be present for all records; "
-                f"otherwise drop the reward field and calibrate from judge "
-                f"scores and oracle labels."
+                f"Missing required field 'prompt_id' in "
+                f"{n_missing_prompt_id}/{len(window)} of the first "
+                f"{len(window)} records{label} (checked top level and "
+                f"metadata). Direct mode aligns draws across policies by "
+                f"prompt_id."
             )
 
-    # Check for judge field - accept it either at top level or in metadata
-    # Also validate that values are numeric and non-None
-    judge_samples_checked = 0
-    valid_judge_samples = 0
-    invalid_judge_values = []
-
-    if judge_field:
-        for i, rec in enumerate(data[:sample_size]):
-            judge_samples_checked += 1
-            judge_val = None
-
-            # Check top level first
-            if judge_field in rec:
-                judge_val = rec[judge_field]
-            # Then check metadata
-            elif "metadata" in rec and judge_field in rec["metadata"]:
-                judge_val = rec["metadata"][judge_field]
-
-            # Validate the value
-            if judge_val is not None:
-                if isinstance(judge_val, (int, float)):
-                    valid_judge_samples += 1
-                else:
-                    invalid_judge_values.append((i, type(judge_val).__name__))
-
-    has_judge = judge_field and (valid_judge_samples > 0)
-
-    # Report invalid judge values if found
-    if invalid_judge_values:
-        examples = invalid_judge_values[:3]  # Show first 3 examples
-        issues.append(
-            f"Judge field '{judge_field}' has non-numeric values. "
-            f"Examples: {examples}. Values must be numeric (int or float)."
-        )
-
-    if not has_reward and not has_judge:
-        issues.append(
-            "No evaluation field found. Need either:\n"
-            "  - A 'reward' field with pre-calibrated values, OR\n"
-            "  - Judge scores in metadata for calibration"
-        )
-
-    # If using judge scores, oracle labels are REQUIRED for calibration
-    if has_judge and not has_reward:
-        # Judge scores without rewards require oracle labels for calibration
-        if not oracle_field:
+        n_missing_judge = 0
+        invalid_judge: List[Tuple[int, str]] = []
+        for i, record in enumerate(window):
+            value = read_record_field(record, judge_field)
+            if value is None:
+                n_missing_judge += 1
+            elif not _is_numeric(value):
+                invalid_judge.append((i, type(value).__name__))
+        if n_missing_judge:
             issues.append(
-                "Judge scores require oracle labels for calibration. "
-                "Provide oracle_field parameter pointing to oracle labels."
+                f"Judge field '{judge_field}' is missing in "
+                f"{n_missing_judge}/{len(window)} of the first "
+                f"{len(window)} records{label} (checked top level and "
+                f"metadata). Every record needs a numeric judge score."
             )
-        else:
-            # Check for oracle labels - accept at top level or in metadata
-            # Also validate that values are numeric
-            oracle_count = 0
-            invalid_oracle_values = []
+        if invalid_judge:
+            issues.append(
+                f"Judge field '{judge_field}' has non-numeric values{label}. "
+                f"Examples (index, type): {invalid_judge[:3]}. "
+                f"Values must be numeric (int or float)."
+            )
 
-            for i, rec in enumerate(data):
-                oracle_val = None
-
-                # Check top level first
-                if oracle_field in rec:
-                    oracle_val = rec[oracle_field]
-                # Then check metadata
-                elif "metadata" in rec and oracle_field in rec["metadata"]:
-                    oracle_val = rec["metadata"][oracle_field]
-
-                # Validate the value
-                if oracle_val is not None:
-                    if isinstance(oracle_val, (int, float)):
-                        oracle_count += 1
-                    else:
-                        invalid_oracle_values.append((i, type(oracle_val).__name__))
-
-            # Report invalid oracle values if found
-            if invalid_oracle_values:
-                examples = invalid_oracle_values[:3]  # Show first 3 examples
-                issues.append(
-                    f"Oracle field '{oracle_field}' has non-numeric values. "
-                    f"Examples: {examples}. Values must be numeric (int or float)."
-                )
-
-            if oracle_count == 0:
-                issues.append(
-                    f"No valid oracle labels found in field '{oracle_field}'. "
-                    "Judge scores require oracle labels for calibration. "
-                    "Need at least 10 samples with oracle labels (50-100 recommended). "
-                    "Check that oracle values are numeric and non-None."
-                )
-            elif oracle_count < 10:
-                issues.append(
-                    f"Too few oracle samples ({oracle_count}). "
-                    "Absolute minimum is 10 samples. "
-                    "Strongly recommend 50-100+ for robust calibration."
-                )
-            elif oracle_count < 50:
-                logger.warning(
-                    f"Found {oracle_count} oracle samples. "
-                    f"Consider adding more (50-100 recommended) for better calibration."
-                )
+    # --- oracle labels: full scan; count ladders on the pooled total
+    # (calibration pools oracle labels across all policies' draws)
+    oracle_counts: Dict[str, int] = {policy: 0 for policy in groups}
+    invalid_oracle: List[Tuple[int, str]] = []
+    for policy, group in groups.items():
+        for i, record in enumerate(group):
+            value = read_record_field(record, oracle_field)
+            if value is None:
+                continue
+            if _is_numeric(value):
+                oracle_counts[policy] += 1
             else:
-                logger.info(f"Found {oracle_count} oracle samples for calibration")
+                invalid_oracle.append((i, type(value).__name__))
 
-    # Check data consistency across samples
-    n_samples = len(data)
-    valid_base_lp = sum(1 for rec in data if rec.get("base_policy_logprob") is not None)
-
-    if valid_base_lp < n_samples:
-        pct_missing = 100 * (n_samples - valid_base_lp) / n_samples
+    if invalid_oracle:
         issues.append(
-            f"{n_samples - valid_base_lp}/{n_samples} samples "
-            f"({pct_missing:.1f}%) have missing base_policy_logprob"
+            f"Oracle field '{oracle_field}' has non-numeric values. "
+            f"Examples (index, type): {invalid_oracle[:3]}. "
+            f"Values must be numeric (int or float)."
         )
 
-    # Check target policies consistency
-    if data and "target_policy_logprobs" in data[0]:
-        first_policies = set(data[0]["target_policy_logprobs"].keys())
-        inconsistent = []
+    total_oracle = sum(oracle_counts.values())
+    if total_oracle == 0:
+        issues.append(
+            f"No oracle labels found in field '{oracle_field}'. "
+            f"Calibration needs at least 10 labeled samples (50-100 "
+            f"recommended): add oracle labels to a slice of these records, "
+            f"or calibrate from a separate file via calibration_data_path "
+            f"(--calibration-data)."
+        )
+    elif total_oracle < 10:
+        issues.append(
+            f"Too few oracle samples ({total_oracle}). "
+            f"Absolute minimum is 10 samples. "
+            f"Strongly recommend 50-100+ for robust calibration."
+        )
+    elif total_oracle < 50:
+        notes.append(
+            f"{NOTE_PREFIX} Found {total_oracle} oracle samples. Consider "
+            f"adding more (50-100 recommended) for better calibration."
+        )
 
-        for i, rec in enumerate(data[1:11], 1):  # Check first 10
-            if "target_policy_logprobs" in rec:
-                policies = set(rec["target_policy_logprobs"].keys())
-                if policies != first_policies:
-                    inconsistent.append(i)
-
-        if inconsistent:
-            issues.append(
-                f"Inconsistent target policies in samples {inconsistent}. "
-                f"Expected: {first_policies}"
-            )
+    # --- logprob fields: informational only, never an issue
+    if any(
+        field in record
+        for record in records[:_LOGPROB_SCAN_LIMIT]
+        for field in _LOGPROB_FIELDS
+    ):
+        notes.append(f"{NOTE_PREFIX} logprob fields present and ignored (Direct mode)")
 
     is_valid = len(issues) == 0
-    return is_valid, issues
+    return is_valid, issues + notes
