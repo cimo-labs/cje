@@ -218,61 +218,6 @@ class TestPlanningWorkflow:
         assert "MDE" in summary
 
     @pytest.mark.slow
-    def test_dr_mode_pilot_to_production(self) -> None:
-        """Test planning workflow with DR mode pilot."""
-        from cje.data.fresh_draws import (
-            load_fresh_draws_auto,
-            discover_policies_from_fresh_draws,
-        )
-
-        logged_data_path = ARENA_SAMPLE_DIR / "logged_data.jsonl"
-        fresh_draws_dir = ARENA_SAMPLE_DIR / "fresh_draws"
-
-        if not logged_data_path.exists():
-            pytest.skip(f"Logged data not found at {logged_data_path}")
-        if not fresh_draws_dir.exists():
-            pytest.skip(f"Fresh draws not found at {fresh_draws_dir}")
-
-        # Run DR mode pilot (both logged data and fresh draws → auto-selects DR)
-        pilot_result = analyze_dataset(
-            logged_data_path=str(logged_data_path),
-            fresh_draws_dir=str(fresh_draws_dir),
-            verbose=False,
-        )
-
-        # Verify DR mode was selected
-        mode_selection = pilot_result.metadata.get("mode_selection", {})
-        assert (
-            mode_selection.get("mode") == "dr"
-        ), f"Expected DR mode, got {mode_selection}"
-
-        # Load fresh draws and fit variance model (use base policy)
-        base_data = load_fresh_draws_auto(fresh_draws_dir, "base")
-
-        variance_model = fit_variance_model(
-            base_data,
-            n_grid=[100, 200],
-            oracle_fraction_grid=[0.25, 0.50],
-            n_replicates=50,
-            verbose=False,
-        )
-
-        # Plan production run
-        plan = plan_evaluation(
-            budget=10000.0,
-            cost_model=CostModel(oracle_cost=16.0),
-            variance_model=variance_model,
-        )
-
-        # Should produce sensible allocation
-        assert plan.n_samples > 0
-        assert plan.m_oracle > 0
-        assert plan.se_level > 0
-
-
-class TestSquareRootLawProperties:
-    """Test mathematical properties of the Square Root Allocation Law."""
-
     def test_budget_constraint_respected(self) -> None:
         """Verify allocation respects budget constraint."""
         # Use synthetic variance model for mathematical property tests

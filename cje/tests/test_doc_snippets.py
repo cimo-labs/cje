@@ -80,6 +80,7 @@ def test_snippet_imports_resolve(path: str, line: int, code: str) -> None:
         optional_markers = (
             "matplotlib",
             "seaborn",
+            "cje-eval[viz]",  # the lazy plot_* hint on no-viz installs
         )
         if any(marker in msg for marker in optional_markers):
             pytest.skip(f"optional extra not installed: {msg}")

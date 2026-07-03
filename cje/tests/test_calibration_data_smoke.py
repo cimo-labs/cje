@@ -168,9 +168,7 @@ def test_calibration_data_only_without_eval_oracle_returns_finite_estimates(
     cluster-robust SEs with the oracle jackknife, loudly.
     """
     # Calibration data: old logged data (judge + oracle), 40 samples.
-    # The logprob fields are present-and-ignored, as in real 0.3.x logs;
-    # load_dataset_from_jsonl still requires target_policy_logprobs to
-    # detect policies (pre-existing loader constraint).
+    # The logprob fields are present-and-ignored, as in real 0.3.x logs.
     calibration_data = [
         {
             "prompt_id": f"calib_{i}",
@@ -225,6 +223,65 @@ def test_calibration_data_only_without_eval_oracle_returns_finite_estimates(
 
     # Oracle (calibration) uncertainty is still included, via the jackknife
     assert results.metadata["se_components"]["includes_oracle_uncertainty"] is True
+
+
+def test_minimal_calibration_file_loads_and_analyzes(tmp_path: Path) -> None:
+    """A minimal judge+oracle calibration file works end-to-end.
+
+    Regression: the documented migration ("pass your logged data — or a
+    minimal judge+oracle file — as calibration_data_path") used to crash for
+    files without logprob fields: no target_policy_logprobs meant
+    target_policies=[] failed Dataset validation ('too_short'), and records
+    without prompt/response were skipped outright — even though `cje
+    validate` blessed the file as a calibration source.
+    """
+    from cje import load_dataset_from_jsonl
+
+    # The minimal documented schema: prompt_id + judge_score + oracle_label.
+    # No prompt, no response, no logprob fields.
+    calibration_data = [
+        {
+            "prompt_id": f"calib_{i}",
+            "judge_score": round(0.2 + i * 0.02, 4),
+            "oracle_label": round(0.25 + i * 0.02, 4),
+        }
+        for i in range(30)
+    ]
+    calib_path = tmp_path / "minimal_calibration.jsonl"
+    calib_path.write_text("\n".join(json.dumps(r) for r in calibration_data) + "\n")
+
+    # Loads directly — every record kept, no policies detected
+    dataset = load_dataset_from_jsonl(str(calib_path))
+    assert dataset.n_samples == 30
+    assert dataset.target_policies == []
+    assert dataset.samples[0].judge_score == pytest.approx(0.2)
+    assert dataset.samples[0].oracle_label == pytest.approx(0.25)
+
+    # And works as the calibration source for a Direct-mode analysis
+    fresh_draws_dir = tmp_path / "fresh_draws"
+    fresh_draws_dir.mkdir()
+    for policy, offset in (("policy_a", 0.5), ("policy_b", 0.4)):
+        records = [
+            {
+                "prompt_id": f"eval_{i}",
+                "judge_score": round(offset + i * 0.005, 4),
+            }
+            for i in range(40)
+        ]
+        (fresh_draws_dir / f"{policy}_responses.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in records) + "\n"
+        )
+
+    results = analyze_dataset(
+        fresh_draws_dir=str(fresh_draws_dir),
+        calibration_data_path=str(calib_path),
+    )
+
+    assert len(results.estimates) == 2
+    assert np.all(np.isfinite(results.estimates)), results.estimates
+    assert np.all(np.isfinite(results.standard_errors)), results.standard_errors
+    assert results.method == "calibrated_direct"  # calibrated, not naive
+    assert results.metadata["oracle_sources"]["calibration_data"]["n_oracle"] == 30
 
 
 if __name__ == "__main__":

@@ -2,224 +2,130 @@
 
 ## Overview
 
-Estimators that turn judge-scored fresh draws into reliable policy value estimates with proper uncertainty quantification.
+Direct-mode estimation: turn judge-scored fresh draws into per-policy value estimates with honest uncertainty quantification. The estimand is the **mean calibrated reward of each policy on a shared prompt set** — "which of these policies produces the best outputs on my eval set, and by how much?"
 
-> **Note (0.4.0):** The off-policy estimators (CalibratedIPS, DR-CPO, MRDR, TMLE, StackedDR) were removed. For IPS/DR workflows pin `pip install "cje-eval==0.3.*"`.
-
-## Estimator Hierarchy
-
-```
-BaseCJEEstimator (abstract)
-└── CalibratedDirectEstimator  # Direct (on-policy) evaluation with fresh draws
-```
-
-## Core Concepts
-
-### Direct Method (On-Policy Evaluation)
-Evaluates target policies using fresh draws sampled directly from those policies. No importance weighting needed since samples come from the target distribution. Supports optional reward calibration (judge → oracle) when labeled data is available.
+> **Note (0.4.0):** The off-policy estimators were removed; for IPS/DR workflows pin `pip install "cje-eval==0.3.*"`.
 
 ## File Structure
 
 ```
 estimators/
-├── base_estimator.py       # Abstract base
-└── direct_method.py        # Direct (on-policy) estimator
+├── base_estimator.py   # BaseCJEEstimator (abstract) + oracle_jackknife_variance
+└── direct_method.py    # CalibratedDirectEstimator
+```
+
+```
+BaseCJEEstimator (abstract)
+└── CalibratedDirectEstimator
 ```
 
 ## Common Interface
 
-```python
-from cje.estimators import CalibratedDirectEstimator
-from cje.calibration import calibrate_dataset
+`analyze_dataset(...)` does all of this for you; use the estimator directly when you need control over calibration or inference settings.
 
-# 1. Calibrate judge scores against oracle labels
+```python
+from cje.calibration import calibrate_dataset
+from cje.estimators import CalibratedDirectEstimator
+
+# 1. Learn the judge → oracle calibration (cross-fitted)
 calibrated_dataset, cal_result = calibrate_dataset(
     dataset,
+    judge_field="judge_score",
+    oracle_field="oracle_label",
     enable_cross_fit=True,
-    calibration_mode='auto'  # Auto-selects monotone or two-stage
 )
 
-# 2. Initialize estimator
+# 2. Build the estimator
 estimator = CalibratedDirectEstimator(
     target_policies=["policy_a", "policy_b"],
     reward_calibrator=cal_result.calibrator,
 )
 
-# 3. Add fresh draws for each policy
-# - easiest: use analyze_dataset(..., fresh_draws_dir=...)
-# - or: call estimator.add_fresh_draws(policy, fresh_draws) per policy
-
-# 4. Fit and estimate
+# 3. Attach fresh draws per policy, then estimate
+# estimator.add_fresh_draws("policy_a", fresh_draws_a)
+# estimator.add_fresh_draws("policy_b", fresh_draws_b)
 result = estimator.fit_and_estimate()
 
-# 5. Access results
-estimates = result.estimates           # Point estimates
-std_errors = result.standard_errors    # Complete standard errors (IF + oracle)
-cis = result.ci()                      # Confidence intervals as (lower, upper) tuples
-diagnostics = result.diagnostics       # Health metrics
-influence = result.influence_functions # For inference
+# 4. Access results
+estimates = result.estimates           # Point estimates per policy
+std_errors = result.standard_errors    # Complete SEs (sampling + calibration)
+cis = result.ci()                      # (lower, upper) tuples, t-based
+diagnostics = result.diagnostics       # DirectDiagnostics incl. boundary cards
 ```
 
-## Fresh Draws
+Fresh draws are auto-discovered from a `fresh_draws_dir` by `load_fresh_draws_auto(...)` under these names: `{policy}_responses.jsonl`, `responses/{policy}_responses.jsonl`, `{policy}_fresh.jsonl`, `fresh_draws/{policy}.jsonl`.
 
-Fresh draws can be auto-loaded from standard locations relative to a provided `fresh_draws_dir` (see `load_fresh_draws_auto(...)`):
-- `{policy}_responses.jsonl`
-- `responses/{policy}_responses.jsonl`
-- `{policy}_fresh.jsonl`
-- `fresh_draws/{policy}.jsonl`
+## Standard Errors
 
-Or add manually:
-```python
-estimator.add_fresh_draws('policy', FreshDrawDataset(samples=[...]))
-```
+`standard_errors` always includes every uncertainty source: sampling noise on the eval set **and** the uncertainty from learning the calibrator on a finite oracle slice. Confidence intervals use t-critical values with the limiting degrees of freedom (stored per policy in `result.metadata["degrees_of_freedom"]` with `df`, `t_critical`, `se_method`, `n_clusters`).
 
-## Standard Errors and Uncertainty Quantification
+### Inference methods (`inference_method` parameter)
 
-### Complete Standard Errors
-
-`standard_errors` always includes all sources of uncertainty:
-- **Influence function (IF) variance**: Base sampling uncertainty
-- **Oracle variance**: When calibration uses partial oracle labels (oracle_coverage < 100%)
-
-### Confidence Intervals with t-Distribution
-
-**All estimators use t-critical values by default** (not z-critical) to account for finite degrees of freedom from:
-- Cluster-robust standard errors (clustering by prompt_id in Direct Mode)
-- Oracle uncertainty adjustment with K oracle folds (df = K - 1)
-
-The degrees of freedom is determined by the limiting factor (minimum across sources). This ensures proper 95% coverage even with small numbers of clusters or oracle folds.
-
-**How it works:**
-- Estimators store DF information in `result.metadata["degrees_of_freedom"]`
-- `EstimationResult.confidence_interval()` automatically uses t-critical values when DF info is available
-- Falls back to z-critical for large-sample approximation when DF info is missing
-- This is completely automatic - no user configuration needed
-
-### Direct Mode Standard Errors
-Direct Mode automatically adapts its standard error calculation based on the data structure and inference method:
-
-**Inference Methods** (controlled via `inference_method` parameter):
-- **`bootstrap`** (default): Cluster bootstrap with calibrator refit + θ̂_aug (achieves **~95% coverage**)
-- **`cluster_robust`**: Standard cluster-robust SEs by prompt (fastest, ~22-55% coverage)
-- **`auto`**: Uses cluster_robust; switches to bootstrap when coupling detected
-
-**Separate flag:** `oua_jackknife` is not an `inference_method` value.
-Set `oua_jackknife=True` to add oracle jackknife augmentation on top of the chosen inference method.
-
-**Bootstrap with θ̂_aug** uses an AIPW-style bias correction:
-```
-θ̂_aug = mean(f̂_full(S)) + mean(Y - f̂_oof(S))
-```
-This applies a per-policy residual correction that is the default first-moment transport fix in Direct mode. Refitting the calibrator on each bootstrap replicate captures the calibration/evaluation covariance that analytic SEs miss.
-
-```python
-# Explicit bootstrap for small samples or coupled calibration/evaluation
-estimator = CalibratedDirectEstimator(
-    target_policies=policies,
-    reward_calibrator=calibrator,
-    inference_method="bootstrap",  # or "auto", "cluster_robust"
-    n_bootstrap=2000,              # Number of bootstrap replicates
-)
-```
-
-**When bootstrap is preferred (recommended for all cases):**
-- **Always** - bootstrap achieves ~95% coverage vs ~22-55% for cluster-robust
-- Few evaluation clusters (< 20 prompts) - asymptotic approximation unreliable
-- Calibration and evaluation data overlap (coupled) - analytic SEs miss covariance
-- Need valid confidence intervals (the default cluster_robust severely undercovers)
-
-**Standard (non-bootstrap) cluster-robust SEs:**
-```python
-# Single policy or unpaired: Standard SE
-standard_errors = np.sqrt(variance/n)
-
-# Paired comparisons (same prompts across policies): Cluster-robust SE
-# Clusters by prompt_id to account for within-prompt correlation
-standard_errors = cluster_robust_se(influence_functions, cluster_ids=prompt_ids)
-
-# Check which method was used
-result.metadata["se_methods"]  # e.g., {"policy_a": "cluster_robust", ...}
-result.metadata["n_clusters"]  # e.g., {"policy_a": 1000, ...}
-```
-
-**When cluster-robust SEs are used:**
-- Evaluating multiple policies on the **same prompts** (paired comparison)
-- Example: 3 policies × 1000 prompts = 3000 samples, but only 1000 independent clusters
-- Clusters by `prompt_id` to account for correlation across policies
-- Provides honest uncertainty for policy comparisons
-
-**Important:** Bootstrap inference affects only SEs and CIs, not point estimates. Point estimates always use the original calibrator for consistency.
-
-**Transport-Aware Bootstrap** (`calibration_policy` parameter):
-When evaluating multiple policies where calibration was learned on a base policy, use `calibration_policy` to enable transport-aware bias correction:
+- **`"bootstrap"` (default):** cluster bootstrap by prompt with a **calibrator refit per replicate**, applied to the augmented estimate `θ̂_aug = mean(f̂_full(S)) + mean(Y − f̂_oof(S))` (an AIPW-style per-policy residual correction; `use_augmented_estimator=True` by default). Refitting captures the calibration/evaluation covariance that analytic SEs miss — this is what achieves ~95% CI coverage.
+- **`"cluster_robust"`:** CRV1 cluster-robust SE of the plug-in mean (clustered by `prompt_id` for paired comparisons), augmented with the oracle-jackknife variance. Fastest; undercovers when calibration and evaluation are coupled. `"analytical"` is accepted as an alias.
+- **`"auto"`:** uses cluster_robust, switching to bootstrap when there are fewer than 20 prompt clusters or when the calibration data overlaps the evaluation draws (coupling).
 
 ```python
 estimator = CalibratedDirectEstimator(
-    target_policies=["base", "verbose", "contrarian"],
-    reward_calibrator=calibrator,
-    inference_method="bootstrap",
-    calibration_policy="base",  # Fit calibrator only on base policy
+    target_policies=["policy_a", "policy_b"],
+    reward_calibrator=cal_result.calibrator,
+    inference_method="bootstrap",  # or "cluster_robust", "auto"
+    n_bootstrap=2000,
 )
 ```
 
-This separates:
-- **Calibration oracle**: Only base policy samples (for fitting the calibrator)
-- **Residual oracle**: All policies (for computing transport bias corrections in θ̂_aug)
+### Automatic fallback when the eval draws carry no oracle labels
 
-When the calibrator doesn't transport to target policies, the residual correction `mean(Y - f̂(S))` captures this bias per policy. Treat a single global offset as a baseline only. See `diagnostics/README.md` for details.
-
-**Philosophy:** Cluster by the source of dependence. Direct Mode clusters by prompts when paired.
-
-### Convenience Method
-```python
-# Get confidence intervals as list of (lower, upper) tuples
-# Uses t-critical values automatically (accounts for finite degrees of freedom)
-cis = result.ci(alpha=0.05)  # 95% CIs by default
-for i, (lower, upper) in enumerate(cis):
-    print(f"Policy {i}: [{lower:.3f}, {upper:.3f}]")
-
-# Check degrees of freedom used (optional)
-if "degrees_of_freedom" in result.metadata:
-    df_info = result.metadata["degrees_of_freedom"]
-    for policy, info in df_info.items():
-        print(f"{policy}: df={info['df']}, t_crit={info['t_critical']:.3f}")
-```
-
-## Advanced Features
-
-### Oracle Uncertainty Augmentation (calibration-aware)
-Delete-one-fold jackknife accounts for calibrator uncertainty from finite oracle samples. **Note: calibration-aware is automatically skipped at 100% oracle coverage** since there's no oracle uncertainty when all samples have ground truth labels.
+With a separate calibration source (`calibration_data_path`) and **label-free** fresh draws, the bootstrap's per-replicate refit has nothing to refit on. The estimator detects this before dispatching and falls back to cluster-robust + oracle jackknife — which is exact there, not an approximation: calibration and evaluation are independent, so the covariance the bootstrap exists to capture is zero. The downgrade is loud (warning) and recorded:
 
 ```python
-# Enabled by default
-estimator = CalibratedDirectEstimator(
-    target_policies=policies,
-    reward_calibrator=calibrator,
-    oua_jackknife=True,
-)
-
-# Oracle uncertainty is automatically included in standard_errors
-result = estimator.fit_and_estimate()
-
-# Check if oracle uncertainty was added
-if "se_components" in result.metadata:
-    if result.metadata["se_components"].get("oracle_uncertainty_skipped"):
-        print("calibration-aware skipped - 100% oracle coverage")
-    elif result.metadata["se_components"].get("includes_oracle_uncertainty"):
-        print("Oracle uncertainty included in standard_errors")
+result.metadata["inference"]
+# {"method": "cluster_robust", "requested_method": "bootstrap",
+#  "fallback_reason": "no_oracle_labels_in_evaluation_data"}
 ```
 
-### Custom Estimators
-Inherit from `BaseCJEEstimator` and implement `fit()` and `estimate()`. Always compute and store influence functions in `_influence_functions`.
+### Oracle uncertainty (calibration-aware inference)
 
-## Implementation Notes
+`oua_jackknife=True` (default) adds the delete-one-oracle-fold jackknife variance so SEs reflect that the calibrator was *learned*, not given. The bootstrap path captures this by construction; the decomposition is reported in `result.metadata["se_components"]` (`includes_oracle_uncertainty`, `oracle_variance_per_policy`). The jackknife is skipped only when the oracle labels live in the evaluation data itself at 100% coverage (no calibration uncertainty left to account for).
 
-### Cross-Fitting
-Calibration uses k-fold cross-fitting via the unified fold system in `cje.data.folds` (deterministic: `hash(prompt_id) % k`).
+### Paired comparisons
 
-### Influence Functions
-Always computed and stored for proper inference, policy comparison, and diagnostics.
+When multiple policies are evaluated on the same prompts (`paired_comparison=True`, default), SEs cluster by `prompt_id`: 3 policies × 1000 prompts is 1000 independent clusters, not 3000 samples. Per-policy method bookkeeping lives in `result.metadata["se_methods"]` and `["n_clusters"]`.
+
+## The Coverage Gate (boundary cards)
+
+`estimate()` computes the paper's coverage badge per policy: the fraction of that policy's judge scores falling **outside the calibrator's oracle S-range** (`calibrator.oracle_s_range`, recorded at fit time). Isotonic calibration extrapolates flatly outside its support, so out-of-range mass makes *level* claims untrustworthy even when rankings survive.
+
+- Cards are attached to `result.diagnostics.boundary_cards` and `result.metadata["boundary_cards"]`.
+- At ≥ 5% out-of-range mass (`OUT_OF_RANGE_REFUSE_THRESHOLD` in `cje.diagnostics.gates`), the card's status is **REFUSE-LEVEL**: the estimator warns loudly, sets that policy's status to CRITICAL, and flags it in `result.metadata["reliability_gates"]` (`flagged`, `refuse_level_claims`, `reasons`). The `cje analyze` CLI demotes such policies from the best-policy announcement.
+- Fix: collect oracle labels covering the missing score range.
+
+```python
+for policy, card in (result.metadata.get("boundary_cards") or {}).items():
+    print(policy, card["status"], f"{card['out_of_range']:.1%} out of range")
+```
+
+## Key Design Decisions
+
+1. **Calibrate rewards, never fabricate them.** Without a `reward_calibrator`, estimation runs on raw judge scores and is loudly labeled `method="naive_direct"` — uncalibrated means are never passed off as calibrated results.
+2. **Cluster by the source of dependence.** Prompts are the sampling unit; every inference path clusters by `prompt_id`.
+3. **Influence functions are first-class.** Always computed and stored (`result.influence_functions`) for policy comparisons and downstream inference.
+4. **Gates change the output.** Coverage violations alter statuses and metadata that the CLI and diagnostics consume — they are not log-only footnotes.
+
+### Cross-fitting
+
+Calibration uses k-fold cross-fitting with deterministic fold assignment from the unified fold system in `cje.data.folds` (`hash(prompt_id) % k`), so folds are stable across runs and datasets.
+
+### Custom estimators
+
+Inherit from `BaseCJEEstimator` (`__init__(target_policies, run_diagnostics=True, diagnostic_config=None, reward_calibrator=None, oua_jackknife=True)`) and implement `fit()` and `estimate()`; store per-policy influence functions in `_influence_functions`.
+
+## Common Issues
+
+- **"No fresh draws added"** — call `add_fresh_draws()` for every policy in `target_policies` before `fit_and_estimate()`.
+- **NaN estimates with tiny oracle slices** — below ~10 pooled oracle labels, cross-fitted calibration cannot fit stable folds; collect more labels (the error says how many).
+- **REFUSE-LEVEL badge** — not an error: rankings may stand, but do not ship absolute numbers for that policy until labels cover its score range.
 
 ## Summary
 
-A focused toolkit for on-policy evaluation of LLM outputs from judge-scored fresh draws, with calibrated rewards, honest uncertainty quantification, and transparent diagnostics.
+One estimator, honestly reported: `CalibratedDirectEstimator` turns calibrated judge scores on fresh draws into per-policy estimates with complete standard errors (bootstrap-with-refit by default), calibration-aware uncertainty, and a coverage gate that refuses level claims the data cannot support.

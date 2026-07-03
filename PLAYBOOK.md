@@ -5,9 +5,7 @@ This is the operational runbook for:
 - deciding what to do when audits pass vs fail,
 - planning oracle label budgets.
 
-It is written against the current CJE API in this repo.
-
-Advanced note: CJE supports IPS/DR variants for counterfactual OPE, but this runbook intentionally focuses on the default Direct-mode operating loop.
+It is written against the current CJE API in this repo. CJE 0.4.x is Direct-mode only; this runbook is the whole operating loop. (Off-policy IPS/DR workflows live on the frozen 0.3.x line: `pip install "cje-eval==0.3.*"`.)
 
 ---
 

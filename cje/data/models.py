@@ -118,7 +118,9 @@ class Dataset(BaseModel):
     """
 
     samples: List[Sample] = Field(..., min_length=1)
-    target_policies: List[str] = Field(..., min_length=1)
+    # May be empty: calibration-only datasets (judge + oracle pairs, e.g. a
+    # minimal calibration_data_path file) carry no policy information.
+    target_policies: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("target_policies")

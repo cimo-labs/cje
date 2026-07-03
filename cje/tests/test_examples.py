@@ -75,6 +75,27 @@ class TestNotebookWalkthrough:
         print(f"✓ Direct mode: {len(valid_estimates)} policies estimated")
 
 
+class TestAdvancedNotebookStub:
+    """cje_advanced.ipynb is a stub since 0.4.0 (OPE moved to the 0.3.x line)."""
+
+    def test_advanced_notebook_is_a_markdown_stub(self) -> None:
+        pytest.importorskip("nbformat")
+        import nbformat
+
+        notebook_path = (
+            Path(__file__).parent.parent.parent / "examples" / "cje_advanced.ipynb"
+        )
+        assert notebook_path.exists(), f"Notebook not found at {notebook_path}"
+
+        nb = nbformat.read(notebook_path, as_version=4)
+
+        # No executable cells: the OPE walkthrough lives at the v0.3.0 tag.
+        assert all(cell.cell_type == "markdown" for cell in nb.cells)
+        text = "\n".join("".join(cell.source) for cell in nb.cells)
+        assert 'pip install "cje-eval==0.3.*"' in text
+        assert "v0.3.0" in text
+
+
 @pytest.mark.slow
 class TestNotebookExecution:
     """Test that the actual notebooks execute without errors."""

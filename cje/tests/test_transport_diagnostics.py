@@ -614,7 +614,7 @@ def test_transport_dict_input() -> None:
 @pytest.mark.unit
 def test_transport_diagnostics_plot() -> None:
     """Test TransportDiagnostics.plot() method creates a figure."""
-    import matplotlib
+    matplotlib = pytest.importorskip("matplotlib")
 
     matplotlib.use("Agg")  # Non-interactive backend for testing
     import matplotlib.pyplot as plt
@@ -645,7 +645,7 @@ def test_transport_diagnostics_plot() -> None:
 @pytest.mark.unit
 def test_plot_transport_comparison() -> None:
     """Test plot_transport_comparison creates a forest plot."""
-    import matplotlib
+    matplotlib = pytest.importorskip("matplotlib")
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt

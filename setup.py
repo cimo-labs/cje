@@ -18,7 +18,7 @@ setup(
     author="Eddie Landesberg",
     author_email="eddie@fondutech.com",
     packages=find_packages(),
-    python_requires=">=3.9,<3.13",
+    python_requires=">=3.9,<3.14",
     install_requires=[
         "numpy>=1.26",
         "pandas>=2.2",

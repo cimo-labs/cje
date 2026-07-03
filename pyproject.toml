@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "cje-eval"
-version = "0.3.0"
-description = "Causal Judge Evaluation - Unbiased LLM evaluation framework"
+version = "0.4.0"
+description = "Causal Judge Evaluation - Calibrated LLM-judge evaluation with honest confidence intervals"
 authors = ["Eddie Landesberg <eddie@cimolabs.com>"]
 license = "MIT"
 packages = [{ include = "cje" }]
@@ -9,21 +9,20 @@ readme = "README.md"
 homepage = "https://cimolabs.com/cje"
 repository = "https://github.com/cimo-labs/cje"
 documentation = "https://arxiv.org/abs/2512.11150"
-keywords = ["evaluation", "llm", "causal-inference", "off-policy", "importance-sampling", "doubly-robust"]
+keywords = ["evaluation", "llm", "llm-judge", "causal-inference", "calibration", "judge-calibration"]
 classifiers = [
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.9,<3.13"
+python = ">=3.9,<3.14"
 # Core dependencies
-numpy = ">=1.26,<2.1"  # Match scipy 1.11-1.14 compatibility (requires <2.1)
+numpy = ">=1.26,<3.0"  # numpy 2.x validated on py3.13 (fast suite green)
 pandas = "^2.2"
 scipy = "^1.11.0"
 scikit-learn = "^1.4"
 pydantic = ">=2.6,<3.0"
-python-dotenv = "^1.1.0"
 
 # Optional dependency groups
 matplotlib = {version = "^3.8", optional = true}
