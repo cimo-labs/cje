@@ -26,7 +26,8 @@ from dataclasses import dataclass
 
 from .base_estimator import BaseCJEEstimator
 from ..data.models import EstimationResult
-from ..diagnostics.models import IPSDiagnostics, Status
+from ..diagnostics.models import DirectDiagnostics, Status
+from ..diagnostics.gates import worst_status
 
 logger = logging.getLogger(__name__)
 
@@ -561,6 +562,9 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
                     "Paired comparisons not available."
                 )
 
+        # Boundary gate: coverage badges + reliability gates for the CLI
+        self._attach_reliability_metadata(metadata, diagnostics)
+
         result = EstimationResult(
             estimates=np.array(estimates),
             standard_errors=np.array(standard_errors),
@@ -579,15 +583,64 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
 
         return result
 
+    def _compute_policy_boundary_card(self, policy: str) -> Optional[Dict[str, Any]]:
+        """Coverage badge (paper REFUSE-LEVEL gate) for one policy.
+
+        Compares the policy's fresh-draw judge scores against the oracle
+        calibration S-range the reward calibrator stored at fit time;
+        >= 5% out-of-range mass refuses level claims (threshold canonical
+        in gates.py). Ported from the 0.3.x CalibratedIPS wiring.
+        """
+        if self.reward_calibrator is None:
+            return None
+        s_range = getattr(self.reward_calibrator, "oracle_s_range", None)
+        r_range = getattr(self.reward_calibrator, "oracle_reward_range", None)
+        if s_range is None or r_range is None:
+            return None
+        pdata = self._policy_data.get(policy)
+        if pdata is None:
+            return None
+
+        try:
+            S_policy = np.asarray(pdata.judge_scores, dtype=float)
+            S_policy = S_policy[np.isfinite(S_policy)]
+            R_policy = np.asarray(pdata.calibrated_rewards, dtype=float)
+            if len(S_policy) == 0 or len(R_policy) == 0:
+                return None
+
+            from dataclasses import asdict
+
+            from ..diagnostics.reward_boundary import boundary_card
+
+            # boundary_card reads only min/max of S_oracle, so the stored
+            # range stands in for the full oracle slice.
+            card = boundary_card(
+                S_policy=S_policy,
+                S_oracle=np.asarray(s_range, dtype=float),
+                R_policy=R_policy,
+                R_min=float(r_range[0]),
+                R_max=float(r_range[1]),
+            )
+            card_dict: Dict[str, Any] = asdict(card)
+            card_dict["oracle_s_range"] = [float(s_range[0]), float(s_range[1])]
+            return card_dict
+        except Exception as e:
+            logger.debug(f"Could not compute boundary card for policy '{policy}': {e}")
+            return None
+
     def _build_diagnostics(
         self,
         estimates: List[float],
         standard_errors: List[float],
         n_samples_used: Dict[str, int],
-    ) -> IPSDiagnostics:
-        """Build simplified diagnostics for direct mode.
+    ) -> DirectDiagnostics:
+        """Build Direct-mode diagnostics.
 
-        Note: No weight metrics (ESS, tail indices) since we don't use weights.
+        No weight metrics (ESS, tail indices) since we don't use weights.
+        The identification risk that matters here is coverage: each
+        policy's boundary card (the paper's coverage badge) is computed
+        against the calibrator's oracle S-range, and a REFUSE-LEVEL badge
+        sets that policy's status to CRITICAL with a loud warning.
         """
         policies = list(self.target_policies)
 
@@ -614,29 +667,76 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
         )
         valid_samples = sum(n_samples_used.values())
 
-        diagnostics = IPSDiagnostics(
+        # Coverage badges (paper REFUSE-LEVEL gate): judge-score mass
+        # outside the oracle calibration range refuses level claims
+        boundary_cards: Dict[str, Dict[str, Any]] = {}
+        status_per_policy: Dict[str, Status] = {p: Status.GOOD for p in policies}
+        for policy in policies:
+            card = self._compute_policy_boundary_card(policy)
+            if card is None:
+                continue
+            boundary_cards[policy] = card
+            if card.get("status") == "REFUSE-LEVEL":
+                status_per_policy[policy] = worst_status(
+                    status_per_policy[policy], Status.CRITICAL
+                )
+                s_lo, s_hi = card["oracle_s_range"]
+                logger.warning(
+                    f"REFUSE-LEVEL for policy '{policy}': "
+                    f"{card.get('out_of_range', 0.0):.1%} of fresh-draw judge "
+                    f"scores fall outside the oracle calibration range "
+                    f"[{s_lo:.3f}, {s_hi:.3f}]. Do not ship level (absolute) "
+                    f"claims for this policy; rankings may stand. Collect "
+                    f"oracle labels covering the missing score range."
+                )
+
+        diagnostics = DirectDiagnostics(
             estimator_type="Direct",
             method=self._method_name,
             n_samples_total=total_samples,
             n_samples_valid=valid_samples,
-            n_policies=len(policies),
             policies=policies,
             estimates=estimates_dict,
             standard_errors=se_dict,
             n_samples_used=n_samples_used,
-            # No weight metrics for direct mode
-            weight_ess=1.0,  # Conceptually, direct mode has perfect "overlap"
-            weight_status=Status.GOOD,
-            ess_per_policy={p: 1.0 for p in policies},
-            max_weight_per_policy={p: 1.0 for p in policies},
+            status_per_policy=status_per_policy,
+            boundary_cards=boundary_cards if boundary_cards else None,
             # Calibration metrics (if available)
             calibration_rmse=cal_info.get("rmse"),
-            calibration_r2=cal_info.get("r2"),
             calibration_coverage=cal_info.get("oracle_coverage"),
             n_oracle_labels=cal_info.get("n_oracle_labels"),
         )
 
         return diagnostics
+
+    def _attach_reliability_metadata(
+        self, metadata: Dict[str, Any], diagnostics: DirectDiagnostics
+    ) -> None:
+        """Record boundary cards and reliability gates in result metadata.
+
+        The CLI's best-policy announcement reads
+        ``metadata["reliability_gates"][policy]["flagged"]``: a REFUSE-LEVEL
+        coverage badge demotes the policy from the trophy line.
+        """
+        if not diagnostics.boundary_cards:
+            return
+        metadata["boundary_cards"] = diagnostics.boundary_cards
+        gates: Dict[str, Dict[str, Any]] = {}
+        for policy, card in diagnostics.boundary_cards.items():
+            refuse_level = card.get("status") == "REFUSE-LEVEL"
+            reasons = []
+            if refuse_level:
+                reasons.append(
+                    f"boundary: {card.get('out_of_range', 0.0):.1%} of judge "
+                    f"scores outside the oracle calibration range"
+                )
+            gates[policy] = {
+                "flagged": refuse_level,
+                "refused": False,  # estimates are still reported
+                "refuse_level_claims": refuse_level,
+                "reasons": reasons,
+            }
+        metadata["reliability_gates"] = gates
 
     def get_oracle_jackknife(self, policy: str) -> Optional[np.ndarray]:
         """Compute leave-one-fold-out estimates for oracle uncertainty.
@@ -1037,6 +1137,9 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
                 metadata["n_prompts"] = len(prompt_sets[0])
             else:
                 metadata["prompts_aligned"] = False
+
+        # Boundary gate: coverage badges + reliability gates for the CLI
+        self._attach_reliability_metadata(metadata, diagnostics)
 
         result = EstimationResult(
             estimates=np.array(estimates),

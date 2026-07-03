@@ -14,11 +14,8 @@ The diagnostics system is now consolidated into a single cohesive module at `cje
 cje/diagnostics/
 ├── __init__.py             # Public API exports
 ├── gates.py                # Canonical gate thresholds + status helpers (single source of truth)
-├── models.py               # Data models (IPSDiagnostics, DRDiagnostics, CJEDiagnostics, Status, GateState)
-├── weights.py              # Weight diagnostic computations (ESS, Hill, etc.)
-├── overlap.py              # Overlap metrics (action-space E[√w], judge-space A_B / σ(S) floors, TTC, CLE)
+├── models.py               # Data models (DirectDiagnostics, Status)
 ├── reward_boundary.py      # Coverage badge (boundary_card, the paper's REFUSE-LEVEL gate)
-├── dr.py                   # DR-specific diagnostics
 ├── transport.py            # Transportability auditing
 ├── display.py              # Display and formatting utilities
 ├── robust_inference.py     # Robust standard errors and inference
@@ -32,11 +29,11 @@ cje/diagnostics/
 ```
 ┌─────────────────┐
 │  Data Models    │  models.py: Immutable dataclasses
-│                 │  (IPSDiagnostics, DRDiagnostics)
+│                 │  (DirectDiagnostics)
 └────────┬────────┘
          │
 ┌────────▼────────┐
-│  Computation    │  weights.py, dr.py, overlap.py, transport.py:
+│  Computation    │  reward_boundary.py, transport.py:
 │                 │  Pure functions for metric computation
 └────────┬────────┘
          │
@@ -73,66 +70,24 @@ Computed properties (via `@property`):
 - `overall_status` - Aggregate health status
 - Additional class-specific properties
 
-### IPSDiagnostics
+### DirectDiagnostics
 
-Base diagnostics for importance sampling estimators. Key field groups:
+The single diagnostics class in 0.4.0 (the 0.3.x `IPSDiagnostics`/`DRDiagnostics`/`CJEDiagnostics` classes were removed with the OPE estimators; `IPSDiagnostics` survives as a deprecated alias of `DirectDiagnostics` until 0.5.0). Key field groups:
 
 **Identification**: `estimator_type`, `method`, `policies`  
 **Sample counts**: `n_samples_total`, `n_samples_valid`, `n_samples_used`  
 **Results**: `estimates`, `standard_errors` (per policy)  
-**Weight metrics**: `weight_ess`, `ess_per_policy`, `max_weight_per_policy`  
-**Tail behavior**: `tail_indices` (Hill estimator results)  
-**Status**: `weight_status`, `status_per_policy`  
-**Calibration**: `calibration_rmse`, `calibration_r2`, `n_oracle_labels`
+**Status**: `status_per_policy` (CRITICAL when the coverage badge refuses level claims)  
+**Coverage badges**: `boundary_cards` (per-policy `BoundaryCard` dict incl. `oracle_s_range`)  
+**Calibration**: `calibration_rmse`, `calibration_coverage`, `n_oracle_labels`
 
-### DRDiagnostics
-
-Extends IPSDiagnostics with doubly robust specific metrics:
-
-**Cross-fitting**: `dr_cross_fitted`, `dr_n_folds`
-**Outcome model**: `outcome_r2_range`, `outcome_rmse_mean`
-**Influence functions**: `worst_if_tail_ratio`, `influence_functions`
-**Decompositions**: `dr_diagnostics_per_policy`, `dm_ips_decompositions`
-**Orthogonality**: `orthogonality_scores`
-
-### CJEDiagnostics
-
-Unified diagnostics for paper-ready reporting. Simplifies IPSDiagnostics and DRDiagnostics into a single class focused on two key questions:
-
-1. **Can we make level claims?** (identification/coverage risk)
-2. **Are CIs honest?** (sampling/variance risk)
-
-**Key fields**:
-- `coverage_risk`: "unknown", "low", "medium", "high", or "critical" — derived from the per-policy `boundary_cards` (REFUSE-LEVEL ⇒ "critical", CAUTION ⇒ "high", OK ⇒ "low"; "unknown" when no boundary card could be computed)
-- `variance_risk`: "low", "medium", "high", or "critical"
-- `refuse_level_claims`: Boolean gate for level claims (True when coverage_risk is "critical")
-- `refuse_inference`: Boolean gate for CI reliability
-
-Note: `can_make_level_claims` is False while `coverage_risk` is "unknown" — level claims are only certified once coverage has actually been checked.
-
-**Key properties**:
-- `can_make_level_claims` - Whether point estimates are reliable
-- `has_honest_inference` - Whether confidence intervals are reliable
-- `overall_risk` - Combined risk assessment
-
-**Factory methods**:
 ```python
-from cje.diagnostics import CJEDiagnostics, IPSDiagnostics, DRDiagnostics
+from cje.diagnostics import DirectDiagnostics, Status
 
-# Convert from IPS diagnostics
-unified = CJEDiagnostics.from_ips_diagnostics(ips_diag)
-
-# Convert from DR diagnostics
-unified = CJEDiagnostics.from_dr_diagnostics(dr_diag)
-
-# Check risk levels
-print(unified.summary())
-# Output: "CalibratedIPS (calibrated) | N=950/1000 | Coverage: low | Variance: medium | ESS=45.2%"
-
-if unified.can_make_level_claims:
-    print("Safe to compare policy levels")
-if unified.has_honest_inference:
-    print("Confidence intervals are reliable")
+# diagnostics = results.diagnostics after analyze_dataset(...)
+# Coverage risk lives in the boundary cards:
+# any card with status "REFUSE-LEVEL" means do NOT ship level claims
+# for that policy (rankings may stand).
 ```
 
 
@@ -148,10 +103,7 @@ The `Status` enum has three values:
 - `WARNING` - Some concerning metrics but results usable
 - `CRITICAL` - Severe issues detected
 
-The `GateState` enum extends this with:
-- `REFUSE` - Overlap too poor for any reliable estimation
-
-Status computation varies by diagnostic class and combines multiple factors like ESS, tail indices, and calibration quality.
+`overall_status` is the worst per-policy status; a policy's status goes CRITICAL when its coverage badge (boundary card) refuses level claims.
 
 ### 2. Validation Warnings  
 The `validate()` method checks for logical inconsistencies:
@@ -193,15 +145,10 @@ Judge scores outside the oracle calibration range are the primary identification
 - **saturation ≥ 20%** or large estimator gap → `CAUTION`
 - otherwise → `OK`
 
-`CalibratedIPS` computes a per-policy card automatically (attached as `diagnostics.boundary_cards` and `result.metadata["boundary_cards"]`, with a loud warning on REFUSE-LEVEL), and `CJEDiagnostics.coverage_risk` / `refuse_level_claims` are derived from it — `coverage_risk` is `"unknown"` (level claims not certified) when no card could be computed, never a hardcoded `"low"`.
+`CalibratedDirectEstimator` computes a per-policy card automatically (attached as `diagnostics.boundary_cards` and `result.metadata["boundary_cards"]`, with a loud warning on REFUSE-LEVEL): each policy's fresh-draw judge scores are compared against the oracle calibration S-range the reward calibrator stored at fit time. A REFUSE-LEVEL badge sets the policy's status to CRITICAL and flags it in `result.metadata["reliability_gates"]` (`refuse_level_claims`), which the CLI's best-policy announcement consults to demote unreliable winners.
 
-### Effective Sample Size (ESS)
-Measures how many "effective" samples remain after weighting. **Can be improved by calibration.**
-
-The canonical ladder lives in `cje.diagnostics.gates` (`ess_status`) and is the ONLY ESS ladder in the library — every surface (estimator gates, `Status` grading, display tables, dashboards) uses it, so a policy at ESS 25% gets the same WARNING verdict everywhere:
-- **ESS ≥ 30%**: GOOD — the paper's ship-gate for reliable IPS
-- **ESS 10-30%**: WARNING — moderate overlap issues
-- **ESS < 10%**: CRITICAL — severe overlap problems
+### Effective Sample Size (ESS) — removed in 0.4.0
+ESS graded importance weights; Direct mode has none. The ESS ladder was removed with the OPE estimators (`pip install "cje-eval==0.3.*"` for the OPE diagnostics). The surviving canonical gate in `cje.diagnostics.gates` is the coverage badge threshold (`OUT_OF_RANGE_REFUSE_THRESHOLD`).
 
 ### Auto-Tuned ESS Thresholds
 Instead of fixed thresholds, compute based on desired CI width using variance bounds for bounded rewards [0,1]:
@@ -252,16 +199,10 @@ if diagnostics.overall_status == Status.CRITICAL:
 
 ### Detailed Analysis
 ```python
-# Check per-policy metrics
-for policy in diagnostics.policies:
-    print(f"{policy}: ESS={diagnostics.ess_per_policy[policy]:.1%}")
-    if diagnostics.hellinger_per_policy:
-        print(f"  Hellinger affinity={diagnostics.hellinger_per_policy[policy]:.1%}")
-
-# For DR estimators
-if isinstance(diagnostics, DRDiagnostics):
-    min_r2, max_r2 = diagnostics.outcome_r2_range
-    print(f"Outcome R² range: [{min_r2:.3f}, {max_r2:.3f}]")
+# Check per-policy coverage badges
+if diagnostics.boundary_cards:
+    for policy, card in diagnostics.boundary_cards.items():
+        print(f"{policy}: {card['status']} (out-of-range={card['out_of_range']:.1%})")
 ```
 
 ### Export for Analysis

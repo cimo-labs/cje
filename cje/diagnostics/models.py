@@ -1,18 +1,20 @@
 """
 Diagnostic data models for CJE.
 
-This module contains the data structures for diagnostics:
-- IPSDiagnostics: Base diagnostics for importance sampling estimators
-- DRDiagnostics: Extended diagnostics for doubly robust estimators
-- CJEDiagnostics: Unified diagnostics for paper-ready reporting
+This module contains the diagnostics for the Direct-mode estimator:
+- DirectDiagnostics: estimates, per-policy statuses, coverage badges
+  (boundary cards), and calibration quality.
 
-Computation logic is in the sibling modules (weights.py, dr.py, overlap.py, etc.).
+``IPSDiagnostics`` is a DEPRECATED alias of DirectDiagnostics kept for
+0.3.x consumers that read shared attributes; it will be removed in 0.5.0.
+
+Computation logic is in the sibling modules (reward_boundary.py,
+transport.py, robust_inference.py, etc.).
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, Optional, List, Any, Tuple
+from dataclasses import dataclass
+from typing import Dict, Optional, List, Any
 from enum import Enum
-import numpy as np
 
 
 class Status(Enum):
@@ -23,25 +25,23 @@ class Status(Enum):
     CRITICAL = "critical"
 
 
-class GateState(Enum):
-    """Gate states (extends Status with REFUSE)."""
-
-    GOOD = "good"
-    WARNING = "warning"
-    CRITICAL = "critical"
-    REFUSE = "refuse"
-
-
 @dataclass
-class IPSDiagnostics:
-    """Diagnostics for IPS-based estimators (CalibratedIPS in both raw and calibrated modes)."""
+class DirectDiagnostics:
+    """Diagnostics for the calibrated direct estimator.
+
+    Direct mode has no importance weights, so there are no weight/overlap
+    metrics here. The identification risk that matters is coverage: the
+    per-policy boundary cards (the paper's coverage badge) record how much
+    of each policy's fresh-draw judge-score mass falls outside the oracle
+    calibration range. A "REFUSE-LEVEL" card means level (absolute) claims
+    must not ship for that policy, while rankings may stand.
+    """
 
     # ========== Core Info (always present) ==========
-    estimator_type: str  # "CalibratedIPS"
-    method: str
+    estimator_type: str  # "Direct"
+    method: str  # "calibrated_direct" | "naive_direct" (+ "_bootstrap")
     n_samples_total: int
     n_samples_valid: int
-    n_policies: int
     policies: List[str]
 
     # ========== Estimation Results (always present) ==========
@@ -49,39 +49,26 @@ class IPSDiagnostics:
     standard_errors: Dict[str, float]
     n_samples_used: Dict[str, int]
 
-    # ========== Weight Diagnostics (always present) ==========
-    weight_ess: float  # Overall effective sample size fraction
-    weight_status: Status
+    # ========== Per-policy status ==========
+    # CRITICAL when the policy's coverage badge refuses level claims.
+    status_per_policy: Optional[Dict[str, Status]] = None
 
-    # Per-policy weight metrics
-    ess_per_policy: Dict[str, float]
-    max_weight_per_policy: Dict[str, float]
-    status_per_policy: Optional[Dict[str, Status]] = None  # Per-policy status
-    tail_indices: Optional[Dict[str, Optional[float]]] = (
-        None  # Hill tail index per policy
-    )
-
-    # ========== Overlap Metrics (new comprehensive diagnostics) ==========
-    hellinger_affinity: Optional[float] = None  # Overall Hellinger affinity
-    hellinger_per_policy: Optional[Dict[str, float]] = None  # Per-policy Hellinger
-    overlap_quality: Optional[str] = None  # "good", "marginal", "poor", "catastrophic"
-    # Target-Typicality Coverage per policy (paper gate: >= 0.70 for
-    # reliable logs-only IPS; < 0.30 means IPS fails regardless of ESS)
-    ttc_per_policy: Optional[Dict[str, float]] = None
-    # Judge-space binned Bhattacharyya affinity A_B per policy
-    # (paper gate: A_B >= 0.85 for reliable IPS; < 0.5 severe mismatch)
-    bc_sigmaS_per_policy: Optional[Dict[str, float]] = None
+    # ========== Coverage badges (identification risk) ==========
     # Serialized BoundaryCard per policy (the paper's coverage badge:
-    # status "OK" | "CAUTION" | "REFUSE-LEVEL")
+    # status "OK" | "CAUTION" | "REFUSE-LEVEL"), plus "oracle_s_range".
     boundary_cards: Optional[Dict[str, Dict[str, Any]]] = None
 
-    # ========== Calibration Diagnostics (None for raw mode) ==========
+    # ========== Calibration Diagnostics (None for naive mode) ==========
     calibration_rmse: Optional[float] = None
-    calibration_r2: Optional[float] = None
     calibration_coverage: Optional[float] = None  # P(|pred - oracle| < 0.1)
     n_oracle_labels: Optional[int] = None
 
     # ========== Computed Properties ==========
+
+    @property
+    def n_policies(self) -> int:
+        """Number of target policies."""
+        return len(self.policies)
 
     @property
     def filter_rate(self) -> float:
@@ -98,71 +85,29 @@ class IPSDiagnostics:
         return max(self.estimates.items(), key=lambda x: x[1])[0]
 
     @property
-    def worst_tail_index(self) -> Optional[float]:
-        """Lowest (worst) Hill tail index across policies.
-
-        NaN entries mean tail estimation FAILED for that policy. If any
-        policy has a finite index, the worst finite index is returned;
-        if every estimable policy failed, NaN is returned (unknown, not
-        light); None means no tail index was computed at all.
-        """
-        if self.tail_indices:
-            finite_indices = [
-                idx
-                for idx in self.tail_indices.values()
-                if idx is not None and np.isfinite(idx)
-            ]
-            if finite_indices:
-                return min(finite_indices)
-            if any(
-                idx is not None and np.isnan(idx) for idx in self.tail_indices.values()
-            ):
-                return float("nan")
-            inf_indices = [idx for idx in self.tail_indices.values() if idx is not None]
-            if inf_indices:
-                return min(inf_indices)
-        return None
-
-    @property
-    def worst_ttc(self) -> Optional[float]:
-        """Lowest (worst) Target-Typicality Coverage across policies."""
-        if self.ttc_per_policy:
-            valid = [v for v in self.ttc_per_policy.values() if v is not None]
-            if valid:
-                return min(valid)
-        return None
-
-    @property
-    def worst_bc_sigmaS(self) -> Optional[float]:
-        """Lowest (worst) judge-space Bhattacharyya affinity across policies."""
-        if self.bc_sigmaS_per_policy:
-            valid = [v for v in self.bc_sigmaS_per_policy.values() if v is not None]
-            if valid:
-                return min(valid)
-        return None
-
-    @property
     def is_calibrated(self) -> bool:
         """Check if this has calibration info."""
         return self.calibration_rmse is not None
 
     @property
+    def refuse_level_policies(self) -> List[str]:
+        """Policies whose coverage badge refuses level claims."""
+        if not self.boundary_cards:
+            return []
+        return sorted(
+            policy
+            for policy, card in self.boundary_cards.items()
+            if card.get("status") == "REFUSE-LEVEL"
+        )
+
+    @property
     def overall_status(self) -> Status:
-        """Overall health status based on diagnostics."""
-        # Start with weight status
-        if self.weight_status == Status.CRITICAL:
-            return Status.CRITICAL
-        elif self.weight_status == Status.WARNING:
-            return Status.WARNING
+        """Overall health status: the worst per-policy status."""
+        from .gates import worst_status
 
-        # Check calibration if present
-        if self.is_calibrated:
-            if self.calibration_r2 is not None and self.calibration_r2 < 0:
-                return Status.CRITICAL
-            elif self.calibration_r2 is not None and self.calibration_r2 < 0.5:
-                return Status.WARNING
-
-        return Status.GOOD
+        if not self.status_per_policy:
+            return Status.GOOD
+        return worst_status(*self.status_per_policy.values())
 
     def validate(self) -> List[str]:
         """Run self-consistency checks."""
@@ -180,28 +125,6 @@ class IPSDiagnostics:
                 f"High filter rate: {self.filter_rate:.1%} of samples filtered"
             )
 
-        # ESS should be <= 1 and check for low ESS
-        if self.weight_ess > 1.0:
-            issues.append(f"ESS fraction > 1.0: {self.weight_ess}")
-        elif self.weight_ess < 0.1:
-            issues.append(f"Very low ESS: {self.weight_ess:.1%}")
-
-        for policy, ess in self.ess_per_policy.items():
-            if ess > 1.0:
-                issues.append(f"ESS fraction > 1.0 for {policy}: {ess}")
-            elif ess < 0.1:
-                issues.append(f"Low ESS for {policy}: {ess:.1%}")
-
-        # Check for extreme weights
-        for policy, max_w in self.max_weight_per_policy.items():
-            if max_w > 100:
-                issues.append(f"Extreme max weight for {policy}: {max_w:.1f}")
-
-        # NOTE(WP3): the tail-index / TTC / Bhattacharyya validation ladders
-        # were removed with the OPE weight diagnostics; the fields themselves
-        # (tail_indices, ttc_per_policy, bc_sigmaS_per_policy) die with the
-        # DirectDiagnostics redesign.
-
         # Check coverage badges (level-claim identification risk)
         if self.boundary_cards:
             for policy, card in self.boundary_cards.items():
@@ -212,10 +135,6 @@ class IPSDiagnostics:
                         f"outside the oracle calibration range; do not ship "
                         f"level claims (ranking may stand)"
                     )
-
-        # R² should be <= 1
-        if self.calibration_r2 is not None and self.calibration_r2 > 1.0:
-            issues.append(f"Calibration R² > 1.0: {self.calibration_r2}")
 
         # Check estimates match policies
         for policy in self.estimates:
@@ -233,30 +152,20 @@ class IPSDiagnostics:
             f"Samples: {self.n_samples_valid}/{self.n_samples_total} valid ({100*(1-self.filter_rate):.1f}%)",
             f"Policies: {', '.join(self.policies)}",
             f"Best policy: {self.best_policy}",
-            f"Weight ESS: {self.weight_ess:.1%}",
         ]
 
-        worst_ttc = self.worst_ttc
-        if worst_ttc is not None:
-            lines.append(f"Worst TTC: {worst_ttc:.1%}")
-
-        worst_bc = self.worst_bc_sigmaS
-        if worst_bc is not None:
-            lines.append(f"Worst judge-space A_B: {worst_bc:.2f}")
-
-        if self.boundary_cards:
-            refuse_level = [
-                policy
-                for policy, card in self.boundary_cards.items()
-                if card.get("status") == "REFUSE-LEVEL"
-            ]
-            if refuse_level:
-                lines.append(f"REFUSE-LEVEL: {', '.join(sorted(refuse_level))}")
+        refuse_level = self.refuse_level_policies
+        if refuse_level:
+            lines.append(f"REFUSE-LEVEL: {', '.join(refuse_level)}")
 
         if self.is_calibrated:
             lines.append(f"Calibration RMSE: {self.calibration_rmse:.3f}")
-            if self.calibration_r2 is not None:
-                lines.append(f"Calibration R²: {self.calibration_r2:.3f}")
+            if self.calibration_coverage is not None:
+                lines.append(
+                    f"Calibration coverage (±0.1): {self.calibration_coverage:.1%}"
+                )
+            if self.n_oracle_labels is not None:
+                lines.append(f"Oracle labels: {self.n_oracle_labels}")
 
         # Add any validation issues
         issues = self.validate()
@@ -270,8 +179,6 @@ class IPSDiagnostics:
         from dataclasses import asdict
 
         d = asdict(self)
-        # Convert enums to strings
-        d["weight_status"] = self.weight_status.value
         d["overall_status"] = self.overall_status.value
 
         # Convert status_per_policy if present
@@ -290,470 +197,51 @@ class IPSDiagnostics:
         return json.dumps(self.to_dict(), indent=indent, default=str)
 
     @classmethod
-    def from_dict(cls, data: Dict) -> "IPSDiagnostics":
+    def from_dict(cls, data: Dict) -> "DirectDiagnostics":
         """Create from dictionary."""
-        # Convert status strings back to enum
-        if "weight_status" in data and isinstance(data["weight_status"], str):
-            data["weight_status"] = Status(data["weight_status"])
+        data = dict(data)
+        # Convert status strings back to enums
+        if data.get("status_per_policy"):
+            data["status_per_policy"] = {
+                policy: Status(status) if isinstance(status, str) else status
+                for policy, status in data["status_per_policy"].items()
+            }
         # Remove computed fields that aren't in the constructor
         data.pop("overall_status", None)
+        data.pop("n_policies", None)
         return cls(**data)
 
     def to_csv_row(self) -> Dict[str, Any]:
         """Export key metrics as a flat dict for CSV export."""
-        row = {
+        row: Dict[str, Any] = {
             "estimator": self.estimator_type,
             "method": self.method,
             "n_samples_total": self.n_samples_total,
             "n_samples_valid": self.n_samples_valid,
             "filter_rate": self.filter_rate,
-            "weight_ess": self.weight_ess,
-            "weight_status": self.weight_status.value,
+            "overall_status": self.overall_status.value,
             "n_policies": self.n_policies,
             "best_policy": self.best_policy if self.policies else None,
-            "worst_tail_index": self.worst_tail_index,
-            "worst_ttc": self.worst_ttc,
         }
         # Add per-policy metrics
         for policy in self.policies:
             row[f"{policy}_estimate"] = self.estimates.get(policy)
             row[f"{policy}_se"] = self.standard_errors.get(policy)
-            row[f"{policy}_ess"] = self.ess_per_policy.get(policy)
-            if self.ttc_per_policy:
-                row[f"{policy}_ttc"] = self.ttc_per_policy.get(policy)
+            row[f"{policy}_n"] = self.n_samples_used.get(policy)
+            if self.boundary_cards and policy in self.boundary_cards:
+                card = self.boundary_cards[policy]
+                row[f"{policy}_boundary_status"] = card.get("status")
+                row[f"{policy}_out_of_range"] = card.get("out_of_range")
         # Add calibration metrics if available
         if self.calibration_rmse is not None:
             row["calibration_rmse"] = self.calibration_rmse
-            row["calibration_r2"] = self.calibration_r2
+            row["calibration_coverage"] = self.calibration_coverage
+            row["n_oracle_labels"] = self.n_oracle_labels
         return row
 
 
-@dataclass
-class DRDiagnostics(IPSDiagnostics):
-    """Diagnostics for DR estimators, extending IPS diagnostics."""
-
-    # ========== DR-specific fields ==========
-    dr_cross_fitted: bool = True
-    dr_n_folds: int = 5
-
-    # Outcome model performance summary
-    outcome_r2_range: Tuple[float, float] = (0.0, 0.0)  # (min, max) across policies
-    outcome_rmse_mean: float = 0.0  # Average RMSE across policies
-
-    # Influence function summary
-    worst_if_tail_ratio: float = 0.0  # Worst p99/p5 ratio across policies
-
-    # Detailed per-policy diagnostics (for visualization and debugging)
-    dr_diagnostics_per_policy: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-
-    # DR decomposition results
-    dm_ips_decompositions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    orthogonality_scores: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-
-    # Optional influence functions (can be large)
-    influence_functions: Optional[Dict[str, np.ndarray]] = None
-
-    # ========== Computed Properties (override parent) ==========
-
-    @property
-    def overall_status(self) -> Status:
-        """Overall health status including DR-specific checks."""
-        # Start with parent status
-        parent_status = super().overall_status
-        if parent_status == Status.CRITICAL:
-            return Status.CRITICAL
-
-        statuses: List[Status] = [parent_status]
-
-        # Check outcome model R²
-        min_r2, max_r2 = self.outcome_r2_range
-        if min_r2 < 0:
-            statuses.append(Status.CRITICAL)
-        elif min_r2 < 0.1:
-            statuses.append(Status.WARNING)
-
-        # Check influence function tails
-        if self.worst_if_tail_ratio > 1000:
-            statuses.append(Status.CRITICAL)
-        elif self.worst_if_tail_ratio > 100:
-            statuses.append(Status.WARNING)
-
-        # Return worst status
-        if Status.CRITICAL in statuses:
-            return Status.CRITICAL
-        if Status.WARNING in statuses:
-            return Status.WARNING
-        return Status.GOOD
-
-    def validate(self) -> List[str]:
-        """Run self-consistency checks including DR-specific ones."""
-        issues = super().validate()
-
-        # Check outcome R² range
-        min_r2, max_r2 = self.outcome_r2_range
-        if min_r2 > max_r2:
-            issues.append(f"Invalid R² range: [{min_r2:.3f}, {max_r2:.3f}]")
-        if max_r2 > 1.0:
-            issues.append(f"Outcome R² > 1.0: {max_r2}")
-        if max_r2 < 0.3:
-            issues.append(f"Poor outcome model R²: max={max_r2:.3f}")
-
-        # Check influence function tail ratio
-        if self.worst_if_tail_ratio > 100:
-            issues.append(
-                f"Heavy-tailed influence functions: tail ratio={self.worst_if_tail_ratio:.1f}"
-            )
-
-        # Check detailed diagnostics consistency
-        if self.dr_diagnostics_per_policy:
-            for policy in self.policies:
-                if policy not in self.dr_diagnostics_per_policy:
-                    issues.append(f"Missing detailed diagnostics for {policy}")
-
-        return issues
-
-    def summary(self) -> str:
-        """Generate concise summary including DR info."""
-        lines = [
-            f"Estimator: {self.estimator_type}",
-            f"Method: {self.method}",
-            f"Status: {self.overall_status.value}",
-            f"Samples: {self.n_samples_valid}/{self.n_samples_total} valid ({100*(1-self.filter_rate):.1f}%)",
-            f"Policies: {', '.join(self.policies)}",
-            f"Best policy: {self.best_policy}",
-            f"Weight ESS: {self.weight_ess:.1%}",
-        ]
-
-        if self.is_calibrated and self.calibration_r2 is not None:
-            lines.append(f"Calibration R²: {self.calibration_r2:.3f}")
-
-        # DR-specific info
-        min_r2, max_r2 = self.outcome_r2_range
-        lines.append(f"Outcome R²: [{min_r2:.3f}, {max_r2:.3f}]")
-        lines.append(f"Cross-fitted: {self.dr_cross_fitted} ({self.dr_n_folds} folds)")
-
-        # Add any validation issues
-        issues = self.validate()
-        if issues:
-            lines.append("Issues: " + "; ".join(issues[:2]))
-
-        return " | ".join(lines)
-
-    def get_policy_diagnostics(self, policy: str) -> Optional[Dict[str, Any]]:
-        """Get detailed diagnostics for a specific policy."""
-        return self.dr_diagnostics_per_policy.get(policy)
-
-    def has_influence_functions(self) -> bool:
-        """Check if influence functions are stored."""
-        return (
-            self.influence_functions is not None and len(self.influence_functions) > 0
-        )
-
-    def to_dict(self) -> Dict:
-        """Export as dictionary for serialization, handling numpy arrays."""
-        import numpy as np
-        from dataclasses import asdict
-
-        d = asdict(self)
-        # Convert enums to strings
-        d["weight_status"] = self.weight_status.value
-        d["overall_status"] = self.overall_status.value
-
-        # Handle influence functions (numpy arrays)
-        if self.influence_functions:
-            # Convert numpy arrays to lists for JSON serialization
-            # Or optionally exclude them to save space
-            d["influence_functions"] = {
-                k: v.tolist() if isinstance(v, np.ndarray) else v
-                for k, v in self.influence_functions.items()
-            }
-
-        return d
-
-    def to_dict_summary(self) -> Dict:
-        """Export summary without large arrays (e.g., influence functions)."""
-        d = super().to_dict()
-        # Add DR-specific summary fields
-        d["dr_cross_fitted"] = self.dr_cross_fitted
-        d["dr_n_folds"] = self.dr_n_folds
-        d["outcome_r2_range"] = self.outcome_r2_range
-        d["outcome_rmse_mean"] = self.outcome_rmse_mean
-        d["worst_if_tail_ratio"] = self.worst_if_tail_ratio
-        # Exclude influence functions and detailed per-policy diagnostics
-        d.pop("influence_functions", None)
-        d.pop("dr_diagnostics_per_policy", None)
-        return d
-
-    def to_csv_row(self) -> Dict[str, Any]:
-        """Export key metrics as a flat dict for CSV export."""
-        # Start with parent's CSV row
-        row = super().to_csv_row()
-        # Add DR-specific metrics
-        row["dr_cross_fitted"] = self.dr_cross_fitted
-        row["dr_n_folds"] = self.dr_n_folds
-        row["outcome_r2_min"] = self.outcome_r2_range[0]
-        row["outcome_r2_max"] = self.outcome_r2_range[1]
-        row["outcome_rmse_mean"] = self.outcome_rmse_mean
-        row["worst_if_tail_ratio"] = self.worst_if_tail_ratio
-        row["has_influence_functions"] = self.has_influence_functions()
-        return row
-
-    @classmethod
-    def from_dict(cls, data: Dict) -> "DRDiagnostics":
-        """Create from dictionary, handling numpy arrays."""
-        import numpy as np
-
-        # Convert status strings back to enum
-        if "weight_status" in data and isinstance(data["weight_status"], str):
-            data["weight_status"] = Status(data["weight_status"])
-
-        # Convert influence function lists back to numpy arrays
-        if "influence_functions" in data and data["influence_functions"]:
-            data["influence_functions"] = {
-                k: np.array(v) if isinstance(v, list) else v
-                for k, v in data["influence_functions"].items()
-            }
-
-        # Remove computed fields
-        data.pop("overall_status", None)
-
-        # Handle tuple for outcome_r2_range
-        if "outcome_r2_range" in data and isinstance(data["outcome_r2_range"], list):
-            data["outcome_r2_range"] = tuple(data["outcome_r2_range"])
-
-        return cls(**data)
-
-
-@dataclass
-class CJEDiagnostics:
-    """Unified diagnostics for paper-ready reporting.
-
-    Simplifies IPSDiagnostics and DRDiagnostics into a single class
-    focused on the two key questions:
-    1. Can we make level claims? (identification/coverage risk)
-    2. Are CIs honest? (sampling/variance risk)
-    """
-
-    # ========== Core Info ==========
-    estimator_type: str
-    method: str
-    n_samples_total: int
-    n_samples_valid: int
-    policies: List[str]
-
-    # ========== Estimates ==========
-    estimates: Dict[str, float]
-    standard_errors: Dict[str, float]
-    confidence_intervals: Dict[str, Tuple[float, float]] = field(default_factory=dict)
-
-    # ========== Identification Risk (Coverage) ==========
-    # Key question: Can estimates be trusted for level claims?
-    coverage_risk: str = "unknown"  # "low", "medium", "high", "critical"
-    oracle_range: Optional[Tuple[float, float]] = None  # Learned from oracle slice
-    extrapolation_rate: Optional[float] = (
-        None  # % of target mass outside oracle support
-    )
-    boundary_risk_scores: Dict[str, float] = field(
-        default_factory=dict
-    )  # Per-policy 0-100
-
-    # ========== Variance Risk (Sampling) ==========
-    # Key question: Are confidence intervals honest?
-    variance_risk: str = "unknown"  # "low", "medium", "high", "critical"
-    weight_ess: float = 0.0  # Overall ESS
-    ess_per_policy: Dict[str, float] = field(default_factory=dict)
-    tail_indices: Dict[str, Optional[float]] = field(default_factory=dict)  # Hill α
-    max_weights: Dict[str, float] = field(default_factory=dict)
-
-    # ========== Calibration Quality ==========
-    calibration_r2: Optional[float] = None
-    calibration_rmse: Optional[float] = None
-    n_oracle_labels: Optional[int] = None
-
-    # ========== DR-specific (if applicable) ==========
-    is_dr: bool = False
-    outcome_r2_range: Optional[Tuple[float, float]] = None
-    outcome_rmse: Optional[float] = None
-    cross_fitted: Optional[bool] = None
-    n_folds: Optional[int] = None
-
-    # ========== Overall Assessment ==========
-    refuse_level_claims: bool = False  # Main gate: refuse point estimates
-    refuse_inference: bool = False  # Secondary: warn about CI reliability
-
-    @property
-    def overall_risk(self) -> str:
-        """Combined risk assessment."""
-        risks = {"low": 0, "medium": 1, "high": 2, "critical": 3}
-        coverage_score = risks.get(self.coverage_risk, 3)
-        variance_score = risks.get(self.variance_risk, 3)
-        max_score = max(coverage_score, variance_score)
-
-        for risk, score in risks.items():
-            if score == max_score:
-                return risk
-        return "critical"
-
-    @property
-    def can_make_level_claims(self) -> bool:
-        """Whether point estimates are reliable for ranking/selection."""
-        return not self.refuse_level_claims and self.coverage_risk in ["low", "medium"]
-
-    @property
-    def has_honest_inference(self) -> bool:
-        """Whether confidence intervals are reliable."""
-        return not self.refuse_inference and self.variance_risk in ["low", "medium"]
-
-    def get_policy_risk(self, policy: str) -> Dict[str, Any]:
-        """Get risk assessment for a specific policy."""
-        return {
-            "estimate": self.estimates.get(policy),
-            "se": self.standard_errors.get(policy),
-            "ci": self.confidence_intervals.get(policy),
-            "ess": self.ess_per_policy.get(policy, 0.0),
-            "tail_index": self.tail_indices.get(policy),
-            "max_weight": self.max_weights.get(policy, 0.0),
-            "boundary_risk": self.boundary_risk_scores.get(policy, 0.0),
-            "coverage_ok": self.boundary_risk_scores.get(policy, 100) < 50,
-            "variance_ok": self.ess_per_policy.get(policy, 0) > 0.1,
-        }
-
-    def summary(self) -> str:
-        """Concise summary for practitioners."""
-        lines = []
-
-        # Basic info
-        lines.append(f"{self.estimator_type} ({self.method})")
-        lines.append(f"N={self.n_samples_valid}/{self.n_samples_total}")
-
-        # Risk assessments
-        if self.refuse_level_claims:
-            lines.append("⚠️ REFUSE LEVEL CLAIMS")
-        else:
-            lines.append(f"Coverage: {self.coverage_risk}")
-
-        if self.refuse_inference:
-            lines.append("⚠️ UNRELIABLE CIs")
-        else:
-            lines.append(f"Variance: {self.variance_risk}")
-
-        # Key metrics
-        lines.append(f"ESS={self.weight_ess:.1%}")
-
-        if self.is_dr and self.outcome_r2_range:
-            min_r2, max_r2 = self.outcome_r2_range
-            lines.append(f"Outcome R²=[{min_r2:.2f},{max_r2:.2f}]")
-
-        return " | ".join(lines)
-
-    @classmethod
-    def from_ips_diagnostics(cls, ips: IPSDiagnostics) -> "CJEDiagnostics":
-        """Create from IPSDiagnostics.
-
-        coverage_risk is derived from the per-policy boundary cards (the
-        paper's coverage badge): any REFUSE-LEVEL card => "critical" (and
-        refuse_level_claims=True); any CAUTION card => "high"; all OK =>
-        "low". When no boundary cards were computed, coverage_risk is
-        "unknown" — NEVER a hardcoded "low" — so can_make_level_claims is
-        False until coverage has actually been checked.
-        """
-        # Assess coverage risk from the boundary cards (coverage badge)
-        coverage_risk = "unknown"
-        boundary_risk_scores: Dict[str, float] = {}
-        extrapolation_rate: Optional[float] = None
-        oracle_range: Optional[Tuple[float, float]] = None
-        if ips.boundary_cards:
-            statuses = [
-                card.get("status", "OK") for card in ips.boundary_cards.values()
-            ]
-            if "REFUSE-LEVEL" in statuses:
-                coverage_risk = "critical"
-            elif "CAUTION" in statuses:
-                coverage_risk = "high"
-            else:
-                coverage_risk = "low"
-            out_of_ranges = [
-                float(card.get("out_of_range", 0.0))
-                for card in ips.boundary_cards.values()
-            ]
-            if out_of_ranges:
-                extrapolation_rate = max(out_of_ranges)
-            boundary_risk_scores = {
-                policy: min(100.0, 100.0 * float(card.get("out_of_range", 0.0)) / 0.05)
-                for policy, card in ips.boundary_cards.items()
-            }
-            for card in ips.boundary_cards.values():
-                s_range = card.get("oracle_s_range")
-                if s_range is not None:
-                    oracle_range = (float(s_range[0]), float(s_range[1]))
-                    break
-
-        # Assess variance risk based on ESS and tail indices
-        variance_risk = "low"
-        if ips.weight_ess < 0.1:
-            variance_risk = "high"
-        elif ips.weight_ess < 0.3:
-            variance_risk = "medium"
-
-        # Check tail indices (NaN = estimation failed = unknown, not light)
-        if ips.tail_indices:
-            worst_tail = min(
-                (
-                    v
-                    for v in ips.tail_indices.values()
-                    if v is not None and np.isfinite(v)
-                ),
-                default=float("inf"),
-            )
-            if worst_tail < 2.0:
-                variance_risk = "critical"  # Infinite variance
-            elif worst_tail < 2.5:
-                variance_risk = "high"
-            elif any(v is not None and np.isnan(v) for v in ips.tail_indices.values()):
-                # Tail estimation failed somewhere: escalate to at least high
-                if variance_risk == "low":
-                    variance_risk = "medium"
-
-        return cls(
-            estimator_type=ips.estimator_type,
-            method=ips.method,
-            n_samples_total=ips.n_samples_total,
-            n_samples_valid=ips.n_samples_valid,
-            policies=ips.policies,
-            estimates=ips.estimates,
-            standard_errors=ips.standard_errors,
-            coverage_risk=coverage_risk,
-            oracle_range=oracle_range,
-            extrapolation_rate=extrapolation_rate,
-            boundary_risk_scores=boundary_risk_scores,
-            variance_risk=variance_risk,
-            weight_ess=ips.weight_ess,
-            ess_per_policy=ips.ess_per_policy,
-            tail_indices=ips.tail_indices or {},
-            max_weights=ips.max_weight_per_policy,
-            calibration_r2=ips.calibration_r2,
-            calibration_rmse=ips.calibration_rmse,
-            n_oracle_labels=ips.n_oracle_labels,
-            is_dr=False,
-            refuse_level_claims=(coverage_risk == "critical"),
-            refuse_inference=(variance_risk == "critical"),
-        )
-
-    @classmethod
-    def from_dr_diagnostics(cls, dr: DRDiagnostics) -> "CJEDiagnostics":
-        """Create from DRDiagnostics."""
-        # Start with IPS conversion
-        unified = cls.from_ips_diagnostics(dr)
-
-        # Add DR-specific info
-        unified.is_dr = True
-        unified.outcome_r2_range = dr.outcome_r2_range
-        unified.outcome_rmse = dr.outcome_rmse_mean
-        unified.cross_fitted = dr.dr_cross_fitted
-        unified.n_folds = dr.dr_n_folds
-
-        # DR can partially mitigate coverage risk
-        if unified.coverage_risk == "high" and dr.outcome_r2_range[0] > 0.3:
-            unified.coverage_risk = "medium"  # DR provides some robustness
-
-        return unified
+# DEPRECATED: 0.3.x name for the estimator diagnostics. Direct mode never
+# had real weight metrics behind it; the shared fields (estimates,
+# standard_errors, status_per_policy, boundary_cards, ...) live on
+# DirectDiagnostics. Removed in 0.5.0.
+IPSDiagnostics = DirectDiagnostics

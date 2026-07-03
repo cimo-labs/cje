@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 
 from cje.data.models import EstimationResult
-from cje.diagnostics import IPSDiagnostics, Status
+from cje.diagnostics import DirectDiagnostics, Status
 from cje.interface.cli import best_policy_lines, create_parser, main
 
 pytestmark = pytest.mark.unit
@@ -306,23 +306,16 @@ def _make_direct_diagnostics(
     estimates: Dict[str, float],
     standard_errors: Dict[str, float],
     status_per_policy: Dict[str, Status],
-) -> IPSDiagnostics:
-    # NOTE(WP3): the fake weight fields disappear when DirectDiagnostics
-    # replaces IPSDiagnostics; only status_per_policy matters here.
-    return IPSDiagnostics(
-        estimator_type="CalibratedDirect",
+) -> DirectDiagnostics:
+    return DirectDiagnostics(
+        estimator_type="Direct",
         method="calibrated_direct",
         n_samples_total=100,
         n_samples_valid=100,
-        n_policies=len(policies),
         policies=policies,
         estimates=estimates,
         standard_errors=standard_errors,
         n_samples_used={p: 100 for p in policies},
-        weight_ess=1.0,
-        weight_status=Status.GOOD,
-        ess_per_policy={p: 1.0 for p in policies},
-        max_weight_per_policy={p: 1.0 for p in policies},
         status_per_policy=status_per_policy,
     )
 

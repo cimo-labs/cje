@@ -146,6 +146,11 @@ class JudgeCalibrator:
         self.oracle_coverage: Optional[float] = (
             None  # Fraction of samples with oracle labels
         )
+        # Training support, stored at fit time for coverage badges
+        # (boundary cards): the min/max judge score in the oracle slice and
+        # the min/max calibrated reward on that slice.
+        self.oracle_s_range: Optional[Tuple[float, float]] = None
+        self.oracle_reward_range: Optional[Tuple[float, float]] = None
 
     def fit_transform(
         self,
@@ -301,6 +306,9 @@ class JudgeCalibrator:
         rmse = np.sqrt(np.mean((oracle_calibrated - oracle_y) ** 2))
         coverage_01 = np.mean(np.abs(oracle_calibrated - oracle_y) <= 0.1)
 
+        # Record the training support for coverage badges (boundary cards)
+        self._store_oracle_ranges(oracle_scores, oracle_calibrated)
+
         # Log summary
         logger.info(
             f"Calibration complete: {n_oracle} oracle samples, "
@@ -315,6 +323,26 @@ class JudgeCalibrator:
             calibrator=self,
             fold_ids=self._fold_ids,
         )
+
+    def _store_oracle_ranges(
+        self, oracle_scores: np.ndarray, oracle_calibrated: np.ndarray
+    ) -> None:
+        """Store the oracle-slice judge-score and reward support at fit time.
+
+        The boundary card (paper's coverage badge) compares a target
+        policy's judge scores against this range: judge mass outside it
+        means the calibrator extrapolates and level claims are at risk.
+        """
+        if len(oracle_scores) > 0:
+            self.oracle_s_range = (
+                float(np.min(oracle_scores)),
+                float(np.max(oracle_scores)),
+            )
+        if len(oracle_calibrated) > 0:
+            self.oracle_reward_range = (
+                float(np.min(oracle_calibrated)),
+                float(np.max(oracle_calibrated)),
+            )
 
     def _warn_if_constant_monotone_fit(
         self, oracle_scores: np.ndarray, oracle_y: np.ndarray
@@ -585,6 +613,9 @@ class JudgeCalibrator:
         oracle_calibrated = calibrated_scores[oracle_mask]
         rmse = np.sqrt(np.mean((oracle_calibrated - oracle_y) ** 2))
         coverage_01 = np.mean(np.abs(oracle_calibrated - oracle_y) <= 0.1)
+
+        # Record the training support for coverage badges (boundary cards)
+        self._store_oracle_ranges(oracle_scores, oracle_calibrated)
 
         # Compute OOF diagnostics for oracle points
         oracle_oof = np.empty_like(oracle_y)

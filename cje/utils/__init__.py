@@ -2,14 +2,8 @@
 
 This module contains:
 - Export helpers for results (JSON/CSV)
-- Diagnostics display re-exports (see cje.diagnostics)
+- Visualization re-exports (see cje.visualization)
 """
-
-# Display utilities moved to cje.diagnostics
-# Keeping this import for backward compatibility
-from ..diagnostics.display import (
-    create_weight_summary_table,
-)
 
 # Import visualization functions if matplotlib is available
 # Note: visualization functions have moved to cje.visualization module
@@ -23,10 +17,7 @@ try:
 except ImportError:
     _visualization_available = False
 
-__all__ = [
-    # Diagnostics display
-    "create_weight_summary_table",
-]
+__all__: list = []
 
 if _visualization_available:
     __all__.extend(
