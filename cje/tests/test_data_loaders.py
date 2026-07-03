@@ -246,6 +246,69 @@ class TestFreshDrawLoading:
             Path(temp_path).unlink()
 
 
+class TestFreshDrawLoaderLoudness:
+    """FreshDrawLoader.load_from_jsonl used to silently skip invalid lines
+    (a logger.warning nobody reads), quietly shrinking the dataset. It now
+    raises with file + line context, mirroring load_fresh_draws_auto;
+    blank/whitespace-only lines are skipped, not errors."""
+
+    @staticmethod
+    def _valid_line(i: int = 0) -> str:
+        return json.dumps(
+            {
+                "prompt_id": f"p{i}",
+                "target_policy": "premium",
+                "judge_score": 0.8,
+                "draw_idx": 0,
+            }
+        )
+
+    def test_invalid_json_line_raises_with_file_and_line(self, tmp_path: Path) -> None:
+        path = tmp_path / "draws.jsonl"
+        path.write_text(self._valid_line(0) + "\n{not json\n")
+
+        with pytest.raises(ValueError, match=rf"{path}:2"):
+            load_fresh_draws_from_jsonl(str(path))
+
+    def test_missing_required_field_raises_with_file_and_line(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "draws.jsonl"
+        record_without_policy = json.dumps({"prompt_id": "p1", "judge_score": 0.8})
+        path.write_text(self._valid_line(0) + "\n" + record_without_policy + "\n")
+
+        with pytest.raises(ValueError, match=r"target_policy") as excinfo:
+            load_fresh_draws_from_jsonl(str(path))
+        assert f"{path}:2" in str(excinfo.value)
+
+    def test_out_of_range_judge_score_raises_with_file_and_line(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "draws.jsonl"
+        bad_record = json.dumps(
+            {
+                "prompt_id": "p1",
+                "target_policy": "premium",
+                "judge_score": 7.5,
+                "draw_idx": 0,
+            }
+        )
+        path.write_text(self._valid_line(0) + "\n" + bad_record + "\n")
+
+        with pytest.raises(ValueError, match=rf"{path}:2"):
+            load_fresh_draws_from_jsonl(str(path))
+
+    def test_blank_and_trailing_lines_are_fine(self, tmp_path: Path) -> None:
+        path = tmp_path / "draws.jsonl"
+        path.write_text(
+            self._valid_line(0) + "\n\n" + self._valid_line(1) + "\n   \n\n"
+        )
+
+        datasets = load_fresh_draws_from_jsonl(str(path))
+
+        assert len(datasets["premium"].samples) == 2
+
+
 class TestFreshDrawsFromDict:
     """Test in-memory fresh_draws_from_dict function."""
 

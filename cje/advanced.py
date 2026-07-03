@@ -132,4 +132,10 @@ def __getattr__(name: str) -> object:
             f"cje.advanced.{name} was removed in 0.4.0 — "
             f'pip install "cje-eval==0.3.*" for OPE'
         )
+    if name in ("plot_calibration_comparison", "plot_policy_estimates"):
+        # Only reached when the viz imports above failed (matplotlib missing)
+        raise ImportError(
+            f"{name} requires the viz extra. "
+            f'Install with: pip install "cje-eval[viz]"'
+        )
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
