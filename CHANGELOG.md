@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1
 
 Docs and UX patch from the post-release review. No estimation behavior changes except the transport-audit CI critical values, two log levels, and one error message.
 
