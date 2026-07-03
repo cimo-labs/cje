@@ -49,7 +49,8 @@ result = estimator.fit_and_estimate()
 # 4. Access results
 estimates = result.estimates           # Point estimates per policy
 std_errors = result.standard_errors    # Complete SEs (sampling + calibration)
-cis = result.ci()                      # (lower, upper) tuples, t-based
+cis = result.ci()                      # (lower, upper) tuples: percentile bootstrap
+                                       # by default; t-based under cluster_robust
 diagnostics = result.diagnostics       # DirectDiagnostics incl. boundary cards
 ```
 
@@ -57,7 +58,7 @@ Fresh draws are auto-discovered from a `fresh_draws_dir` by `load_fresh_draws_au
 
 ## Standard Errors
 
-`standard_errors` always includes every uncertainty source: sampling noise on the eval set **and** the uncertainty from learning the calibrator on a finite oracle slice. Confidence intervals use t-critical values with the limiting degrees of freedom (stored per policy in `result.metadata["degrees_of_freedom"]` with `df`, `t_critical`, `se_method`, `n_clusters`).
+`standard_errors` always includes every uncertainty source: sampling noise on the eval set **and** the uncertainty from learning the calibrator on a finite oracle slice. Confidence intervals are percentile bootstrap intervals under the default `bootstrap` inference; under `cluster_robust` they use t-critical values with the limiting degrees of freedom (stored per policy in `result.metadata["degrees_of_freedom"]` with `df`, `t_critical`, `se_method`, `n_clusters` — that metadata only exists there).
 
 ### Inference methods (`inference_method` parameter)
 
@@ -123,7 +124,7 @@ Inherit from `BaseCJEEstimator` (`__init__(target_policies, run_diagnostics=True
 ## Common Issues
 
 - **"No fresh draws added"** — call `add_fresh_draws()` for every policy in `target_policies` before `fit_and_estimate()`.
-- **NaN estimates with tiny oracle slices** — below ~10 pooled oracle labels, cross-fitted calibration cannot fit stable folds; collect more labels (the error says how many).
+- **"Only N oracle-labeled samples"** — cross-fitted calibration needs at least 2 labels per fold (10 for the default 5 folds); with 4–9 labels CJE reduces the fold count with a warning, below 4 it raises.
 - **REFUSE-LEVEL badge** — not an error: rankings may stand, but do not ship absolute numbers for that policy until labels cover its score range.
 
 ## Summary

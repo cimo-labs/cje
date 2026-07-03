@@ -165,7 +165,11 @@ from cje.diagnostics import CostModel, fit_variance_model, plan_evaluation, plan
 
 # Fit variance model from pilot data (recommended)
 base_pilot = load_fresh_draws_auto("responses/pilot", "base")
-variance_model = fit_variance_model(base_pilot, n_replicates=150, verbose=True)
+variance_model = fit_variance_model(
+    base_pilot,
+    n_replicates=150,  # slow, production-grade; the default (5) runs in ~30s
+    verbose=True,
+)
 
 # No pilot yet? Use simulation instead:
 # from cje.diagnostics import simulate_variance_model

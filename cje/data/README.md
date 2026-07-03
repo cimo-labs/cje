@@ -153,7 +153,8 @@ estimates = result.estimates                    # numpy array
 standard_errors = result.standard_errors        # numpy array
 policies = result.metadata["target_policies"]   # list of policy names
 
-# Confidence intervals (t-based, finite-sample df when available)
+# Confidence intervals (percentile bootstrap by default; t-based with
+# finite-sample df under cluster_robust — df metadata only exists there)
 ci_lower, ci_upper = result.confidence_interval(alpha=0.05)
 cis = result.ci()  # [(lower, upper), ...]
 

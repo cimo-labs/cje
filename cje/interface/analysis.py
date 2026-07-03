@@ -27,7 +27,8 @@ and label a small oracle slice.
     calibration source: pass calibration_data_path="<your logged data>.jsonl".
   * Need IPS/DR from logged propensities?  Pin the frozen OPE line:
         pip install "cje-eval==0.3.*"
-    (maintained on the 0.3.x branch; docs at the v0.3.0 tag)."""
+    (maintained on the 0.3.x branch; docs at the v0.3.0 tag; requires
+    Python <=3.12 — on 3.13 use a 3.12 env for OPE)."""
 
 
 def analyze_dataset(

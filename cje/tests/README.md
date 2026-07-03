@@ -13,20 +13,31 @@ tests/
 ├── E2E Tests (User Workflows)
 │   ├── test_e2e_features.py              # Cross-fitting fold plumbing on arena data
 │   ├── test_interface_integration.py     # High-level API testing (Direct mode)
-│   └── test_examples.py                  # Tutorial notebook and quickstart validation
+│   ├── test_examples.py                  # Tutorial notebook and quickstart validation
+│   ├── test_cli_analyze.py               # `cje analyze` CLI (fresh draws, gates, trophy)
+│   └── test_cli_validate.py              # `cje validate` CLI (raw-JSONL validation)
 │
 ├── Core Tests (Infrastructure)
-│   └── test_unified_folds.py             # Comprehensive fold management
+│   ├── test_unified_folds.py             # Comprehensive fold management
+│   ├── test_migration_errors.py          # 0.4.0 migration errors pinned VERBATIM
+│   ├── test_doc_snippets.py              # Every README ```python block compiles + imports
+│   └── test_loud_by_default.py           # No-silent-fallback contracts
 │
 ├── Feature Tests
+│   ├── test_array_api.py                 # calibrated_mean_ci / transport_audit (array layer)
 │   ├── test_bootstrap_inference.py       # Bootstrap UQ for Direct mode
 │   ├── test_covariates.py                # Calibration covariates
 │   ├── test_data_loaders.py              # Data loading functions
+│   ├── test_direct_diagnostics.py        # DirectDiagnostics + boundary-card gating
 │   ├── test_normalization.py             # Auto-normalization for arbitrary scales
 │   ├── test_calibration_data_smoke.py    # calibration_data_path parameter
+│   ├── test_opencompass_bridge.py        # OpenCompass output conversion
 │   ├── test_oua_at_full_coverage.py      # Calibration-aware inference skipped at 100% coverage
+│   ├── test_oua_jackknife_formula.py     # Delete-one-fold jackknife variance formula
+│   ├── test_oua_two_stage_routing.py     # Jackknife predictions route through predict_oof
 │   ├── test_transport_diagnostics.py     # Transportability probe protocol
 │   ├── test_transport_bootstrap.py       # Transport bootstrap testing
+│   ├── test_viz_hint.py                  # Lazy viz imports + actionable ImportError hint
 │   ├── test_mc_coverage.py               # Monte Carlo CI coverage harness (slow layer)
 │   ├── test_planning.py                  # Budget planning features
 │   ├── test_planning_viz.py              # Planning visualization
@@ -69,7 +80,7 @@ Shared fixtures in `conftest.py` provide consistent test data:
 ## Running Tests
 
 Prereqs:
-- Python `>=3.9,<3.13`
+- Python `>=3.9,<3.14`
 - If using Poetry: `poetry install`
 - If using pip: `pip install -e ".[viz]" && pip install pytest pytest-cov` (and optionally `nbconvert nbformat` for notebook execution tests)
 
@@ -180,7 +191,8 @@ pip install -e .
 
 - **E2E tests**: < 2 seconds each
 - **Infrastructure tests**: < 1 second each
-- **Full suite**: ~60 seconds for ~180 tests
+- **Fast suite** (`-m "not slow"`): ~2 minutes for ~415 tests
+- **Full suite**: ~440 collected tests; the 22 slow tests (Monte Carlo coverage, planning, notebook execution) add several more minutes
 
 Test execution tips:
 - Use `-x` to stop on first failure

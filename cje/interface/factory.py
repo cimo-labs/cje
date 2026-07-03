@@ -60,7 +60,8 @@ REMOVED_ESTIMATORS: Tuple[str, ...] = (
 REMOVED_ESTIMATOR_MESSAGE = """\
 estimator='{name}' was removed in cje-eval 0.4.0 (Direct-mode only).
 Off-policy estimators (calibrated-ips, raw-ips, dr-cpo, mrdr, tmle, stacked-dr)
-live on the frozen 0.3.x line: pip install "cje-eval==0.3.*".
+live on the frozen 0.3.x line: pip install "cje-eval==0.3.*"
+(requires Python <=3.12; on 3.13 use a 3.12 env for OPE).
 Use estimator='calibrated-direct' (the default) with fresh draws instead."""
 
 

@@ -147,7 +147,7 @@ Calibrated mean: 0.5316 (SE 0.0175, CI [0.4965, 0.5649], n=400, n_oracle=100, bo
 
 0.4.0 is a **breaking release: CJE is now Direct-mode only.** The off-policy machinery — importance-sampling and doubly-robust estimators (`calibrated-ips`, `dr-cpo`, `mrdr`, `tmle`, `stacked-dr`), teacher forcing, SIMCal weight stabilization, and the overlap diagnostics — has been removed. Our own paper's results drove the cut: for realistic LLM policy pairs, importance weighting failed even when ESS looked healthy (target-typicality coverage 0.19–0.49, far below the 0.70 gate), and the best DR stack merely matched Direct mode's accuracy at ~12× the compute. Direct mode — fresh draws, calibrated judge, audits — is what the evidence supports, so it is now the whole product.
 
-- **Need IPS/DR from logged propensities?** Pin the frozen OPE line: `pip install "cje-eval==0.3.*"` (maintained on the `0.3.x` branch; docs at the `v0.3.0` tag).
+- **Need IPS/DR from logged propensities?** Pin the frozen OPE line: `pip install "cje-eval==0.3.*"` (maintained on the `0.3.x` branch; docs at the `v0.3.0` tag; requires Python <=3.12 — on 3.13 use a 3.12 env for OPE).
 - **Have old logged data with `judge_score` + `oracle_label`?** It still works as the calibration source: `analyze_dataset(fresh_draws_dir=..., calibration_data_path="logged.jsonl")`.
 - Removed entry points raise migration errors that say exactly this.
 

@@ -163,7 +163,7 @@ Provide `fresh_draws_dir` **or** `fresh_draws_data`.
 
 **Returns** `EstimationResult` with:
 - `.estimates` / `.standard_errors`: numpy arrays (order = `metadata["target_policies"]`)
-- `.ci()` / `.confidence_interval()`: t-based confidence intervals
+- `.ci()` / `.confidence_interval()`: percentile bootstrap CIs by default; t-based with finite-sample df under `cluster_robust` (df metadata only exists there)
 - `.compare_policies(i, j)`: paired policy comparison
 - `.diagnostics`: `DirectDiagnostics` (statuses, boundary cards, calibration quality)
 - `.calibrator`: fitted calibrator, reusable for transport audits
