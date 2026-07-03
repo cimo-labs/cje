@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Docs and UX patch from the post-release review. No estimation behavior changes except the transport-audit CI critical values, two log levels, and one error message.
+
+- **Redesigned the README quickstart around calibration transfer**: the old example labeled 6/8 rows of BOTH policies — teaching the label-under-every-policy anti-pattern CJE exists to remove. The quickstart now shows one policy carrying a 10-label oracle slice while the second policy is judge-only and still gets a calibrated estimate with an honest CI; the interface README's in-memory example matches. Output blocks are pasted from real runs (byte-exact).
+- **Fixed the HealthBench link 404** (`/blog/` → `/research/`), absolutized the README's relative image sources and doc links so they render on PyPI, and pointed the `Documentation` project URL at https://cimolabs.com/cje instead of the arXiv paper.
+
 ## 0.4.0
 
 **BREAKING — CJE 0.4.0 is Direct-mode only.** The library now does one thing: calibrated evaluation of LLM policies from judge-scored fresh draws, with audits that refuse unsupported claims. The off-policy (IPS/DR) machinery — which requires teacher-forced logprobs no realistic user has, and which the paper's own results show mostly failing for LLM policies (target-typicality coverage 0.19–0.49 on realistic policy pairs even when ESS looked healthy; the best doubly-robust stack merely matched Direct mode's RMSE at ~12× the compute) — is removed. The core library drops from ~28.1k to ~13.5k lines. **OPE workflows: pin `pip install "cje-eval==0.3.*"`** (frozen on the `0.3.x` maintenance branch; docs and the OPE notebook live at the `v0.3.0` tag). Logged data with `judge_score` + `oracle_label` still works in 0.4.0 as the calibration source via `calibration_data_path`. Every removed entry point raises a migration error saying exactly this.
