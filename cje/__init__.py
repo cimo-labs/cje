@@ -20,6 +20,9 @@ from .data import Dataset, Sample, EstimationResult
 # Simple data loading
 from .data import load_dataset_from_jsonl
 
+# Array-first primitive (single-policy calibrated mean + transport audit)
+from .array_api import CalibratedMeanResult, calibrated_mean_ci, transport_audit
+
 # Budget planning
 from .diagnostics.planning import (
     CostModel,
@@ -48,6 +51,10 @@ __all__ = [
     "EstimationResult",
     # Data loading
     "load_dataset_from_jsonl",
+    # Array-first primitive
+    "CalibratedMeanResult",
+    "calibrated_mean_ci",
+    "transport_audit",
     # Budget planning
     "CostModel",
     "FittedVarianceModel",
