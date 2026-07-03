@@ -27,27 +27,6 @@ def _arena_paths() -> tuple[Path, Path]:
     return dataset_path, fresh_draws_dir
 
 
-def test_logged_data_path_raises_migration_error() -> None:
-    """OPE modes were removed in 0.4.0; logged_data_path must fail loudly.
-
-    NOTE(WP2): the exact migration copy is pinned by test_migration_errors;
-    here we only assert that the temporary error fires and names the release.
-    """
-    dataset_path, _ = _arena_paths()
-
-    with pytest.raises(ValueError, match="0.4.0"):
-        analyze_dataset(logged_data_path=str(dataset_path))
-
-
-def test_removed_estimator_names_raise_migration_error() -> None:
-    """Removed OPE estimator names must raise, not fall through."""
-    _, responses_dir = _arena_paths()
-
-    for name in ("calibrated-ips", "raw-ips", "dr-cpo", "mrdr", "tmle", "stacked-dr"):
-        with pytest.raises(ValueError, match="0.4.0"):
-            analyze_dataset(fresh_draws_dir=str(responses_dir), estimator=name)
-
-
 def test_direct_mode_with_calibration_data() -> None:
     """Direct mode with a dedicated calibration dataset (judge+oracle labels)."""
     dataset_path, responses_dir = _arena_paths()

@@ -40,7 +40,9 @@ REGISTRY: Dict[str, BuilderFn] = {
     "direct": _build_calibrated_direct,  # Alias
 }
 
-# Estimator names removed in 0.4.0 with the off-policy (IPS/DR) modes.
+# Estimator names removed in 0.4.0 with the off-policy (IPS/DR) modes
+# (includes the ghost aliases oc-dr-cpo / tr-cpo / tr-cpo-e that 0.3.x
+# still recognized in its mode-inference lists).
 REMOVED_ESTIMATORS: Tuple[str, ...] = (
     "calibrated-ips",
     "raw-ips",
@@ -48,7 +50,18 @@ REMOVED_ESTIMATORS: Tuple[str, ...] = (
     "mrdr",
     "tmle",
     "stacked-dr",
+    "oc-dr-cpo",
+    "tr-cpo",
+    "tr-cpo-e",
 )
+
+# Exact migration copy, shared by the CLI and the API; pinned verbatim by
+# test_migration_errors.py.
+REMOVED_ESTIMATOR_MESSAGE = """\
+estimator='{name}' was removed in cje-eval 0.4.0 (Direct-mode only).
+Off-policy estimators (calibrated-ips, raw-ips, dr-cpo, mrdr, tmle, stacked-dr)
+live on the frozen 0.3.x line: pip install "cje-eval==0.3.*".
+Use estimator='calibrated-direct' (the default) with fresh draws instead."""
 
 
 def get_estimator_names() -> Tuple[str, ...]:
@@ -64,11 +77,7 @@ def validate_estimator_name(name: str) -> str:
     if name in REGISTRY:
         return name
     if name in REMOVED_ESTIMATORS:
-        # NOTE(WP2): the exact migration copy is pinned by test_migration_errors.
-        raise ValueError(
-            f"Estimator '{name}' was removed in 0.4.0 — full migration message "
-            f'coming in WP2. For IPS/DR estimators pin pip install "cje-eval==0.3.*".'
-        )
+        raise ValueError(REMOVED_ESTIMATOR_MESSAGE.format(name=name))
     raise ValueError(f"Unknown estimator type: {name}")
 
 

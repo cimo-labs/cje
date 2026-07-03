@@ -90,15 +90,9 @@ class AnalysisService:
         return reduced_folds
 
     def run(self, config: AnalysisConfig) -> EstimationResult:
-        # OPE (IPS/DR) modes were removed in 0.4.0; the service is Direct-only.
-        if config.logged_data_path is not None:
-            # NOTE(WP2): the exact migration copy (calibration_data_path guidance,
-            # 0.3.x pin) is owned by WP2 and pinned by test_migration_errors.
-            raise ValueError(
-                "logged_data_path was removed in 0.4.0 — full migration message "
-                'coming in WP2. For IPS/DR modes pin pip install "cje-eval==0.3.*".'
-            )
-
+        # OPE (IPS/DR) modes were removed in 0.4.0; the service is Direct-only
+        # (analyze_dataset raises the migration error for logged_data_path
+        # before a config is ever built).
         if config.fresh_draws_dir is None and config.fresh_draws_data is None:
             raise ValueError(
                 "Must provide fresh_draws_dir or fresh_draws_data for Direct mode"
@@ -446,110 +440,6 @@ class AnalysisService:
             results.calibrator = calibration_result.calibrator
 
         return results
-
-    def _run_direct_with_calibration(
-        self,
-        config: AnalysisConfig,
-        chosen_estimator: str,
-        target_policies: List[str],
-        calibration_result: Optional[Any],
-    ) -> EstimationResult:
-        """Run Direct mode with logged data for calibration."""
-        from ..data.fresh_draws import load_fresh_draws_auto
-        from ..estimators.direct_method import CalibratedDirectEstimator
-
-        if not config.fresh_draws_dir:
-            raise ValueError(
-                "Direct mode requires fresh_draws_dir. "
-                "Provide fresh draws or use IPS/DR mode."
-            )
-
-        if config.verbose:
-            logger.info(
-                "Direct mode: Using logged data for calibration, fresh draws for evaluation"
-            )
-
-        # Create Direct estimator with calibrator from logged data
-        estimator_obj = CalibratedDirectEstimator(
-            target_policies=target_policies,
-            reward_calibrator=(
-                calibration_result.calibrator if calibration_result else None
-            ),
-            run_diagnostics=True,
-            oua_jackknife=True,  # Include calibration uncertainty
-            **config.estimator_config,
-        )
-
-        # Build covariate list (need to compute for fresh draws if present)
-        covariate_names = self._build_covariate_list(config, dataset=None)
-
-        # Load fresh draws for each policy
-        fresh_draws_path = Path(config.fresh_draws_dir)  # Already checked above
-
-        # Compute covariates for fresh draws if needed
-        from ..data.fresh_draws import compute_response_covariates
-
-        for policy in target_policies:
-            fd = load_fresh_draws_auto(fresh_draws_path, policy, verbose=config.verbose)
-
-            # Compute covariates if needed
-            if covariate_names:
-                fd = compute_response_covariates(fd, covariate_names=covariate_names)
-
-            estimator_obj.add_fresh_draws(policy, fd)
-
-        results = estimator_obj.fit_and_estimate()
-
-        # Add metadata
-        results.metadata["mode"] = "direct"
-        results.metadata["logged_data_path"] = config.logged_data_path
-        results.metadata["estimator"] = chosen_estimator
-        results.metadata["target_policies"] = target_policies
-        results.metadata["fresh_draws_dir"] = config.fresh_draws_dir
-        results.metadata["calibration"] = "from_logged_data"
-        results.metadata["judge_field"] = config.judge_field
-        results.metadata["oracle_field"] = config.oracle_field
-        metadata_estimator_config = self._metadata_estimator_config(
-            config.estimator_config
-        )
-        if metadata_estimator_config:
-            results.metadata["estimator_config"] = metadata_estimator_config
-
-        # Add mode_selection metadata
-        # Note: This is Direct mode with logged data for calibration
-        # Logprob coverage is not computed here (would need to scan dataset)
-        results.metadata["mode_selection"] = {
-            "mode": "direct",
-            "estimator": chosen_estimator,
-            "logprob_coverage": None,  # Not computed for Direct mode
-            "has_fresh_draws": True,
-            "has_logged_data": True,
-            "reason": "Direct mode: Using logged data for calibration, fresh draws for evaluation",
-        }
-
-        # Add calibrator for transportability audits
-        if calibration_result:
-            results.calibrator = calibration_result.calibrator
-
-        return results
-
-    def _load_all_fresh_draws(self, config: AnalysisConfig) -> Dict[str, Any]:
-        """Load fresh draws for all policies (helper for oracle combining)."""
-        from ..data.fresh_draws import (
-            discover_policies_from_fresh_draws,
-            load_fresh_draws_auto,
-        )
-
-        if config.fresh_draws_dir is None:
-            raise ValueError("fresh_draws_dir is required")
-
-        fresh_draws_path = Path(config.fresh_draws_dir)
-        policies = discover_policies_from_fresh_draws(fresh_draws_path)
-        fresh_draws = {}
-        for policy in policies:
-            fd = load_fresh_draws_auto(fresh_draws_path, policy, verbose=config.verbose)
-            fresh_draws[policy] = fd
-        return fresh_draws
 
     def _combine_oracle_sources(
         self,

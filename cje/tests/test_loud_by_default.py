@@ -52,7 +52,7 @@ class TestFreshDrawsDataWithLoggedData:
         }
         with pytest.raises(
             ValueError,
-            match="logged_data_path was removed in 0.4.0",
+            match="'logged_data_path' is no longer accepted",
         ):
             analyze_dataset(
                 logged_data_path="logged.jsonl",

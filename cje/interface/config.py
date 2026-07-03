@@ -1,6 +1,6 @@
 """Typed configuration models for the CJE interface.
 
-These models provide a stable, validated contract between CLI/Hydra and
+These models provide a stable, validated contract between the CLI and
 the analysis service while preserving backward-compatible function APIs.
 """
 
@@ -9,12 +9,6 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class AnalysisConfig(BaseModel):
-    # NOTE(WP2): this field is dropped entirely once the service merges to the
-    # single Direct flow; for now any non-None value raises the migration error.
-    logged_data_path: Optional[str] = Field(
-        None,
-        description="REMOVED in 0.4.0 (OPE modes). Non-None values raise a migration error.",
-    )
     fresh_draws_dir: Optional[str] = Field(
         None, description="Directory with fresh draws from target policies"
     )
@@ -59,11 +53,3 @@ class AnalysisConfig(BaseModel):
     @classmethod
     def normalize_estimator(cls, v: str) -> str:
         return v.strip()
-
-    @field_validator("logged_data_path", "fresh_draws_dir")
-    @classmethod
-    def validate_at_least_one_source(cls, v: Optional[str], info: Any) -> Optional[str]:
-        """Ensure at least one data source is provided."""
-        # Note: This validation happens after both fields are set
-        # We'll do the actual validation in the service
-        return v
