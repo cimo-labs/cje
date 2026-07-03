@@ -9,7 +9,31 @@ Example:
     print(results.summary())
 """
 
-__version__ = "0.3.0"
+
+# Single-source the version. Installed packages read the cje-eval
+# distribution metadata (which poetry generates from pyproject.toml); source
+# checkouts read the adjacent pyproject.toml directly, so a stale cje-eval
+# dist elsewhere in the environment cannot shadow the checkout's version.
+def _resolve_version() -> str:
+    try:
+        import re as _re
+        from pathlib import Path as _Path
+
+        _pyproject = _Path(__file__).resolve().parent.parent / "pyproject.toml"
+        if _pyproject.exists():
+            _match = _re.search(
+                r'^version\s*=\s*"([^"]+)"', _pyproject.read_text(), _re.MULTILINE
+            )
+            if _match:
+                return _match.group(1)
+        from importlib.metadata import version as _dist_version
+
+        return _dist_version("cje-eval")
+    except Exception:  # PackageNotFoundError, or metadata unavailable
+        return "0.4.0"
+
+
+__version__ = _resolve_version()
 
 # Simple API - what 90% of users need
 from .interface import analyze_dataset
