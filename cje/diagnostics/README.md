@@ -87,14 +87,16 @@ The returned `BoundaryCard` dataclass carries `status`, `out_of_range`, `saturat
 
 **Use case:** test whether a calibrator fitted on policy A / era 1 can be safely reused for policy B / era 2.
 
-`audit_transportability(calibrator, probe_samples, bins=10, group_label=None)` runs a simple unbiasedness test on a small oracle-labeled probe slice (typically 40–60 rows):
+`audit_transportability(calibrator, probe_samples, bins=10, group_label=None, alpha=0.05)` runs a simple unbiasedness test on a small oracle-labeled probe slice (typically 40–60 rows):
 
 1. Compute the mean residual δ̂ = E[Y − f̂(S)] on the probe.
-2. Construct the parametric 95% CI: δ̂ ± 1.96·SE.
+2. Construct the parametric (1−α) CI: δ̂ ± t_{1−α/2, n−1}·SE (t critical values, not z — at 40–60 probe rows the z interval under-covers and inflates the audit's false-alarm rate).
 3. Classify:
    - **PASS**: 0 ∈ CI → calibrator is unbiased on the target (action: `none`)
    - **WARN**: 0 ∉ CI and |δ̂| < 0.05 → small but detectable bias (action: `monitor`)
    - **FAIL**: 0 ∉ CI and |δ̂| ≥ 0.05 → clear systematic bias (action: `refit_two_stage`)
+
+The per-decile residuals in the result are **display-only** (4–6 rows per bin at recommended probe sizes — never gate on them). Auditing K policies at per-test α inflates the family-wise false-alarm rate; a BH correction is a planned option, not implemented.
 
 ```python
 import json

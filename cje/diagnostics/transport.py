@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import List, Literal, Optional, Any, Dict
 import logging
 
+from scipy import stats
+
 logger = logging.getLogger(__name__)
 
 
@@ -19,9 +21,11 @@ class TransportDiagnostics:
     Attributes:
         status: PASS/WARN/FAIL based on unbiasedness test (0 ∈ CI?)
         delta_hat: Mean residual (Y - f̂(S)) for target policy
-        delta_ci: 95% CI for delta_hat (parametric)
+        delta_ci: (1 - alpha) CI for delta_hat (parametric, t-based)
         delta_se: Standard error of delta_hat
-        decile_residuals: Mean residuals by decile (for visualization)
+        decile_residuals: Mean residuals by decile — DISPLAY-ONLY. At the
+            recommended probe sizes (40-60 rows) each bin holds 4-6 samples;
+            never gate on per-decile values, only on the pooled CI.
         decile_counts: Sample counts per decile
         coverage: Fraction of samples in score range
         recommended_action: Next step if WARN/FAIL
@@ -185,21 +189,34 @@ def audit_transportability(
     probe_samples: List[Any],
     bins: int = 10,
     group_label: Optional[str] = None,
+    alpha: float = 0.05,
 ) -> TransportDiagnostics:
     """Test if calibrator transports to target policy.
 
     Simple unbiasedness test:
     - Compute mean residual δ̂ = E[Y - f̂(S)] for target policy
-    - Get 95% CI for δ̂ (parametric: δ̂ ± 1.96*SE)
+    - Get the (1 - α) CI for δ̂ (parametric: δ̂ ± t_{1-α/2, n-1}·SE).
+      t critical values matter here: the recommended probe slices are
+      small (40-60 rows), where the z interval under-covers and inflates
+      the audit's false-alarm rate.
     - PASS if 0 ∈ CI (unbiased), WARN/FAIL if 0 ∉ CI (biased)
 
     A calibrator that transports well should have mean residual ≈ 0.
+
+    Notes:
+        - The returned `decile_residuals` are DISPLAY-ONLY diagnostics:
+          at recommended probe sizes each bin holds 4-6 rows. Gate on the
+          pooled CI, never on per-decile values.
+        - Auditing K policies at per-test α inflates the family-wise
+          false-alarm rate (a Benjamini-Hochberg correction is a planned
+          option, not implemented).
 
     Args:
         calibrator: Fitted JudgeCalibrator
         probe_samples: Target policy samples with judge_score and oracle_label
         bins: Number of bins for visualization (default 10)
         group_label: Optional label (e.g., "policy:gpt-4-mini")
+        alpha: Significance level for the CI (default 0.05 → 95% CI)
 
     Returns:
         TransportDiagnostics with PASS/WARN/FAIL status
@@ -232,10 +249,14 @@ def audit_transportability(
     R_hat_probe = calibrator.predict(S_probe)
     residuals_probe = Y_probe - R_hat_probe
 
-    # Compute target statistics
+    # Compute target statistics. t critical values (df = n_probe - 1), not
+    # z: probe slices are small (40-60 rows recommended), where 1.96 SEs
+    # under-cover and inflate the false-alarm rate to ~6-7%.
     delta_hat = float(residuals_probe.mean())
     delta_se = float(residuals_probe.std(ddof=1) / np.sqrt(n_probe))
-    delta_ci = (delta_hat - 1.96 * delta_se, delta_hat + 1.96 * delta_se)
+    df = max(n_probe - 1, 1)
+    t_crit = float(stats.t.ppf(1 - alpha / 2, df))
+    delta_ci = (delta_hat - t_crit * delta_se, delta_hat + t_crit * delta_se)
 
     # Bin residuals for visualization
     bin_edges = np.quantile(S_probe, np.linspace(0, 1, bins + 1))
@@ -336,7 +357,7 @@ def _classify_status(
 
     Args:
         delta_hat: Mean residual
-        delta_ci: 95% confidence interval for mean residual
+        delta_ci: (1 - alpha) confidence interval for mean residual
         coverage: Fraction of bins with sufficient samples
 
     Returns:
