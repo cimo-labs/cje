@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Fix planning measurement-grid construction for large oracle pools**: `fit_variance_model` derived its calibration levels as fractions of the *full* oracle pool, so a pilot with many labels relative to `n_grid` (e.g. 480 labels with `n_grid=[100, 200]` → m ∈ {120, 240}) produced m values that exceeded most n; the `m < n` filter then collapsed the grid below 2 unique values per dimension and every planning run raised "Grid has insufficient variation" (broken since ≤0.2.25). The m levels now derive from the grid's own scale — `n_ref = min(max(n_grid), n_oracle_available)` — and are capped at 90% of `min(n_grid)`, so every n in the grid retains every m level and the design stays fully orthogonal (same fix keeps small-pool grids unchanged). The insufficient-variation error message now prints sorted lists instead of raw set literals (was `n={200}, m={120}`). NNLS/variance-model math untouched. The five slow planning tests (`test_planning.py` ×4, `test_planning_viz.py` dashboard E2E) pass again, plus new fast grid-construction unit tests.
+
 ## 0.3.0
 
 Statistical-correctness and honesty release. Reported confidence intervals CHANGE BY DESIGN relative to 0.2.x: wider where oracle-calibration uncertainty was understated (OUA jackknife x K bug), narrower where Monte Carlo variance was double-counted, and several silent fallbacks now fail loudly. See the entries below and PRs #10-#14.
