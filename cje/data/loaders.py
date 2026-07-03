@@ -234,11 +234,14 @@ class DatasetLoader:
             if key not in {"judge_score", "oracle_label"}:
                 metadata[key] = value
 
-        # Create Sample object with judge_score and oracle_label as top-level fields
+        # Create Sample object with judge_score and oracle_label as top-level
+        # fields. prompt/response default to "" so minimal judge+oracle
+        # calibration files ({prompt_id, judge_score, oracle_label}) load —
+        # calibration needs neither text field.
         return Sample(
             prompt_id=prompt_id,
-            prompt=record[self.prompt_field],
-            response=record[self.response_field],
+            prompt=record.get(self.prompt_field, ""),
+            response=record.get(self.response_field, ""),
             reward=reward,
             base_policy_logprob=base_logprob,
             target_policy_logprobs=target_logprobs,
@@ -249,7 +252,7 @@ class DatasetLoader:
 
 
 class FreshDrawLoader:
-    """Loader for fresh draw samples used in DR estimation."""
+    """Loader for fresh draw samples used in Direct-mode estimation."""
 
     @staticmethod
     def load_from_jsonl(path: str) -> Dict[str, FreshDrawDataset]:

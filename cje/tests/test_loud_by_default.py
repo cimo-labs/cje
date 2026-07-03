@@ -255,13 +255,13 @@ class TestPromptIdHandling:
     def test_all_records_invalid_raises(self, caplog: pytest.LogCaptureFixture) -> None:
         from cje.data.loaders import DatasetLoader, InMemoryDataSource
 
-        # Missing required 'response' field -> every record is skipped
+        # Out-of-range judge scores -> every record fails validation
         records = [
             {
                 "prompt_id": f"p{i}",
                 "prompt": "prompt",
-                "base_policy_logprob": -10.0,
-                "target_policy_logprobs": {"pi_target": -11.0},
+                "response": "response",
+                "judge_score": 5.0,  # must be in [0, 1]
             }
             for i in range(3)
         ]
@@ -274,12 +274,30 @@ class TestPromptIdHandling:
     ) -> None:
         from cje.data.loaders import DatasetLoader, InMemoryDataSource
 
-        records = [self._record("p0"), {"prompt_id": "p1", "prompt": "x"}]
+        records = [self._record("p0"), {"prompt_id": "p1", "judge_score": 5.0}]
         with caplog.at_level(logging.WARNING):
             dataset = DatasetLoader().load_from_source(InMemoryDataSource(records))
 
         assert len(dataset.samples) == 1
         assert any("Skipped 1/2" in r.message for r in caplog.records)
+
+    def test_minimal_records_load_without_text_fields(self) -> None:
+        """Minimal judge+oracle records (no prompt/response/logprobs) load.
+
+        This is the documented calibration_data_path schema; it used to be
+        rejected wholesale (missing 'prompt' KeyError skipped every record,
+        and target_policies=[] failed Dataset validation)."""
+        from cje.data.loaders import DatasetLoader, InMemoryDataSource
+
+        records = [
+            {"prompt_id": f"p{i}", "judge_score": 0.5, "oracle_label": 0.5}
+            for i in range(3)
+        ]
+        dataset = DatasetLoader().load_from_source(InMemoryDataSource(records))
+
+        assert len(dataset.samples) == 3
+        assert dataset.target_policies == []
+        assert all(s.prompt == "" and s.response == "" for s in dataset.samples)
 
 
 class TestValidateDirectDataScan:
