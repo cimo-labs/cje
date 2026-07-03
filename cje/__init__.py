@@ -44,9 +44,6 @@ try:
     from .visualization import (
         plot_policy_estimates,
         plot_calibration_comparison,
-        plot_weight_dashboard_summary,
-        plot_weight_dashboard_detailed,
-        plot_dr_dashboard,
         plot_planning_dashboard,
     )
 
@@ -84,9 +81,6 @@ if _has_visualization:
         [
             "plot_policy_estimates",
             "plot_calibration_comparison",
-            "plot_weight_dashboard_summary",
-            "plot_weight_dashboard_detailed",
-            "plot_dr_dashboard",
             "plot_planning_dashboard",
         ]
     )

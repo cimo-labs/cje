@@ -195,52 +195,6 @@ Judge scores outside the oracle calibration range are the primary identification
 
 `CalibratedIPS` computes a per-policy card automatically (attached as `diagnostics.boundary_cards` and `result.metadata["boundary_cards"]`, with a loud warning on REFUSE-LEVEL), and `CJEDiagnostics.coverage_risk` / `refuse_level_claims` are derived from it — `coverage_risk` is `"unknown"` (level claims not certified) when no card could be computed, never a hardcoded `"low"`.
 
-### TTC (Target-Typicality Coverage)
-TTC measures the logging policy's coverage of the *target-typical* region T (samples whose mean per-token surprisal under π' is below the target-distribution q_0.9 quantile — so α = 0.9 by construction). It is computed from `(base_logprobs, target_logprobs)` and is **not** the same as Hellinger affinity (`hellinger_affinity(weights) = E[√w]`).
-
-**TTC is computed automatically**: `CalibratedIPS` (and the DR estimators through their internal IPS component) populate `diagnostics.ttc_per_policy`, fold TTC into `weight_status` / `status_per_policy` via the canonical gates (WARNING below 0.70, CRITICAL below 0.30), and record which length normalizer was used in `result.metadata["ttc_diagnostics"]`.
-
-**Length normalization caveat**: the paper's statistic normalizes surprisal by token count. The pipeline uses a `response_token_count` metadata field when every sample has one; otherwise it falls back to response length in characters as a documented proxy (`length_normalizer: "response_chars"`). Passing `token_counts=None` to `compute_ttc` directly degrades to total sequence surprisal, which confounds typicality with response length.
-
-**Decision rule (paper gate, `cje.diagnostics.gates`):** If TTC < 0.7, logs-only IPS will fail regardless of weight stabilization.
-- **TTC ≥ 0.7**: Good overlap, IPS may work
-- **TTC 0.3-0.7**: Marginal, consider DR methods (WARNING)
-- **TTC < 0.3**: Poor overlap, IPS will fail (CRITICAL)
-
-```python
-import numpy as np
-from cje.diagnostics import compute_ttc, compute_cle_diagnostics
-
-# data should include per-sample base/target logprobs (e.g. from PrecomputedSampler.get_data_for_policy)
-# data = sampler.get_data_for_policy(policy)
-base_lp = np.array([d["base_policy_logprob"] for d in data])
-target_lp = np.array([d["policy_logprob"] for d in data])
-token_counts = np.array([d["response_token_count"] for d in data])  # or char lengths
-
-# Quick TTC check (also available as diagnostics.ttc_per_policy after estimation)
-ttc = compute_ttc(base_lp, target_lp, token_counts=token_counts)
-if ttc < 0.7:
-    print("Use Direct or DR methods instead of IPS")
-
-# Full CLE diagnostics
-cle = compute_cle_diagnostics(base_lp, target_lp, token_counts=token_counts)
-print(cle.summary())
-```
-
-### CLE (Coverage-Limited Efficiency) Diagnostics
-The CLE bound explains why IPS can fail even with high ESS:
-
-```
-SE(Ψ̂) ≥ (σ_T · α) / √(β·n) · √(1 + χ²)
-```
-
-Components:
-- **α** = target mass on target-typical region T
-- **β** = logger mass on T (logger coverage)
-- **Coverage penalty α/√β**: Explodes when logger rarely visits target-typical regions
-- **Shape mismatch √(1+χ²)**: Inflates variance even with good coverage
-- **CLE factor**: Combined inflation = coverage_penalty × shape_mismatch
-
 ### Effective Sample Size (ESS)
 Measures how many "effective" samples remain after weighting. **Can be improved by calibration.**
 
@@ -309,30 +263,6 @@ if isinstance(diagnostics, DRDiagnostics):
     min_r2, max_r2 = diagnostics.outcome_r2_range
     print(f"Outcome R² range: [{min_r2:.3f}, {max_r2:.3f}]")
 ```
-
-### Using Overlap Metrics
-```python
-from cje.diagnostics.overlap import compute_overlap_metrics, diagnose_overlap_problems
-
-# Analyze overlap for a specific policy
-weights = estimator.get_raw_weights("target_policy")
-metrics = compute_overlap_metrics(
-    weights,
-    target_ci_halfwidth=0.01,  # Want ±1% CI
-    auto_tune_threshold=True
-)
-
-# Get diagnosis and recommendations
-should_proceed, explanation = diagnose_overlap_problems(metrics)
-print(explanation)
-
-# Check if calibration would help
-if metrics.can_calibrate:
-    print("Weight stabilization could improve ESS")
-else:
-    print("Overlap too poor for calibration to help")
-```
-
 
 ### Export for Analysis
 ```python

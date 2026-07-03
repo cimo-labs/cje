@@ -311,45 +311,6 @@ print(f"Coverage: {cal_result.coverage_at_01:.1%}")
 print(f"Selected mode: {calibrated_dataset.metadata.get('calibration_info', {}).get('selected_mode')}")
 ```
 
-### Weight Calibration (Direct)
-```python
-from cje.calibration import calibrate_to_target_mean
-
-# Calibrate weights with variance control
-calibrated_weights, info = calibrate_to_target_mean(
-    raw_weights,
-    target_mean=1.0,
-    enforce_variance_nonincrease=True,
-    ordering_index=judge_scores,  # Order by judge scores
-    return_diagnostics=True
-)
-
-print(f"Variance reduction: {info['var_before']/info['var_after']:.2f}x")
-```
-
-### Stacked weight stabilization
-```python
-from cje.calibration import SIMCalibrator, SimcalConfig
-
-# Configure stacked calibration
-config = SimcalConfig(
-    ess_floor=0.2,      # Minimum 20% ESS
-    var_cap=1.0,        # No variance increase
-    include_baseline=False,
-)
-
-# Run calibration
-calibrator = SIMCalibrator(config)
-calibrated, info = calibrator.transform(
-    weights, 
-    judge_scores,
-    rewards=rewards  # For IPS influence functions
-)
-
-print(f"Mixture: {info['mixture_weights']}")
-print(f"ESS improvement: {info['ess_after']/info['ess_before']:.2f}x")
-```
-
 ### Cross-Fitted Calibration (for DR)
 ```python
 from cje.calibration import JudgeCalibrator

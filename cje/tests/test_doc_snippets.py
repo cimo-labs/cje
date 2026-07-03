@@ -78,12 +78,8 @@ def test_snippet_imports_resolve(path: str, line: int, code: str) -> None:
         # docs for those modules state the required extra explicitly.
         msg = str(e)
         optional_markers = (
-            "fireworks",
-            "transformers",
             "matplotlib",
             "seaborn",
-            "hydra",
-            "teacher_forcing",
         )
         if any(marker in msg for marker in optional_markers):
             pytest.skip(f"optional extra not installed: {msg}")

@@ -28,13 +28,10 @@ python-dotenv = "^1.1.0"
 # Optional dependency groups
 matplotlib = {version = "^3.8", optional = true}
 seaborn = {version = "^0.13.2", optional = true}
-hydra-core = {version = "^1.3", optional = true}
-omegaconf = {version = "^2.3", optional = true}
 
 [tool.poetry.extras]
 viz = ["matplotlib", "seaborn"]
-hydra = ["hydra-core", "omegaconf"]
-all = ["matplotlib", "seaborn", "hydra-core", "omegaconf"]
+all = ["matplotlib", "seaborn"]
 
 [tool.poetry.scripts]
 cje = "cje.interface.cli:main"

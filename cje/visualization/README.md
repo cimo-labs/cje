@@ -2,21 +2,9 @@
 
 ## Overview
 
-The visualization module provides comprehensive diagnostic plots for understanding and validating CJE analysis results. It offers specialized dashboards for weight diagnostics, doubly robust diagnostics, calibration assessment, and policy estimate comparisons to help practitioners audit assumptions and interpret results.
+The visualization module provides diagnostic plots for understanding and validating CJE analysis results. It offers calibration assessment, policy estimate comparisons, and budget-planning dashboards to help practitioners audit assumptions and interpret results.
 
 ## When to Use
-
-### Use **Weight Dashboards** when:
-- You need to diagnose weight explosion or concentration
-- You want to understand effective sample size (ESS) issues
-- You're comparing raw vs calibrated weight behaviors
-- You need to identify which samples dominate estimates
-
-### Use **DR Dashboard** when:
-- You're using doubly robust estimators
-- You need to check orthogonality assumptions
-- You want to understand DM vs IPS contributions
-- You need to diagnose influence function tail behavior
 
 ### Use **Calibration Plots** when:
 - You want to visualize judge → oracle calibration
@@ -44,43 +32,27 @@ The visualization module provides comprehensive diagnostic plots for understandi
 
 ```
 visualization/
-├── __init__.py              # Public API with backward-compatible aliases
+├── __init__.py              # Public API
 ├── calibration.py           # Calibration transformation and reliability plots
-├── dr_dashboards.py         # Doubly robust diagnostic visualizations
 ├── estimates.py             # Policy performance forest plots
-├── planning.py              # Budget planning dashboard (MDE vs budget)
-└── weight_dashboards.py     # Weight diagnostic dashboards (summary & detailed)
+└── planning.py              # Budget planning dashboard (MDE vs budget)
 ```
 
 ## Core Concepts
 
-### 1. Weight Diagnostics
-Comprehensive analysis of importance weight behavior:
-- **ESS tracking**: Monitor effective sample size degradation
-- **Tail analysis**: CCDF plots to identify heavy tails
-- **Concentration metrics**: How many samples contribute X% of weight
-- **Calibration impact**: Compare raw vs calibrated distributions
-- **Judge correlation**: Optional analysis of weight-judge score relationships
-
-### 2. DR Diagnostics
-Specialized plots for doubly robust estimation:
-- **Component analysis**: Direct method vs IPS correction contributions
-- **Orthogonality checks**: Score function mean ± 2SE for validity
-- **Influence functions**: EIF tail behavior and stability
-
-### 3. Calibration Assessment
+### 1. Calibration Assessment
 Visual tools for judge calibration quality:
 - **Transformation curves**: Visualize f: judge → oracle mapping
 - **Reliability diagrams**: Bin-wise calibration alignment
 - **Improvement metrics**: ECE and RMSE before/after calibration
 
-### 4. Estimate Visualization
+### 2. Estimate Visualization
 Clear presentation of final results:
 - **Forest plots**: Point estimates with confidence intervals
 - **Policy comparison**: Visual ranking and uncertainty
 - **Oracle validation**: Compare estimates to ground truth when available
 
-### 5. Planning Dashboard
+### 3. Planning Dashboard
 Budget optimization visualization (3 panels):
 - **MDE vs Budget**: What precision can you achieve at each budget level
 - **Power Curve**: Statistical power to detect various effect sizes
@@ -95,40 +67,14 @@ All visualization functions follow consistent patterns and are available in two 
 from cje import (
     plot_policy_estimates,
     plot_calibration_comparison,
-    plot_weight_dashboard_summary,
-    plot_weight_dashboard_detailed,
-    plot_dr_dashboard,
+    plot_planning_dashboard,
 )
 
 # Option 2: Import from visualization module (also works)
 from cje.visualization import (
-    plot_weight_dashboard_summary,
-    plot_weight_dashboard_detailed,
-    plot_dr_dashboard,
     plot_calibration_comparison,
     plot_policy_estimates,
     plot_planning_dashboard,
-)
-
-# Weight diagnostics - summary dashboard (6 panels)
-fig, metrics = plot_weight_dashboard_summary(
-    raw_weights_dict=raw_weights,
-    calibrated_weights_dict=calibrated_weights,
-    save_path="diagnostics/weights_summary.png"
-)
-
-# Weight diagnostics - detailed per-policy view
-fig, metrics = plot_weight_dashboard_detailed(
-    raw_weights_dict=raw_weights,
-    calibrated_weights_dict=calibrated_weights,
-    judge_scores=judge_scores,  # Optional for correlation analysis
-    save_path="diagnostics/weights_detailed.png"
-)
-
-# DR diagnostics (requires DR estimation result)
-fig, summary = plot_dr_dashboard(
-    estimation_result=dr_result,
-    figsize=(15, 5)
 )
 
 # Calibration comparison
@@ -190,20 +136,12 @@ Complex diagnostics are organized into focused panels:
 - Panels are visually connected but independently interpretable
 - Summary metrics accompany visual diagnostics
 
-### 2. **Dual Dashboard Approach**
-Two complementary weight visualizations:
-- **Summary dashboard**: 6-panel overview across all policies
-- **Detailed dashboard**: Per-policy analysis with judge score correlation
-- Each serves distinct analysis needs with clear naming
-
-### 3. **Automatic Metric Computation**
+### 2. **Automatic Metric Computation**
 Visualizations compute and display key metrics:
-- ESS and effective sample percentages
 - Calibration errors (ECE, RMSE)
-- Weight concentration statistics
 - No need for separate metric calculation
 
-### 4. **Save Options**
+### 3. **Save Options**
 All plots support optional saving:
 - Automatic file extension handling
 - High DPI for publication quality
@@ -217,18 +155,12 @@ Most plots require the optional visualization dependencies:
 pip install "cje-eval[viz]"
 ```
 
-If you’re in a headless environment, force a non-GUI backend:
+If you're in a headless environment, force a non-GUI backend:
 ```bash
 export MPLBACKEND=Agg
 ```
 
-If you’re on Linux and want interactive plots, install a GUI backend (e.g. `python3-tk` or Qt bindings) and then install matplotlib (or just use the `cje-eval[viz]` extra above).
-
-### "Figure too small for content"
-Adjust figsize parameter:
-```python
-plot_weight_dashboard_summary(..., figsize=(16, 14))
-```
+If you're on Linux and want interactive plots, install a GUI backend (e.g. `python3-tk` or Qt bindings) and then install matplotlib (or just use the `cje-eval[viz]` extra above).
 
 ### "Missing diagnostics object"
 Ensure estimator was run with diagnostics enabled:
@@ -238,17 +170,14 @@ result = estimator.fit_and_estimate()
 
 ## Performance
 
-- **Weight dashboards**: O(n_samples × n_policies) for metric computation
-- **DR dashboards**: O(n_samples) for influence function analysis  
 - **Calibration plots**: O(n_samples × n_bins) for binning operations
-- **Memory**: Dashboards create temporary copies for sorting/binning
+- **Memory**: Plots create temporary copies for sorting/binning
 
 For large datasets (>100k samples), consider:
 - Sampling for scatter plots
 - Reducing bin counts
 - Pre-computing metrics
-- Using summary dashboard instead of detailed for initial analysis
 
 ## Summary
 
-The visualization module transforms complex statistical diagnostics into interpretable visual insights. It helps practitioners validate assumptions, diagnose issues, and communicate results effectively through carefully designed multi-panel dashboards and focused diagnostic plots.
+The visualization module transforms statistical diagnostics into interpretable visual insights. It helps practitioners validate assumptions, diagnose issues, and communicate results effectively through focused diagnostic plots and planning dashboards.

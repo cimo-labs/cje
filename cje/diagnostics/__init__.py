@@ -1,12 +1,12 @@
 """CJE Diagnostics System.
 
 Consolidated module for all diagnostic functionality:
-- Data models (IPSDiagnostics, DRDiagnostics)
-- Weight diagnostics computation
-- DR-specific diagnostics
+- Data models (IPSDiagnostics)
 - Transportability auditing
+- Reward boundary / coverage badge
 - Display utilities
 - Robust inference tools
+- Budget planning
 """
 
 # Data models
@@ -20,39 +20,11 @@ from .models import (
 
 # Canonical gate thresholds and status helpers (single source of truth)
 from .gates import (
+    OUT_OF_RANGE_REFUSE_THRESHOLD,
     ESS_GOOD_THRESHOLD,
     ESS_WARNING_THRESHOLD,
-    TTC_GOOD_THRESHOLD,
-    TTC_CRITICAL_THRESHOLD,
-    BHATTACHARYYA_GOOD_THRESHOLD,
-    BHATTACHARYYA_SEVERE_THRESHOLD,
-    TAIL_INDEX_CRITICAL,
-    TAIL_INDEX_WARNING,
-    OUT_OF_RANGE_REFUSE_THRESHOLD,
     ess_status,
-    ttc_status,
-    bhattacharyya_status,
-    tail_status,
     worst_status,
-    format_tail_index,
-)
-
-# Weight diagnostics
-from .weights import (
-    compute_weight_diagnostics,
-    effective_sample_size,
-    compute_ess,
-    hill_tail_index,
-    hill_tail_index_stable,
-    mass_concentration,
-)
-
-# DR diagnostics
-from .dr import (
-    compute_dr_policy_diagnostics,
-    compute_dr_diagnostics_all,
-    compute_dm_ips_decomposition,
-    compute_orthogonality_score,
 )
 
 # Transport diagnostics
@@ -72,26 +44,12 @@ from .display import (
 
 # Robust inference
 from .robust_inference import (
-    stationary_bootstrap_se,
-    moving_block_bootstrap_se,
+    DirectEvalTable,
+    build_direct_eval_table,
+    make_calibrator_factory,
+    cluster_bootstrap_direct_with_refit,
+    compare_policies_bootstrap,
     cluster_robust_se,
-    two_way_cluster_se,
-    compose_se_components,
-    benjamini_hochberg_correction,
-    compute_simultaneous_bands,
-    compute_robust_inference,
-)
-
-# Overlap and CLE diagnostics
-from .overlap import (
-    OverlapMetrics,
-    CLEDiagnostics,
-    hellinger_affinity,
-    bhattacharyya_judge_space,
-    compute_ttc,
-    compute_overlap_metrics,
-    compute_cle_diagnostics,
-    diagnose_overlap_problems,
 )
 
 # Reward boundary / coverage badge (paper's REFUSE-LEVEL gate)
@@ -127,33 +85,11 @@ __all__ = [
     "Status",
     "GateState",
     # Canonical gates
+    "OUT_OF_RANGE_REFUSE_THRESHOLD",
     "ESS_GOOD_THRESHOLD",
     "ESS_WARNING_THRESHOLD",
-    "TTC_GOOD_THRESHOLD",
-    "TTC_CRITICAL_THRESHOLD",
-    "BHATTACHARYYA_GOOD_THRESHOLD",
-    "BHATTACHARYYA_SEVERE_THRESHOLD",
-    "TAIL_INDEX_CRITICAL",
-    "TAIL_INDEX_WARNING",
-    "OUT_OF_RANGE_REFUSE_THRESHOLD",
     "ess_status",
-    "ttc_status",
-    "bhattacharyya_status",
-    "tail_status",
     "worst_status",
-    "format_tail_index",
-    # Weight diagnostics
-    "compute_weight_diagnostics",
-    "effective_sample_size",
-    "compute_ess",
-    "hill_tail_index",
-    "hill_tail_index_stable",
-    "mass_concentration",
-    # DR diagnostics
-    "compute_dr_policy_diagnostics",
-    "compute_dr_diagnostics_all",
-    "compute_dm_ips_decomposition",
-    "compute_orthogonality_score",
     # Transport
     "TransportDiagnostics",
     "audit_transportability",
@@ -164,23 +100,12 @@ __all__ = [
     "format_dr_diagnostic_summary",
     "format_diagnostic_comparison",
     # Robust inference
-    "stationary_bootstrap_se",
-    "moving_block_bootstrap_se",
+    "DirectEvalTable",
+    "build_direct_eval_table",
+    "make_calibrator_factory",
+    "cluster_bootstrap_direct_with_refit",
+    "compare_policies_bootstrap",
     "cluster_robust_se",
-    "two_way_cluster_se",
-    "compose_se_components",
-    "benjamini_hochberg_correction",
-    "compute_simultaneous_bands",
-    "compute_robust_inference",
-    # Overlap and CLE diagnostics
-    "OverlapMetrics",
-    "CLEDiagnostics",
-    "hellinger_affinity",
-    "bhattacharyya_judge_space",
-    "compute_ttc",
-    "compute_overlap_metrics",
-    "compute_cle_diagnostics",
-    "diagnose_overlap_problems",
     # Reward boundary / coverage badge
     "BoundaryCard",
     "boundary_card",
