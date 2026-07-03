@@ -8,9 +8,10 @@
 **Start here:** [`cje_core_demo.ipynb`](cje_core_demo.ipynb) — Compare policies, check calibration transfers, monitor drift.
 
 1. **Compare Policies** — One-line analysis with `analyze_dataset()`
-2. **Check If Calibration Transfers** — Test on held-out data with `audit_transportability()`
-3. **Inspect What's Fooling the Judge** — Dig into worst residuals with `compute_residuals()`
-4. **Monitor Calibration Over Time** — Detect drift before it breaks your metrics
+2. **Know When Not to Trust the Levels** — Per-policy coverage badge (`boundary_cards`), including a real REFUSE-LEVEL
+3. **Check If Calibration Transfers** — Test on held-out data with `audit_transportability()`
+4. **Inspect What's Fooling the Judge** — Dig into worst residuals with `compute_residuals()`
+5. **Monitor Calibration Over Time** — Detect drift before it breaks your metrics
 
 No setup required — runs entirely in Google Colab with real Chatbot Arena data.
 
@@ -24,9 +25,9 @@ No setup required — runs entirely in Google Colab with real Chatbot Arena data
 3. **MDE-Constrained Planning** — "I need to detect X%, what's the cost?"
 4. **Visualize Tradeoffs** — Interactive dashboard for budget vs precision
 
-### Advanced: Off-Policy Evaluation
+### Off-Policy Evaluation (moved to 0.3.x)
 
-For IPS/DR modes (reusing logged data without new inference), see [`cje_advanced.ipynb`](cje_advanced.ipynb).
+The IPS/DR modes were removed in CJE 0.4.0. [`cje_advanced.ipynb`](cje_advanced.ipynb) is now a stub pointing at the frozen 0.3.x line (`pip install "cje-eval==0.3.*"`; the full OPE notebook lives at the [v0.3.0 tag](https://github.com/cimo-labs/cje/blob/v0.3.0/examples/cje_advanced.ipynb)).
 
 ## Dataset
 

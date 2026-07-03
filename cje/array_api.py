@@ -266,7 +266,7 @@ def calibrated_mean_ci(
         CalibratedMeanResult with estimate, se, ci, and diagnostics (including
         the coverage badge against the calibrator's oracle S-range).
 
-    Example:
+    Example (matches the README's array-API section):
         >>> import numpy as np
         >>> from cje import calibrated_mean_ci
         >>> rng = np.random.default_rng(0)
@@ -276,9 +276,7 @@ def calibrated_mean_ci(
         >>> labels[labeled] = np.clip(
         ...     scores[labeled] + rng.normal(0, 0.1, size=100), 0, 1
         ... )
-        >>> result = calibrated_mean_ci(
-        ...     scores, labels, inference="cluster_robust", seed=0
-        ... )
+        >>> result = calibrated_mean_ci(scores, labels)
         >>> print(result.summary())  # doctest: +SKIP
     """
     if inference not in _VALID_INFERENCE:

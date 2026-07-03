@@ -4,348 +4,97 @@ For the operational runbook that combines diagnostics + action policy + budgetin
 
 ## Overview
 
-The CJE diagnostics system provides comprehensive monitoring and validation of causal inference assumptions. It follows a **push-based architecture** where estimators compute diagnostics during estimation and attach them to results.
+Diagnostics answer the question the estimates alone cannot: **should you trust this result?** CJE follows a **push-based architecture** — the estimator computes diagnostics during estimation and attaches them to results, so every `analyze_dataset(...)` run arrives with its own audit trail. Failing gates change the output (loud warnings, CRITICAL statuses, a demoted "best policy" in the CLI); they are not footnotes.
 
-## Core Architecture
+Direct mode has no importance weights, so there are no weight/overlap metrics here (the 0.3.x ESS/tail-index/overlap diagnostics were removed with the OPE estimators — `pip install "cje-eval==0.3.*"` if you need them). The two identification risks that remain, and the two audits that cover them:
 
-The diagnostics system is now consolidated into a single cohesive module at `cje/diagnostics/`:
+1. **Coverage** — did the calibrator see oracle labels where this policy's judge scores live? → the **boundary card** (coverage badge).
+2. **Transport** — does a calibrator learned on one policy/era still hold on another? → the **transport audit**.
+
+## File Structure
 
 ```
 cje/diagnostics/
 ├── __init__.py             # Public API exports
-├── gates.py                # Canonical gate thresholds + status helpers (single source of truth)
-├── models.py               # Data models (DirectDiagnostics, Status)
-├── reward_boundary.py      # Coverage badge (boundary_card, the paper's REFUSE-LEVEL gate)
+├── gates.py                # Canonical gate thresholds + status helpers
+├── models.py               # DirectDiagnostics, Status
+├── reward_boundary.py      # Coverage badge (boundary_card, REFUSE-LEVEL gate)
 ├── transport.py            # Transportability auditing
-├── display.py              # Display and formatting utilities
-├── robust_inference.py     # Robust standard errors and inference
+├── display.py              # format_diagnostic_comparison
+├── robust_inference.py     # Bootstrap + cluster-robust inference
 ├── planning.py             # Budget optimization (Square Root Allocation Law)
 ├── simulation_planning.py  # Simulation-based planning (no pilot data required)
 └── README.md               # This documentation
 ```
 
-### Three-Layer Architecture
+## DirectDiagnostics
 
-```
-┌─────────────────┐
-│  Data Models    │  models.py: Immutable dataclasses
-│                 │  (DirectDiagnostics)
-└────────┬────────┘
-         │
-┌────────▼────────┐
-│  Computation    │  reward_boundary.py, transport.py:
-│                 │  Pure functions for metric computation
-└────────┬────────┘
-         │
-┌────────▼────────┐
-│  Integration    │  Estimators import and use diagnostics
-│                 │  during their estimate() methods
-└─────────────────┘
-```
+The single diagnostics class in 0.4.0, attached to results as `results.diagnostics`. (`IPSDiagnostics` survives as a deprecated alias of `DirectDiagnostics` for 0.3.x consumers that read the shared attributes; it will be removed in 0.5.0. `DRDiagnostics` and `CJEDiagnostics` were removed with the OPE estimators.)
 
-### Key Design Principles
+Field groups:
 
-1. **Diagnostics are data, not behavior** - Dataclasses with computed properties
-2. **Push-based flow** - Created during estimation, not on-demand
-3. **Warn by default, refuse on request** - Gate failures always warn loudly and are recorded (`result.metadata["reliability_gates"]`, statuses); numeric estimates are still returned unless `refuse_unreliable=True`, in which case gated policies get NaN
-4. **Hierarchical status** - Multiple layers of safety checks
-5. **Self-describing** - Objects know how to validate, summarize, and serialize themselves
+- **Identification**: `estimator_type` ("Direct"), `method` (`calibrated_direct` | `naive_direct`, `_bootstrap` suffix when bootstrap inference ran), `policies`
+- **Sample counts**: `n_samples_total`, `n_samples_valid`, per-policy `n_samples_used`
+- **Results**: `estimates`, `standard_errors` (per-policy dicts)
+- **Status**: `status_per_policy` (`Status.CRITICAL` when the policy's coverage badge refuses level claims)
+- **Coverage badges**: `boundary_cards` — serialized per-policy `BoundaryCard` dicts, including the `oracle_s_range` they were graded against
+- **Calibration quality**: `calibration_rmse`, `calibration_coverage` (P(|pred − oracle| < 0.1)), `n_oracle_labels` (all None in naive/uncalibrated mode)
 
-## Diagnostic Classes
+Common interface: `validate() -> List[str]` (self-consistency checks), `summary() -> str` (one-line), `to_dict()` / `to_json()` / `to_csv_row()` (serialization), plus computed properties `overall_status` (worst per-policy status), `best_policy`, `filter_rate`, `refuse_level_policies`, `is_calibrated`.
 
-The system provides three main diagnostic classes that share a common interface:
-
-### Common Interface
-
-All diagnostic classes provide these methods:
-- `validate() -> List[str]` - Self-consistency checks, returns list of issues
-- `summary() -> str` - Human-readable one-line summary
-- `to_dict() -> Dict` - Full serialization including enums as strings
-- `to_json(indent=2) -> str` - JSON export with configurable formatting
-- `to_csv_row() -> Dict` - Flat dictionary for tabular analysis
-
-Computed properties (via `@property`):
-- `filter_rate` - Fraction of samples filtered out
-- `best_policy` - Policy with highest estimate
-- `overall_status` - Aggregate health status
-- Additional class-specific properties
-
-### DirectDiagnostics
-
-The single diagnostics class in 0.4.0 (the 0.3.x `IPSDiagnostics`/`DRDiagnostics`/`CJEDiagnostics` classes were removed with the OPE estimators; `IPSDiagnostics` survives as a deprecated alias of `DirectDiagnostics` until 0.5.0). Key field groups:
-
-**Identification**: `estimator_type`, `method`, `policies`  
-**Sample counts**: `n_samples_total`, `n_samples_valid`, `n_samples_used`  
-**Results**: `estimates`, `standard_errors` (per policy)  
-**Status**: `status_per_policy` (CRITICAL when the coverage badge refuses level claims)  
-**Coverage badges**: `boundary_cards` (per-policy `BoundaryCard` dict incl. `oracle_s_range`)  
-**Calibration**: `calibration_rmse`, `calibration_coverage`, `n_oracle_labels`
-
-```python
-from cje.diagnostics import DirectDiagnostics, Status
-
-# diagnostics = results.diagnostics after analyze_dataset(...)
-# Coverage risk lives in the boundary cards:
-# any card with status "REFUSE-LEVEL" means do NOT ship level claims
-# for that policy (rankings may stand).
-```
-
-
-## Status System
-
-The diagnostic system uses a **three-tier hierarchy**:
-
-### 1. Computed Status (Informational)
-Each diagnostic object computes an `overall_status` based on its metrics. This is purely informational and shown in displays but doesn't prevent estimation.
-
-The `Status` enum has three values:
-- `GOOD` - All metrics within acceptable ranges
-- `WARNING` - Some concerning metrics but results usable
-- `CRITICAL` - Severe issues detected
-
-`overall_status` is the worst per-policy status; a policy's status goes CRITICAL when its coverage badge (boundary card) refuses level claims.
-
-### 2. Validation Warnings  
-The `validate()` method checks for logical inconsistencies:
-- Impossible values (ESS > 1.0, R² > 1.0)
-- Inconsistent counts (n_valid > n_total)
-- Extreme metrics that suggest problems
-
-Returns a list of issue descriptions. Empty list means all checks pass.
-
-### 3. Refusal Gates (Optional)
-Estimators can optionally refuse to provide estimates when diagnostics indicate unreliable results. By default, estimators **warn** and still provide estimates. When `refuse_unreliable=True`, they return `NaN` for unreliable policies.
-
-Gate criteria use combinations of ESS, weight concentration, and coefficient of variation. These thresholds are more conservative than status levels and are estimator-specific.
-
-## Key Diagnostic Metrics
-
-### Hellinger Affinity (Action-Space Bhattacharyya, E[√w])
-Measures structural overlap between policies over the full action space. **Cannot be improved by calibration.**
-- **Affinity > 50%**: Good overlap
-- **Affinity 35-50%**: Marginal overlap
-- **Affinity 20-35%**: Poor overlap (consider DR or better logging; calibration won’t fix overlap)
-- **Affinity < 20%**: Catastrophic mismatch (refuse estimation)
-
-Key insight: Hellinger tells us whether to give up, ESS tells us how hard to try.
-
-**This is NOT the paper's judge-space gate** — see the next section. By the data-processing inequality the judge-space A_B upper-bounds this action-space value, which is why the two use different ladders.
-
-### Judge-Space Bhattacharyya Affinity (A_B, the paper's overlap gate)
-`bhattacharyya_judge_space` computes the paper's binned A_B = Σ_b √(p_b(π₀)·p_b(π')) between judge-score marginals. Canonical gates (`cje.diagnostics.gates`):
-- **A_B ≥ 0.85**: passes the paper's gate for reliable IPS (GOOD)
-- **A_B 0.5-0.85**: below the gate (WARNING)
-- **A_B < 0.5**: severe distribution mismatch (CRITICAL)
-
-Two estimation modes: with fresh draws, the logged-S histogram is compared against the fresh-draw-S histogram (DR estimators do this automatically); logs-only, the π' marginal is the raw-importance-weight-weighted histogram of logged S (CalibratedIPS does this automatically). Populated as `diagnostics.bc_sigmaS_per_policy` and folded into `weight_status`. `OverlapMetrics.bc_sigmaS`/`aessf_sigmaS` (= A_B², the σ(S) structural ceiling on achievable ESS fraction) are populated when `compute_overlap_metrics` receives `judge_scores`.
-
-### Coverage Badge (`boundary_card`, the paper's REFUSE-LEVEL gate)
-Judge scores outside the oracle calibration range are the primary identification threat to *level* claims: the calibrator must extrapolate there. `boundary_card` implements the paper's badge:
-- **out_of_range ≥ 5%** → status `REFUSE-LEVEL`: do not ship level (absolute) claims; rankings may stand
-- **saturation ≥ 20%** or large estimator gap → `CAUTION`
-- otherwise → `OK`
-
-`CalibratedDirectEstimator` computes a per-policy card automatically (attached as `diagnostics.boundary_cards` and `result.metadata["boundary_cards"]`, with a loud warning on REFUSE-LEVEL): each policy's fresh-draw judge scores are compared against the oracle calibration S-range the reward calibrator stored at fit time. A REFUSE-LEVEL badge sets the policy's status to CRITICAL and flags it in `result.metadata["reliability_gates"]` (`refuse_level_claims`), which the CLI's best-policy announcement consults to demote unreliable winners.
-
-### Effective Sample Size (ESS) — removed in 0.4.0
-ESS graded importance weights; Direct mode has none. The ESS ladder was removed with the OPE estimators (`pip install "cje-eval==0.3.*"` for the OPE diagnostics). The surviving canonical gate in `cje.diagnostics.gates` is the coverage badge threshold (`OUT_OF_RANGE_REFUSE_THRESHOLD`).
-
-### Auto-Tuned ESS Thresholds
-Instead of fixed thresholds, compute based on desired CI width using variance bounds for bounded rewards [0,1]:
-```python
-# For bounded rewards: Var(V_IPS) ≤ 1/(4n·ESS_fraction)  
-# 95% CI halfwidth: ≈ 1.96/(2√(n·ESS_fraction))
-# Solving: ESS_fraction ≥ (1.96/2)²/(n·target²) = 0.9604/(n·target²)
-threshold = 0.9604 / (n * target_ci_halfwidth**2)
-```
-For n=10,000 and ±1% target: threshold = 96%  
-For n=100,000 and ±1% target: threshold = 9.6%
-
-### Hill Tail Index
-Estimates tail behavior of importance weights (k = 5% of samples).
-- **α ≥ 2**: Finite variance, acceptable
-- **α ∈ [1, 2)**: Infinite variance, WARNING
-- **α < 1**: Infinite mean, CRITICAL
-- **α = NaN**: Estimation FAILED (e.g. >~95% exact-zero weights). Treated as *unknown* — escalated to WARNING when ESS is also below the 30% ship-gate, and displayed as "n/a". `+inf` is reserved for genuinely uniform tails.
-
-The tail index feeds `weight_status` (WARNING/CRITICAL as above); it is **not** a NaN-refusal gate.
-
-### Calibration R²
-Measures judge-to-oracle calibration quality.
-- **R² ≥ 0.5**: Good calibration
-- **R² ∈ [0, 0.5)**: Moderate calibration
-- **R² < 0**: Poor calibration
-
-### Weight Concentration
-Fraction of samples with near-zero weight.
-- **< 50%**: Acceptable
-- **50-85%**: Concerning
-- **> 85%**: Critical
-
-## Usage Examples
-
-### Basic Diagnostics Check
 ```python
 from cje import analyze_dataset
+from cje.diagnostics import Status
 
-results = analyze_dataset("data.jsonl", estimator="calibrated-ips")
+results = analyze_dataset(fresh_draws_dir="responses/")
 diagnostics = results.diagnostics
 
-# Check overall health
 if diagnostics.overall_status == Status.CRITICAL:
-    print("⚠️ Critical issues detected!")
     print(diagnostics.summary())
-```
 
-### Detailed Analysis
-```python
-# Check per-policy coverage badges
+# Per-policy coverage badges: any REFUSE-LEVEL card means do NOT ship
+# level (absolute) claims for that policy — rankings may stand.
 if diagnostics.boundary_cards:
     for policy, card in diagnostics.boundary_cards.items():
         print(f"{policy}: {card['status']} (out-of-range={card['out_of_range']:.1%})")
 ```
 
-### Export for Analysis
-```python
-# Export to pandas for further analysis
-import pandas as pd
+## Status System and Gates
 
-df = pd.DataFrame(diagnostics.to_csv_row(), index=[0])
-df.to_csv("diagnostics.csv")
+`gates.py` is the single source of truth for thresholds, so a given number receives the same verdict everywhere.
 
-# Or as JSON
-with open("diagnostics.json", "w") as f:
-    f.write(diagnostics.to_json())
-```
+- `Status` enum: `GOOD` / `WARNING` / `CRITICAL`.
+- `worst_status(*statuses)` combines statuses (None entries ignored).
+- `OUT_OF_RANGE_REFUSE_THRESHOLD = 0.05` — the coverage-badge gate (below).
 
-## Diagnostic Gates
+**Gate failures are loud but non-destructive**: estimates are still returned with warnings, CRITICAL statuses, and per-policy records in `result.metadata["reliability_gates"]` (`{"flagged", "refused", "refuse_level_claims", "reasons"}`). The `cje analyze` CLI consults those gates before crowning a winner — a flagged argmax prints "⚠️ Best by point estimate: X (UNRELIABLE — see diagnostics)" followed by the best reliable policy.
 
-Estimators evaluate reliability gates during estimation. **By default gate failures WARN loudly and numeric estimates are still returned** — a non-NaN estimate does NOT mean the gates passed. Per-policy gate outcomes are recorded in `result.metadata["reliability_gates"]` (`{"flagged": bool, "refused": bool, "reasons": [...]}`) and reflected in `diagnostics.weight_status` / `status_per_policy`; the CLI uses them to demote unreliable "best policy" winners.
+## Coverage Badge (`boundary_card`, the REFUSE-LEVEL gate)
 
-To make gate failures return NaN instead (refuse-rather-than-mislead), set `refuse_unreliable=True`. It is exposed through the public API:
+Judge scores outside the oracle calibration range are the primary identification threat to *level* claims: the calibrator must extrapolate there, and no data exists to check the extrapolation. `boundary_card(S_policy, S_oracle, R_policy, R_min, R_max, ...)` implements the paper's badge (arXiv:2512.11150) with three signals:
 
-```python
-from cje import analyze_dataset
+- **out_of_range ≥ 5%** (`OUT_OF_RANGE_REFUSE_THRESHOLD`) → status `REFUSE-LEVEL`: do not ship level (absolute) claims; rankings may stand
+- **saturation ≥ 20%** (calibrated rewards piled near the oracle reward bounds) or estimator gap ≥ 0.10 → `CAUTION`
+- otherwise → `OK`
 
-results = analyze_dataset(
-    "data.jsonl",
-    estimator="calibrated-ips",
-    estimator_config={"refuse_unreliable": True},
-)
-# Gated policies now have NaN estimates and NaN standard errors
-```
+The returned `BoundaryCard` dataclass carries `status`, `out_of_range`, `saturation`, `estimator_gap`, `partial_id_width` (a conservative partial-identification band under monotonicity), and a human-readable `note`.
 
-The flag reaches `CalibratedIPS` directly and every DR estimator's internal IPS component (`dr-cpo`, `mrdr`, `tmle`, and the `stacked-dr` components). Note that for DR estimators the flag governs the internal IPS component; the DR point estimate still combines the outcome model with the weights (DR is the recommended mitigation for poor overlap, so it does not auto-refuse on IPS gates).
+**Wiring**: `CalibratedDirectEstimator.estimate()` computes a card per policy automatically, grading each policy's fresh-draw judge scores against the oracle S-range the reward calibrator recorded at fit time. Cards land in `diagnostics.boundary_cards` and `result.metadata["boundary_cards"]`; a REFUSE-LEVEL card triggers a loud warning, sets that policy's status to CRITICAL, and flags it in `result.metadata["reliability_gates"]` (`refuse_level_claims`), which demotes it in the CLI's best-policy announcement.
 
-### CalibratedIPS Gate Criteria (thresholds in `cje.diagnostics.gates`)
-A policy is flagged (warned by default; NaN with `refuse_unreliable=True`) when:
-- ESS < 30% (the paper's ship-gate)
-- raw_near_zero > 85% (more than 85% of raw weights near zero)
-- top_5pct_weight > 30% AND cv_weights > 2.0 (high concentration with high variability)
-
-The Hill tail index is **not** a refusal gate: it feeds `weight_status` (WARNING for α < 2, CRITICAL for α < 1, "unknown" for NaN failures).
-
-### DR Estimator Gates
-DR estimators inherit IPS gate recording and add warnings (but continue) when:
-- Outcome model R² < 0 (indicates misspecification)
-- Influence function tail ratio > 100 (heavy-tailed influence functions)
-
-## Visualization
-
-Weight diagnostics are displayed automatically when running `analyze_dataset.py`:
-```
-Weight Summary
-----------------------------------------------------------------------
-Policy                             ESS   Max Weight Status    
-----------------------------------------------------------------------
-clone                             45.2%      12.3456 GOOD      
-parallel_universe_prompt          38.7%      18.9012 WARNING   
-----------------------------------------------------------------------
-```
-
-Display utilities in `display.py` format diagnostics for tables and comparisons.
-
-## Interpreting Diagnostics
-
-### When to Trust Results
-
-These bands use the same canonical thresholds as `cje.diagnostics.gates` (ESS ship-gate 30%, warning floor 10%):
-
-✅ **High Confidence**:
-- Overall status: GOOD
-- ESS ≥ 30% (paper ship-gate)
-- Hill index ≥ 2.0
-- Calibration R² > 0.8
-- DR: Balanced DM/IPS contributions
-
-⚠️ **Use with Caution**:
-- Overall status: WARNING
-- ESS 10-30%
-- Hill index 1.0-2.0 (or NaN: estimation failed, tail risk unknown)
-- Calibration R² 0.5-0.8
-- DR: One component dominates
-
-🔴 **Do Not Trust**:
-- Overall status: CRITICAL
-- ESS < 10%
-- Hill index < 1.0
-- Calibration R² < 0.5
-- DR: Negative R² values
-
-### Common Issues and Solutions
-
-**Problem**: Low ESS (< 30%)
-- **Cause**: Poor overlap between policies
-- **Solution**: Use DR estimators with fresh draws
-
-**Problem**: Heavy tails (Hill index < 2)
-- **Cause**: Extreme importance weights
-- **Solution**: Tighten the weight-stabilization variance cap
-
-**Problem**: Poor calibration (R² < 0.5)
-- **Cause**: Judge doesn't predict oracle well
-- **Solution**: Increase oracle coverage or improve judge
-
-**Problem**: Negative outcome model R²
-- **Cause**: Model misspecification
-- **Solution**: Check for distribution shift, add features
-
-## Implementation Notes
-
-### Memory Considerations
-- Diagnostics store summary statistics, not raw data
-- Influence functions stored in `EstimationResult.influence_functions`
-- Can be large for many samples - consider memory when processing large datasets
-
-### Adding New Metrics
-1. Extend the dataclass in `models.py`
-2. Add computation function to appropriate module
-3. Call in estimator's `_build_diagnostics()`
-4. Update `summary()` and `to_dict()` methods
-
-## Advanced Topics
-
-### Influence Function Analysis
-```python
-# Access influence functions (always stored)
-for policy, ifs in results.influence_functions.items():
-    z_scores = np.abs((ifs - np.mean(ifs)) / np.std(ifs))
-    n_outliers = np.sum(z_scores > 3)
-    print(f"{policy}: {n_outliers} influential points")
-```
+**Fixing a REFUSE-LEVEL badge**: collect oracle labels covering the missing score range (the warning names the range), then re-run.
 
 ## Transportability Audit
 
-**Use case:** Test if a calibrator fitted on policy A/era 1 can be safely reused for policy B/era 2.
+**Use case:** test whether a calibrator fitted on policy A / era 1 can be safely reused for policy B / era 2.
 
-**How it works:**
-1. Computes mean residual: δ̂ = E[Y - f̂(S)] on target probe
-2. Constructs 95% CI: δ̂ ± 1.96 × SE
-3. Tests unbiasedness: Is 0 ∈ CI?
-4. Checks regional residuals by decile (catches non-uniform drift)
-5. Verifies coverage of score range
+`audit_transportability(calibrator, probe_samples, bins=10, group_label=None)` runs a simple unbiasedness test on a small oracle-labeled probe slice (typically 40–60 rows):
 
-**Basic Usage:**
+1. Compute the mean residual δ̂ = E[Y − f̂(S)] on the probe.
+2. Construct the parametric 95% CI: δ̂ ± 1.96·SE.
+3. Classify:
+   - **PASS**: 0 ∈ CI → calibrator is unbiased on the target (action: `none`)
+   - **WARN**: 0 ∉ CI and |δ̂| < 0.05 → small but detectable bias (action: `monitor`)
+   - **FAIL**: 0 ∉ CI and |δ̂| ≥ 0.05 → clear systematic bias (action: `refit_two_stage`)
 
 ```python
 import json
@@ -355,702 +104,104 @@ from cje.diagnostics import audit_transportability, plot_transport_comparison
 # analyze_dataset automatically fits and exposes the calibrator
 results = analyze_dataset(fresh_draws_dir="responses/")
 
-# Load 40-60 probe samples on target (just dicts with judge_score + oracle_label)
+# Probe: 40-60 target samples, plain dicts with judge_score + oracle_label
 probe = [json.loads(line) for line in open("gpt4_mini_probe.jsonl")]
 
-# Test transportability using the calibrator from analysis
 diag = audit_transportability(
-    results.calibrator,  # Calibrator automatically fitted during analysis
-    probe,  # List[dict] - no wrapper needed!
-    group_label="policy:gpt-4-mini"
+    results.calibrator,
+    probe,
+    group_label="policy:gpt-4-mini",
 )
-
-# Check result
 print(diag.summary())
-# Output: "Transport: PASS | Group: policy:gpt-4-mini | N=50 | δ̂: +0.012 (CI: [-0.008, +0.032])"
+# Transport: PASS | Group: policy:gpt-4-mini | N=50 | δ̂: +0.012 (CI: [-0.008, +0.032])
 
-# Visualize
-diag.plot()  # Decile-level residuals
+diag.plot()  # residuals by score decile (requires the viz extra)
 
-# Or compare multiple policies at once:
+# Compare several policies at once (forest plot):
 # audits = {"clone": diag_clone, "premium": diag_premium}
 # fig = plot_transport_comparison(audits)
-
-# Take action based on status
-if diag.status == "PASS":
-    # δ̂ CI includes 0 → calibrator is unbiased on target
-    print("✅ Calibrator transports - safe to reuse")
-
-elif diag.status == "WARN":
-    # δ̂ CI excludes 0 but |δ̂| < 0.05 → small bias
-    print(f"⚠️ Small bias detected: δ̂={diag.delta_hat:+.3f}")
-    print(f"Action: {diag.recommended_action}")  # "monitor"
-    # Consider mean anchoring or collecting more probe labels
-
-elif diag.status == "FAIL":
-    # |δ̂| ≥ 0.05 → clear systematic bias
-    print(f"🔴 Clear drift detected: δ̂={diag.delta_hat:+.3f}")
-    print(f"Action: {diag.recommended_action}")  # "refit_two_stage"
-    # Collect more oracle labels on target and refit calibrator
 ```
 
-**Status Classification:**
+`TransportDiagnostics` carries `status`, `delta_hat`, `delta_ci`, `delta_se`, `decile_residuals`/`decile_counts` (for the plot), `coverage`, `recommended_action`, `n_probe`, and `group_label`, plus `summary()`, `to_dict()`, and `plot()`.
 
-Tests H₀: E[Y - f̂(S)] = 0 for target policy using parametric 95% CI.
+**Probe sampling**: sample randomly (or randomly within score strata) — labeling only "interesting" cases biases the audit. Common uses: policy change, temporal drift, domain shift, judge/rubric updates.
 
-- **PASS**: 0 ∈ CI → calibrator is unbiased on target
-- **WARN**: 0 ∉ CI but |δ̂| < 0.05 → small but detectable bias
-- **FAIL**: 0 ∉ CI and |δ̂| ≥ 0.05 → large systematic bias
-
-**Recommended Actions:**
-- `none` - Safe to reuse calibrator as-is
-- `monitor` - Small bias detected, monitor or collect more probe labels
-- `refit_two_stage` - Large bias, refit with pooled data or use two-stage calibration
-
-**Probe Sampling Strategy:**
-
-For best coverage, stratify by risk index:
-
-```python
-# Stratified sampling for better score range coverage
-probe = stratified_sample(
-    target_data,
-    strata_field="risk_index_decile",
-    n_per_stratum=5,  # 50 total for 10 deciles
-    oracle_label_required=True
-)
-```
-
-**Common Use Cases:**
-
-1. **Policy change**: GPT-4 → GPT-4-mini
-2. **Temporal shift**: Q1 logs → Q2 logs (without timestamps)
-3. **Domain shift**: Customer support → Sales queries
-4. **Judge update**: After rubric or model changes
-5. **Cross-user**: Power users → Novice users
-
-**Example: Cross-Era Transport**
-
-For time-series analysis where you have separate historical data, manually fit the calibrator:
-
-```python
-import json
-from sklearn.isotonic import IsotonicRegression
-from cje.diagnostics import audit_transportability
-
-# Fit on Q1 data (manual fitting when you have separate historical data)
-q1_records = [json.loads(line) for line in open("q1_logs.jsonl")]
-q1_with_oracle = [r for r in q1_records if r.get("oracle_label") is not None]
-calibrator = IsotonicRegression(out_of_bounds="clip")
-calibrator.fit([r["judge_score"] for r in q1_with_oracle], [r["oracle_label"] for r in q1_with_oracle])
-
-# Test on Q2 with 50 probe labels
-q2_probe = [json.loads(line) for line in open("q2_probe.jsonl")]
-diag = audit_transportability(calibrator, q2_probe, group_label="era:Q2-2025")
-
-print(diag.summary())
-# Output: "Transport: FAIL | Group: era:Q2-2025 | N=50 | δ̂: -0.082 (CI: [-0.114, -0.050]) | Action: refit_two_stage"
-
-# Interpretation: Judge systematically under-predicts by ~8% in Q2
-# Action: Collect 100-200 Q2 oracle labels and refit
-```
-
-**Inspecting Individual Residuals:**
-
-When calibration fails, inspect which samples have the worst errors:
+**Inspecting individual residuals** when an audit fails:
 
 ```python
 from cje.diagnostics import compute_residuals
 
-# Compute residuals for each sample (sorted by worst overestimate first)
-# Use results.calibrator from analyze_dataset()
-samples = compute_residuals(results.calibrator, probe_data)
-
-# Inspect worst overestimates (where the judge was most fooled)
+samples = compute_residuals(results.calibrator, probe)  # sorted: worst overestimates first
 for s in samples[:3]:
-    print(f"Residual: {s['residual']:.2f}")
-    print(f"  Judge: {s['judge_score']:.2f} → Calibrated: {s['calibrated']:.2f}")
-    print(f"  Oracle: {s['oracle_label']:.2f}")
-    print(f"  Response: {s['response'][:100]}...")
+    print(f"residual={s['residual']:+.2f}  judge={s['judge_score']:.2f} "
+          f"→ calibrated={s['calibrated']:.2f}  oracle={s['oracle_label']:.2f}")
 ```
 
-Sort options:
-- `sort_by="residual"` (default): Worst overestimates first (most negative residuals)
-- `sort_by="abs_residual"`: Biggest errors first (regardless of direction)
-- `sort_by=None`: Preserve original order
+`sort_by="residual"` (default) puts the samples that most fooled the judge first; `"abs_residual"` sorts by error magnitude; `None` preserves input order.
 
-## Uncertainty Quantification: Bootstrap with θ̂_aug
+## Robust Inference
 
-CJE provides **~95% coverage** for confidence intervals using bootstrap with θ̂_aug (AIPW-style debiasing).
+CJE's uncertainty has two independent sources: **evaluation sampling** (which prompts you drew) and **calibrator uncertainty** (the judge→oracle map was learned from a finite label budget). `robust_inference.py` provides the two inference engines `CalibratedDirectEstimator` dispatches between; both account for both sources.
 
-### Recommended Approach: Bootstrap + θ̂_aug
+**1. Cluster bootstrap with calibrator refit (the default)** — `cluster_bootstrap_direct_with_refit(eval_table, calibrator_factory, n_bootstrap=2000, ...)`. Each replicate resamples prompt clusters (shared across policies, preserving the paired design) and refits the calibrator on the replicate's oracle subset, capturing the calibration/evaluation covariance analytic SEs miss. By default it uses the augmented estimator θ̂_aug = mean(f̂_full(S)) + mean(Y − f̂_oof(S)), an AIPW-style debiasing of the plug-in. Returns percentile CIs plus the `bootstrap_matrix` for paired contrasts. `calibration_policy_idx` restricts calibrator fitting to one policy's labels (transport-aware bootstrap: the residual term then absorbs transport bias on the other policies).
 
-The default inference method uses **cluster bootstrap with calibrator refit** and an **augmented estimator (θ̂_aug)** that corrects for calibrator bias:
+**2. Cluster-robust SE + oracle jackknife** — `cluster_robust_se(data, cluster_ids, statistic_fn, ...)` computes CRV1 sandwich SEs with t-based CIs (df = G−1 clusters). The estimator augments this with the delete-one-oracle-fold jackknife variance (`oracle_jackknife_variance` in `cje.estimators.base_estimator`), added once, so calibration uncertainty is never dropped. This is the automatic fallback when the evaluation draws carry no oracle labels at all (calibration-data-only runs) — there the calibration/evaluation covariance is exactly zero and the additive decomposition is exact, recorded in `result.metadata["inference"]`.
 
-```
-θ̂_aug = mean(f̂_full(S)) + mean(Y - f̂_oof(S))
-       = plug-in estimate + residual correction
-```
-
-Where:
-- `f̂_full`: Calibrator fitted on ALL oracle-labeled data (lower variance)
-- `f̂_oof`: Cluster-out-of-fold predictions (unbiased residuals)
-- The residual term corrects for calibrator bias using oracle samples
-
-**Coverage comparison (from ablation study):**
-
-| Oracle | Cluster-Robust | calibration-aware Jackknife | Bootstrap+θ̂_aug |
-|--------|----------------|---------------|------------------|
-| 5%     | 22%            | 78%           | **94%**          |
-| 10%    | 32%            | 77%           | **96%**          |
-| 25%    | 42%            | 83%           | **96%**          |
-| 50%    | 55%            | 87%           | **97%**          |
-
-**Why bootstrap wins:**
-1. **Bias correction**: θ̂_aug corrects for systematic calibrator bias using OOF residuals
-2. **Full uncertainty capture**: Refitting calibrator on each replicate captures calibration/evaluation covariance that analytic SEs miss
-
-### Two-Component Variance Structure
-
-CJE's uncertainty comes from **two independent sources**:
-
-1. **Main sampling uncertainty** (from the eval log/prompts) → cluster-robust SEs
-2. **Calibrator uncertainty** (from the oracle slice) → captured via bootstrap refit
-
-Under the standard product-sample setup (oracle and eval datasets are independent), these components are **additive**:
-
-```
-Var_total = Var_CR + Var_cal
-```
-
-This two-component structure is critical for honest inference. Ignoring clustering on the eval side can cause severe undercoverage (e.g., 86.9% instead of 95%), while ignoring calibrator uncertainty understates risk when oracle slices are small.
-
-### Component 1: Cluster-Robust Variance (Eval-Side Dependence)
-
-**What to cluster:** Any structure that creates dependence between rows in your evaluation data:
-- **User/session clustering**: Multiple prompts from the same user or session
-- **Time blocks**: Prompts collected in temporal batches
-- **Conversation threads**: Multi-turn dialogues
-- **Paired designs**: DM contrasts where the same prompt is used for multiple policies
-
-**Why it matters:** Standard i.i.d. SEs assume independent samples. When prompts cluster (e.g., 5 prompts per user), the **effective** sample size is closer to the number of clusters (users), not the number of rows (prompts). Ignoring this inflates precision artificially.
-
-**Computing cluster-robust variance:**
-
-All CJE estimators are means of **per-row influence contributions**:
-- **DM level** for policy π: `ψ_i = f(S_i^π) - V_hat`
-- **DM paired contrast** (π vs π'): `ψ_i = [f(S_i^π) - f(S_i^π')] - Delta_hat`
-- **IPS**: `ψ_i = w_tilde_i * R_i - V_hat`
-- **DR**: `ψ_i = g_π(X_i) + w_tilde_i * (R_i - q_hat(X_i, A_i)) - V_hat`
-
-Aggregate to cluster sums:
-```
-Ψ_g = Σ_{i: c(i)=g} ψ_i
-```
-
-Small-sample corrected cluster-robust variance:
-```
-Var_CR = (G/(G-1)) * (1/n²) * Σ_{g=1}^G Ψ_g²
-```
-
-where G is the number of clusters and n is the total number of rows.
-
-**Edge cases:**
-- **Few clusters (G < 15)**: Prefer wild-cluster bootstrap over asymptotic CR1
-- **Two-way dependence** (e.g., user × day): Use two-way clustering formula (sum one-way variances, subtract intersection)
-- **Time series**: Use moving-block bootstrap with block length ≈ n^(1/3)
-
-### Component 2: Calibration-Aware Oracle Jackknife
-
-**What it captures:** Uncertainty from learning the calibration function f(S) on a finite oracle slice.
-
-**Why it matters:** When oracle size is small (common: 5-25% coverage), treating the calibrator as fixed drastically understates total uncertainty. calibration-aware properly accounts for this.
-
-**Computing calibration-aware variance:**
-
-1. Split oracle labels into K folds (same folds used for cross-fitting)
-2. For each fold k:
-   - Refit calibrator f^(-k) on oracle \ fold_k (let auto mode selection re-decide mono vs two-stage)
-   - Recompute calibrated rewards R^(-k) = f^(-k)(S)
-   - **For IPS/DR**: Re-select stabilized weights (selection depends on R)
-   - **For DR**: Refit outcome model (depends on R)
-   - Compute point estimate θ_hat^(-k)
-
-3. Jackknife variance:
-```
-Var_cal = ((K-1)/K) * Σ_{k=1}^K (θ_hat^(-k) - θ_bar)²
-```
-where `θ_bar = (1/K) Σ_k θ_hat^(-k)`
-
-**Key principle:** calibration-aware inference captures **oracle-only** uncertainty. It holds the eval log fixed and only refits components that depend on calibrator outputs. This maintains independence with Var_CR.
-
-### Combining the Components
-
-Because oracle and eval are independent samples, the cross-term vanishes asymptotically:
-
-```
-Var_total = Var_CR + Var_cal
-SE_total = √Var_total
-```
-
-**Critical value selection:**
-
-- **Large samples** (G ≥ 30, K ≥ 5): Use normal quantile (1.96 for 95% CI)
-- **Small clusters or oracle**: Use Satterthwaite effective degrees of freedom:
-
-```
-df_eff = (Var_CR + Var_cal)² / (Var_CR²/df_CR + Var_cal²/df_cal)
-
-where df_CR = G - 1, df_cal = K - 1
-```
-
-Then use t_{1-α/2, df_eff} critical value (e.g., qt(0.975, df_eff) in R).
-
-### What to Report
-
-For complete transparency, always report:
-
-1. **Point estimate** with 95% CI using SE_total
-2. **calibration uncertainty share**: `Var_cal / Var_total` (shows which component dominates)
-3. **Cluster structure**: Number of clusters G, cluster size distribution
-4. **Comparison**: i.i.d. SE vs cluster-robust SE (shows dependence penalty)
-
-Example output:
-```
-Policy: gpt-4-mini
-Estimate: 0.756 [0.712, 0.800]  (95% CI, df=42)
-
-Variance decomposition:
-  Cluster-robust (eval): 0.0012  (72%)
-  calibration-aware (oracle):          0.0005  (28%)
-  Total:                 0.0017
-
-Cluster structure: G=45 clusters (mean size=22, range [5, 67])
-Standard errors: i.i.d.=0.032, cluster-robust=0.041 (28% inflation)
-```
-
-### Implementation Pattern (Pseudocode)
+Supporting pieces: `build_direct_eval_table(fresh_draws_per_policy, covariate_names=None)` builds the long-format `DirectEvalTable` the bootstrap resamples; `make_calibrator_factory(mode, ...)` produces fresh `JudgeCalibrator` instances per replicate (mode fixed to the full-data selection, never "auto"); `compare_policies_bootstrap(bootstrap_result, policy_a, policy_b)` computes paired contrasts from the stored bootstrap matrix (same resampled clusters on both sides → tighter CIs than independence).
 
 ```python
-# Component 1: Cluster-robust variance on eval log
-def compute_cluster_robust_variance(psi, cluster_ids):
-    """
-    psi: per-row influence contributions (n,)
-    cluster_ids: cluster identifier for each row (n,)
-    Returns: Var_CR
-    """
-    clusters = pd.DataFrame({"psi": psi, "cluster": cluster_ids})
-    cluster_sums = clusters.groupby("cluster")["psi"].sum()  # Ψ_g
-
-    G = len(cluster_sums)
-    n = len(psi)
-
-    Var_CR = (G / (G - 1)) * (cluster_sums ** 2).sum() / (n ** 2)
-    return Var_CR, G
-
-# Component 2: calibration-aware jackknife (oracle-only refits)
-def compute_calibration_variance(dataset, oracle_folds, estimator_config):
-    """
-    Refit calibrator K times, holding eval log fixed
-    Returns: Var_cal, K
-    """
-    K = len(oracle_folds)
-    estimates = []
-
-    for k in range(K):
-        # Refit calibrator on oracle \ fold_k
-        f_minus_k = fit_reward_calibration(oracle_minus_fold=k)  # auto mode selection
-
-        # Recompute calibrated rewards
-        R_minus_k = f_minus_k(dataset.judge_scores)
-
-        # Compute point estimate with the refit calibrator
-        theta_k = compute_estimate(R_minus_k)
-        estimates.append(theta_k)
-
-    theta_bar = np.mean(estimates)
-    Var_cal = ((K - 1) / K) * np.sum((estimates - theta_bar) ** 2)
-
-    return Var_cal, K
-
-# Combine and construct CI
-def construct_ci(estimate, Var_CR, Var_cal, df_CR, df_cal, alpha=0.05):
-    """
-    estimate: point estimate
-    Var_CR, df_CR: cluster-robust component
-    Var_cal, df_cal: calibration uncertainty component
-    Returns: (lower, upper, df_eff)
-    """
-    Var_total = Var_CR + Var_cal
-    SE_total = np.sqrt(Var_total)
-
-    # Satterthwaite effective df
-    if Var_CR > 0 and Var_cal > 0:
-        df_eff = (Var_total ** 2) / (
-            (Var_CR ** 2 / df_CR) + (Var_cal ** 2 / df_cal)
-        )
-    elif Var_CR > 0:
-        df_eff = df_CR
-    else:
-        df_eff = df_cal
-
-    # Critical value
-    if df_eff >= 30:
-        crit = 1.96  # normal approximation
-    else:
-        from scipy.stats import t
-        crit = t.ppf(1 - alpha/2, df_eff)
-
-    lower = estimate - crit * SE_total
-    upper = estimate + crit * SE_total
-
-    return lower, upper, df_eff
-```
-
-### Usage Example
-
-```python
-from cje import analyze_dataset
-
-# Analyze with cluster-robust inference
-result = analyze_dataset(fresh_draws_dir="responses/")
-
-# SE decomposition lives in metadata["se_components"] when available
-comps = result.metadata.get("se_components", {})
-print(f"IF SE per policy: {comps.get('se_if_per_policy')}")
-print(f"Oracle (calibration) variance per policy: {comps.get('oracle_variance_per_policy')}")
-
-# Confidence intervals combine both components: SE_total = sqrt(Var_IF + Var_cal)
-lo, hi = result.confidence_interval(alpha=0.05)
-for i, policy in enumerate(result.metadata["target_policies"]):
-    print(f"{policy}: {result.estimates[i]:.3f} [{lo[i]:.3f}, {hi[i]:.3f}]")
-```
-
-### Transport-Aware Bootstrap (calibration_policy_idx)
-
-When calibration is learned on a **base policy** but applied to different **target policies**, the standard θ̂_aug may underestimate bias if the calibrator doesn't transport well. The `calibration_policy_idx` parameter enables **transport-aware bootstrap** that separates:
-
-1. **Calibration oracle**: Only base policy samples (for fitting the calibrator)
-2. **Residual oracle**: All policies (for computing transport bias corrections)
-
-**Why this matters:**
-
-When `calibration_policy_idx` is set:
-- The calibrator is fitted only on the base policy's oracle samples
-- The residual correction `mean(Y - f̂(S))` uses ALL policies' oracle samples
-- Target policies get full-model predictions (not OOF) since they weren't in calibration
-- This captures transport bias: if f̂ learned on base doesn't fit target, the residual term corrects it
-
-**Usage:**
-
-```python
-from cje.diagnostics.robust_inference import (
+from cje.diagnostics import (
+    build_direct_eval_table,
     cluster_bootstrap_direct_with_refit,
+    compare_policies_bootstrap,
     make_calibrator_factory,
 )
 
-# calibration_policy_idx=0 means: fit calibrator only on policy 0 (base)
-result = cluster_bootstrap_direct_with_refit(
-    eval_table=eval_table,
-    calibrator_factory=make_calibrator_factory("monotone"),
-    n_bootstrap=2000,
-    min_oracle_per_replicate=30,
-    calibration_policy_idx=0,  # Base policy only for calibration
-    use_augmented_estimator=True,
-)
-
-# Check residual corrections in diagnostics
-aug_diag = result.get("augmentation_diagnostics", {})
-residual_corrections = aug_diag.get("residual_corrections", [])
-
-# Base policy: small residual (calibrator fits well)
-# Target policy: larger residual (captures transport bias)
-print(f"Base residual: {residual_corrections[0]:.3f}")
-print(f"Target residual: {residual_corrections[1]:.3f}")
+# fresh_draws = {"policy_a": FreshDrawDataset, "policy_b": FreshDrawDataset}
+# eval_table = build_direct_eval_table(fresh_draws)
+# boot = cluster_bootstrap_direct_with_refit(
+#     eval_table, make_calibrator_factory("monotone"), n_bootstrap=2000
+# )
+# contrast = compare_policies_bootstrap(boot, policy_a=0, policy_b=1)
 ```
 
-**Through CalibratedDirectEstimator:**
+Most users never call these directly — `analyze_dataset` / `CalibratedDirectEstimator` route through them and record the SE decomposition in `result.metadata["se_components"]` and the method actually used in `result.metadata["inference"]`.
+
+## Budget Planning
+
+How many prompts and how many oracle labels? Total variance decomposes as σ²_eval/n + σ²_cal/m; given per-unit costs, the Square Root Allocation Law gives the optimal split (paper Appendix F).
 
 ```python
-from cje.estimators import CalibratedDirectEstimator
+from cje.diagnostics import CostModel, fit_variance_model, plan_evaluation, plan_for_mde
 
-estimator = CalibratedDirectEstimator(
-    target_policies=["base", "verbose", "contrarian"],
-    calibration_policy="base",  # Calibrate only on base
-    inference_method="bootstrap",
-    use_augmented_estimator=True,
-)
+# model = fit_variance_model(base_pilot_data)      # from pilot fresh draws
+# cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
+# plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost)
+# plan = plan_for_mde(target_mde=0.01, variance_model=model, cost_model=cost)
 ```
 
-**Expected behavior:**
+No pilot data yet? `simulate_variance_model(r2=...)` builds a variance model from expected judge quality (`correlation_to_r2` converts a Pearson correlation), and `simulate_planning` / `simulate_planning_sweep` wrap the exploration loop. The [planning notebook](../../examples/cje_planning.ipynb) walks through the full workflow, and `plot_planning_dashboard` (viz extra) visualizes the tradeoffs.
 
-| Policy | Residual Correction | Explanation |
-|--------|---------------------|-------------|
-| base | ~0 | Calibrator fits well (trained on this) |
-| verbose | ~+0.03 | Small transport bias |
-| contrarian | ~+0.12 | Large transport bias (calibrator backfires) |
+## Display
 
-The final estimate for each policy is: `mean(f̂(S)) + residual_correction`, which corrects for transport failures automatically.
+`format_diagnostic_comparison(diag1, diag2, label1="Run 1", label2="Run 2")` renders a side-by-side text table of two `DirectDiagnostics` objects (sample counts, calibration RMSE, per-policy estimates) — useful for before/after comparisons across runs.
 
-### Common Pitfalls
+## Key Design Decisions
 
-**❌ Using i.i.d. SEs with clustered data**
-- Result: Severe undercoverage (86.9% instead of 95% observed empirically)
-- Fix: CJE's estimators compute cluster-robust SEs over calibration folds automatically; keep `prompt_id` stable so rows that share a prompt share a cluster
+1. **Diagnostics are data, not behavior** — dataclasses with computed properties, serializable via `to_dict`/`to_json`/`to_csv_row`.
+2. **Push-based flow** — created during estimation, not on demand; every result is born audited.
+3. **Warn loudly, never silently** — gate failures warn, set CRITICAL statuses, and are recorded in `metadata["reliability_gates"]`; numeric estimates are still returned so you can inspect them.
+4. **One threshold source** — every surface imports gate thresholds from `gates.py`.
+5. **Refuse levels, keep rankings** — the coverage badge distinguishes level (absolute) claims, which extrapolation invalidates, from rankings, which often survive.
 
-**❌ Ignoring calibration-aware with small oracle slices**
-- Result: CIs too narrow, overconfidence in precision
-- Fix: CJE computes calibration-aware by default; check calibration uncertainty share in reports
+## Common Issues
 
-**❌ Not reporting which component dominates**
-- Result: Unclear whether to add more prompts or more labels
-- Fix: Always report calibration uncertainty share—if >50%, labels are the bottleneck
+**"REFUSE-LEVEL" badge** — a policy's judge scores fall outside the oracle calibration range. Collect oracle labels covering that range (the warning names it); don't ship absolute numbers for that policy meanwhile.
 
-**❌ Mixing cluster levels (e.g., clustering by session but pairing by user)**
-- Result: Incorrect variance, wrong CIs
-- Fix: Match cluster definition to the dependence structure; for nested clusters, use the coarsest level
+**Transport audit FAIL** — the calibrator doesn't hold on the probe group. Collect 100–200 target-group labels and re-run with the labels pooled in; escalate to a refit with covariates if decile residuals trend with score (see PLAYBOOK Sections 3 and 5).
 
-## Budget Planning (Sample Size Optimization)
-
-CJE includes tools for optimal allocation of budget between surrogate scores and oracle labels, based on the **Square Root Allocation Law** from CJE paper Appendix F.
-
-### The Problem
-
-Total variance decomposes into two independent components:
-```
-V_total(n, m) = σ²_eval/n + σ²_cal/m
-```
-
-Where:
-- `n` = number of evaluation samples (scored by surrogate)
-- `m` = number of oracle labels (for calibration)
-- `σ²_eval` = intrinsic evaluation variance
-- `σ²_cal` = intrinsic calibration variance
-
-### The Solution: Square Root Law
-
-Given budget `B = c_S·n + c_Y·m`, the optimal allocation is:
-```
-m*/n* = √(c_S/c_Y) · √(σ²_cal/σ²_eval)
-```
-
-### MDE-Centric Workflow
-
-The planning API is centered around **MDE (Minimum Detectable Effect)** - the smallest difference between policies you can reliably detect:
-
-```python
-from cje.diagnostics import fit_variance_model, plan_evaluation, plan_for_mde, CostModel
-
-# 1. Fit variance model from base policy pilot data (where calibration is learned)
-model = fit_variance_model(base_pilot_data, verbose=True)
-# σ²_eval = 0.008, σ²_cal = 0.004, R² = 0.94
-
-# 2. Specify your cost model
-# Use actual costs per call so budget is in real dollars
-# Example: GPT-4o-mini surrogate ($0.01/call) vs GPT-4o oracle ($0.16/call)
-cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-
-# 3a. "I have $5000, what can I detect?"
-plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
-print(plan.summary())
-# Evaluation Plan
-#   Allocation: n=4,200, m=80 (1.9% oracle)
-#   Cost: $5,000
-#   Single-policy SE: 0.0086
-#   MDE (80% power): 2.4%
-#   → Can detect 2.4% difference between policies
-
-# 3b. "I need to detect 1% differences"
-plan = plan_for_mde(target_mde=0.01, variance_model=model, cost_model=cost_model)
-print(f"Required budget: ${plan.total_cost:,.0f}")
-```
-
-> **Why no defaults?** The Square Root Allocation Law gives optimal split as `m*/n* = √(c_S/c_Y) × √(σ²_cal/σ²_eval)`. A 4× cost ratio vs 64× cost ratio produces completely different allocations. Using the wrong ratio wastes budget or underestimates MDE.
-
-### EvaluationPlan Features
-
-The `EvaluationPlan` returned by `plan_evaluation()` and `plan_for_mde()` includes:
-
-```python
-# Core outputs
-plan.n_samples        # Optimal number of prompts
-plan.m_oracle         # Optimal number of oracle labels
-plan.total_cost       # Total cost at this allocation
-plan.mde              # MDE at 80% power for pairwise comparisons
-plan.se_level         # SE for single policy estimate
-
-# Utilities
-plan.mde_at_power(0.9)        # MDE at 90% power
-plan.power_to_detect(0.02)    # Power to detect 2% effect
-plan.summary()                # Human-readable summary
-```
-
-### Acting on the Plan
-
-The plan output tells you exactly what to collect:
-
-```python
-plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
-
-# WHAT TO COLLECT:
-print(f"Collect {plan.n_samples} responses scored by surrogate judge")
-print(f"Randomly select {plan.m_oracle} for oracle labels")
-print(f"Oracle fraction: {plan.m_oracle/plan.n_samples:.1%}")
-
-# WHAT YOU CAN DETECT:
-print(f"MDE: {plan.mde:.1%} difference between policies (80% power)")
-```
-
-**Critical: oracle labels must be randomly selected** from the evaluation set. If you only label "interesting" or "hard" examples, the calibration will be biased.
-
-### The Budget ↔ MDE Decision Loop
-
-Most users iterate between two questions:
-
-```python
-# "I have $10K, what can I detect?"
-plan = plan_evaluation(budget=10000, variance_model=model, cost_model=cost_model)
-print(f"MDE = {plan.mde:.1%}")  # Maybe 1.5%
-
-# "That's not sensitive enough. What if I need 1%?"
-plan = plan_for_mde(target_mde=0.01, variance_model=model, cost_model=cost_model)
-print(f"Budget needed: ${plan.total_cost:,.0f}")  # Maybe $22K
-
-# "Too expensive. What about 1.2%?"
-plan = plan_for_mde(target_mde=0.012, variance_model=model, cost_model=cost_model)
-print(f"Budget needed: ${plan.total_cost:,.0f}")  # Maybe $15K - acceptable
-```
-
-**Rule of thumb**: Target MDE should be 2-3× smaller than differences you care about. If you care about 5% differences, aim for MDE ≤ 2%.
-
-### MDE Assumptions
-
-The MDE calculation uses **conservative assumptions**:
-
-- **√2 factor**: Assumes independent samples for pairwise comparison `Var(Δ̂) = 2 × Var(θ̂)`
-- **Actual MDE may be better** due to correlation (same calibrator, same prompts)
-- **Transportability assumed**: Calibrator transfers across policies (verify post-hoc with `audit_transportability()`)
-
-Formula: `MDE = (z_{α/2} + z_β) × √2 × SE(θ̂)` ≈ `2.8 × √2 × SE` for 80% power, α=0.05
-
-### Variance Model Fitting
-
-The key to accurate planning is fitting the variance model correctly:
-
-```python
-from cje.diagnostics import fit_variance_model
-
-# Fit model - uses direct Var(θ̂) measurement (not bootstrap SE²)
-# Automatically checks that labeling is ignorable (random within policy)
-model = fit_variance_model(
-    base_pilot_data,   # FreshDrawDataset from base policy (where calibration is learned)
-    n_replicates=150,  # Replicates per grid point
-    verbose=True,
-)
-print(model.summary())
-# FittedVarianceModel (R²=0.955, n=12 measurements)
-#   σ²_eval = 0.008432
-#   σ²_cal  = 0.004156
-```
-
-**Key insight**: The variance model achieves R² > 0.9 when:
-1. Labeling is ignorable (random within policy) - checked automatically
-2. We measure Var(θ̂) directly across replicates (not bootstrap SE²)
-
-### Post-Hoc Transportability Check
-
-After collecting production data, verify the calibrator transfers:
-
-```python
-from cje import analyze_dataset
-from cje.diagnostics import audit_transportability
-
-# Analyze production data
-result = analyze_dataset(fresh_draws_dir="production_data/")
-
-# Check if calibrator transports to each target policy
-for policy_name, probe_data in target_probes.items():
-    diag = audit_transportability(result.calibrator, probe_data, group_label=policy_name)
-    if diag.status == "FAIL":
-        print(f"Warning: calibrator may not transfer to {policy_name}")
-        print(f"  δ̂ = {diag.delta_hat:+.3f} (CI: [{diag.delta_ci[0]:+.3f}, {diag.delta_ci[1]:+.3f}])")
-```
-
-### Simulation-Based Planning (No Pilot Data Required)
-
-When you don't have pilot data yet, you can plan based on **expected judge quality** (isotonic R²):
-
-```python
-from cje import simulate_variance_model, plan_evaluation, CostModel
-
-# Get variance model from judge quality (no real data needed)
-variance_model = simulate_variance_model(r2=0.7)  # Parallels fit_variance_model()
-
-# Use with standard planning functions
-cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-plan = plan_evaluation(budget=5000, variance_model=variance_model, cost_model=cost)
-print(plan.summary())
-```
-
-**Two approaches to get a `FittedVarianceModel`:**
-
-| Approach | Function | Input | When to use |
-|----------|----------|-------|-------------|
-| **Pilot-based** | `fit_variance_model()` | Real pilot data | You have 200+ samples with oracle labels |
-| **Simulation-based** | `simulate_variance_model()` | R² (judge quality) | Planning before data collection |
-
-Both return a `FittedVarianceModel` that works with `plan_evaluation()` and `plan_for_mde()`.
-
-**Convenience wrapper for exploration:**
-
-```python
-from cje import simulate_planning, simulate_planning_sweep
-
-# Quick sensitivity analysis
-result = simulate_planning(r2=0.7, budget=5000, cost_model=cost)
-print(result.explain())  # Educational output explaining the recommendation
-
-# Sweep across multiple R² values
-results = simulate_planning_sweep([0.5, 0.7, 0.9], budget=5000, cost_model=cost)
-for r in results:
-    print(f"R²={r.r2}: MDE={r.plan.mde:.1%}, oracle={r.plan.oracle_fraction:.0%}")
-```
-
-**Converting correlation to R²:**
-
-If you know your judge's Pearson correlation with oracle but not isotonic R²:
-
-```python
-from cje import correlation_to_r2
-
-r2 = correlation_to_r2(0.8)  # Linear: r² = 0.64
-r2 = correlation_to_r2(0.8, "monotone")  # Monotone nonlinear: ~0.82
-```
-
-**R² interpretation (isotonic R² = fraction of oracle variance explained by judge):**
-
-| R² | Judge Quality | Calibration Uncertainty |
-|----|---------------|------------------------|
-| 0.9+ | Excellent | Low - minimal oracle needed |
-| 0.7-0.9 | Good | Moderate oracle investment |
-| 0.5-0.7 | Moderate | Significant oracle needed |
-| <0.5 | Weak | Heavy oracle investment or improve judge |
-
-## References
-
-- **ESS**: Effective Sample Size in Importance Sampling (Kong, 1992)
-- **Hill Estimator**: Hill (1975), "A Simple General Approach to Inference About the Tail of a Distribution"
-- **Influence Functions**: Bickel et al. (1993), "Efficient and Adaptive Estimation"
-- **TMLE Diagnostics**: van der Laan & Rose (2011), "Targeted Learning"
+**Poor calibration (`calibration_rmse` high, `calibration_coverage` low)** — the judge doesn't predict the oracle well. Increase oracle coverage, improve the judge, or add calibration covariates.
 
 ## Summary
 
-The CJE diagnostics system provides:
-- **Comprehensive monitoring** of all causal inference assumptions
-- **Loud safety gates** that warn by default and refuse with NaN when `refuse_unreliable=True`
-- **Clear status indicators** (GOOD/WARNING/CRITICAL)
-- **Detailed metrics** for debugging issues
-- **Export capabilities** for further analysis
-- **Integration with visualization** for intuitive understanding
-
-Always check diagnostics before trusting results!
+The 0.4.0 diagnostics system covers the two failure modes a Direct-mode evaluation actually has: calibration that doesn't cover a policy's scores (boundary cards) and calibration that doesn't transport (transport audit) — backed by inference that accounts for the calibrator being learned from finite labels (robust_inference) and planning tools to buy the right data (planning). Always check `results.diagnostics.summary()` before trusting estimates.

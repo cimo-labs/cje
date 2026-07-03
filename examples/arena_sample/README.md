@@ -4,21 +4,18 @@ This directory contains a real-world sample dataset from Chatbot Arena for demon
 
 ## Contents
 
-- `logged_data.jsonl` - Logged data from base/production policy (1000 samples)
-  - Logged responses from the base policy
-  - Judge scores and oracle labels for calibration
-  - Log probabilities under target policies (for importance weighting)
-
-- `fresh_draws/` - Fresh responses from all policies (for estimation)
-  - `base_responses.jsonl` - Base policy (1000 samples, 480 with oracle for calibration)
+- `fresh_draws/` - Fresh responses from all policies (the evaluation data)
+  - `base_responses.jsonl` - Base policy (1000 samples, 480 with oracle labels for calibration)
   - `clone_responses.jsonl` - Clone policy (1000 samples, no oracle)
-  - `parallel_universe_prompt_responses.jsonl` - Alternative prompt (1000 samples, no oracle)
-  - `unhelpful_responses.jsonl` - Adversarial policy (1000 samples, no oracle)
+  - `parallel_universe_prompt_responses.jsonl` - Alternative system prompt (1000 samples, no oracle)
+  - `unhelpful_responses.jsonl` - Adversarial policy that fools the judge (1000 samples, no oracle)
 
 - `probe_slice/` - Small oracle-labeled samples for transportability testing
   - `clone_probe.jsonl` - 50 samples with oracle labels
   - `parallel_universe_prompt_probe.jsonl` - 50 samples with oracle labels
   - `unhelpful_probe.jsonl` - 50 samples with oracle labels
+
+- `logged_data.jsonl` - 0.3.x-era logged dataset from the base policy (1000 samples). Its judge scores and oracle labels make it usable in 0.4.0 as a **calibration source** (`--calibration-data`); its logprob fields are ignored (off-policy estimation lives on the 0.3.x line: `pip install "cje-eval==0.3.*"`).
 
 ## Data Structure
 
@@ -26,7 +23,7 @@ The data is structured to demonstrate the CJE workflow:
 
 1. **Calibration training**: Uses oracle labels from `base_responses.jsonl` (~48% coverage)
 2. **Policy estimation**: Uses all samples in `fresh_draws/` (judge scores only for target policies)
-3. **Transportability testing**: Uses separate `probe_slice/` to verify calibration transfers
+3. **Transportability testing**: Uses the held-out `probe_slice/` to verify calibration transfers
 
 This separation ensures calibration is trained only on base policy data, and probe samples are held out for transportability validation.
 
@@ -60,16 +57,14 @@ This separation ensures calibration is trained only on base policy data, and pro
 
 ### Logged Data (`logged_data.jsonl`)
 
+Judge + oracle pairs from the base policy, plus 0.3.x-era logprob fields that 0.4.0 ignores:
+
 ```json
 {
   "prompt": "User question",
   "response": "Base policy response",
-  "base_policy_logprob": -60.88,
-  "target_policy_logprobs": {
-    "clone": -60.88,
-    "parallel_universe_prompt": -59.75,
-    "unhelpful": -120.5
-  },
+  "base_policy_logprob": -60.88,     // ignored in 0.4.0
+  "target_policy_logprobs": { ... }, // ignored in 0.4.0
   "judge_score": 0.85,
   "oracle_label": 0.7,
   "metadata": {
@@ -80,24 +75,33 @@ This separation ensures calibration is trained only on base policy data, and pro
 
 ## Usage
 
-### Direct Mode (Recommended for demos)
+### Direct-mode analysis
+
+```bash
+cje validate examples/arena_sample/fresh_draws
+cje analyze examples/arena_sample/fresh_draws
+```
+
+Or from Python:
 
 ```python
 from cje import analyze_dataset
 
-# CJE automatically uses oracle labels from base for calibration
-results = analyze_dataset(
-    fresh_draws_dir="examples/arena_sample/fresh_draws",
-    estimator="auto"
-)
+# CJE automatically uses the oracle labels in base_responses.jsonl for calibration
+results = analyze_dataset(fresh_draws_dir="examples/arena_sample/fresh_draws")
 
-# Results include calibrated estimates for all policies
 for policy, est, se in zip(
     results.metadata["target_policies"],
     results.estimates,
     results.standard_errors
 ):
     print(f"{policy}: {est:.3f} ± {1.96*se:.3f}")
+```
+
+### Using the logged data as a calibration source
+
+```bash
+cje analyze examples/arena_sample/fresh_draws --calibration-data examples/arena_sample/logged_data.jsonl
 ```
 
 ### Transportability Testing
@@ -130,22 +134,7 @@ for policy in ["clone", "parallel_universe_prompt", "unhelpful"]:
 fig = plot_transport_comparison(audits)
 ```
 
-### IPS/DR Modes
-
-```python
-# IPS mode: logged data only
-results = analyze_dataset(
-    logged_data_path="examples/arena_sample/logged_data.jsonl",
-    estimator="calibrated-ips"
-)
-
-# DR mode: logged data + fresh draws (most accurate)
-results = analyze_dataset(
-    logged_data_path="examples/arena_sample/logged_data.jsonl",
-    fresh_draws_dir="examples/arena_sample/fresh_draws",
-    estimator="stacked-dr"
-)
-```
+The adversarial `unhelpful` policy is the point of this dataset: its judge scores look plausible, but the transport audit catches that the calibration learned on base-policy data does not hold for it.
 
 ## Data Source
 

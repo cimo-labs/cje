@@ -2,469 +2,155 @@
 
 ## Overview
 
-The calibration module implements **reward calibration**, the core mathematical machinery that maps judge scores to oracle labels with automatic mode selection. The module also provides **weight stabilization**, a separate method for stabilizing importance weights in off-policy estimation. These are independent calibration techniques:
+This module implements **reward calibration**: learning the mapping from cheap LLM-judge scores to expensive oracle labels, with automatic mode selection between standard isotonic regression and a two-stage flexible variant. The fitted calibrator is what turns judge scores into rewards everywhere else in CJE, and its cross-fitted fold models are what make calibration-aware inference (the oracle jackknife) possible.
 
-1. **reward calibration (Reward Calibration)**: Maps judge scores to oracle labels with automatic mode selection between monotone and two-stage calibration
-2. **weight stabilization (Weight Stabilization)**: Stabilizes importance weights for off-policy estimation via surrogate-indexed monotone projection (separate from reward calibration)
-3. **Cross-fitted models**: Enables orthogonality guarantees for doubly robust methods (used by both reward calibration and weight stabilization when needed)
+## When to Use
 
-## When to Use Each Calibration
-
-### Use **Reward Calibration** when:
-- You have judge scores and some oracle labels
-- You want to map judge scores → oracle scale
-- You're using any estimation method
-
-### Use **Weight stabilization** (`SIMCalibrator`) when:
-- Importance weights have high variance
-- You want to stabilize IPS estimates
-- You're using CalibratedIPS or Calibrated DR estimators
-
-### Use **Cross-Fitted Models** when:
-- You're using DR estimators
-- You need orthogonality guarantees
-- You have enough data for stable folds
+- **`calibrate_dataset()`** — you have a `Dataset` with judge scores and a partially-labeled oracle slice and want calibrated rewards plus a reusable calibrator. This is what `analyze_dataset` calls internally.
+- **`JudgeCalibrator`** — you are working with raw numpy arrays or need direct control over fitting (`fit_transform` / `fit_cv`) and prediction (`predict`, `predict_oof`).
+- **`FlexibleCalibrator`** — used internally for non-monotone relationships and covariates; you rarely construct it yourself.
 
 ## File Structure
 
 ```
 calibration/
-├── __init__.py          # Public API exports
-├── dataset.py           # High-level dataset calibration workflows
-├── flexible_calibrator.py # Flexible calibration for non-monotone relationships
-└── judge.py             # Judge score calibration to oracle labels
+├── __init__.py             # Public API exports
+├── dataset.py              # calibrate_dataset / calibrate_from_raw_data workflows
+├── judge.py                # JudgeCalibrator + CalibrationResult
+└── flexible_calibrator.py  # Two-stage (index → rank → isotonic) calibration
 ```
 
 ## Core Concepts
 
-### 1. Judge Score Calibration (reward calibration Core)
-reward calibration maps cheap LLM judge scores to expensive oracle labels with automatic mode selection. Default is 'auto' mode which automatically chooses between:
-- **Monotone calibration**: Standard isotonic regression (when relationship is monotone)
-- **Flexible calibration**: Two-stage g(S)→isotonic for non-monotone relationships
+### 1. Judge → oracle calibration with automatic mode selection
 
-Auto mode detects non-monotonicity by comparing regional performance and selects the appropriate method. The selected mode is stored in metadata for transparency. This automatic selection is a key feature of reward calibration.
+`calibration_mode='auto'` compares two candidates by cross-validation and picks per the 1-SE rule:
 
-**Why isotonic?** Isotonic regression is the default because it imposes exactly the right inductive bias (monotonicity) while making minimal assumptions, preserves oracle KPI levels by construction, and is highly efficient with small label budgets (5-25% coverage recommended). See the detailed rationale below.
+- **Monotone**: standard isotonic regression on S (chosen when the relationship is monotone — the common case).
+- **Two-stage**: learn a smooth index g(S) (splines, optionally with covariates), rank-transform it, then fit isotonic on the ranks (chosen when there is regional miscalibration or covariate structure).
 
-### 3. Cross-Fitted Models
-For doubly robust methods, provides out-of-fold predictions to maintain orthogonality between nuisance functions.
-Stacking relies on the component estimators' influence functions and does not re-fit nuisances at the stack level.
+The selected mode is recorded (`calibrator.selected_mode`, and in dataset metadata under `calibration_info`) so runs are auditable.
 
-### 4. calibration-aware inference Inference
-When we calibrate judge scores using only a subset of oracle labels (e.g., 10% coverage), the calibration function f̂ itself has uncertainty. **calibration-aware** uses delete-one-fold jackknife to add a **variance** component to standard errors, accounting for calibration learning uncertainty. Used by all Cal-IPS/DR estimators and enabled by default.
+### 2. Cross-fitting
 
-## Why Isotonic Regression for Reward Calibration?
+`fit_cv()` fits a global model f_all (used for stable reward predictions) plus per-fold models f^(−k) for out-of-fold predictions. Fold assignment is deterministic via the unified fold system (`cje.data.folds`, `hash(prompt_id) % k`). Cross-fitting is what keeps downstream inference honest: OOF predictions never score a sample with a model that saw its label.
 
-Isotonic regression is the default choice for learning f̂(S) = E[Y|S] because it imposes exactly the right inductive bias while making minimal assumptions:
+### 3. Calibration-aware inference (oracle uncertainty)
 
-### The Right Structural Prior
-**Monotonicity is all you want to assume**: If a judge says S₂ > S₁, the oracle label shouldn't go down in expectation. Isotonic regression enforces exactly this constraint—and nothing else. Unlike parametric approaches (sigmoid/beta), it doesn't impose a rigid functional form that could misspecify the true relationship.
+With oracle labels on only a slice, the calibrator f̂ is itself a noisy estimate. The per-fold models from `fit_cv` (exposed via `get_fold_models_for_oua()`) let estimators run a delete-one-fold jackknife that adds the calibration-learning variance to reported standard errors. Enabled by default in `CalibratedDirectEstimator` (`oua_jackknife=True`).
 
-### Mean Preservation by Construction
-Least-squares isotonic regression is the orthogonal projection onto the monotone cone, which contains constants. By KKT conditions, this guarantees:
+### 4. Fit-time support and quality recording
+
+At fit time the calibrator records:
+
+- `oracle_s_range` / `oracle_reward_range` — the judge-score and reward support of the oracle slice, consumed by the coverage badge (`boundary_card`) to refuse level claims for policies whose scores fall outside the calibrated range.
+- Quality metrics (RMSE, coverage@0.1, oracle count, OOF variants) — exposed via `get_calibration_info()` and surfaced in Direct diagnostics.
+
+## Why Isotonic Regression?
+
+Isotonic regression is the default for learning f̂(S) = E[Y|S] because it imposes exactly the right inductive bias while assuming almost nothing else:
+
+### The right structural prior
+If the judge says S₂ > S₁, the oracle label shouldn't go *down* in expectation. Isotonic regression enforces exactly this constraint — and nothing else. Unlike parametric links (sigmoid/beta), it can't be misspecified in shape.
+
+### Mean preservation by construction
+Least-squares isotonic regression is the orthogonal projection onto the monotone cone, which contains constants. By the KKT conditions:
+
 ```
 (1/n)Σf̂(Sᵢ) = (1/n)ΣYᵢ
 ```
-Your oracle KPI level stays on the right scale automatically—critical for unbiased estimation without post-hoc adjustments.
 
-### Small-Label Efficiency
-With few oracle labels (5-25% coverage recommended), shape constraints buy stability:
-- **No overfitting**: Can't create spurious non-monotone regions
-- **Adaptive complexity**: Naturally produces piecewise-constant regions when data supports them
-- **Edge robustness**: Flattens at boundaries (explains why edge-slope diagnostics are so informative)
-- **Fast iteration**: O(n log n) via PAVA algorithm
+The calibrated rewards preserve the oracle slice's sample mean exactly — no recentering step, no post-hoc adjustment. (Population-level preservation additionally needs a representative slice and successful transport; that is what the transport audit checks.)
 
-### Ranking-Sane and Interpretable
-- **Never inverts judge order**: No "perverse" regions where higher S predicts lower Y
-- **Human-readable**: Step blocks give actionable thresholds ("above 7.8, pass rate ≈ 0.81")
-- **Operator trust**: Matches how humans think about judge reliability
+### Small-label efficiency
+With 5–25% oracle coverage, shape constraints buy stability: no spurious non-monotone regions, adaptive piecewise-constant complexity, and O(n log n) fitting via PAVA.
 
-### Diagnostic-Friendly
-The 1-D monotone structure makes diagnostics tractable:
-- **Reliability by region**: Easy to compute and visualize
-- **S-coverage & edge slopes**: Fragility is visible; fix with targeted labels
-- **calibration-aware jackknife**: Delete-one-fold refits propagate calibrator noise cleanly
+### Ranking-sane and interpretable
+Never inverts judge order; step blocks read as actionable thresholds ("above 0.78, pass rate ≈ 0.81").
 
-### Consistency Guarantees
-When the true E[Y|S] is monotone, f̂ is L²-consistent. When it's not, the two-stage variant (g(S)→isotonic) provides a safety net by learning a smooth transformation first.
-
-### When to Consider Alternatives
-- **Parametric calibration (Platt/Beta)**: Lower variance if you're confident about the link shape
-- **Two-stage flexible**: When S has systematic bias (length effects, prompt families)
-- **Unconstrained methods**: Only if monotonicity fails and you have abundant oracle labels
-
-**Bottom line**: Isotonic hits the sweet spot of correct inductive bias, minimal assumptions, strong stability with few labels, and clean uncertainty accounting—which is why it's the default in reward calibration.
+### When to consider alternatives
+- **Parametric (Platt/beta)**: lower variance *if* you truly know the link shape.
+- **Two-stage**: when S has systematic regional bias or slice effects (length, domain) — this is built in and auto-selected.
+- **Unconstrained models**: only with abundant labels and evidence monotonicity fails.
 
 ## Why Two-Stage (Index → Rank → Isotonic) When Needed?
 
-**Two-stage makes sense because it keeps the only belief we really trust—monotonicity—while fixing the two places plain isotonic on raw S can stumble: (i) regional miscalibration and slice heterogeneity, and (ii) density/scale weirdness along S.** It does this with almost no extra assumption and tiny label budgets.
+Two-stage keeps the only belief we trust — monotonicity — while fixing the two places plain isotonic on raw S stumbles: regional miscalibration / slice heterogeneity, and density or scale weirdness along S.
 
-### What the Two Stages Do
+1. **Learn a low-capacity index** T = g(S, X_cov) with splines (minimum 5 knots) and optional covariates such as `response_length` or `domain`. The goal is a better *ordering*, not levels.
+2. **Uniformize and enforce shape**: U = ECDF(T), then isotonic h(U). The rank transform makes the axis scale-free and density-balanced; per-fold ECDFs prevent leakage between folds.
+3. **Mean-preserve and cross-fit**: the terminal isotonic stage preserves the oracle-slice mean by construction, and cross-fitting handles selection noise. Samples smaller than 20 fall back to monotone.
 
-1. **Learn a low-capacity "risk index"** T = g(S, X_cov)
-   - Uses a spline of S and optional covariates X_cov (e.g., response_length, domain)
-   - Goal: cheaply improve the *ordering* of examples by expected outcome, not to nail absolute levels
-   - **Covariate support**: Handles judge bias where judge scores at fixed S have different oracle outcomes based on observable features
+**Auto-selection logic** (in `FlexibleCalibrator`): compare monotone vs two-stage OOF performance overall (1-SE rule) and across low/mid/high score regions; select two-stage only when it is significantly better overall or better in ≥ 2/3 regions. Simpler wins ties.
 
-2. **Uniformize & enforce shape**: U = ECDF(T) ∈ [0,1] then fit **isotonic** h(U)
-   - Rank/ECDF makes the axis scale-free and density-balanced
-   - Isotonic imposes exactly "higher risk index ⇒ no worse KPI"
+> **One-line mental model:** first get the order right (cheap index), then calibrate that order to the KPI scale (isotonic).
 
-3. **Mean-preserve & cross-fit**
-   - The terminal isotonic stage is mean-preserving on the oracle slice by construction (PAVA preserves the slice mean; there is no separate recentering step)
-   - We cross-fit so selection noise and kinks are handled
-   - calibration-aware jackknife then measures calibrator variance honestly
+## Common Interface
 
-### Why This Is Better Than "Plain Isotonic on S"
+### Dataset-level calibration
 
-**Captures slice heterogeneity with one degree of freedom.** If Y depends on both S and a coarse slice Z (e.g., long answers at the same S do worse), a single index g(S,Z) lets you *re-order* cases correctly, then isotonic maps that order to the KPI scale. You avoid brittle 2D isotonic or exploding bins.
-
-**Stable at small n.** Shape constraint + 1D axis keeps variance down; ECDF removes density distortions (big flat regions where labels are dense vs. sparse).
-
-**Consistent under a mild "single-index monotone" truth.** If E[Y|S,Z] = μ*(g*(S,Z)) with μ* nondecreasing, and g approximates g*, then isotonic on U=rank(g(S,Z)) recovers μ*∘g* in L². That's exactly the failure mode you see in reliability plots with "S-shaped" regional bias.
-
-**Scale & transport friendly.** Because we learn on U (quantiles), the mapping is invariant to monotone rescalings of the index and more robust to density shifts; your **S-coverage/edge-slope** diagnostic still applies (now on U near 0/1).
-
-**Interpretability preserved.** Output is still a monotone f(S,Z) ∈ [0,1] with mean preserved; panels (reliability by region, coverage, calibration uncertainty share) remain readable.
-
-### When to Auto-Switch to Two-Stage
-
-- Reliability plot shows **persistent regional bias** after plain isotonic (low/mid/high S)
-- Clear **slice effects at fixed S** (length, family) in residuals
-- Edge fragility (flat boundary slopes) that a smarter ordering could stabilize
-
-### Why Not Fancier Stuff?
-
-- Full 2D monotone fits or unconstrained models need lots more labels and can invert judge order locally
-- Parametric links (sigmoid/beta) impose shape you don't actually believe
-- Two-stage keeps it nonparametric and monotone
-
-### One-Line Mental Model
-
-> **First get the order right (cheap index), then calibrate that order to the KPI scale (isotonic).**
-> Minimal bias, low variance, and diagnostics stay meaningful.
-
-That's why the two-stage reward calibration fallback is a great default: it fixes exactly the observed failure modes, assumes very little extra, and slots cleanly into calibration-aware + your report panels.
-
-## Module Descriptions
-
-### `dataset.py` - Dataset Calibration Workflows (reward calibration API)
-High-level functions that orchestrate the reward calibration calibration process for entire datasets:
-- `calibrate_dataset()`: Main reward calibration entry point - transforms Dataset objects with judge scores into calibrated rewards
-- `calibrate_from_raw_data()`: Works with raw dictionaries for pipeline integration
-- Handles both standard and cross-fitted calibration
-- Preserves metadata and adds calibration diagnostics
-
-### `judge.py` - Judge Calibration (reward calibration Implementation)
-Implements the core reward calibration algorithm for calibration from judge scores to oracle labels:
-- `JudgeCalibrator`: Core reward calibration class with flexible mode support and automatic selection
-- `fit_transform()`: Standard calibration on oracle subset
-- `fit_cv()`: Cross-fitted calibration for DR methods
-- `index()`: Returns transformation for outcome models (S for monotone, g(S) for two-stage)
-- `CalibrationResult`: Container for calibrated scores and diagnostics
-- Auto mode (default): Automatically selects monotone or flexible calibration
-- Supports partial labeling (oracle coverage)
-
-### `flexible_calibrator.py` - Non-Monotone Calibration
-Handles non-monotone judge→oracle relationships via two-stage approach:
-- `FlexibleCalibrator`: Implements g(S)→isotonic calibration
-- First stage: Learn smooth transformation g(S) using splines
-- Second stage: Apply isotonic regression on g(S)
-- `index()`: Exposes the transformation T=g(S) for outcome models
-- Per-fold ECDF for consistent rank transformation
-- Auto selection based on regional performance comparison
-
-**Mode Selection Logic:**
-- Compares monotone vs two-stage using 1-SE rule
-- Checks performance across score regions (low/mid/high)
-- Selects two-stage if better in ≥2/3 regions or significantly better overall
-- Optimized to skip two-stage training when monotone is clearly sufficient
-
-**Technical Details:**
-- ECDF-based ranking prevents distribution leakage between folds
-- Minimum 5 spline knots to avoid underfitting
-- Fallback to monotone for small samples (<20)
-- Clipping to [0,1] ensures valid reward range
-
-## Key Design Decisions
-
-### 1. **Separation of Concerns**
-Each calibration type is isolated with clear interfaces:
-- Reward calibration doesn't know about weights
-- Weight calibration doesn't know about rewards
-- Outcome models are separate from both
-
-### 2. **Mean Preservation**
-Calibrations preserve means for unbiased estimation:
-- Isotonic preserves the **slice sample mean** exactly on the labeled calibration data; population mean preservation requires representative slice (MAR/MCAR), monotone relationship, and successful transport to target policies/contexts
-- Weight projections preserve the **sample** mean-one exactly (Hájek normalization)
-- Critical for unbiased estimation
-
-### 3. **Variance Control**
-Multiple mechanisms for variance reduction:
-- **Isotonic projection**: Can reduce variance when weights correlate with ordering index
-- **Variance cap**: Explicit upper bound on weight variance via blending
-- **ESS floor**: Minimum effective sample size constraint
-- **Baseline shrinkage**: Small bias for large variance reduction
-
-### 4. **Cross-Fitting Support**
-Built-in support for cross-fitted calibration:
-- Prevents overfitting in DR methods
-- Maintains orthogonality between nuisance functions
-- Uses unified fold system from `cje.data.folds` for consistency
-- Fold assignments computed deterministically from prompt_id
-
-### 5. **Numerical Robustness**
-Careful handling of edge cases:
-- Zero weights: Fallback to uniform
-- Constant weights: Return target mean
-- Sparse weights: Relaxed tolerance
-- Numerical precision: Multiple safety checks
-
-
-## Mathematical Foundations
-
-### Isotonic Regression (PAV Algorithm)
-Finds the best-fitting monotone function: `min ||f(x) - y||²` subject to monotonicity.
-- **Time**: O(n log n) 
-- **Property**: When ordered by uncorrelated index, produces nearly constant weights
-
-### Mean-Preserving Projection  
-Ensures calibrated weights have exactly mean=1 via bisection on Lagrange multipliers.
-- **Why**: Critical for unbiased estimation (E[W] = 1)
-- **Implementation**: ~30-40 PAV calls for exact solution
-
-### Variance-Safe Blending
-Optimally blends raw and calibrated weights to satisfy variance constraints:
-```
-w_final = (1-α)·raw + α·calibrated
-where Var(w_final) ≤ ρ·Var(raw)
-```
-- **Solution**: Closed-form via quadratic formula
-
-### Stacked weight stabilization
-Combines the candidate weight maps (increasing + decreasing isotonic; K=2 by default, K=3 with `include_baseline=True`) by minimizing OOF influence variance:
-```
-min_π π'Σπ s.t. π ≥ 0, Σπ = 1
-```
-- **Candidates**: {baseline, increasing, decreasing}
-- **Solution**: Quadratic program on simplex
-
-## Usage Patterns
-
-### Basic Reward Calibration
 ```python
 from cje.calibration import calibrate_dataset
 
-# Default: Judge score only (no covariates, auto-selects monotone/two-stage via CV)
+# Default: cross-fitted, auto mode selection
 calibrated_dataset, cal_result = calibrate_dataset(
     dataset,
     judge_field="judge_score",
-    oracle_field="oracle_label"
+    oracle_field="oracle_label",
 )
 
-# Include response_length covariate with two-stage calibration
-calibrated_dataset, cal_result = calibrate_dataset(
-    dataset,
-    use_response_length=True
-)
-
-# Add domain as additional covariate (combine with response_length)
+# Two-stage with covariates (response_length auto-computed from response text)
 calibrated_dataset, cal_result = calibrate_dataset(
     dataset,
     use_response_length=True,
-    covariate_names=["domain"]
+    covariate_names=["domain"],
 )
 
-# Access calibration quality metrics and metadata
 print(f"RMSE: {cal_result.calibration_rmse:.3f}")
-print(f"Coverage: {cal_result.coverage_at_01:.1%}")
-print(f"Selected mode: {calibrated_dataset.metadata.get('calibration_info', {}).get('selected_mode')}")
+print(f"Coverage@0.1: {cal_result.coverage_at_01:.1%}")
+print(cal_result.summary())
 ```
 
-### Cross-Fitted Calibration (for DR)
+`calibrate_dataset(dataset, judge_field="judge_score", oracle_field="oracle_label", enable_cross_fit=True, n_folds=5, calibration_mode=None, use_response_length=False, covariate_names=None, random_seed=42)` returns `(calibrated_dataset, CalibrationResult)`. When `calibration_mode` is None it defaults to `'two_stage'` with covariates present, `'auto'` for cross-fit without covariates. `calibrate_from_raw_data()` is the same workflow for raw dicts.
+
+`CalibrationResult` fields: `calibrated_scores`, `calibration_rmse`, `coverage_at_01`, `n_oracle`, `calibrator`, `fold_ids`, `oof_rmse`, `oof_coverage_at_01`.
+
+### Array-level calibration
+
 ```python
 from cje.calibration import JudgeCalibrator
 
-# Fit with cross-validation for DR methods
-calibrator = JudgeCalibrator()
-result = calibrator.fit_cv(
-    judge_scores,
-    oracle_labels,
-    oracle_mask,
-    n_folds=5
-)
+calibrator = JudgeCalibrator()  # calibration_mode="auto" by default
+result = calibrator.fit_cv(judge_scores, oracle_labels, oracle_mask, n_folds=5)
 
-# Get out-of-fold predictions
-fold_ids = result.fold_ids
-oof_predictions = calibrator.predict_oof(judge_scores, fold_ids)
+rewards = calibrator.predict_all(judge_scores)            # global model
+oof = calibrator.predict_oof(judge_scores, result.fold_ids)  # out-of-fold
+info = calibrator.get_calibration_info()                  # fit-time metrics
 ```
 
-### Oracle Uncertainty (Default: calibration-aware Jackknife)
-```python
-from cje.estimators import CalibratedDirectEstimator
+(For a one-call version of this — calibrated mean with a CI from plain arrays — use `cje.calibrated_mean_ci`.)
 
-# Default: calibration-aware jackknife for oracle uncertainty (recommended)
-estimator = CalibratedDirectEstimator(
-    target_policies=["policy_a"],
-    reward_calibrator=cal_result.calibrator,
-    oua_jackknife=True,  # Default
-)
-estimator.add_fresh_draws("policy_a", fresh_draws)
-result = estimator.fit_and_estimate()
-# standard_errors already include the oracle-jackknife component when enabled
+## Key Design Decisions
 
-# Inspect the decomposition via metadata
-comps = result.metadata.get("se_components", {})
-print(f"Total SE: {result.standard_errors[0]:.4f}")
-print(f"Oracle variance per policy: {comps.get('oracle_variance_per_policy')}")
-```
+1. **Mean preservation is structural, not corrective.** The isotonic projection preserves the slice mean by construction; there is no recentering code to drift or fail.
+2. **Auto mode prefers the simpler model.** Two-stage must earn its complexity via the 1-SE rule or regional wins; ties go to monotone.
+3. **Deterministic folds from `prompt_id`.** Calibration folds are reproducible across runs and shared with the estimators' jackknife, so uncertainty accounting composes correctly.
+4. **Fit-time recording over recomputation.** Oracle S-range and quality metrics are captured when the calibrator is fitted — downstream consumers (boundary cards, diagnostics) never have to re-derive them from data they may not have.
+5. **Numerical robustness.** Degenerate fold assignments fall back to fitting on all oracle samples; constant fits with varying labels warn loudly (inverted judge scale); predictions are clipped to [0, 1].
 
-## Configuration Options
+## Common Issues
 
-### SimcalConfig Parameters
-- `ess_floor`: Minimum ESS as fraction (e.g., 0.2 = 20%)
-- `var_cap`: Maximum variance (e.g., 1.0 = no increase)
-- `include_baseline`: Include raw weights in stack
-- `baseline_shrink`: Shrinkage toward baseline (0-1)
-- `ridge_lambda`: Ridge regularization for covariance
-- `n_folds`: Number of OOF folds if not provided
-
-### Calibration Modes
-- **Auto** (default): Automatically selects between monotone and two-stage based on performance
-- **Monotone**: Standard isotonic regression (forces monotone relationship)
-- **Two-stage**: Flexible g(S)→isotonic for non-monotone relationships
-- **Cross-fitted**: K-fold models for DR orthogonality (enable_cross_fit=True)
-- **Projection mode**: Always uses "exact" (bisection) for consistency
-
-## Implementation Details
-
-### Ordering Index Flexibility
-The `ordering_index` parameter in isotonic calibration allows weights to be monotone in any score:
-- **None**: Sort by raw weights (backward compatibility)
-- **Judge scores**: Align with human evaluation
-- **Calibrated rewards**: Align with outcome models (for DR)
-
-When the ordering index is uncorrelated with weights, isotonic projection produces nearly constant weights - this is expected and provides stabilization.
-
-### Tie Handling
-When the ordering index has ties (common with discrete judge scores):
-1. Pool weights within tied groups (average)
-2. Apply isotonic regression to pooled values
-3. Assign same calibrated weight to all tied samples
-
-### Numerical Tolerances
-- `EPS = 1e-12`: Machine epsilon for comparisons
-- `MEAN_TOL = 1e-10`: Tolerance for mean preservation
-- `VAR_TOL = 1.001`: Allow 0.1% slack on variance cap
-
-### Memory Efficiency
-- Isotonic regression is O(n log n) time, O(n) space
-- Stacked calibration builds K=2 candidates by default (K=3 with `include_baseline=True`)
-- Cross-fitting stores K models but applies one at a time
-
-## Common Issues and Solutions
-
-### Issue: "Judge field 'reward' not allowed"
-**Cause**: Trying to use 'reward' as judge field to avoid confusion  
-**Solution**: Use a different field name in metadata (e.g., 'judge_score')
-
-### Issue: Low calibration R² (< 0.3)
-**Cause**: Judge scores poorly predict oracle labels  
-**Solution**: 
-- Increase oracle coverage (aim for >10%)
-- Improve judge prompt/model
-- Consider using a different judge
-- Check if oracle labels are noisy
-
-### Issue: Nearly constant calibrated weights
-**Cause**: Ordering index uncorrelated with importance ratios  
-**Solution**: This is expected and actually good - provides maximum variance stabilization
-
-### Issue: Variance cap not satisfied exactly
-**Cause**: Numerical precision or infeasible constraint  
-**Solution**: Check info dict for 'feasible' flag and 'note' field
-
-### Issue: ESS floor conflicts with variance cap
-**Cause**: ESS implies tighter variance constraint than specified  
-**Solution**: ESS constraint will dominate (warning issued)
-
-### Issue: Very low oracle coverage (<5%)
-**Cause**: Too few labeled samples for reliable calibration
-**Solution**: 
-- Collect more oracle labels
-- Consider using judge scores directly (uncalibrated)
-- Use bootstrapping to assess calibration uncertainty
-
-## Testing
-
-The calibration module has comprehensive test coverage:
-- Integration tests verify calibration in full pipeline
-- Edge case tests for degenerate inputs
-
-Run tests:
-```bash
-poetry run pytest cje/tests/ -k calibration
-```
-
-## Performance Considerations
-
-### Computational Complexity
-- **Isotonic regression**: O(n log n) via PAV
-- **Exact projection**: ~30-40 PAV calls (still O(n log n))
-- **Stacked weight stabilization**: O(nK²) time, O(K²) memory (K=2-3 candidates)
-- **Cross-fitting**: K × isotonic regression cost
-
-
-### When to Use Each Method
-
-**Use standard calibration when:**
-- You have sufficient oracle labels (>100)
-- Not using DR methods
-- Speed is critical
-
-**Use cross-fitted calibration when:**
-- Using DR estimators
-- Need orthogonality guarantees
-- Have enough data for stable fold models
-
-**Use stacked weight stabilization when:**
-- Weights have high variance
-- Multiple candidate projections make sense
-- OOF validation is feasible
-
-
-## Advanced Topics
-
-### Bootstrapping Calibration Uncertainty
-```python
-# For low oracle coverage scenarios
-n_bootstrap = 100
-calibrations = []
-for _ in range(n_bootstrap):
-    idx = np.random.choice(n_oracle, n_oracle, replace=True)
-    cal = JudgeCalibrator()
-    result = cal.fit_transform(judge_scores[idx], oracle_labels[idx])
-    calibrations.append(result.calibrated_scores)
-```
-
-### Debugging weight stabilization
-```python
-# Check intermediate steps
-calibrated, info = calibrator.transform(weights, scores, rewards=rewards)
-print(f"Mixture weights: {info['mixture_weights']}")
-print(f"Variance reduction: {info['var_before']/info['var_after']:.2f}x")
-```
-
+- **Low calibration R² / high RMSE** — the judge poorly predicts the oracle. Increase oracle coverage (>10%), improve the judge prompt, or check label noise.
+- **"Only N oracle-labeled samples"** — cross-fitted calibration needs at least 2 labels per fold (10 for the default 5 folds); with 4–9 labels CJE reduces the fold count with a warning, below 4 it raises.
+- **Non-monotone reliability plots after monotone calibration** — auto mode should catch this; force `calibration_mode="two_stage"` (optionally with covariates) if you have external evidence.
+- **Constant calibrated rewards while labels vary** — usually an anti-correlated (inverted) judge scale; the fit warns. Check the judge's score direction.
 
 ## References
 
-- **Isotonic Regression**: Robertson et al. (1988), "Order Restricted Statistical Inference"
-- **PAV Algorithm**: Ayer et al. (1955), "An Empirical Distribution Function for Sampling with Incomplete Information"  
-- **Majorization**: Marshall & Olkin (1979), "Inequalities: Theory of Majorization"
-- **`SIMCalibrator`**: Compatibility-preserving runtime name for the CJE weight-stabilization stack
-- **Cross-fitting**: Chernozhukov et al. (2018), "Double/Debiased Machine Learning"
+- **Isotonic regression**: Robertson et al. (1988), *Order Restricted Statistical Inference*
+- **PAV algorithm**: Ayer et al. (1955)
+- **Cross-fitting**: Chernozhukov et al. (2018), *Double/Debiased Machine Learning*
 
 ## Summary
 
-The calibration module provides three essential transformations for causal inference: mapping judge scores to oracle labels, stabilizing importance weights through the `SIMCalibrator` stack, and enabling cross-fitted models for DR methods. Each calibration type maintains mean preservation for unbiased estimation while controlling variance through different mechanisms.
+One calibration, done carefully: judge → oracle reward calibration via cross-fitted isotonic regression (two-stage when the data demands it), mean-preserving by construction, with fit-time support ranges and fold models that power CJE's coverage badge and calibration-aware standard errors.
