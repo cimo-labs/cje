@@ -337,6 +337,52 @@ class TestDirectDiagnosticsSurface:
 
 
 # ---------------------------------------------------------------------------
+# Calibration quality metrics (rmse / coverage / n_oracle_labels)
+# ---------------------------------------------------------------------------
+
+
+class TestCalibrationInfoPopulated:
+    """_build_diagnostics guards on a get_calibration_info method that
+    JudgeCalibrator never implemented, so calibration_rmse /
+    calibration_coverage / n_oracle_labels were always None. The
+    calibrator now exposes its fit-time metrics and the estimator
+    populates them."""
+
+    def test_judge_calibrator_exposes_fit_time_info(self) -> None:
+        from cje.calibration import JudgeCalibrator
+
+        rng = np.random.default_rng(10)
+        judge = rng.uniform(0, 1, 200)
+        oracle = np.clip(judge + rng.normal(0, 0.05, 200), 0, 1)
+
+        calibrator = JudgeCalibrator(calibration_mode="monotone")
+        assert calibrator.get_calibration_info() == {}  # empty before fit
+
+        result = calibrator.fit_cv(judge, oracle, n_folds=5)
+        info = calibrator.get_calibration_info()
+
+        assert info["rmse"] == pytest.approx(result.calibration_rmse)
+        assert info["coverage_at_01"] == pytest.approx(result.coverage_at_01)
+        assert info["n_oracle_labels"] == 200
+        assert info["oof_rmse"] == pytest.approx(result.oof_rmse)
+
+    def test_direct_diagnostics_carry_calibration_quality(self) -> None:
+        rng = np.random.default_rng(11)
+        dataset = _calibration_dataset(rng, s_max=1.0)
+        n_oracle = sum(1 for s in dataset.samples if s.oracle_label is not None)
+
+        _, result = _run_direct(dataset, rng.uniform(0.05, 0.95, 200))
+
+        diag = result.diagnostics
+        assert diag is not None
+        assert diag.calibration_rmse is not None
+        assert 0.0 <= diag.calibration_rmse < 0.5
+        assert diag.calibration_coverage is not None
+        assert 0.0 <= diag.calibration_coverage <= 1.0
+        assert diag.n_oracle_labels == n_oracle
+
+
+# ---------------------------------------------------------------------------
 # Deprecated alias
 # ---------------------------------------------------------------------------
 
