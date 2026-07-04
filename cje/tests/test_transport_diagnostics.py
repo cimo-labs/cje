@@ -384,7 +384,7 @@ def test_transport_diagnostics_summary() -> None:
         coverage=0.92,
         recommended_action="monitor",
         n_probe=50,
-        group_label="policy:gpt-4-mini",
+        group_label="policy:gpt-5.6-mini",
     )
 
     summary = diag.summary()
@@ -392,7 +392,7 @@ def test_transport_diagnostics_summary() -> None:
     # Check key info is present
     assert "WARN" in summary
     assert "N=50" in summary
-    assert "policy:gpt-4-mini" in summary
+    assert "policy:gpt-5.6-mini" in summary
     assert "δ̂:" in summary  # mean residual
     assert "monitor" in summary  # recommended action for WARN
 

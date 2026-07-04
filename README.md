@@ -34,11 +34,11 @@ judge_only = [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94]
 
 results = analyze_dataset(
     fresh_draws_data={
-        "gpt-4o": [
+        "gpt-5.6": [
             {"prompt_id": f"q{i:02d}", "judge_score": s, "oracle_label": y}
             for i, (s, y) in enumerate(labeled)
         ],
-        "claude-sonnet": [
+        "fable-5": [
             {"prompt_id": f"q{i:02d}", "judge_score": s}
             for i, s in enumerate(judge_only)
         ],
@@ -52,11 +52,11 @@ for policy, estimate, (lo, hi) in zip(
 ```
 
 ```text
-claude-sonnet   0.811  95% CI [0.748, 0.873]
-gpt-4o          0.779  95% CI [0.538, 0.853]
+fable-5         0.811  95% CI [0.748, 0.873]
+gpt-5.6         0.779  95% CI [0.538, 0.853]
 ```
 
-`claude-sonnet` gets a calibrated estimate and an honest CI **without a single label of its own** — that transfer is what the labels-under-every-policy workflow wastes money re-buying.
+`fable-5` gets a calibrated estimate and an honest CI **without a single label of its own** — that transfer is what the labels-under-every-policy workflow wastes money re-buying.
 
 **And when the data can't support an answer, CJE says so** instead of handing you a confident number. Here a candidate policy's judge scores land mostly *outside* the range where the calibrator saw oracle labels — the run emits the paper's coverage badge and refuses level claims for that policy:
 

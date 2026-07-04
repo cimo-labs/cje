@@ -474,7 +474,7 @@ def transport_audit(
         calibrator: A fitted calibrator with `.predict()` — e.g. the
             `calibrator` returned by `calibrated_mean_ci`.
         bins: Number of score-quantile bins for the residual breakdown.
-        group_label: Optional label (e.g. "policy:gpt-4-mini").
+        group_label: Optional label (e.g. "policy:gpt-5.6-mini").
         alpha: Significance level for the audit CI (default 0.05 → 95% CI,
             t critical values with df = n_probe - 1).
 

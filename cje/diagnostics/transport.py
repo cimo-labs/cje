@@ -30,7 +30,7 @@ class TransportDiagnostics:
         coverage: Fraction of samples in score range
         recommended_action: Next step if WARN/FAIL
         n_probe: Number of target samples
-        group_label: Optional label (e.g., "policy:gpt-4-mini")
+        group_label: Optional label (e.g., "policy:gpt-5.6-mini")
     """
 
     status: Literal["PASS", "WARN", "FAIL"]
@@ -215,7 +215,7 @@ def audit_transportability(
         calibrator: Fitted JudgeCalibrator
         probe_samples: Target policy samples with judge_score and oracle_label
         bins: Number of bins for visualization (default 10)
-        group_label: Optional label (e.g., "policy:gpt-4-mini")
+        group_label: Optional label (e.g., "policy:gpt-5.6-mini")
         alpha: Significance level for the CI (default 0.05 → 95% CI)
 
     Returns:
@@ -233,7 +233,7 @@ def audit_transportability(
         >>> diag = audit_transportability(
         ...     calibrator,
         ...     probe_samples=target_fresh_draws,
-        ...     group_label="policy:gpt-4-mini"
+        ...     group_label="policy:gpt-5.6-mini"
         ... )
         >>> print(diag.summary())
         >>> # Output: "Transport: PASS | N=200 | δ̂: -0.012 (CI: [-0.039, +0.014])"

@@ -107,15 +107,15 @@ from cje.diagnostics import audit_transportability, plot_transport_comparison
 results = analyze_dataset(fresh_draws_dir="responses/")
 
 # Probe: 40-60 target samples, plain dicts with judge_score + oracle_label
-probe = [json.loads(line) for line in open("gpt4_mini_probe.jsonl")]
+probe = [json.loads(line) for line in open("gpt56_mini_probe.jsonl")]
 
 diag = audit_transportability(
     results.calibrator,
     probe,
-    group_label="policy:gpt-4-mini",
+    group_label="policy:gpt-5.6-mini",
 )
 print(diag.summary())
-# Transport: PASS | Group: policy:gpt-4-mini | N=50 | δ̂: +0.012 (CI: [-0.008, +0.032])
+# Transport: PASS | Group: policy:gpt-5.6-mini | N=50 | δ̂: +0.012 (CI: [-0.008, +0.032])
 
 diag.plot()  # residuals by score decile (requires the viz extra)
 

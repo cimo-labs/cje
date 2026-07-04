@@ -229,7 +229,7 @@ from cje import analyze_dataset
 
 results = analyze_dataset(
     fresh_draws_data={
-        "gpt-4o": [
+        "gpt-5.6": [
             {"prompt_id": "1", "judge_score": 85, "oracle_label": 78},
             {"prompt_id": "2", "judge_score": 72, "oracle_label": 65},
         ],
@@ -278,7 +278,7 @@ A record is malformed (bad JSON, missing `judge_score`, out-of-range value). The
 Some prompts have more draws than others for a policy. This is a warning, not an error — estimation handles unbalanced draws.
 
 ### Policy name mismatches
-Policy names come from filenames (`{policy}_responses.jsonl`). Use identical names everywhere (`"gpt-4"` vs `"gpt4"` are different policies).
+Policy names come from filenames (`{policy}_responses.jsonl`). Use identical names everywhere (`"gpt-5.6"` vs `"gpt5.6"` are different policies).
 
 ## Summary
 

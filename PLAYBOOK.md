@@ -68,11 +68,11 @@ Use a small oracle-labeled probe slice (typically 40-60 rows) on the target poli
 import json
 from cje.diagnostics import audit_transportability
 
-probe = [json.loads(line) for line in open("probes/policy_gpt4mini.jsonl")]
+probe = [json.loads(line) for line in open("probes/policy_gpt56mini.jsonl")]
 diag = audit_transportability(
     calibrator=results.calibrator,
     probe_samples=probe,
-    group_label="policy:gpt-4-mini",
+    group_label="policy:gpt-5.6-mini",
 )
 
 print(diag.summary())
