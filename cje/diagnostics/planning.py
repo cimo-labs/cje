@@ -164,7 +164,16 @@ class EvaluationPlan:
         return (z_alpha + z_power) * self.se_comparison
 
     def power_to_detect(self, effect_size: float) -> float:
-        """Compute power to detect a specific effect size."""
+        """Compute power to detect a specific effect size.
+
+        Raises:
+            ValueError: If the plan's comparison SE is zero (degenerate plan).
+        """
+        if self.se_comparison <= 0:
+            raise ValueError(
+                "se_comparison is zero — power to detect is undefined for a "
+                "degenerate (zero-variance) plan"
+            )
         z_alpha = stats.norm.ppf(1 - self.alpha / 2)
         z = effect_size / self.se_comparison - z_alpha
         return float(stats.norm.cdf(z))
@@ -178,6 +187,9 @@ class EvaluationPlan:
             f"  Cost: ${self.total_cost:,.0f}\n"
             f"  Single-policy SE: {self.se_level:.4f}\n"
             f"  MDE ({self.power:.0%} power): {self.mde:.1%}\n"
+            f"  Note: MDE assumes independent policies; paired evals on a shared "
+            f"prompt set typically detect smaller differences (this plan is "
+            f"conservative).\n"
             f"  → Can detect {self.mde:.1%} difference between policies"
         )
 
@@ -220,6 +232,11 @@ def fit_variance_model(
     Uses the actual CJE pipeline (analyze_dataset) to measure variance at
     different (n, m) allocations, then fits NNLS to decompose into σ²_eval
     and σ²_cal components.
+
+    Note:
+        Variance components are measured from bootstrap SEs, which are
+        conservative at small oracle counts — treat planned budgets as upper
+        bounds.
 
     Args:
         fresh_draws: Pilot data from the base policy where calibration will be
@@ -284,60 +301,9 @@ def fit_variance_model(
     if verbose:
         print(f"  Grid: n={n_grid}, oracle_frac={oracle_fraction_grid}")
 
-    if not oracle_fraction_grid:
-        raise ValueError("oracle_fraction_grid must contain at least one fraction")
-
-    invalid_fractions = [f for f in oracle_fraction_grid if f <= 0 or f > 1]
-    if invalid_fractions:
-        raise ValueError(
-            "oracle_fraction_grid fractions must lie in (0, 1], got "
-            f"{invalid_fractions}"
-        )
-
-    # Build measurement grid with INDEPENDENT variation in n and m
-    # Key insight: to separate σ²_eval/n from σ²_cal/m, we need measurements where
-    # n varies while m is held constant (and vice versa).
-    #
-    # Design principle: Create a 2D grid with explicit variation in both dimensions
-    # rather than using oracle fractions (which create collinearity).
-    # Fractions are converted into fixed m values shared across every n, which
-    # avoids the collinearity of setting m = frac * n.
-    #
-    # The m levels are derived from the grid's own scale (n_ref), NOT from the
-    # full oracle pool: with a large pool (e.g. 480 labels vs n_grid=[100, 200]),
-    # pool-based m values exceed most n, the m < n filter kills those points, and
-    # the grid collapses to fewer than 2 unique values per dimension. Each level
-    # is additionally capped at 90% of min(n_grid) so every n in the grid retains
-    # every m level (m < n holds across the whole orthogonal grid).
-    n_ref = min(max(n_grid), n_oracle_available)
-    m_cap = min(n_oracle_available, int(0.9 * min(n_grid)))
-    m_values = sorted(
-        set(min(max(15, int(n_ref * frac)), m_cap) for frac in oracle_fraction_grid)
+    measurement_points = _build_measurement_grid(
+        n_grid, oracle_fraction_grid, n_oracle_available
     )
-
-    # Build orthogonal grid: vary n at each fixed m, and vary m at each fixed n
-    measurement_points: List[Tuple[int, int]] = []
-
-    for n in n_grid:
-        for m in m_values:
-            # Constraint: m < n (can't have more oracle than samples)
-            # Also need m < n_oracle_available (can't use more oracle than exists)
-            if m < n and m <= n_oracle_available:
-                measurement_points.append((n, m))
-
-    # Sort and dedupe
-    measurement_points = sorted(set(measurement_points))
-
-    # Verify we have enough variation - need at least 2 different n and 2 different m
-    unique_n = set(n for n, m in measurement_points)
-    unique_m = set(m for n, m in measurement_points)
-    if len(unique_n) < 2 or len(unique_m) < 2:
-        raise ValueError(
-            f"Grid has insufficient variation "
-            f"(n={sorted(unique_n)}, m={sorted(unique_m)}). "
-            f"Need at least 2 unique values in each dimension. "
-            f"Collect more pilot data (recommend 200+ prompts with 100+ oracle labels)."
-        )
 
     if verbose:
         print(
@@ -347,6 +313,7 @@ def fit_variance_model(
 
     # Measure variance at each grid point
     measurements: List[Tuple[int, int, float]] = []
+    n_clamped_cells = 0
     for i, (n, m) in enumerate(measurement_points):
         if verbose:
             print(f"    n={n}, m={m} ({m/n:.0%})...", end="", flush=True)
@@ -359,13 +326,28 @@ def fit_variance_model(
             seed=seed + i * 100,
         )
 
+        # _measure_variance_direct clamps (n, m) when the pilot pools are too
+        # small; record the ACTUAL sizes so the fit matches what was measured.
+        n_actual = int(result["n_actual"])
+        m_actual = int(result["m_actual"])
+        if (n_actual, m_actual) != (n, m):
+            n_clamped_cells += 1
+
         if not np.isnan(result["variance"]) and result["variance"] > 0:
-            measurements.append((n, m, result["variance"]))
+            measurements.append((n_actual, m_actual, result["variance"]))
             if verbose:
                 print(f" SE={result['se']:.4f}")
         else:
             if verbose:
                 print(" FAILED")
+
+    if n_clamped_cells > 0:
+        logger.warning(
+            f"{n_clamped_cells} of {len(measurement_points)} measurement cells "
+            f"were clamped to smaller actual sizes (unlabeled pool too small for "
+            f"the requested n - m); the variance model is fit on the actual "
+            f"(n, m) sizes."
+        )
 
     if len(measurements) < 3:
         raise ValueError(
@@ -427,31 +409,65 @@ def plan_evaluation(
         alpha: Significance level (default 0.05).
 
     Returns:
-        EvaluationPlan with allocation and achievable MDE.
+        EvaluationPlan with allocation and achievable MDE. The returned plan
+        never costs more than the budget.
+
+    Raises:
+        ValueError: If the variance model is degenerate (both components zero),
+            or if the budget cannot fund the minimum plan of m_min oracle
+            labels plus m_min surrogate scores (since n ≥ m ≥ m_min).
+
+    Note:
+        MDE assumes independent policies; paired evals on a shared prompt set
+        typically detect smaller differences (this plan is conservative).
     """
     c_S = cost_model.surrogate_cost
     c_Y = cost_model.oracle_cost
     sigma2_eval = variance_model.sigma2_eval
     sigma2_cal = variance_model.sigma2_cal
 
+    if sigma2_eval <= 0 and sigma2_cal <= 0:
+        raise ValueError(
+            "variance model is degenerate (both components zero) — refusing to plan"
+        )
+
+    # Cheapest valid plan: m = m_min oracle labels and n = m_min samples
+    # (n ≥ m ≥ m_min). Refuse budgets that cannot fund it rather than
+    # silently returning a plan that overruns the budget.
+    min_budget = m_min * (c_S + c_Y)
+    if budget < min_budget:
+        raise ValueError(
+            f"budget ${budget:,.2f} cannot fund the minimum plan: m_min={m_min} "
+            f"oracle labels (plus n ≥ m surrogate scores) require at least "
+            f"${min_budget:,.2f}"
+        )
+
     # Square Root Law (CJE paper Appendix F, Proposition 7)
     denom = np.sqrt(c_S * sigma2_eval) + np.sqrt(c_Y * sigma2_cal)
 
     if denom < 1e-10:
-        # Edge case: allocate based on which component has variance
+        # Near-degenerate edge case: allocate based on which component has variance
         if sigma2_cal > 0:
-            n_star = m_min
-            m_star = max(int(budget / c_Y), m_min)
+            # Calibration variance dominates: maximize m subject to n ≥ m
+            n_star = m_star = max(int(budget / (c_S + c_Y)), m_min)
         else:
-            n_star = max(int(budget / c_S), 1)
+            # Evaluation variance dominates: fund the m_min oracle floor first,
+            # then spend the remainder on evaluation samples
             m_star = m_min
+            n_star = max(int((budget - c_Y * m_min) / c_S), m_min)
     else:
-        n_star_float = (
-            budget * np.sqrt(sigma2_eval / c_S) / denom if sigma2_eval > 0 else m_min
-        )
-        m_star_float = (
-            budget * np.sqrt(sigma2_cal / c_Y) / denom if sigma2_cal > 0 else m_min
-        )
+        if sigma2_cal <= 0:
+            # No calibration variance: fund the m_min oracle floor first, then
+            # spend the remainder on evaluation samples. (Previously n consumed
+            # the ENTIRE budget and the oracle cost was added on top.)
+            m_star_float = float(m_min)
+            n_star_float = (budget - c_Y * m_min) / c_S
+        elif sigma2_eval <= 0:
+            # No evaluation variance: n merely tags along (n ≥ m constraint)
+            n_star_float = m_star_float = budget / (c_S + c_Y)
+        else:
+            n_star_float = budget * np.sqrt(sigma2_eval / c_S) / denom
+            m_star_float = budget * np.sqrt(sigma2_cal / c_Y) / denom
 
         # Enforce m ≤ n constraint
         if m_star_float > n_star_float:
@@ -468,6 +484,12 @@ def plan_evaluation(
 
     if n_star < m_star:
         n_star = m_star
+
+    # Postcondition: the plan must never cost more than the budget.
+    # (Feasibility of m_min was checked above, so n can always afford ≥ m_star.)
+    max_affordable_n = int((budget - c_Y * m_star) / c_S)
+    if n_star > max_affordable_n:
+        n_star = max(max_affordable_n, m_star)
 
     # Compute variance and SE
     var_total = sigma2_eval / n_star + sigma2_cal / m_star
@@ -503,7 +525,19 @@ def plan_for_mde(
     power: float = 0.8,
     alpha: float = 0.05,
 ) -> EvaluationPlan:
-    """Find minimum budget to achieve target MDE."""
+    """Find minimum budget to achieve target MDE.
+
+    Inverts the Square Root Allocation Law. The closed-form inversion is exact
+    only at the unconstrained optimum; when the implied unconstrained m* falls
+    below m_min, the m_min floor binds and the budget is instead derived by
+    fixing m = m_min and solving σ²_eval/n = var_needed − σ²_cal/m_min for n.
+    The returned plan is verified to achieve plan.mde ≤ 1.02 × target_mde
+    (budget is bumped minimally if integer rounding pushes it over).
+
+    Note:
+        MDE assumes independent policies; paired evals on a shared prompt set
+        typically detect smaller differences (this plan is conservative).
+    """
     z_alpha = stats.norm.ppf(1 - alpha / 2)
     z_power = stats.norm.ppf(power)
     critical_value = z_alpha + z_power
@@ -517,10 +551,34 @@ def plan_for_mde(
     sigma2_eval = variance_model.sigma2_eval
     sigma2_cal = variance_model.sigma2_cal
 
-    numerator = (np.sqrt(c_S * sigma2_eval) + np.sqrt(c_Y * sigma2_cal)) ** 2
-    budget_needed = numerator / var_needed
+    sqrt_term = np.sqrt(c_S * sigma2_eval) + np.sqrt(c_Y * sigma2_cal)
 
-    return plan_evaluation(
+    # Unconstrained optimum (Lagrangian of min-cost s.t. variance = var_needed):
+    #   m* = sqrt(sigma2_cal / c_Y) * sqrt_term / var_needed
+    m_star_unconstrained = (
+        np.sqrt(sigma2_cal / c_Y) * sqrt_term / var_needed if sigma2_cal > 0 else 0.0
+    )
+
+    if m_star_unconstrained >= m_min:
+        # Interior optimum: the closed-form budget inversion is exact.
+        budget_needed = sqrt_term**2 / var_needed
+    else:
+        # m_min binds: fix m = m_min and solve for the n that delivers the
+        # remaining required variance. The residual is provably positive when
+        # the floor binds (m* < m_min implies sigma2_cal/m_min < var_needed).
+        residual_var = var_needed - sigma2_cal / m_min
+        if sigma2_eval > 0:
+            n_needed = int(np.ceil(sigma2_eval / residual_var))
+        else:
+            n_needed = m_min
+        n_needed = max(n_needed, m_min)
+        budget_needed = c_S * n_needed + c_Y * m_min
+
+    # Never propose a budget below the feasibility floor enforced by
+    # plan_evaluation (n ≥ m ≥ m_min).
+    budget_needed = max(budget_needed, m_min * (c_S + c_Y))
+
+    plan = plan_evaluation(
         budget=budget_needed,
         variance_model=variance_model,
         cost_model=cost_model,
@@ -529,10 +587,96 @@ def plan_for_mde(
         alpha=alpha,
     )
 
+    # Verify the target is met; integer rounding (or a binding n ≥ m
+    # constraint) can leave the plan slightly above target. Rescale toward the
+    # required variance (MDE² scales ~1/budget) plus one sample-and-label step
+    # so the loop always makes progress.
+    for _ in range(50):
+        if plan.mde <= target_mde * 1.02:
+            break
+        scale = max((plan.mde / target_mde) ** 2, 1.0)
+        budget_needed = budget_needed * scale + (c_S + c_Y)
+        plan = plan_evaluation(
+            budget=budget_needed,
+            variance_model=variance_model,
+            cost_model=cost_model,
+            m_min=m_min,
+            power=power,
+            alpha=alpha,
+        )
+
+    return plan
+
 
 # =============================================================================
 # Variance Measurement (using actual CJE pipeline)
 # =============================================================================
+
+
+def _build_measurement_grid(
+    n_grid: List[int],
+    oracle_fraction_grid: List[float],
+    n_oracle_available: int,
+) -> List[Tuple[int, int]]:
+    """Build the orthogonal (n, m) measurement grid shared by pilot- and
+    simulation-based variance fitting.
+
+    Key insight: to separate σ²_eval/n from σ²_cal/m, we need measurements where
+    n varies while m is held constant (and vice versa).
+
+    Design principle: Create a 2D grid with explicit variation in both dimensions
+    rather than using oracle fractions (which create collinearity).
+    Fractions are converted into fixed m values shared across every n, which
+    avoids the collinearity of setting m = frac * n.
+
+    The m levels are derived from the grid's own scale (n_ref), NOT from the
+    full oracle pool: with a large pool (e.g. 480 labels vs n_grid=[100, 200]),
+    pool-based m values exceed most n, the m < n filter kills those points, and
+    the grid collapses to fewer than 2 unique values per dimension. Each level
+    is additionally capped at 90% of min(n_grid) so every n in the grid retains
+    every m level (m < n holds across the whole orthogonal grid).
+    """
+    if not oracle_fraction_grid:
+        raise ValueError("oracle_fraction_grid must contain at least one fraction")
+
+    invalid_fractions = [f for f in oracle_fraction_grid if f <= 0 or f > 1]
+    if invalid_fractions:
+        raise ValueError(
+            "oracle_fraction_grid fractions must lie in (0, 1], got "
+            f"{invalid_fractions}"
+        )
+
+    n_ref = min(max(n_grid), n_oracle_available)
+    m_cap = min(n_oracle_available, int(0.9 * min(n_grid)))
+    m_values = sorted(
+        set(min(max(15, int(n_ref * frac)), m_cap) for frac in oracle_fraction_grid)
+    )
+
+    # Build orthogonal grid: vary n at each fixed m, and vary m at each fixed n
+    measurement_points: List[Tuple[int, int]] = []
+
+    for n in n_grid:
+        for m in m_values:
+            # Constraint: m < n (can't have more oracle than samples)
+            # Also need m < n_oracle_available (can't use more oracle than exists)
+            if m < n and m <= n_oracle_available:
+                measurement_points.append((n, m))
+
+    # Sort and dedupe
+    measurement_points = sorted(set(measurement_points))
+
+    # Verify we have enough variation - need at least 2 different n and 2 different m
+    unique_n = set(n for n, m in measurement_points)
+    unique_m = set(m for n, m in measurement_points)
+    if len(unique_n) < 2 or len(unique_m) < 2:
+        raise ValueError(
+            f"Grid has insufficient variation "
+            f"(n={sorted(unique_n)}, m={sorted(unique_m)}). "
+            f"Need at least 2 unique values in each dimension. "
+            f"Collect more pilot data (recommend 200+ prompts with 100+ oracle labels)."
+        )
+
+    return measurement_points
 
 
 def _measure_variance_direct(

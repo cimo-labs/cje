@@ -228,16 +228,16 @@ class TestPlanningWorkflow:
             n_measurements=9,
         )
 
-        # Test with various budgets (start at 500 to avoid edge cases
-        # where minimum m_oracle=1 dominates the budget)
-        for budget in [500, 1000, 10000]:
+        # Test with various budgets (start at 600: budgets below the
+        # m_min feasibility floor of 30 * (1 + 16) = 510 now raise ValueError)
+        for budget in [600, 1000, 10000]:
             plan = plan_evaluation(
                 budget=budget,
                 cost_model=CostModel(oracle_cost=16.0),
                 variance_model=model,
             )
-            # Allow small tolerance for integer rounding
-            assert plan.total_cost <= budget * 1.05
+            # Budget is a hard postcondition (no rounding overrun allowed)
+            assert plan.total_cost <= budget
 
     def test_m_leq_n_constraint(self) -> None:
         """Oracle samples cannot exceed total samples (m ≤ n)."""
@@ -971,3 +971,168 @@ class TestEvaluationPlanAPI:
         cost_model = CostModel(oracle_cost=16.0)
         plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
         assert isinstance(plan, EvaluationPlan)
+
+
+class TestPlanningReviewRegressions:
+    """Regression tests from the 2026-07 statistical review (fixes 1-5).
+
+    Pure-unit tests: synthetic variance models and mocked pipeline calls only.
+    """
+
+    def test_plan_for_mde_hits_target_when_m_min_binds(self) -> None:
+        """FIX 1: closed-form budget inversion is exact only for the interior
+        optimum. With sigma2_cal tiny, the unconstrained m* falls below m_min;
+        the old code returned a plan whose MDE was ~1.75x the target (0.0193
+        vs 0.011) at a budget of ~$505 instead of the required ~$594."""
+        model = FittedVarianceModel(
+            sigma2_eval=0.05, sigma2_cal=1e-4, r_squared=0.99, n_measurements=12
+        )
+        cost_model = CostModel(surrogate_cost=0.01, oracle_cost=16.0)
+
+        plan = plan_for_mde(
+            target_mde=0.011, variance_model=model, cost_model=cost_model, m_min=30
+        )
+
+        assert plan.mde <= 0.011 * 1.02
+        assert plan.m_oracle == 30  # the floor binds
+        # Correct minimum budget: m=30 floor plus n solving the residual
+        # variance -> ~$594, not the ~$505 the unconstrained inversion gave.
+        assert plan.total_cost == pytest.approx(594.3, rel=0.03)
+
+    def test_plan_for_mde_interior_case_round_trips(self) -> None:
+        """FIX 1: the benign interior case (m* >> m_min) still round-trips."""
+        model = FittedVarianceModel(
+            sigma2_eval=0.03, sigma2_cal=0.01, r_squared=0.99, n_measurements=12
+        )
+        cost_model = CostModel(surrogate_cost=0.01, oracle_cost=16.0)
+
+        plan = plan_for_mde(
+            target_mde=0.02, variance_model=model, cost_model=cost_model
+        )
+
+        assert plan.mde <= 0.02 * 1.02
+        assert abs(plan.mde - 0.02) / 0.02 < 0.02
+        assert plan.m_oracle > 30  # interior optimum, floor not binding
+
+    def test_budget_respected_when_sigma2_cal_zero(self) -> None:
+        """FIX 2: sigma2_cal == 0 used to let n consume the ENTIRE budget and
+        then added the m_min oracle cost on top ($5,480 on a $5,000 budget)."""
+        model = FittedVarianceModel(
+            sigma2_eval=0.03, sigma2_cal=0.0, r_squared=0.99, n_measurements=12
+        )
+        cost_model = CostModel(surrogate_cost=0.01, oracle_cost=16.0)
+
+        plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
+
+        assert plan.total_cost <= 5000
+        assert plan.m_oracle == 30
+        assert plan.n_samples >= plan.m_oracle
+
+    def test_budget_respected_when_sigma2_eval_zero(self) -> None:
+        """FIX 2 mirror: sigma2_eval == 0 must also respect the budget."""
+        model = FittedVarianceModel(
+            sigma2_eval=0.0, sigma2_cal=0.01, r_squared=0.99, n_measurements=12
+        )
+        cost_model = CostModel(surrogate_cost=0.01, oracle_cost=16.0)
+
+        plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
+
+        assert plan.total_cost <= 5000
+        assert plan.m_oracle <= plan.n_samples
+
+    def test_infeasible_budget_raises(self) -> None:
+        """FIX 3: a budget below the m_min floor cost must raise, not return a
+        plan costing 4.8x the budget."""
+        model = FittedVarianceModel(
+            sigma2_eval=0.03, sigma2_cal=0.01, r_squared=0.99, n_measurements=12
+        )
+        cost_model = CostModel(surrogate_cost=0.01, oracle_cost=16.0)
+
+        with pytest.raises(ValueError, match="cannot fund the minimum plan"):
+            plan_evaluation(
+                budget=100, variance_model=model, cost_model=cost_model, m_min=30
+            )
+
+    def test_degenerate_variance_model_raises(self) -> None:
+        """FIX 4: an all-zero variance model must refuse to plan."""
+        model = FittedVarianceModel(
+            sigma2_eval=0.0, sigma2_cal=0.0, r_squared=0.0, n_measurements=3
+        )
+        cost_model = CostModel(surrogate_cost=0.01, oracle_cost=16.0)
+
+        with pytest.raises(ValueError, match="degenerate"):
+            plan_evaluation(budget=5000, variance_model=model, cost_model=cost_model)
+
+    def test_power_to_detect_zero_se_raises(self) -> None:
+        """FIX 4: power_to_detect must raise ValueError (not ZeroDivisionError)
+        on a zero-SE plan."""
+        plan = EvaluationPlan(
+            n_samples=100,
+            m_oracle=30,
+            total_cost=100.0,
+            mde=0.0,
+            se_level=0.0,
+            power=0.8,
+            alpha=0.05,
+            sigma2_eval=0.0,
+            sigma2_cal=0.0,
+            cost_model=CostModel(),
+        )
+
+        with pytest.raises(ValueError, match="se_comparison is zero"):
+            plan.power_to_detect(0.01)
+
+    def test_fit_variance_model_records_actual_sizes_when_clamped(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """FIX 5: when the unlabeled pool is too small for n - m, the fit must
+        use the ACTUAL (clamped) sizes measured, not the requested ones.
+
+        Pilot: 400 labeled + 100 unlabeled. With n_grid=[300, 400] the grid
+        cells (300, 100), (400, 100), (400, 200) all clamp. The fake
+        analyze_dataset reports SE from the sizes it actually receives, so
+        NNLS recovers (0.05, 0.02) exactly ONLY if the fit used actual sizes.
+        """
+        import logging
+        import cje.interface.analysis as analysis_module
+
+        def fake_analyze_dataset(**kwargs: Any) -> Any:
+            records = next(iter(kwargs["fresh_draws_data"].values()))
+            n_recv = len(records)
+            m_recv = sum(1 for r in records if "oracle_label" in r)
+            se = float(np.sqrt(0.05 / n_recv + 0.02 / m_recv))
+            return SimpleNamespace(standard_errors=[se])
+
+        fresh_draws = cast(
+            Any,
+            SimpleNamespace(
+                target_policy="base",
+                samples=_make_fake_pilot_samples(n_oracle=400, n_unlabeled=100),
+            ),
+        )
+
+        original_analyze_dataset = analysis_module.analyze_dataset
+        setattr(analysis_module, "analyze_dataset", fake_analyze_dataset)
+
+        try:
+            with caplog.at_level(logging.WARNING, logger="cje.diagnostics.planning"):
+                model = fit_variance_model(
+                    fresh_draws,
+                    n_grid=[300, 400],
+                    oracle_fraction_grid=[0.25, 0.50],
+                    n_replicates=2,
+                    verbose=False,
+                )
+        finally:
+            setattr(analysis_module, "analyze_dataset", original_analyze_dataset)
+
+        # One consolidated warning naming the clamped cell count and cause
+        assert "3 of 4" in caplog.text
+        assert "clamped" in caplog.text
+        assert "unlabeled pool too small" in caplog.text
+
+        # Exact recovery of the generating components proves the fit used the
+        # actual (n, m) sizes received by analyze_dataset.
+        assert model.n_measurements == 4
+        assert model.sigma2_eval == pytest.approx(0.05, rel=1e-3)
+        assert model.sigma2_cal == pytest.approx(0.02, rel=1e-3)
