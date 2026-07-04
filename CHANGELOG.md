@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.2
+
+Docs-only release so the improved quickstart renders on PyPI. No code changes.
+
+- **Quickstart shows partial oracle coverage on the base policy**: the previous example labeled all 10 of `gpt-5.6`'s rows, implying the policy that carries the oracle slice needs complete coverage. It now has 20 responses with labels on only 10 — records with `oracle_label=None` are treated as unlabeled — while `fable-5` remains fully judge-only. The calibrator is fit on whichever rows have labels, pooled across policies; labels are a pooled budget, not a per-row requirement. Output block re-shot from a real run (byte-exact).
+
 ## 0.4.1
 
 Docs and UX patch from the post-release review. No estimation behavior changes except the transport-audit CI critical values, two log levels, and one error message.
