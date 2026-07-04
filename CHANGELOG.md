@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.3
 
 Fixes from a two-agent statistical review of the planning/power code. The core algebra (square-root allocation law, MDE formula, measurement-grid design) was verified correct and is unchanged; these fixes target the constrained/degenerate paths, budget accounting, and the simulation path.
 
