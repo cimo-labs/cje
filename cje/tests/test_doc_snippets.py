@@ -1,7 +1,7 @@
 """Keep documentation code snippets honest.
 
-Extracts every ```python block from the repo READMEs and checks it at two
-levels:
+Extracts every ```python block from the repo READMEs and the agent-skill
+files (skills/cje/) and checks it at two levels:
 
 1. SYNTAX: every snippet must compile() — catches broken example code.
 2. IMPORTS: every `import`/`from` line in every snippet is executed — catches
@@ -27,6 +27,7 @@ README_PATHS = sorted(
     for p in [
         REPO_ROOT / "README.md",
         *(REPO_ROOT / "cje").glob("*/README.md"),
+        *(REPO_ROOT / "skills").glob("*/*.md"),
     ]
     if p.exists()
 )
@@ -57,6 +58,23 @@ def test_snippet_compiles(path: str, line: int, code: str) -> None:
         compile(code, f"{path}:{line}", "exec")
     except SyntaxError as e:  # pragma: no cover - failure path
         pytest.fail(f"{path}:{line} snippet has a syntax error: {e}")
+
+
+def test_skill_quickstart_matches_readme() -> None:
+    """The multi-policy example in the agent skill must be a byte-exact copy
+    of the README quickstart — one canonical example, no drift. (Each copy
+    passes compile+import on its own, so only this equality check catches
+    divergence.)"""
+    skill_text = (REPO_ROOT / "skills" / "cje" / "SKILL.md").read_text()
+    readme_text = (REPO_ROOT / "README.md").read_text()
+    quickstart = [
+        code for code in _FENCE_RE.findall(skill_text) if "fresh_draws_data={" in code
+    ]
+    assert len(quickstart) == 1, "expected exactly one canonical example in SKILL.md"
+    assert quickstart[0] in readme_text, (
+        "SKILL.md quickstart has drifted from the README quickstart; "
+        "re-paste it byte-exact from README.md"
+    )
 
 
 @pytest.mark.parametrize("path,line,code", SNIPPETS, ids=IDS)

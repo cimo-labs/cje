@@ -146,6 +146,14 @@ Calibrated mean: 0.5316 (SE 0.0175, CI [0.4965, 0.5649], n=400, n_oracle=100, bo
 
 **Module deep dives:** [Calibration](https://github.com/cimo-labs/cje/blob/main/cje/calibration/README.md) · [Diagnostics](https://github.com/cimo-labs/cje/blob/main/cje/diagnostics/README.md) · [Estimators](https://github.com/cimo-labs/cje/blob/main/cje/estimators/README.md) · [Interface/API](https://github.com/cimo-labs/cje/blob/main/cje/interface/README.md) · [Data formats](https://github.com/cimo-labs/cje/blob/main/cje/data/README.md)
 
+## Use CJE from your AI agent
+
+[`skills/cje/`](https://github.com/cimo-labs/cje/tree/main/skills/cje) is an [Agent Skill](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview) that teaches Claude Code and similar agents to run CJE correctly — reshape your data, drive the labeling loop, calibrate, compare, and respect the refusal gates — instead of averaging raw judge scores.
+
+- **Claude Code (all projects):** `mkdir -p ~/.claude/skills/cje && curl -fsSL https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/SKILL.md -o ~/.claude/skills/cje/SKILL.md && curl -fsSL https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/reference.md -o ~/.claude/skills/cje/reference.md`
+- **Project-level:** `cp -r skills/cje .claude/skills/` from a checkout of this repo.
+- **Other agents:** point your agent at [`skills/cje/SKILL.md`](https://github.com/cimo-labs/cje/blob/main/skills/cje/SKILL.md) — plain Markdown; `reference.md` loads on demand.
+
 ## Notes on 0.4.0
 
 0.4.0 is a **breaking release: CJE is now Direct-mode only.** The off-policy machinery — importance-sampling and doubly-robust estimators (`calibrated-ips`, `dr-cpo`, `mrdr`, `tmle`, `stacked-dr`), teacher forcing, SIMCal weight stabilization, and the overlap diagnostics — has been removed. Our own paper's results drove the cut: for realistic LLM policy pairs, importance weighting failed even when ESS looked healthy (target-typicality coverage 0.19–0.49, far below the 0.70 gate), and the best DR stack merely matched Direct mode's accuracy at ~12× the compute. Direct mode — fresh draws, calibrated judge, audits — is what the evidence supports, so it is now the whole product.
