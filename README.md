@@ -21,22 +21,25 @@
 pip install cje-eval
 ```
 
-Generate responses from each candidate policy on a shared prompt set, judge everything, and attach ground-truth labels (`oracle_label`) to the slice you can afford — human raters, expert review, a downstream KPI. Any bounded scale works (0–1, 0–100, Likert). CJE needs at least 10 labeled rows pooled across policies — they can all come from one policy:
+Generate responses from each candidate policy on a shared prompt set, judge everything, and attach ground-truth labels (`oracle_label`) to the slice you can afford — human raters, expert review, a downstream KPI. Any bounded scale works (0–1, 0–100, Likert). CJE needs at least 10 labeled rows pooled across policies — they can all come from one policy, and even that policy doesn't need labels on every row:
 
 ```python
 from cje import analyze_dataset
 
 # One policy carries the oracle slice — CJE learns the judge→oracle mapping
-# once and applies it to every policy; label 5–25% in practice.
+# once and applies it to every unlabeled response, in any policy. Coverage
+# is never required to be complete: gpt-5.6 has 20 responses with labels on
+# only 10 (oracle_label=None means unlabeled); fable-5 has no labels at all.
 labeled = [(0.62, 0.55), (0.68, 0.60), (0.72, 0.70), (0.76, 0.74), (0.79, 0.75),
            (0.83, 0.80), (0.85, 0.90), (0.88, 0.92), (0.91, 0.88), (0.95, 0.97)]
+unlabeled = [0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94]
 judge_only = [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94]
 
 results = analyze_dataset(
     fresh_draws_data={
         "gpt-5.6": [
             {"prompt_id": f"q{i:02d}", "judge_score": s, "oracle_label": y}
-            for i, (s, y) in enumerate(labeled)
+            for i, (s, y) in enumerate(labeled + [(u, None) for u in unlabeled])
         ],
         "fable-5": [
             {"prompt_id": f"q{i:02d}", "judge_score": s}
@@ -52,11 +55,11 @@ for policy, estimate, (lo, hi) in zip(
 ```
 
 ```text
-fable-5         0.811  95% CI [0.748, 0.873]
-gpt-5.6         0.779  95% CI [0.538, 0.853]
+fable-5         0.811  95% CI [0.751, 0.873]
+gpt-5.6         0.784  95% CI [0.589, 0.844]
 ```
 
-`fable-5` gets a calibrated estimate and an honest CI **without a single label of its own** — that transfer is what the labels-under-every-policy workflow wastes money re-buying.
+`fable-5` gets a calibrated estimate and an honest CI **without a single label of its own**, and `gpt-5.6`'s ten unlabeled rows are covered by the same transfer — labels are a pooled budget, not a per-row requirement. That transfer is what the labels-under-every-policy workflow wastes money re-buying.
 
 **And when the data can't support an answer, CJE says so** instead of handing you a confident number. Here a candidate policy's judge scores land mostly *outside* the range where the calibrator saw oracle labels — the run emits the paper's coverage badge and refuses level claims for that policy:
 
