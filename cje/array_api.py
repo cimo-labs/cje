@@ -458,13 +458,15 @@ def transport_audit(
     *,
     bins: int = 10,
     group_label: Optional[str] = None,
+    alpha: float = 0.05,
 ) -> TransportDiagnostics:
     """Test whether a fitted calibrator transports to a new probe sample.
 
     Array-first wrapper around `cje.diagnostics.transport.audit_transportability`:
     checks the unbiasedness condition E[Y - f̂(S)] = 0 on the probe and returns
     PASS/WARN/FAIL with decile residuals. Rows with NaN oracle labels are
-    excluded (the audit needs labeled probes only).
+    excluded (the audit needs labeled probes only). The decile residuals are
+    display-only — gate on the pooled CI, never on per-decile values.
 
     Args:
         judge_scores: (m,) judge scores for the probe sample.
@@ -472,7 +474,9 @@ def transport_audit(
         calibrator: A fitted calibrator with `.predict()` — e.g. the
             `calibrator` returned by `calibrated_mean_ci`.
         bins: Number of score-quantile bins for the residual breakdown.
-        group_label: Optional label (e.g. "policy:gpt-4-mini").
+        group_label: Optional label (e.g. "policy:gpt-5.6-mini").
+        alpha: Significance level for the audit CI (default 0.05 → 95% CI,
+            t critical values with df = n_probe - 1).
 
     Returns:
         TransportDiagnostics (status, delta_hat, delta_ci, decile residuals).
@@ -519,5 +523,5 @@ def transport_audit(
         for s, y in zip(judge[mask], labels[mask])
     ]
     return audit_transportability(
-        calibrator, probe_records, bins=bins, group_label=group_label
+        calibrator, probe_records, bins=bins, group_label=group_label, alpha=alpha
     )

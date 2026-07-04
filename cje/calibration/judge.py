@@ -417,6 +417,7 @@ class JudgeCalibrator:
         n_folds: int = 5,
         prompt_ids: Optional[List[str]] = None,
         covariates: Optional[np.ndarray] = None,
+        quiet: bool = False,
     ) -> CalibrationResult:
         """Fit both global and cross-fitted calibration models.
 
@@ -432,10 +433,14 @@ class JudgeCalibrator:
             n_folds: Number of CV folds
             prompt_ids: Optional prompt IDs for fold assignment
             covariates: Optional covariate matrix (n_samples, n_covariates)
+            quiet: Log fit progress at DEBUG instead of INFO. Used by the
+                per-replicate bootstrap refits, which would otherwise emit
+                thousands of identical "CV Calibration complete" lines.
 
         Returns:
             CalibrationResult with both global and CV calibration
         """
+        fit_log_level = logging.DEBUG if quiet else logging.INFO
         judge_scores = np.asarray(judge_scores)
         n_total = len(judge_scores)
         self._n_folds = n_folds
@@ -492,7 +497,8 @@ class JudgeCalibrator:
             raise ValueError(
                 f"Too few oracle samples ({n_oracle}) for {n_folds}-fold CV. "
                 f"Need at least {n_folds * 2} (2 per fold). To fix: add "
-                f"oracle_label values to more samples, or pass a smaller n_folds."
+                f"oracle_label values to more samples (>=10 pooled across "
+                f"policies)."
             )
 
         # Step 1: Assign fold IDs to all samples first (unified approach)
@@ -546,13 +552,16 @@ class JudgeCalibrator:
 
         # Step 2: Fit global model
         if self.calibration_mode != "monotone":
-            logger.info(f"Calibration mode: {self.calibration_mode}")
+            logger.log(fit_log_level, f"Calibration mode: {self.calibration_mode}")
 
             # Use flexible calibration
             from .flexible_calibrator import FlexibleCalibrator
 
             # Fit flexible calibrator
-            logger.info(f"Fitting FlexibleCalibrator with {n_oracle} oracle samples")
+            logger.log(
+                fit_log_level,
+                f"Fitting FlexibleCalibrator with {n_oracle} oracle samples",
+            )
             self._flexible_calibrator = FlexibleCalibrator(
                 mode=self.calibration_mode,
                 random_seed=self.random_seed,
@@ -566,14 +575,16 @@ class JudgeCalibrator:
             if self.calibration_mode == "auto":
                 selected = self._flexible_calibrator.selected_mode
                 self.selected_mode = selected  # Store for metadata
-                logger.info(f"Auto-calibration selected: {selected}")
+                logger.log(fit_log_level, f"Auto-calibration selected: {selected}")
                 if selected == "two_stage":
-                    logger.info(
-                        "  → Non-monotone relationship detected, using flexible calibration"
+                    logger.log(
+                        fit_log_level,
+                        "  → Non-monotone relationship detected, using flexible calibration",
                     )
                 else:
-                    logger.info(
-                        "  → Monotone relationship confirmed, using standard calibration"
+                    logger.log(
+                        fit_log_level,
+                        "  → Monotone relationship confirmed, using standard calibration",
                     )
 
             # Get calibrated scores using the full model (no folds for inference)
@@ -585,7 +596,10 @@ class JudgeCalibrator:
                 1.0,
             )
         else:
-            logger.info("Calibration mode: monotone (standard isotonic regression)")
+            logger.log(
+                fit_log_level,
+                "Calibration mode: monotone (standard isotonic regression)",
+            )
             # Use standard monotone calibration
             self._final_calibrator = IsotonicRegression(out_of_bounds="clip")
             self._final_calibrator.fit(oracle_scores, oracle_y)
@@ -661,10 +675,11 @@ class JudgeCalibrator:
         else:
             mode_str = " [monotone]"
 
-        logger.info(
+        logger.log(
+            fit_log_level,
             f"CV Calibration complete{mode_str}: {n_oracle} oracle samples, {n_folds} folds, "
             f"RMSE={rmse:.3f} (OOF: {rmse_oof:.3f}), "
-            f"coverage@0.1={coverage_01:.1%} (OOF: {coverage_01_oof:.1%})"
+            f"coverage@0.1={coverage_01:.1%} (OOF: {coverage_01_oof:.1%})",
         )
 
         self._calibration_info = {

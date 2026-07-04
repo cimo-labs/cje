@@ -384,7 +384,7 @@ def test_transport_diagnostics_summary() -> None:
         coverage=0.92,
         recommended_action="monitor",
         n_probe=50,
-        group_label="policy:gpt-4-mini",
+        group_label="policy:gpt-5.6-mini",
     )
 
     summary = diag.summary()
@@ -392,7 +392,7 @@ def test_transport_diagnostics_summary() -> None:
     # Check key info is present
     assert "WARN" in summary
     assert "N=50" in summary
-    assert "policy:gpt-4-mini" in summary
+    assert "policy:gpt-5.6-mini" in summary
     assert "δ̂:" in summary  # mean residual
     assert "monitor" in summary  # recommended action for WARN
 
@@ -692,3 +692,130 @@ def test_plot_transport_comparison() -> None:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ---------------------------------------------------------------------------
+# t-based CI regression tests (0.4.1): the audit CI uses t critical values
+# with df = n_probe - 1 instead of z (1.96). Probe slices are small (40-60
+# rows recommended), where the z interval under-covers and inflates the
+# audit's false-alarm rate.
+# ---------------------------------------------------------------------------
+
+from scipy import stats as _scipy_stats  # noqa: E402
+
+
+class _IdentityZeroCalibrator:
+    """Stub calibrator predicting 0 — probe residuals equal oracle labels."""
+
+    def predict(self, judge_scores: np.ndarray) -> np.ndarray:
+        return np.zeros(len(judge_scores))
+
+
+def _probe_from_residuals(residuals: np.ndarray, seed: int = 0) -> list:
+    rng = np.random.default_rng(seed)
+    scores = rng.uniform(size=len(residuals))
+    return [
+        {"judge_score": float(s), "oracle_label": float(r)}
+        for s, r in zip(scores, residuals)
+    ]
+
+
+def _residuals_with_exact_moments(
+    n: int, mean: float, se: float, seed: int = 7
+) -> np.ndarray:
+    """Residuals whose sample mean and SE (ddof=1) are exactly as requested."""
+    rng = np.random.default_rng(seed)
+    base = rng.normal(size=n)
+    z = (base - base.mean()) / base.std(ddof=1)
+    return np.asarray(mean + (se * np.sqrt(n)) * z)
+
+
+@pytest.mark.unit
+class TestTransportAuditTCriticalValues:
+    def test_small_n_ci_matches_scipy_t_interval_and_is_wider_than_z(self) -> None:
+        residuals = _residuals_with_exact_moments(n=12, mean=0.02, se=0.015)
+        diag = audit_transportability(
+            _IdentityZeroCalibrator(), _probe_from_residuals(residuals)
+        )
+
+        mean = float(residuals.mean())
+        sem = float(residuals.std(ddof=1) / np.sqrt(len(residuals)))
+        lo, hi = _scipy_stats.t.interval(
+            0.95, df=len(residuals) - 1, loc=mean, scale=sem
+        )
+
+        # Exact match with scipy's one-sample t interval
+        assert diag.delta_ci[0] == pytest.approx(lo, rel=1e-12, abs=1e-15)
+        assert diag.delta_ci[1] == pytest.approx(hi, rel=1e-12, abs=1e-15)
+
+        # Strictly wider than the old z interval on both sides
+        z_lo, z_hi = mean - 1.96 * sem, mean + 1.96 * sem
+        assert diag.delta_ci[0] < z_lo
+        assert diag.delta_ci[1] > z_hi
+
+    def test_boundary_case_z_would_fail_but_t_passes(self) -> None:
+        """|δ̂|/SE = 2.0 at n=40: outside z (1.96) but inside t_0.975(39) ≈ 2.023.
+
+        Pins the t verdict: PASS. Under the old z interval this probe was a
+        FAIL (0 outside the CI and |δ̂| ≥ 0.05).
+        """
+        residuals = _residuals_with_exact_moments(n=40, mean=0.06, se=0.03)
+        diag = audit_transportability(
+            _IdentityZeroCalibrator(), _probe_from_residuals(residuals)
+        )
+
+        assert diag.delta_hat == pytest.approx(0.06, rel=1e-12)
+        assert diag.delta_se == pytest.approx(0.03, rel=1e-12)
+
+        # The old z interval excludes 0 and |δ̂| >= 0.05 → z verdict was FAIL
+        z_lo = diag.delta_hat - 1.96 * diag.delta_se
+        assert z_lo > 0
+        assert abs(diag.delta_hat) >= 0.05
+
+        # The t interval contains 0 → verdict flips to PASS
+        assert diag.delta_ci[0] <= 0 <= diag.delta_ci[1]
+        assert diag.status == "PASS"
+        assert diag.recommended_action == "none"
+
+    def test_alpha_is_threaded_through(self) -> None:
+        residuals = _residuals_with_exact_moments(n=25, mean=0.01, se=0.02)
+        probe = _probe_from_residuals(residuals)
+
+        diag_95 = audit_transportability(_IdentityZeroCalibrator(), probe)
+        diag_80 = audit_transportability(_IdentityZeroCalibrator(), probe, alpha=0.20)
+
+        # Same point estimate; narrower interval at larger alpha
+        assert diag_80.delta_hat == diag_95.delta_hat
+        assert diag_80.delta_ci[0] > diag_95.delta_ci[0]
+        assert diag_80.delta_ci[1] < diag_95.delta_ci[1]
+
+        lo, hi = _scipy_stats.t.interval(
+            0.80, df=len(residuals) - 1, loc=diag_80.delta_hat, scale=diag_80.delta_se
+        )
+        assert diag_80.delta_ci[0] == pytest.approx(lo, rel=1e-12, abs=1e-15)
+        assert diag_80.delta_ci[1] == pytest.approx(hi, rel=1e-12, abs=1e-15)
+
+    def test_array_api_wrapper_threads_alpha(self) -> None:
+        from cje import transport_audit
+
+        residuals = _residuals_with_exact_moments(n=30, mean=0.015, se=0.02)
+        probe = _probe_from_residuals(residuals)
+        scores = np.array([r["judge_score"] for r in probe])
+        labels = np.array([r["oracle_label"] for r in probe])
+
+        via_wrapper = transport_audit(
+            scores, labels, _IdentityZeroCalibrator(), alpha=0.10
+        )
+        direct = audit_transportability(_IdentityZeroCalibrator(), probe, alpha=0.10)
+        assert via_wrapper.delta_ci == direct.delta_ci
+        assert via_wrapper.status == direct.status
+
+    def test_df_floor_at_two_probe_samples(self) -> None:
+        """n=2 → df=1: the widest t interval, still finite."""
+        probe = [
+            {"judge_score": 0.4, "oracle_label": 0.10},
+            {"judge_score": 0.6, "oracle_label": 0.20},
+        ]
+        diag = audit_transportability(_IdentityZeroCalibrator(), probe)
+        assert np.isfinite(diag.delta_ci[0]) and np.isfinite(diag.delta_ci[1])
+        assert diag.n_probe == 2

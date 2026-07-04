@@ -74,7 +74,7 @@ if diagnostics.boundary_cards:
 Judge scores outside the oracle calibration range are the primary identification threat to *level* claims: the calibrator must extrapolate there, and no data exists to check the extrapolation. `boundary_card(S_policy, S_oracle, R_policy, R_min, R_max, ...)` implements the paper's badge (arXiv:2512.11150) with three signals:
 
 - **out_of_range ≥ 5%** (`OUT_OF_RANGE_REFUSE_THRESHOLD`) → status `REFUSE-LEVEL`: do not ship level (absolute) claims; rankings may stand
-- **saturation ≥ 20%** (calibrated rewards piled near the oracle reward bounds) or estimator gap ≥ 0.10 → `CAUTION`
+- **saturation ≥ 20%** (calibrated rewards piled near the oracle reward bounds) or estimator gap ≥ 0.10 (a cross-estimator signal not computed by the 0.4.x pipeline) → `CAUTION`
 - otherwise → `OK`
 
 The returned `BoundaryCard` dataclass carries `status`, `out_of_range`, `saturation`, `estimator_gap`, `partial_id_width` (a conservative partial-identification band under monotonicity), and a human-readable `note`.
@@ -87,14 +87,16 @@ The returned `BoundaryCard` dataclass carries `status`, `out_of_range`, `saturat
 
 **Use case:** test whether a calibrator fitted on policy A / era 1 can be safely reused for policy B / era 2.
 
-`audit_transportability(calibrator, probe_samples, bins=10, group_label=None)` runs a simple unbiasedness test on a small oracle-labeled probe slice (typically 40–60 rows):
+`audit_transportability(calibrator, probe_samples, bins=10, group_label=None, alpha=0.05)` runs a simple unbiasedness test on a small oracle-labeled probe slice (typically 40–60 rows):
 
 1. Compute the mean residual δ̂ = E[Y − f̂(S)] on the probe.
-2. Construct the parametric 95% CI: δ̂ ± 1.96·SE.
+2. Construct the parametric (1−α) CI: δ̂ ± t_{1−α/2, n−1}·SE (t critical values, not z — at 40–60 probe rows the z interval under-covers and inflates the audit's false-alarm rate).
 3. Classify:
    - **PASS**: 0 ∈ CI → calibrator is unbiased on the target (action: `none`)
    - **WARN**: 0 ∉ CI and |δ̂| < 0.05 → small but detectable bias (action: `monitor`)
    - **FAIL**: 0 ∉ CI and |δ̂| ≥ 0.05 → clear systematic bias (action: `refit_two_stage`)
+
+The per-decile residuals in the result are **display-only** (4–6 rows per bin at recommended probe sizes — never gate on them). Auditing K policies at per-test α inflates the family-wise false-alarm rate; a BH correction is a planned option, not implemented.
 
 ```python
 import json
@@ -105,15 +107,15 @@ from cje.diagnostics import audit_transportability, plot_transport_comparison
 results = analyze_dataset(fresh_draws_dir="responses/")
 
 # Probe: 40-60 target samples, plain dicts with judge_score + oracle_label
-probe = [json.loads(line) for line in open("gpt4_mini_probe.jsonl")]
+probe = [json.loads(line) for line in open("gpt56_mini_probe.jsonl")]
 
 diag = audit_transportability(
     results.calibrator,
     probe,
-    group_label="policy:gpt-4-mini",
+    group_label="policy:gpt-5.6-mini",
 )
 print(diag.summary())
-# Transport: PASS | Group: policy:gpt-4-mini | N=50 | δ̂: +0.012 (CI: [-0.008, +0.032])
+# Transport: PASS | Group: policy:gpt-5.6-mini | N=50 | δ̂: +0.012 (CI: [-0.008, +0.032])
 
 diag.plot()  # residuals by score decile (requires the viz extra)
 

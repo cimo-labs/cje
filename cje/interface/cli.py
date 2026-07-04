@@ -90,7 +90,7 @@ def create_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument(
         "--estimator-config",
         type=json.loads,
-        help="JSON config for estimator (e.g., '{\"n_folds\": 10}')",
+        help="JSON config for estimator (e.g., '{\"n_bootstrap\": 4000}')",
     )
 
     analyze_parser.add_argument(
