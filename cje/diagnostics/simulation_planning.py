@@ -25,7 +25,7 @@ Usage:
 """
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Tuple
 import logging
 import numpy as np
 
@@ -35,6 +35,8 @@ from .planning import (
     CostModel,
     plan_evaluation,
     _PLANNING_BOOTSTRAP_REPLICATES,
+    _build_measurement_grid,
+    _fit_variance_model_from_measurements,
 )
 
 logger = logging.getLogger(__name__)
@@ -150,7 +152,11 @@ def correlation_to_r2(correlation: float, relationship: str = "linear") -> float
         correlation: Pearson correlation coefficient (-1 to 1).
         relationship: Type of relationship ("linear" or "monotone").
             - "linear": Returns r² (correlation squared)
-            - "monotone": Returns conservative estimate assuming some nonlinearity
+            - "monotone": Returns a midpoint-to-1 heuristic that assumes real
+              monotone nonlinearity. WARNING: this heuristic INFLATES R² if the
+              relationship is actually linear — only use "monotone" when you
+              have evidence of nonlinearity; when unsure, "linear" is the safer
+              (lower) estimate.
 
     Returns:
         Approximate isotonic R² (0 to 1).
@@ -159,7 +165,7 @@ def correlation_to_r2(correlation: float, relationship: str = "linear") -> float
         >>> correlation_to_r2(0.7)  # Linear relationship
         0.49
         >>> correlation_to_r2(0.7, "monotone")  # Nonlinear monotone
-        0.735  # Higher because isotonic captures nonlinear monotone patterns
+        0.745  # Midpoint between r²=0.49 and 1.0
     """
     if not -1 <= correlation <= 1:
         raise ValueError(f"Correlation must be in [-1, 1], got {correlation}")
@@ -169,14 +175,67 @@ def correlation_to_r2(correlation: float, relationship: str = "linear") -> float
     if relationship == "linear":
         return r2_linear
     elif relationship == "monotone":
-        # For monotone nonlinear relationships, isotonic R² is typically higher.
-        # Use a conservative estimate: midpoint between r² and 1.
-        # This reflects that isotonic regression captures any monotone pattern.
+        # For monotone nonlinear relationships, isotonic R² is typically higher
+        # than r². Use the midpoint between r² and 1 as a rough heuristic; note
+        # this overstates R² when the relationship is actually linear.
         return min(1.0, r2_linear + 0.5 * (1 - r2_linear))
     else:
         raise ValueError(
             f"relationship must be 'linear' or 'monotone', got {relationship}"
         )
+
+
+def _calibrated_mixing_weight(
+    r2: float,
+    seed: int,
+    n_probe: int = 20000,
+    tol: float = 0.02,
+) -> float:
+    """Find the internal mixing weight whose BINARIZED labels realize the
+    requested isotonic R² against the judge.
+
+    The naive mixing judge = √r2·oracle + √(1−r2)·noise targets the CONTINUOUS
+    oracle, but the generator binarizes labels at 0.5, which attenuates the
+    realized isotonic R² 15-25% below the request. This bisects on an internal
+    r2_eff ∈ (r2, min(1, 2·r2)] such that the realized isotonic R² of the
+    binarized labels against the judge (measured on a large seeded probe
+    sample) hits the requested r2 within ±tol. Deterministic given seed.
+    """
+    if r2 <= 0.0 or r2 >= 1.0:
+        return float(r2)
+
+    from sklearn.isotonic import IsotonicRegression
+
+    probe_rng = np.random.default_rng(seed)
+    oracle = probe_rng.uniform(0, 1, n_probe)
+    noise = probe_rng.uniform(0, 1, n_probe)
+    labels = (oracle > 0.5).astype(float)
+    ss_tot = float(np.sum((labels - labels.mean()) ** 2))
+
+    def realized_isotonic_r2(weight: float) -> float:
+        judge = np.sqrt(weight) * oracle + np.sqrt(1 - weight) * noise
+        iso = IsotonicRegression(out_of_bounds="clip")
+        pred = iso.fit(judge, labels).predict(judge)
+        ss_res = float(np.sum((labels - pred) ** 2))
+        return 1 - ss_res / ss_tot
+
+    lo, hi = r2, min(1.0, 2.0 * r2)
+    if realized_isotonic_r2(hi) < r2:
+        # Attenuation larger than the 2x interval allows; widen to the maximum
+        # (realized R² at weight 1.0 is exactly 1: labels are monotone in judge).
+        hi = 1.0
+
+    for _ in range(10):
+        mid = 0.5 * (lo + hi)
+        realized = realized_isotonic_r2(mid)
+        if abs(realized - r2) <= tol:
+            return mid
+        if realized < r2:
+            lo = mid
+        else:
+            hi = mid
+
+    return 0.5 * (lo + hi)
 
 
 def _generate_synthetic_data(
@@ -187,29 +246,40 @@ def _generate_synthetic_data(
 ) -> List[dict]:
     """Generate synthetic data with specified judge quality.
 
-    Creates synthetic judge scores and oracle labels where the isotonic R²
-    between judge and oracle is approximately the specified value.
+    Creates synthetic judge scores and binary oracle labels where the isotonic
+    R² between judge and the BINARIZED labels is approximately the specified
+    value.
+
+    Math note: the judge mixes the continuous oracle with independent uniform
+    noise, judge = √w·oracle + √(1−w)·noise, with oracle, noise ~ U(0, 1). This
+    gives Var(judge|oracle) = (1 − w)/12 (the uniform-variance factor), and the
+    R² of the judge against the CONTINUOUS oracle equals w. Labels are
+    binarized at 0.5 (mimicking binary KPIs), which attenuates the realized
+    isotonic R² below w — so the internal weight w is calibrated numerically
+    (see _calibrated_mixing_weight) to deliver the requested r2 on the
+    binarized labels.
 
     Args:
         n_total: Total number of samples to generate.
         oracle_fraction: Fraction of samples to have oracle labels.
-        r2: Target isotonic R² (judge quality).
+        r2: Target isotonic R² of the binarized labels given the judge.
         seed: Random seed for reproducibility.
 
     Returns:
         List of sample dicts with prompt_id, judge_score, and optionally oracle_label.
     """
+    # Calibrate the mixing weight so the binarized labels realize the
+    # requested isotonic R² (deterministic given seed).
+    r2_eff = _calibrated_mixing_weight(r2, seed)
+
     rng = np.random.default_rng(seed)
 
     # Generate oracle labels (ground truth) as uniform [0, 1]
     oracle_values = rng.uniform(0, 1, n_total)
 
-    # Generate judge scores with specified R² relationship
-    # Higher R² means judge is more predictive of oracle
-    # Use: judge = oracle * sqrt(r2) + noise * sqrt(1 - r2) (linear case)
-    # This gives Var(judge|oracle) = 1 - r2, so R² ≈ r2
+    # Generate judge scores from the calibrated mixture
     noise = rng.uniform(0, 1, n_total)
-    judge_scores = np.sqrt(r2) * oracle_values + np.sqrt(1 - r2) * noise
+    judge_scores = np.sqrt(r2_eff) * oracle_values + np.sqrt(1 - r2_eff) * noise
 
     # Normalize judge scores to [0, 1]
     judge_scores = (judge_scores - judge_scores.min()) / (
@@ -284,7 +354,6 @@ def simulate_variance_model(
         >>> print(f"MDE: {plan.mde:.1%}")
     """
     from ..interface.analysis import analyze_dataset
-    from scipy.optimize import nnls
 
     if not 0 <= r2 <= 1:
         raise ValueError(f"r2 must be in [0, 1], got {r2}")
@@ -297,84 +366,99 @@ def simulate_variance_model(
     # Generate base synthetic data
     base_data = _generate_synthetic_data(n_total, oracle_fraction, r2, seed)
 
-    # Measurement grid: vary n and m independently
-    n_grid = [
-        max(50, int(n_total * 0.2)),
-        max(100, int(n_total * 0.4)),
-        max(150, int(n_total * 0.6)),
-    ]
+    # Measurement grid: derived exactly the way fit_variance_model does
+    # (post-0.4.0) — m levels come from the grid's own scale, not the oracle
+    # pool, so the orthogonal grid survives large oracle fractions.
+    n_grid = sorted(
+        set(
+            n
+            for n in [
+                max(50, int(n_total * 0.2)),
+                max(100, int(n_total * 0.4)),
+                max(150, int(n_total * 0.6)),
+            ]
+            if n <= n_total * 0.8
+        )
+    )
+    if len(n_grid) < 2:
+        raise ValueError(
+            f"Need at least 2 valid n values, but only {len(n_grid)} fit in the "
+            f"simulated dataset (n_total={n_total}). Increase n_total."
+        )
     n_oracle_available = int(n_total * oracle_fraction)
-    m_values = [
-        max(10, int(n_oracle_available * 0.3)),
-        max(20, int(n_oracle_available * 0.5)),
-        max(30, int(n_oracle_available * 0.7)),
-    ]
+    measurement_points = _build_measurement_grid(
+        n_grid, [0.15, 0.25, 0.40], n_oracle_available
+    )
 
-    measurements: List[tuple] = []
+    oracle_records = [r for r in base_data if "oracle_label" in r]
+    non_oracle_records = [r for r in base_data if "oracle_label" not in r]
 
-    for n in n_grid:
-        for m in m_values:
-            if m >= n or m > n_oracle_available:
+    measurements: List[Tuple[int, int, float]] = []
+
+    for n, m in measurement_points:
+        if verbose:
+            print(f"  Measuring n={n}, m={m}...", end="", flush=True)
+
+        se_values = []
+        for rep in range(n_replicates):
+            # Sample exactly m labeled records (keeping their labels)
+            oracle_idx = sorted(
+                int(i) for i in rng.choice(len(oracle_records), size=m, replace=False)
+            )
+            oracle_idx_set = set(oracle_idx)
+            sampled_oracle = [oracle_records[i] for i in oracle_idx]
+
+            # The remaining pool supplies the n - m judge-only records; any
+            # oracle labels are stripped so analyze_dataset sees exactly
+            # (n, m). Labeling is random by construction, so stripping
+            # preserves ignorability. (Previously the unlabeled pool alone
+            # supplied these records, so e.g. at oracle_fraction=1.0 the
+            # recorded (n, m) was never actually delivered.)
+            remaining = [
+                oracle_records[i]
+                for i in range(len(oracle_records))
+                if i not in oracle_idx_set
+            ] + non_oracle_records
+            extra_idx = rng.choice(len(remaining), size=n - m, replace=False)
+            sampled_unlabeled = [
+                {
+                    "prompt_id": remaining[i]["prompt_id"],
+                    "judge_score": remaining[i]["judge_score"],
+                }
+                for i in extra_idx
+            ]
+
+            subsample = sampled_oracle + sampled_unlabeled
+
+            if len(subsample) < 20:
                 continue
 
-            if verbose:
-                print(f"  Measuring n={n}, m={m}...", end="", flush=True)
-
-            se_values = []
-            for rep in range(n_replicates):
-                # Subsample data
-                oracle_records = [r for r in base_data if "oracle_label" in r]
-                non_oracle_records = [r for r in base_data if "oracle_label" not in r]
-
-                # Sample using indices to satisfy mypy
-                n_oracle_sample = min(m, len(oracle_records))
-                oracle_indices = rng.choice(
-                    len(oracle_records), size=n_oracle_sample, replace=False
+            try:
+                result = analyze_dataset(
+                    fresh_draws_data={"synthetic": subsample},
+                    verbose=False,
+                    estimator_config={
+                        "inference_method": "bootstrap",
+                        "n_bootstrap": _PLANNING_BOOTSTRAP_REPLICATES,
+                    },
                 )
-                sampled_oracle = [oracle_records[i] for i in oracle_indices]
+                if (
+                    result.standard_errors is not None
+                    and len(result.standard_errors) > 0
+                    and result.standard_errors[0] > 0
+                ):
+                    se_values.append(float(result.standard_errors[0]))
+            except Exception as e:
+                logger.debug(f"analyze_dataset failed: {e}")
+                continue
 
-                n_non_oracle = min(n - len(sampled_oracle), len(non_oracle_records))
-                if n_non_oracle > 0:
-                    non_oracle_indices = rng.choice(
-                        len(non_oracle_records), size=n_non_oracle, replace=False
-                    )
-                    sampled_non_oracle = [
-                        non_oracle_records[i] for i in non_oracle_indices
-                    ]
-                else:
-                    sampled_non_oracle = []
-
-                subsample = sampled_oracle + sampled_non_oracle
-
-                if len(subsample) < 20:
-                    continue
-
-                try:
-                    result = analyze_dataset(
-                        fresh_draws_data={"synthetic": subsample},
-                        verbose=False,
-                        estimator_config={
-                            "inference_method": "bootstrap",
-                            "n_bootstrap": _PLANNING_BOOTSTRAP_REPLICATES,
-                        },
-                    )
-                    if (
-                        result.standard_errors is not None
-                        and len(result.standard_errors) > 0
-                        and result.standard_errors[0] > 0
-                    ):
-                        se_values.append(float(result.standard_errors[0]))
-                except Exception as e:
-                    logger.debug(f"analyze_dataset failed: {e}")
-                    continue
-
-            if se_values:
-                median_se = float(np.median(se_values))
-                measurements.append((n, m, median_se**2))
-                if verbose:
-                    print(f" SE={median_se:.4f}")
-            elif verbose:
-                print(" FAILED")
+        if se_values:
+            median_se = float(np.median(se_values))
+            measurements.append((n, m, median_se**2))
+            if verbose:
+                print(f" SE={median_se:.4f}")
+        elif verbose:
+            print(" FAILED")
 
     if len(measurements) < 3:
         raise ValueError(
@@ -382,29 +466,16 @@ def simulate_variance_model(
             f"Try increasing n_total or oracle_fraction."
         )
 
-    # Fit model via NNLS
-    X = np.array([[1 / n, 1 / m] for n, m, _ in measurements])
-    y = np.array([var for _, _, var in measurements])
-
-    coeffs, _ = nnls(X, y)
-    sigma2_eval, sigma2_cal = coeffs
-
-    y_pred = X @ coeffs
-    ss_res = np.sum((y - y_pred) ** 2)
-    ss_tot = np.sum((y - np.mean(y)) ** 2)
-    r_squared = 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
+    # Fit via the same NNLS fitter used for pilot data
+    model = _fit_variance_model_from_measurements(measurements)
 
     if verbose:
         print(
-            f"Fitted model: σ²_eval={sigma2_eval:.4f}, σ²_cal={sigma2_cal:.4f}, R²={r_squared:.2f}"
+            f"Fitted model: σ²_eval={model.sigma2_eval:.4f}, "
+            f"σ²_cal={model.sigma2_cal:.4f}, R²={model.r_squared:.2f}"
         )
 
-    return FittedVarianceModel(
-        sigma2_eval=float(sigma2_eval),
-        sigma2_cal=float(sigma2_cal),
-        r_squared=float(r_squared),
-        n_measurements=len(measurements),
-    )
+    return model
 
 
 # =============================================================================
@@ -509,9 +580,9 @@ def simulate_planning_sweep(
 ) -> List[SimulationPlanningResult]:
     """Run planning across multiple R² values for sensitivity analysis.
 
-    Note: Each R² value runs a simulation, so sweeping across
-    N values can still take a while. Consider using fewer R² values or
-    running overnight for large sweeps.
+    Note: Each R² value runs a simulation taking roughly 25-30 seconds at the
+    default n_total/n_replicates, so a sweep over N values takes about N/2
+    minutes.
 
     Args:
         r2_values: List of R² values to evaluate.
@@ -531,14 +602,15 @@ def simulate_planning_sweep(
     Example:
         >>> from cje import simulate_planning_sweep, CostModel
         >>> cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-        >>> # Note: This takes ~15-21 minutes for 3 R² values
+        >>> # Note: This takes ~25-30 seconds per R² value (~1.5 min for 3)
         >>> results = simulate_planning_sweep([0.5, 0.7, 0.9], budget=5000, cost_model=cost)
         >>> for r in results:
         ...     print(f"R²={r.r2}: MDE={r.plan.mde:.1%}, oracle={r.plan.oracle_fraction:.0%}")
     """
     if len(r2_values) > 0:
         print(
-            f"Running {len(r2_values)} simulations (~{len(r2_values) * 5}-{len(r2_values) * 7} min total)..."
+            f"Running {len(r2_values)} simulations "
+            f"(~{len(r2_values) * 25}-{len(r2_values) * 30} s total)..."
         )
 
     results = []

@@ -198,6 +198,11 @@ print(plan_target.total_cost)
 - Refit the variance model periodically with new pilot/production evidence.
 - If audit FAIL frequency rises, increase planned `m_oracle` and rerun planning.
 
+### Planning caveats (read before trusting the numbers)
+
+- MDE assumes independent policies; paired evals on a shared prompt set typically detect smaller differences (plans are conservative).
+- Variance components are measured from bootstrap SEs, which are conservative at small oracle counts — treat planned budgets as upper bounds.
+
 ---
 
 ## 7) Suggested Operational Cadence

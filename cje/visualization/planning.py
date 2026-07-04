@@ -232,6 +232,13 @@ def plot_planning_dashboard(
     for i, oc in enumerate(oracle_costs):
         cm = CostModel(surrogate_cost=cost_model.surrogate_cost, oracle_cost=oc)
         budgets_sens = np.linspace(budget_range[0], budget_range[1] * 0.75, 30)
+        # plan_evaluation raises for budgets below the m_min feasibility floor
+        # (30 oracle labels plus 30 surrogate scores at this cost model); only
+        # plot the feasible portion of the curve.
+        min_feasible = 30 * (cost_model.surrogate_cost + oc)
+        budgets_sens = budgets_sens[budgets_sens >= min_feasible]
+        if len(budgets_sens) == 0:
+            continue
         mdes_sens = [
             plan_evaluation(budget=b, variance_model=variance_model, cost_model=cm).mde
             * 100
