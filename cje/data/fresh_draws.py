@@ -4,10 +4,16 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Callable, Dict, List, Optional, Any, Tuple, TypeVar
 import numpy as np
 from pydantic import BaseModel, Field, field_validator
 
+from .ingest import (
+    POLICY_FILE_PATTERNS,
+    read_aliased_field,
+    resolve_policy_file,
+    resolve_prompt_id,
+)
 from .normalization import ScaleInfo, detect_range
 
 logger = logging.getLogger(__name__)
@@ -106,19 +112,111 @@ def load_fresh_draws_from_jsonl(path: str) -> Dict[str, FreshDrawDataset]:
     return FreshDrawLoader.load_from_jsonl(path)
 
 
+_T = TypeVar("_T")
+
+
+def _parse_fresh_draw_record(
+    data: Dict[str, Any], idx: int, policy: str
+) -> Dict[str, Any]:
+    """Parse one raw fresh-draw record into canonical dict form.
+
+    Preserves the review-hardened per-record semantics of the original
+    load_fresh_draws_auto loop:
+
+    - prompt_id: top level -> metadata -> prompt-hash -> index fallback,
+      with explicit None checks so falsy-but-valid ids (0, "") survive;
+    - judge_score / oracle_label: top level first, then metadata; missing
+      judge_score is never fabricated - fail clearly;
+    - float coercion here so type errors surface with file/line context.
+    """
+    prompt_id = resolve_prompt_id(data, idx, policy=policy)
+
+    # Check for judge_score properly - don't use 'or' for numeric fields
+    judge_score = read_aliased_field(data, "judge_score")
+    if judge_score is None:
+        # Never fabricate missing data - fail clearly
+        raise ValueError(
+            f"Missing judge_score for prompt_id={prompt_id}. "
+            f"Fresh draws require judge scores."
+        )
+
+    record: Dict[str, Any] = {
+        "prompt_id": prompt_id,
+        "judge_score": float(judge_score),
+        "response": data.get("response", ""),
+    }
+
+    # Extract oracle_label if present (for calibration)
+    oracle_label = read_aliased_field(data, "oracle_label")
+    if oracle_label is not None:
+        record["oracle_label"] = float(oracle_label)
+
+    if "draw_idx" in data:
+        record["draw_idx"] = data["draw_idx"]
+
+    metadata = data.get("metadata")
+    if isinstance(metadata, dict):
+        record["metadata"] = metadata
+
+    return record
+
+
+def _load_policy_file_records(
+    file_path: Path,
+    policy: str,
+    parse: Callable[[Dict[str, Any], int], _T],
+) -> List[_T]:
+    """Read a per-policy fresh-draws file, applying ``parse`` per record.
+
+    Parse errors propagate loudly (with file/line context) instead of being
+    swallowed; blank/whitespace-only lines (e.g. a trailing newline) are
+    skipped, matching the logged-data loader — only real records should hit
+    the loud parse-error path.
+    """
+    results: List[_T] = []
+    with open(file_path, "r") as f:
+        for idx, line in enumerate(f):
+            if not line.strip():
+                continue
+            try:
+                data = json.loads(line)
+                item = parse(data, idx)
+            except ValueError as e:
+                # Covers json.JSONDecodeError and pydantic ValidationError
+                # (both subclass ValueError). Add file/line context.
+                raise ValueError(
+                    f"Invalid fresh draw record at {file_path}:{idx + 1} "
+                    f"for policy '{policy}': {e}"
+                ) from e
+            results.append(item)
+
+    if not results:
+        raise ValueError(
+            f"Fresh draw file {file_path} exists but contains no records "
+            f"for policy '{policy}'."
+        )
+    return results
+
+
 def load_fresh_draws_auto(
     data_dir: Path,
     policy: str,
     verbose: bool = False,
 ) -> FreshDrawDataset:
     """
-    Load fresh draws from files.
+    Load fresh draws for a single policy from a fresh-draws directory.
 
-    This function tries to load fresh draws from standard locations:
+    The file is located via the canonical POLICY_FILE_PATTERNS (first
+    existing match wins):
     1. {data_dir}/{policy}_responses.jsonl
-    2. {data_dir}/responses/{policy}_responses.jsonl
-    3. {data_dir}/{policy}_fresh.jsonl
+    2. {data_dir}/{policy}.jsonl
+    3. {data_dir}/responses/{policy}.jsonl
     4. {data_dir}/fresh_draws/{policy}.jsonl
+
+    Values must already be in [0, 1]: samples are constructed with hard
+    [0, 1] bounds. The analyze_dataset directory flow instead goes through
+    fresh_draws_data_from_dir + fresh_draws_from_dict, which jointly
+    auto-normalizes any bounded scale.
 
     Args:
         data_dir: Directory to search for fresh draw files
@@ -134,135 +232,94 @@ def load_fresh_draws_auto(
     # Convert to Path if string
     data_dir = Path(data_dir)
 
-    # Standard file patterns to check
-    possible_files = [
-        data_dir / f"{policy}_responses.jsonl",
-        data_dir / "responses" / f"{policy}_responses.jsonl",
-        data_dir / f"{policy}_fresh.jsonl",
-        data_dir / "fresh_draws" / f"{policy}.jsonl",
-    ]
+    file_path = resolve_policy_file(data_dir, policy)
+    if file_path is None:
+        # No file found - raise error with helpful message
+        searched_paths = "\n  ".join(
+            str(data_dir / pattern.format(policy=policy))
+            for pattern in POLICY_FILE_PATTERNS
+        )
+        raise FileNotFoundError(
+            f"No fresh draw file found for policy '{policy}'. Searched:\n  {searched_paths}\n"
+            f"Direct mode requires judge-scored fresh draws for every target policy."
+        )
 
-    # Try to load from each possible location. Once an existing file is found,
-    # parse errors propagate loudly (with file/line context) instead of being
-    # swallowed and misreported as "no fresh draw file found".
-    for file_path in possible_files:
-        if not file_path.exists():
-            continue
+    if verbose:
+        logger.info(f"Loading fresh draws from {file_path}")
 
+    def _parse_sample(data: Dict[str, Any], idx: int) -> FreshDrawSample:
+        record = _parse_fresh_draw_record(data, idx, policy)
+        return FreshDrawSample(
+            prompt_id=record["prompt_id"],
+            target_policy=policy,
+            response=record["response"],
+            judge_score=record["judge_score"],
+            oracle_label=record.get("oracle_label"),
+            draw_idx=record.get("draw_idx", 0),
+        )
+
+    fresh_samples = _load_policy_file_records(file_path, policy, _parse_sample)
+
+    # Create dataset
+    fresh_dataset = FreshDrawDataset(
+        target_policy=policy,
+        samples=fresh_samples,
+    )
+
+    if verbose:
+        logger.info(
+            f"Loaded {len(fresh_samples)} fresh draws for {policy} "
+            f"({len(fresh_dataset.get_prompt_ids())} unique prompts)"
+        )
+
+    return fresh_dataset
+
+
+def fresh_draws_data_from_dir(
+    data_dir: Path,
+    verbose: bool = False,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Read a fresh-draws directory into raw records grouped by policy.
+
+    Discovers policies via POLICY_FILE_PATTERNS, reads each policy's file
+    with the same loud per-record parsing as load_fresh_draws_auto, and
+    returns ``{policy: [record dicts]}`` ready for fresh_draws_from_dict —
+    so directory input gets exactly the same joint scale detection and
+    auto-normalization as in-memory ``fresh_draws_data``.
+
+    Args:
+        data_dir: Directory containing per-policy fresh draw files
+        verbose: Whether to log detailed information
+
+    Returns:
+        Dict mapping policy names to lists of canonical record dicts
+
+    Raises:
+        ValueError: If the directory is missing or contains no policy files
+    """
+    data_dir = Path(data_dir)
+    data: Dict[str, List[Dict[str, Any]]] = {}
+
+    for policy in discover_policies_from_fresh_draws(data_dir):
+        file_path = resolve_policy_file(data_dir, policy)
+        if file_path is None:
+            # Discovery and loading share POLICY_FILE_PATTERNS, so this can
+            # only happen if the file disappears between the two calls.
+            raise FileNotFoundError(
+                f"Fresh draw file for discovered policy '{policy}' vanished "
+                f"from {data_dir} while loading."
+            )
         if verbose:
             logger.info(f"Loading fresh draws from {file_path}")
 
-        # Load the file
-        fresh_samples = []
-        with open(file_path, "r") as f:
-            for idx, line in enumerate(f):
-                # Skip blank/whitespace-only lines (e.g. a trailing newline),
-                # matching the logged-data loader; only real records should
-                # hit the loud parse-error path below.
-                if not line.strip():
-                    continue
-                try:
-                    data = json.loads(line)
+        def _parse_record(
+            record: Dict[str, Any], idx: int, _policy: str = policy
+        ) -> Dict[str, Any]:
+            return _parse_fresh_draw_record(record, idx, _policy)
 
-                    # Get prompt_id - check top-level first, then metadata,
-                    # then auto-generate. Explicit None checks: falsy but
-                    # valid ids like 0 or "" must not be hash-replaced.
-                    prompt_id = data.get("prompt_id")
-                    if prompt_id is None:
-                        prompt_id = data.get("metadata", {}).get("prompt_id")
-                    if prompt_id is None:
-                        # Auto-generate from prompt hash for consistency with logged data
-                        # This ensures fresh draws will map to the same prompt_id
-                        prompt = data.get("prompt", "")
-                        if prompt:
-                            import hashlib
+        data[policy] = _load_policy_file_records(file_path, policy, _parse_record)
 
-                            # Use first 12 chars of SHA256 for readable but unique ID
-                            prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[
-                                :12
-                            ]
-                            prompt_id = f"prompt_{prompt_hash}"
-                        else:
-                            # Fallback to index if no prompt either
-                            prompt_id = f"fresh_{policy}_{idx:06d}"
-                            logger.warning(
-                                f"Fresh draw record {idx} for policy '{policy}' missing both "
-                                f"'prompt_id' and 'prompt'. Using index-based ID '{prompt_id}'. "
-                                f"This will NOT align with logged data for DR mode. "
-                                f"Add explicit prompt_id or prompt text for stability."
-                            )
-
-                    # Handle different formats
-                    # Check for judge_score properly - don't use 'or' for numeric fields
-                    if "judge_score" in data and data["judge_score"] is not None:
-                        judge_score = data["judge_score"]
-                    elif (
-                        "metadata" in data
-                        and "judge_score" in data["metadata"]
-                        and data["metadata"]["judge_score"] is not None
-                    ):
-                        judge_score = data["metadata"]["judge_score"]
-                    else:
-                        # Never fabricate missing data - fail clearly
-                        raise ValueError(
-                            f"Missing judge_score for prompt_id={prompt_id}. "
-                            f"Fresh draws require judge scores."
-                        )
-
-                    # Extract oracle_label if present (for calibration)
-                    oracle_label = None
-                    if "oracle_label" in data and data["oracle_label"] is not None:
-                        oracle_label = data["oracle_label"]
-                    elif (
-                        "metadata" in data
-                        and "oracle_label" in data["metadata"]
-                        and data["metadata"]["oracle_label"] is not None
-                    ):
-                        oracle_label = data["metadata"]["oracle_label"]
-
-                    fresh_sample = FreshDrawSample(
-                        prompt_id=str(prompt_id),
-                        target_policy=policy,
-                        response=data.get("response", ""),
-                        judge_score=judge_score,
-                        oracle_label=oracle_label,
-                        draw_idx=data.get("draw_idx", 0),
-                    )
-                except ValueError as e:
-                    # Covers json.JSONDecodeError and pydantic ValidationError
-                    # (both subclass ValueError). Add file/line context.
-                    raise ValueError(
-                        f"Invalid fresh draw record at {file_path}:{idx + 1} "
-                        f"for policy '{policy}': {e}"
-                    ) from e
-                fresh_samples.append(fresh_sample)
-
-        if not fresh_samples:
-            raise ValueError(
-                f"Fresh draw file {file_path} exists but contains no records "
-                f"for policy '{policy}'."
-            )
-
-        # Create dataset
-        fresh_dataset = FreshDrawDataset(
-            target_policy=policy,
-            samples=fresh_samples,
-        )
-
-        if verbose:
-            logger.info(
-                f"Loaded {len(fresh_samples)} fresh draws for {policy} "
-                f"({len(fresh_dataset.get_prompt_ids())} unique prompts)"
-            )
-
-        return fresh_dataset
-
-    # No file found - raise error with helpful message
-    searched_paths = "\n  ".join(str(p) for p in possible_files)
-    raise FileNotFoundError(
-        f"No fresh draw file found for policy '{policy}'. Searched:\n  {searched_paths}\n"
-        f"Direct mode requires judge-scored fresh draws for every target policy."
-    )
+    return data
 
 
 @dataclass
@@ -484,12 +541,23 @@ def fresh_draws_from_dict(
     return result, norm_info
 
 
+# File stems that never denote a policy (auxiliary files living next to
+# per-policy fresh draws).
+_NON_POLICY_STEMS = frozenset(["dataset", "data", "logs"])
+
+
 def discover_policies_from_fresh_draws(fresh_draws_dir: Path) -> List[str]:
     """Discover target policies from fresh draws directory.
 
-    Looks for files matching patterns:
-    - {policy}_responses.jsonl
-    - {policy}.jsonl
+    Recognizes exactly the canonical POLICY_FILE_PATTERNS, checked in
+    order — the first location that yields any policies wins:
+    1. {policy}_responses.jsonl
+    2. {policy}.jsonl
+    3. responses/{policy}.jsonl
+    4. fresh_draws/{policy}.jsonl
+
+    Every discovered policy is guaranteed to load, because loading
+    (resolve_policy_file) resolves through the same pattern list.
 
     Args:
         fresh_draws_dir: Directory containing fresh draw files
@@ -504,24 +572,30 @@ def discover_policies_from_fresh_draws(fresh_draws_dir: Path) -> List[str]:
     if not fresh_draws_path.exists():
         raise ValueError(f"Fresh draws directory not found: {fresh_draws_dir}")
 
-    policies = []
+    policies: List[str] = []
 
     # Pattern 1: {policy}_responses.jsonl
     for path in fresh_draws_path.glob("*_responses.jsonl"):
-        policy = path.stem.replace("_responses", "")
-        policies.append(policy)
+        policies.append(path.stem[: -len("_responses")])
 
-    # Pattern 2: {policy}.jsonl (if no _responses files found)
-    if not policies:
-        for path in fresh_draws_path.glob("*.jsonl"):
+    # Patterns 2-4: bare {policy}.jsonl at the top level, then in the
+    # responses/ and fresh_draws/ subdirectories. Each is a fallback: it is
+    # only consulted when no earlier pattern matched, so auxiliary .jsonl
+    # files next to *_responses.jsonl files are never mistaken for policies.
+    for glob_pattern in ("*.jsonl", "responses/*.jsonl", "fresh_draws/*.jsonl"):
+        if policies:
+            break
+        for path in fresh_draws_path.glob(glob_pattern):
             # Skip files that don't look like policy files
-            if path.stem not in ["dataset", "data", "logs"]:
+            if path.stem not in _NON_POLICY_STEMS:
                 policies.append(path.stem)
 
     if not policies:
+        patterns = ", ".join(f"'{p}'" for p in POLICY_FILE_PATTERNS)
         raise ValueError(
             f"No fresh draw files found in {fresh_draws_dir}. "
-            f"Expected files like 'policy_a_responses.jsonl' or 'policy_a.jsonl'"
+            f"Expected per-policy files matching one of: {patterns} "
+            f"(e.g. 'policy_a_responses.jsonl' or 'policy_a.jsonl')"
         )
 
     logger.info(f"Discovered {len(policies)} policies from fresh draws: {policies}")

@@ -70,7 +70,7 @@ responses/
 └── model_c_responses.jsonl
 ```
 
-File patterns searched per policy (in order): `{policy}_responses.jsonl`, `responses/{policy}_responses.jsonl`, `{policy}_fresh.jsonl`, `fresh_draws/{policy}.jsonl`.
+File patterns searched per policy (in order): `{policy}_responses.jsonl`, `{policy}.jsonl`, `responses/{policy}.jsonl`, `fresh_draws/{policy}.jsonl`. Discovery, loading, and the CLI all resolve through this one list (`cje.data.ingest.POLICY_FILE_PATTERNS`), so any layout that is discovered is guaranteed to load.
 
 ### Calibration files (`calibration_data_path`)
 
@@ -81,7 +81,7 @@ A calibration file needs only judge + oracle pairs:
 {"prompt_id": "calib_1", "judge_score": 0.81, "oracle_label": 0.77}
 ```
 
-No `prompt`, `response`, or logprob fields are required (they're accepted and ignored). Your old 0.3.x logged data works here as-is — the judge/oracle pairs are used to learn the judge→oracle mapping and everything else is ignored.
+No `prompt`, `response`, or logprob fields are required (they're accepted and ignored). Your old 0.3.x logged data works here as-is — the judge/oracle pairs are used to learn the judge→oracle mapping and everything else is ignored. Calibration values must already be in [0, 1]: out-of-range `judge_score`/`oracle_label` values raise a hard error naming the observed range (rescale them, or pass your data in-memory via `fresh_draws_data`, which auto-normalizes any bounded scale).
 
 ## Core Concepts
 

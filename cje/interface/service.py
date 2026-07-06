@@ -102,10 +102,10 @@ class AnalysisService:
         from ..data.fresh_draws import (
             NormalizationInfo,
             compute_response_covariates,
-            discover_policies_from_fresh_draws,
+            fresh_draws_data_from_dir,
             fresh_draws_from_dict,
-            load_fresh_draws_auto,
         )
+        from ..data.ingest import fresh_draws_data_from_file
         from ..data.models import Dataset, Sample
         from ..estimators.direct_method import CalibratedDirectEstimator
 
@@ -122,26 +122,34 @@ class AnalysisService:
             # Raises the migration error for removed OPE estimator names.
             validate_estimator_name(chosen_estimator)
 
-        # --- 2. Load fresh draws (in-memory dict OR directory); norm_info
-        # tracks auto-normalization for the inverse transform in stage 5
+        # --- 2. Load fresh draws (in-memory dict, directory, or single
+        # multi-policy JSONL file). All three inputs converge on
+        # fresh_draws_from_dict so joint scale detection / auto-normalization
+        # behaves identically; norm_info tracks the applied normalization for
+        # the inverse transform in stage 5.
         norm_info: Optional[NormalizationInfo] = None
 
         if config.fresh_draws_data is not None:
             if config.verbose:
                 logger.info("Using in-memory fresh_draws_data")
-            fresh_draws_dict, norm_info = fresh_draws_from_dict(
-                config.fresh_draws_data, verbose=config.verbose, auto_normalize=True
-            )
-            target_policies = sorted(fresh_draws_dict.keys())
+            raw_fresh_draws = config.fresh_draws_data
         else:
             assert config.fresh_draws_dir is not None  # validated in stage 1
-            draws_dir = Path(config.fresh_draws_dir)
-            target_policies = discover_policies_from_fresh_draws(draws_dir)
-            fresh_draws_dict = {}
-            for policy in target_policies:
-                fresh_draws_dict[policy] = load_fresh_draws_auto(
-                    draws_dir, policy, verbose=config.verbose
+            draws_path = Path(config.fresh_draws_dir)
+            if draws_path.is_file():
+                # Single JSONL file with a target_policy field per record
+                if config.verbose:
+                    logger.info(f"Loading fresh draws from file {draws_path}")
+                raw_fresh_draws = fresh_draws_data_from_file(draws_path)
+            else:
+                raw_fresh_draws = fresh_draws_data_from_dir(
+                    draws_path, verbose=config.verbose
                 )
+
+        fresh_draws_dict, norm_info = fresh_draws_from_dict(
+            raw_fresh_draws, verbose=config.verbose, auto_normalize=True
+        )
+        target_policies = sorted(fresh_draws_dict.keys())
 
         if config.verbose:
             logger.info(

@@ -20,7 +20,7 @@ Logprob fields from 0.3.x logged data are accepted and ignored.
 **Three ways to supply data to `analyze_dataset`:**
 
 1. `fresh_draws_data={policy_name: [records]}` — in-memory, the default choice when you reshaped the user's data yourself.
-2. `fresh_draws_dir="responses/"` — one JSONL per policy, named `{policy}_responses.jsonl` (also accepted: `{policy}.jsonl`, `{policy}_fresh.jsonl`). Policy name comes from the filename; keep names identical everywhere.
+2. `fresh_draws_dir="responses/"` — one JSONL per policy, named `{policy}_responses.jsonl` (also accepted: `{policy}.jsonl`). Policy name comes from the filename; keep names identical everywhere. A single JSONL file path (records grouped by `target_policy`) also works here.
 3. `calibration_data_path="labeled.jsonl"` — a separate judge+oracle file (e.g. historical labeled logs) used as the calibration source. With `combine_oracle_sources=True` (default) any `oracle_label`s in the fresh draws are pooled with it; `metadata["oracle_sources"]` reports provenance and cross-source conflicts.
 
 Field names differ in the user's data? Pass `judge_field="score"`, `oracle_field="human_rating"` instead of renaming.

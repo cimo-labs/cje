@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field, field_validator
 
 class AnalysisConfig(BaseModel):
     fresh_draws_dir: Optional[str] = Field(
-        None, description="Directory with fresh draws from target policies"
+        None,
+        description="Directory with per-policy fresh draw files, or a single "
+        "JSONL file whose records carry a target_policy field.",
     )
     fresh_draws_data: Optional[Dict[str, List[Dict[str, Any]]]] = Field(
         None,
