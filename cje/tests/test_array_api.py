@@ -61,7 +61,6 @@ def arena_single_policy(
                 oracle_label=label,
                 response=None,
                 draw_idx=sample.draw_idx,
-                fold_id=None,
             )
         )
         judge.append(sample.judge_score)
@@ -74,7 +73,6 @@ def arena_single_policy(
 
     fd_labeled = FreshDrawDataset(
         target_policy=policy,
-        draws_per_prompt=fd.draws_per_prompt,
         samples=samples,
     )
     return policy, fd_labeled, np.asarray(judge, dtype=float), labels_arr, prompts

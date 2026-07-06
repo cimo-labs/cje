@@ -14,13 +14,13 @@ logger = logging.getLogger(__name__)
 
 
 class FreshDrawSample(BaseModel):
-    """A single fresh draw sample for DR estimation.
+    """A single fresh draw sample for Direct-mode evaluation.
 
     Represents a fresh response sampled from a target policy,
     evaluated by the judge.
     """
 
-    prompt_id: str = Field(..., description="ID to align with logged data")
+    prompt_id: str = Field(..., description="ID to align with calibration data")
     target_policy: str = Field(..., description="Policy that generated this response")
     judge_score: float = Field(..., ge=0, le=1, description="Judge evaluation score")
     oracle_label: Optional[float] = Field(
@@ -30,30 +30,20 @@ class FreshDrawSample(BaseModel):
     draw_idx: int = Field(
         ..., ge=0, description="Draw index for this prompt (0, 1, 2...)"
     )
-    fold_id: Optional[int] = Field(
-        None, description="CV fold assignment (should match logged data)"
-    )
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description="Additional metadata (e.g., computed covariates)",
     )
-
-    @field_validator("judge_score")
-    def validate_judge_score(cls, v: float) -> float:
-        if not 0 <= v <= 1:
-            raise ValueError(f"Judge score must be in [0, 1], got {v}")
-        return v
 
 
 class FreshDrawDataset(BaseModel):
     """Collection of fresh draws for a target policy.
 
     Contains pre-generated fresh samples from a target policy,
-    evaluated by a judge, for use in DR estimation.
+    evaluated by a judge, for use in Direct-mode estimation.
     """
 
     target_policy: str = Field(..., description="Target policy name")
-    draws_per_prompt: int = Field(..., ge=1, description="Number of draws per prompt")
     samples: List[FreshDrawSample] = Field(..., min_length=1)
 
     @field_validator("samples")
@@ -76,91 +66,17 @@ class FreshDrawDataset(BaseModel):
         """Total number of fresh draw samples."""
         return len(self.samples)
 
+    @property
+    def draws_per_prompt(self) -> int:
+        """Maximum number of draws for any single prompt."""
+        counts: Dict[str, int] = {}
+        for sample in self.samples:
+            counts[sample.prompt_id] = counts.get(sample.prompt_id, 0) + 1
+        return max(counts.values()) if counts else 1
+
     def get_prompt_ids(self) -> List[str]:
         """Get unique prompt IDs in dataset."""
         return sorted(set(s.prompt_id for s in self.samples))
-
-    def get_scores_for_prompt_id(self, prompt_id: str) -> np.ndarray:
-        """Get judge scores for a specific prompt.
-
-        Args:
-            prompt_id: The prompt ID to get scores for
-
-        Returns:
-            Array of judge scores for this prompt, sorted by draw_idx
-        """
-        # Sort by draw_idx for reproducibility
-        matching_samples = sorted(
-            [s for s in self.samples if s.prompt_id == prompt_id],
-            key=lambda s: s.draw_idx,
-        )
-
-        if not matching_samples:
-            raise ValueError(f"No samples found for prompt_id '{prompt_id}'")
-
-        # Allow variable draws per prompt (don't enforce exact count)
-        # Just log if different from expected
-        if self.draws_per_prompt and len(matching_samples) != self.draws_per_prompt:
-            logger.debug(
-                f"Prompt '{prompt_id}' has {len(matching_samples)} draws "
-                f"(dataset average: {self.draws_per_prompt})"
-            )
-
-        return np.array([s.judge_score for s in matching_samples])
-
-    def get_samples_for_prompt_id(self, prompt_id: str) -> List[FreshDrawSample]:
-        """Get all samples for a specific prompt.
-
-        Args:
-            prompt_id: The prompt ID to get samples for
-
-        Returns:
-            List of samples for this prompt
-        """
-        samples = [s for s in self.samples if s.prompt_id == prompt_id]
-
-        if not samples:
-            raise ValueError(f"No samples found for prompt_id '{prompt_id}'")
-
-        # Sort by draw_idx to ensure consistent ordering
-        return sorted(samples, key=lambda s: s.draw_idx)
-
-    def to_arrays(self) -> Dict[str, np.ndarray]:
-        """Convert dataset to arrays for efficient computation.
-
-        Returns:
-            Dict with 'prompt_ids' and 'judge_scores' arrays
-        """
-        # Sort samples by (prompt_id, draw_idx) for consistent ordering
-        sorted_samples = sorted(self.samples, key=lambda s: (s.prompt_id, s.draw_idx))
-
-        prompt_ids = []
-        judge_scores = []
-
-        for sample in sorted_samples:
-            prompt_ids.append(sample.prompt_id)
-            judge_scores.append(sample.judge_score)
-
-        return {
-            "prompt_ids": np.array(prompt_ids),
-            "judge_scores": np.array(judge_scores),
-        }
-
-    def summary(self) -> Dict[str, Any]:
-        """Get summary statistics for the dataset."""
-        scores = np.array([s.judge_score for s in self.samples])
-        unique_prompts = self.get_prompt_ids()
-
-        return {
-            "target_policy": self.target_policy,
-            "n_samples": len(self.samples),
-            "n_prompts": len(unique_prompts),
-            "draws_per_prompt": self.draws_per_prompt,
-            "judge_score_mean": float(scores.mean()),
-            "judge_score_std": float(scores.std()),
-            "judge_score_min": float(scores.min()),
-            "judge_score_max": float(scores.max()),
-        }
 
 
 # ============================================================================
@@ -311,7 +227,6 @@ def load_fresh_draws_auto(
                         judge_score=judge_score,
                         oracle_label=oracle_label,
                         draw_idx=data.get("draw_idx", 0),
-                        fold_id=data.get("fold_id"),
                     )
                 except ValueError as e:
                     # Covers json.JSONDecodeError and pydantic ValidationError
@@ -331,21 +246,13 @@ def load_fresh_draws_auto(
         # Create dataset
         fresh_dataset = FreshDrawDataset(
             target_policy=policy,
-            draws_per_prompt=1,  # Will be updated based on actual data
             samples=fresh_samples,
         )
-
-        # Update draws_per_prompt based on actual data
-        prompt_counts: Dict[str, int] = {}
-        for sample in fresh_samples:
-            prompt_counts[sample.prompt_id] = prompt_counts.get(sample.prompt_id, 0) + 1
-        if prompt_counts:
-            fresh_dataset.draws_per_prompt = max(prompt_counts.values())
 
         if verbose:
             logger.info(
                 f"Loaded {len(fresh_samples)} fresh draws for {policy} "
-                f"({len(prompt_counts)} unique prompts)"
+                f"({len(fresh_dataset.get_prompt_ids())} unique prompts)"
             )
 
         return fresh_dataset
@@ -354,39 +261,8 @@ def load_fresh_draws_auto(
     searched_paths = "\n  ".join(str(p) for p in possible_files)
     raise FileNotFoundError(
         f"No fresh draw file found for policy '{policy}'. Searched:\n  {searched_paths}\n"
-        f"Fresh draws must be generated from real teacher forcing responses."
+        f"Direct mode requires judge-scored fresh draws for every target policy."
     )
-
-
-def save_fresh_draws_to_jsonl(
-    datasets: Dict[str, FreshDrawDataset],
-    path: str,
-) -> None:
-    """Save fresh draw datasets to JSONL file.
-
-    Args:
-        datasets: Dict mapping policy names to FreshDrawDataset objects
-        path: Output path for JSONL file
-    """
-    path_obj = Path(path)
-    path_obj.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(path_obj, "w") as f:
-        for policy, dataset in datasets.items():
-            for sample in dataset.samples:
-                record = {
-                    "prompt_id": sample.prompt_id,
-                    "target_policy": sample.target_policy,
-                    "judge_score": sample.judge_score,
-                    "draw_idx": sample.draw_idx,
-                }
-                if sample.response is not None:
-                    record["response"] = sample.response
-
-                f.write(json.dumps(record) + "\n")
-
-    total_samples = sum(len(d.samples) for d in datasets.values())
-    logger.info(f"Saved {total_samples} fresh draws to {path_obj}")
 
 
 @dataclass
@@ -584,17 +460,12 @@ def fresh_draws_from_dict(
                 oracle_label=normalized_oracle,
                 response=record.get("response"),
                 draw_idx=draw_idx,
-                fold_id=record.get("fold_id"),
                 metadata=record.get("metadata", {}),
             )
             samples.append(sample)
 
-        # Determine draws_per_prompt (max draws for any prompt)
-        draws_per_prompt = max(prompt_draw_counts.values()) if prompt_draw_counts else 1
-
         dataset = FreshDrawDataset(
             target_policy=policy,
-            draws_per_prompt=draws_per_prompt,
             samples=samples,
         )
         result[policy] = dataset
@@ -722,7 +593,6 @@ def compute_response_covariates(
     # Create new dataset with updated samples
     updated_dataset = FreshDrawDataset(
         target_policy=fresh_draws.target_policy,
-        draws_per_prompt=fresh_draws.draws_per_prompt,
         samples=updated_samples,
     )
 

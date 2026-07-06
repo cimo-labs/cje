@@ -3,7 +3,6 @@
 This module contains:
 - Estimators: CalibratedDirectEstimator and the base class
 - Data models: Pydantic models for type safety
-- Types: Data structures for results and error handling
 """
 
 from .base_estimator import BaseCJEEstimator
@@ -12,8 +11,6 @@ from ..data.models import (
     Sample,
     Dataset,
     EstimationResult,
-    LogProbResult,
-    LogProbStatus,
 )
 
 __all__ = [
@@ -24,7 +21,4 @@ __all__ = [
     "Sample",
     "Dataset",
     "EstimationResult",
-    # Types
-    "LogProbResult",
-    "LogProbStatus",
 ]

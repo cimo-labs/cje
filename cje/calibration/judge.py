@@ -96,14 +96,12 @@ class JudgeCalibrator:
 
     Args:
         random_seed: Random seed for reproducibility
-        balance_oracle_folds: Whether to balance oracle samples across folds
         calibration_mode: Calibration mode - 'auto' (default), 'monotone', or 'two_stage'
     """
 
     def __init__(
         self,
         random_seed: int = 42,
-        balance_oracle_folds: bool = True,
         calibration_mode: Optional[Literal["monotone", "two_stage", "auto"]] = "auto",
         covariate_names: Optional[List[str]] = None,
     ):
@@ -111,7 +109,6 @@ class JudgeCalibrator:
 
         Args:
             random_seed: Random seed for reproducibility
-            balance_oracle_folds: Whether to balance oracle samples across folds
             calibration_mode: Calibration method to use:
                 - 'auto' (default): Automatically select based on cross-validation
                 - 'monotone': Force standard isotonic regression
@@ -121,9 +118,6 @@ class JudgeCalibrator:
                 for use in two-stage calibration (e.g., ["response_length", "domain"])
         """
         self.random_seed = random_seed
-        self.balance_oracle_folds = (
-            balance_oracle_folds  # Whether to balance oracle samples across folds
-        )
         # None defaults to 'monotone' for backward compatibility
         self.calibration_mode = (
             calibration_mode if calibration_mode is not None else "monotone"

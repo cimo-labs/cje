@@ -8,10 +8,7 @@ All cross-validation in CJE MUST use these functions.
 
 import hashlib
 import numpy as np
-from typing import List, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .models import Dataset
+from typing import List
 
 
 def get_fold(prompt_id: str, n_folds: int = 5, seed: int = 42) -> int:
@@ -64,75 +61,3 @@ def get_folds_for_prompts(
         return np.array([], dtype=int)
 
     return np.array([get_fold(pid, n_folds, seed) for pid in prompt_ids])
-
-
-def get_folds_for_dataset(
-    dataset: "Dataset", n_folds: int = 5, seed: int = 42
-) -> np.ndarray:
-    """Get fold assignments for all samples in a dataset.
-
-    Args:
-        dataset: Dataset with samples containing prompt_ids
-        n_folds: Number of folds
-        seed: Random seed
-
-    Returns:
-        Array of fold indices aligned with dataset.samples
-    """
-    prompt_ids = [s.prompt_id for s in dataset.samples]
-    return get_folds_for_prompts(prompt_ids, n_folds, seed)
-
-
-def get_folds_with_oracle_balance(
-    prompt_ids: List[str], oracle_mask: np.ndarray, n_folds: int = 5, seed: int = 42
-) -> np.ndarray:
-    """Get folds with balanced oracle sample distribution.
-
-    Ensures oracle samples are evenly distributed across folds
-    (important for small oracle subsets). Unlabeled samples
-    use standard hash-based assignment.
-
-    Args:
-        prompt_ids: All prompt identifiers
-        oracle_mask: Boolean mask indicating oracle samples
-        n_folds: Number of folds
-        seed: Random seed
-
-    Returns:
-        Array of fold indices with balanced oracle distribution
-
-    Note:
-        This is primarily for JudgeCalibrator backward compatibility.
-        New code should use get_folds_for_prompts() directly.
-    """
-    n = len(prompt_ids)
-    if n == 0:
-        return np.array([], dtype=int)
-
-    if len(oracle_mask) != n:
-        raise ValueError(
-            f"oracle_mask length ({len(oracle_mask)}) must match "
-            f"prompt_ids length ({n})"
-        )
-
-    folds = np.zeros(n, dtype=int)
-
-    # Oracle samples: round-robin for perfect balance
-    oracle_indices = np.where(oracle_mask)[0]
-    if len(oracle_indices) > 0:
-        # Shuffle oracle indices for randomization
-        rng = np.random.RandomState(seed)
-        oracle_indices = oracle_indices.copy()
-        rng.shuffle(oracle_indices)
-
-        for i, idx in enumerate(oracle_indices):
-            folds[idx] = i % n_folds
-
-    # Unlabeled samples: standard hash-based
-    unlabeled = ~oracle_mask
-    if np.any(unlabeled):
-        unlabeled_ids = [prompt_ids[i] for i in range(n) if unlabeled[i]]
-        unlabeled_folds = get_folds_for_prompts(unlabeled_ids, n_folds, seed)
-        folds[unlabeled] = unlabeled_folds
-
-    return folds

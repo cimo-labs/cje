@@ -123,8 +123,6 @@ def test_transport_regional_fail_synthetic() -> None:
                 prompt=f"prompt {i}",
                 response=f"response {i}",
                 reward=None,
-                base_policy_logprob=-1.0,
-                target_policy_logprobs={"policy_a": -1.1},
                 judge_score=float(judge_scores[i]),  # Top level for calibrate_dataset
                 metadata={
                     "judge_score": float(judge_scores[i])
@@ -172,8 +170,6 @@ def test_transport_regional_fail_synthetic() -> None:
                 prompt=f"prompt {i}",
                 response=f"response {i}",
                 reward=None,
-                base_policy_logprob=-1.0,
-                target_policy_logprobs={"policy_a": -1.1},
                 judge_score=float(s),
                 metadata={"judge_score": float(s)},
                 oracle_label=float(y),
@@ -219,8 +215,6 @@ def test_transport_sparse_deciles() -> None:
                 prompt=f"prompt {i}",
                 response=f"response {i}",
                 reward=None,
-                base_policy_logprob=-1.0,
-                target_policy_logprobs={"policy_a": -1.1},
                 judge_score=float(judge_scores[i]),
                 metadata={"judge_score": float(judge_scores[i])},
                 oracle_label=float(oracle_labels[i]),
@@ -279,8 +273,6 @@ def test_transport_coverage_failure() -> None:
                 prompt=f"prompt {i}",
                 response=f"response {i}",
                 reward=None,
-                base_policy_logprob=-1.0,
-                target_policy_logprobs={"policy_a": -1.1},
                 judge_score=float(train_scores[i]),
                 metadata={"judge_score": float(train_scores[i])},
                 oracle_label=float(train_labels[i]),
@@ -316,8 +308,6 @@ def test_transport_coverage_failure() -> None:
                 prompt=f"prompt {i}",
                 response=f"response {i}",
                 reward=None,
-                base_policy_logprob=-1.0,
-                target_policy_logprobs={"policy_a": -1.1},
                 judge_score=float(s),
                 metadata={"judge_score": float(s)},
                 oracle_label=float(y),
@@ -417,8 +407,6 @@ def test_transport_missing_judge_score_raises() -> None:
             response="test response",
             reward=None,
             judge_score=None,
-            base_policy_logprob=-1.0,
-            target_policy_logprobs={"policy_a": -1.1},
             metadata={},  # Missing judge_score!
             oracle_label=0.5,
         )
@@ -449,8 +437,6 @@ def test_transport_missing_oracle_label_raises() -> None:
             response="test response",
             reward=None,
             judge_score=None,
-            base_policy_logprob=-1.0,
-            target_policy_logprobs={"policy_a": -1.1},
             metadata={"judge_score": 0.5},
             oracle_label=None,  # Missing!
         )
@@ -519,8 +505,6 @@ def test_transport_monotone_uses_quantile_binning() -> None:
                 prompt=f"prompt {i}",
                 response=f"response {i}",
                 reward=None,
-                base_policy_logprob=-1.0,
-                target_policy_logprobs={"clone": -1.0},
                 judge_score=float(s),
                 metadata={"judge_score": float(s)},
                 oracle_label=float(y),

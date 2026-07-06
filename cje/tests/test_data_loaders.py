@@ -153,13 +153,10 @@ class TestFreshDrawLoading:
                         oracle_label=None,
                         draw_idx=0,
                         response=rec.get("response"),
-                        fold_id=None,
                     )
                     samples.append(sample)
 
-                fresh_dataset = FreshDrawDataset(
-                    target_policy="clone", draws_per_prompt=1, samples=samples
-                )
+                fresh_dataset = FreshDrawDataset(target_policy="clone", samples=samples)
 
             # Validate
             assert len(fresh_dataset.samples) == 2

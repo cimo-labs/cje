@@ -89,13 +89,6 @@ class ScaleInfo:
             abs(self.min_val - 0.0) < tolerance and abs(self.max_val - 1.0) < tolerance
         )
 
-    def to_dict(self) -> dict:
-        """Convert to dict for serialization."""
-        return {
-            "min_val": self.min_val,
-            "max_val": self.max_val,
-        }
-
 
 def detect_range(
     values: np.ndarray,
@@ -134,30 +127,3 @@ def detect_range(
     max_v = float(valid_values.max())
 
     return ScaleInfo(min_val=min_v, max_val=max_v)
-
-
-def detect_and_normalize(
-    values: np.ndarray,
-    field_name: str = "values",
-) -> tuple[np.ndarray, ScaleInfo]:
-    """Detect range and normalize values in one step.
-
-    Args:
-        values: Array of values (can contain NaN)
-        field_name: Name of field for error messages
-
-    Returns:
-        Tuple of (normalized_values, scale_info)
-
-    Example:
-        >>> values = np.array([0, 50, 100])
-        >>> normalized, scale = detect_and_normalize(values, "judge_score")
-        >>> normalized
-        array([0. , 0.5, 1. ])
-    """
-    scale = detect_range(values, field_name)
-
-    # Normalize values (preserve NaN positions)
-    normalized = np.where(np.isnan(values), np.nan, scale.normalize_array(values))
-
-    return normalized, scale

@@ -80,8 +80,6 @@ def _simulate(
                 prompt=f"question {i}",
                 response=f"answer {i}",
                 reward=None,
-                base_policy_logprob=-10.0,
-                target_policy_logprobs={POLICY: -10.0 + float(np.log(_tilt(s)))},
                 judge_score=s,
                 oracle_label=y if rng.uniform() < oracle_frac else None,
             )
@@ -97,14 +95,11 @@ def _simulate(
                     judge_score=_sample_tilted_score(rng),
                     oracle_label=None,
                     response=None,
-                    fold_id=None,
                     target_policy=POLICY,
                     draw_idx=d,
                 )
             )
-    fresh = FreshDrawDataset(
-        samples=fresh_samples, target_policy=POLICY, draws_per_prompt=m_draws
-    )
+    fresh = FreshDrawDataset(samples=fresh_samples, target_policy=POLICY)
     return dataset, fresh
 
 
@@ -297,8 +292,6 @@ def _run_direct_with_fresh_scores(
                 prompt=f"question {i}",
                 response=f"answer {i}",
                 reward=None,
-                base_policy_logprob=-10.0,
-                target_policy_logprobs={POLICY: -10.0},
                 judge_score=float(s),
                 oracle_label=y if rng.uniform() < 0.5 else None,
             )
@@ -318,15 +311,12 @@ def _run_direct_with_fresh_scores(
             judge_score=float(s),
             oracle_label=None,
             response=None,
-            fold_id=None,
             target_policy=POLICY,
             draw_idx=0,
         )
         for i, s in enumerate(fresh_scores)
     ]
-    fresh = FreshDrawDataset(
-        samples=fresh_samples, target_policy=POLICY, draws_per_prompt=1
-    )
+    fresh = FreshDrawDataset(samples=fresh_samples, target_policy=POLICY)
 
     est = CalibratedDirectEstimator(
         target_policies=[POLICY],

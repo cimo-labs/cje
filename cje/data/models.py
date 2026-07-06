@@ -1,40 +1,8 @@
 """Data models for CJE using Pydantic."""
 
-import math
-from typing import Dict, List, Optional, Any, Tuple, Union
-from enum import Enum
-from pydantic import BaseModel, Field, field_validator
+from typing import Dict, List, Optional, Any, Tuple
+from pydantic import BaseModel, Field
 import numpy as np
-
-
-class LogProbStatus(Enum):
-    """Status of log probability computation."""
-
-    SUCCESS = "success"
-    API_ERROR = "api_error"
-    TOKEN_BOUNDARY_ERROR = "token_boundary_error"
-    TOKEN_LIMIT_EXCEEDED = "token_limit_exceeded"
-    EMPTY_RESPONSE = "empty_response"
-
-
-class LogProbResult(BaseModel):
-    """Result of log probability computation with explicit error handling."""
-
-    value: Optional[float] = Field(
-        None, description="Log probability value if successful"
-    )
-    status: LogProbStatus = Field(
-        LogProbStatus.API_ERROR, description="Computation status"
-    )
-    error: Optional[str] = Field(None, description="Error message if failed")
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict, description="Additional metadata"
-    )
-
-    @property
-    def is_valid(self) -> bool:
-        """Check if computation succeeded."""
-        return self.status == LogProbStatus.SUCCESS and self.value is not None
 
 
 class Sample(BaseModel):
@@ -45,12 +13,6 @@ class Sample(BaseModel):
     response: str = Field(..., description="Generated response")
     reward: Optional[float] = Field(
         None, ge=0, le=1, description="Calibrated reward [0,1]"
-    )
-    base_policy_logprob: Optional[float] = Field(
-        None, description="Log prob under base policy"
-    )
-    target_policy_logprobs: Dict[str, Optional[float]] = Field(
-        ..., description="Log probs under target policies (None for failures)"
     )
     judge_score: Optional[float] = Field(
         None, ge=0, le=1, description="Judge evaluation score [0,1]"
@@ -63,58 +25,12 @@ class Sample(BaseModel):
         description="Additional metadata (timestamps, model info, etc.)",
     )
 
-    @field_validator("base_policy_logprob")
-    def validate_base_policy_logprob(cls, v: Optional[float]) -> Optional[float]:
-        if v is None:
-            return v
-        if not math.isfinite(v):
-            # NaN/inf silently corrupt importance weights downstream (Hajek
-            # weights zero out other samples; raw weights explode). -inf means
-            # "impossible under the policy" — filter or fix such records
-            # upstream; use None as the explicit missing-value marker.
-            raise ValueError(
-                f"base_policy_logprob must be finite, got {v}. "
-                f"Use None to mark missing log probabilities, and filter or fix "
-                f"non-finite values upstream."
-            )
-        if v > 0:
-            raise ValueError(f"Log probability must be <= 0, got {v}")
-        return v
-
-    @field_validator("target_policy_logprobs")
-    def validate_target_policy_logprobs(
-        cls, v: Dict[str, Optional[float]]
-    ) -> Dict[str, Optional[float]]:
-        for policy, logprob in v.items():
-            if logprob is None:
-                continue
-            if not math.isfinite(logprob):
-                raise ValueError(
-                    f"Log probability for {policy} must be finite, got {logprob}. "
-                    f"Use None to mark missing log probabilities, and filter or "
-                    f"fix non-finite values upstream."
-                )
-            if logprob > 0:
-                raise ValueError(
-                    f"Log probability for {policy} must be <= 0, got {logprob}"
-                )
-        return v
-
-    def get_importance_weight(self, target_policy: str) -> Optional[float]:
-        """Compute importance weight for a target policy."""
-        if self.base_policy_logprob is None:
-            return None
-        target_lp = self.target_policy_logprobs.get(target_policy)
-        if target_lp is None:
-            return None
-        return float(np.exp(target_lp - self.base_policy_logprob))
-
 
 class Dataset(BaseModel):
     """A dataset for CJE analysis.
 
     This is a pure data container following the Single Responsibility Principle.
-    For loading data, use DatasetFactory or DatasetLoader.
+    For loading data, use DatasetLoader.
     """
 
     samples: List[Sample] = Field(..., min_length=1)
@@ -123,51 +39,9 @@ class Dataset(BaseModel):
     target_policies: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("target_policies")
-    def validate_policies_exist(cls, v: List[str], info: Any) -> List[str]:
-        """Ensure target policies exist in samples."""
-        if "samples" in info.data:
-            all_policies = set()
-            for sample in info.data["samples"]:
-                all_policies.update(sample.target_policy_logprobs.keys())
-
-            missing = set(v) - all_policies
-            if missing:
-                raise ValueError(f"Target policies not found in data: {missing}")
-        return v
-
-    def filter_valid_samples(self, target_policy: str) -> List[Sample]:
-        """Get samples with valid data for a specific target policy."""
-        valid_samples = []
-        for sample in self.samples:
-            if (
-                sample.base_policy_logprob is not None
-                and sample.target_policy_logprobs.get(target_policy) is not None
-            ):
-                valid_samples.append(sample)
-        return valid_samples
-
     @property
     def n_samples(self) -> int:
         return len(self.samples)
-
-    def summary(self) -> Dict[str, Any]:
-        """Get dataset summary statistics."""
-        rewards = [s.reward for s in self.samples if s.reward is not None]
-        valid_counts = {policy: 0 for policy in self.target_policies}
-
-        for sample in self.samples:
-            for policy in self.target_policies:
-                if sample.get_importance_weight(policy) is not None:
-                    valid_counts[policy] += 1
-
-        return {
-            "n_samples": self.n_samples,
-            "target_policies": self.target_policies,
-            "reward_mean": np.mean(rewards) if rewards else None,
-            "reward_std": np.std(rewards) if rewards else None,
-            "valid_samples_per_policy": valid_counts,
-        }
 
 
 class EstimationResult(BaseModel):
@@ -596,10 +470,6 @@ class EstimationResult(BaseModel):
                     "ci_upper": float(ci_upper[i]),
                     "n_samples": self.n_samples_used.get(policy, 0),
                 }
-
-        # Include diagnostics if available
-        if "diagnostics" in self.metadata:
-            result["diagnostics"] = self.metadata["diagnostics"]
 
         return result
 

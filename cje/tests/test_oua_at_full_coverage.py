@@ -44,7 +44,6 @@ def test_direct_method_skips_oua_at_full_coverage() -> None:
             target_policy="policy_a",
             draw_idx=0,
             response=None,
-            fold_id=None,
             metadata={},
         )
         for i in range(50)
@@ -52,7 +51,6 @@ def test_direct_method_skips_oua_at_full_coverage() -> None:
     fresh_draws_dataset = FreshDrawDataset(
         samples=fresh_draw_samples,
         target_policy="policy_a",
-        draws_per_prompt=1,
     )
 
     # Create direct estimator with oracle-jackknife inference enabled

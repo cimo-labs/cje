@@ -7,9 +7,7 @@ import time
 from cje.data import Dataset, Sample
 from cje.data.folds import (
     get_fold,
-    get_folds_for_dataset,
     get_folds_for_prompts,
-    get_folds_with_oracle_balance,
 )
 
 
@@ -23,8 +21,6 @@ def create_test_dataset(n_samples: int = 100) -> Dataset:
                 prompt=f"Test prompt {i}",
                 response=f"Response {i}",
                 reward=np.random.random(),
-                base_policy_logprob=-10.0,
-                target_policy_logprobs={"policy": -10.0},
                 judge_score=np.random.random(),
                 oracle_label=None,
             )
@@ -89,14 +85,16 @@ class TestFilteringRobustness:
         dataset = create_test_dataset(100)
 
         # Get folds before filtering
-        folds_before = get_folds_for_dataset(dataset)
+        folds_before = get_folds_for_prompts([s.prompt_id for s in dataset.samples])
 
         # Filter to subset (keep samples with reward > 0.5)
         filtered_samples = [
             s for s in dataset.samples if s.reward is not None and s.reward > 0.5
         ]
         filtered_dataset = Dataset(samples=filtered_samples, target_policies=["policy"])
-        folds_after = get_folds_for_dataset(filtered_dataset)
+        folds_after = get_folds_for_prompts(
+            [s.prompt_id for s in filtered_dataset.samples]
+        )
 
         # Check consistency
         for i, sample in enumerate(filtered_dataset.samples):
@@ -125,14 +123,16 @@ class TestFilteringRobustness:
         dataset = create_test_dataset(50)
 
         # Get original folds
-        original_folds = get_folds_for_dataset(dataset)
+        original_folds = get_folds_for_prompts([s.prompt_id for s in dataset.samples])
 
         # Create reordered dataset
         reordered_samples = dataset.samples[::-1]  # Reverse order
         reordered_dataset = Dataset(
             samples=reordered_samples, target_policies=["policy"]
         )
-        reordered_folds = get_folds_for_dataset(reordered_dataset)
+        reordered_folds = get_folds_for_prompts(
+            [s.prompt_id for s in reordered_dataset.samples]
+        )
 
         # Map back to original order and compare
         for i, sample in enumerate(dataset.samples):
@@ -144,94 +144,8 @@ class TestFilteringRobustness:
             assert original_folds[i] == reordered_folds[reordered_idx]
 
 
-class TestOracleBalance:
-    """Test oracle sample balancing functionality."""
-
-    def test_oracle_balance_perfect_division(self) -> None:
-        """Oracle samples are perfectly balanced when divisible."""
-        n = 100
-        prompt_ids = [f"p_{i}" for i in range(n)]
-
-        # 20 oracle samples, 5 folds -> 4 per fold
-        oracle_mask = np.zeros(n, dtype=bool)
-        oracle_mask[:20] = True
-
-        folds = get_folds_with_oracle_balance(prompt_ids, oracle_mask, n_folds=5)
-
-        # Check oracle distribution
-        oracle_folds = folds[oracle_mask]
-        for fold in range(5):
-            count = np.sum(oracle_folds == fold)
-            assert count == 4  # 20 oracle / 5 folds = 4 per fold
-
-    def test_oracle_balance_imperfect_division(self) -> None:
-        """Oracle samples are balanced as evenly as possible."""
-        n = 100
-        prompt_ids = [f"p_{i}" for i in range(n)]
-
-        # 22 oracle samples, 5 folds -> 4,4,4,5,5
-        oracle_mask = np.zeros(n, dtype=bool)
-        oracle_mask[:22] = True
-
-        folds = get_folds_with_oracle_balance(prompt_ids, oracle_mask, n_folds=5)
-
-        # Check oracle distribution
-        oracle_folds = folds[oracle_mask]
-        counts = [np.sum(oracle_folds == fold) for fold in range(5)]
-
-        # Should have either 4 or 5 samples per fold
-        assert all(c in [4, 5] for c in counts)
-        assert sum(counts) == 22
-
-    def test_oracle_balance_preserves_unlabeled(self) -> None:
-        """Unlabeled samples still use hash-based assignment."""
-        n = 100
-        prompt_ids = [f"p_{i}" for i in range(n)]
-
-        # 20 oracle, 80 unlabeled
-        oracle_mask = np.zeros(n, dtype=bool)
-        oracle_mask[:20] = True
-
-        folds = get_folds_with_oracle_balance(prompt_ids, oracle_mask, n_folds=5)
-
-        # Check unlabeled samples match standard assignment
-        unlabeled_mask = ~oracle_mask
-        unlabeled_ids = [prompt_ids[i] for i in range(n) if unlabeled_mask[i]]
-        expected_unlabeled_folds = get_folds_for_prompts(unlabeled_ids)
-
-        actual_unlabeled_folds = folds[unlabeled_mask]
-        np.testing.assert_array_equal(actual_unlabeled_folds, expected_unlabeled_folds)
-
-    def test_oracle_balance_empty_inputs(self) -> None:
-        """Handle empty inputs gracefully."""
-        # Empty prompt_ids
-        folds = get_folds_with_oracle_balance([], np.array([], dtype=bool))
-        assert len(folds) == 0
-
-    def test_oracle_balance_mismatched_lengths(self) -> None:
-        """Raise error on mismatched lengths."""
-        prompt_ids = ["p1", "p2", "p3"]
-        oracle_mask = np.array([True, False])  # Wrong length
-
-        with pytest.raises(ValueError, match="must match"):
-            get_folds_with_oracle_balance(prompt_ids, oracle_mask)
-
-
 class TestConsistency:
     """Test consistency across components."""
-
-    def test_all_components_same_folds(self) -> None:
-        """Verify all estimators would get identical folds."""
-        dataset = create_test_dataset(50)
-
-        # Simulate what each component would compute
-        judge_folds = get_folds_for_dataset(dataset)
-        dr_folds = get_folds_for_dataset(dataset)
-        stacked_folds = get_folds_for_dataset(dataset)
-
-        # All should be identical
-        np.testing.assert_array_equal(judge_folds, dr_folds)
-        np.testing.assert_array_equal(dr_folds, stacked_folds)
 
     def test_consistent_with_different_n_folds(self) -> None:
         """Same prompt gets consistent fold index scaled to n_folds."""
@@ -298,7 +212,7 @@ class TestEdgeCases:
     def test_single_sample(self) -> None:
         """Handle single sample dataset."""
         dataset = create_test_dataset(1)
-        folds = get_folds_for_dataset(dataset)
+        folds = get_folds_for_prompts([s.prompt_id for s in dataset.samples])
         assert len(folds) == 1
         assert 0 <= folds[0] < 5
 

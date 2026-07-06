@@ -6,7 +6,7 @@ following the Single Responsibility Principle.
 
 import json
 import logging
-from typing import List, Dict, Any, Optional, Protocol
+from typing import List, Dict, Any, Optional
 from collections import defaultdict
 from pathlib import Path
 
@@ -14,41 +14,6 @@ from .models import Dataset, Sample
 from .fresh_draws import FreshDrawSample, FreshDrawDataset
 
 logger = logging.getLogger(__name__)
-
-
-class DataSource(Protocol):
-    """Protocol for data sources."""
-
-    def load(self) -> List[Dict[str, Any]]:
-        """Load raw data as list of dictionaries."""
-        ...
-
-
-class JsonlDataSource:
-    """Load data from JSONL files."""
-
-    def __init__(self, file_path: str):
-        self.file_path = file_path
-
-    def load(self) -> List[Dict[str, Any]]:
-        """Load data from JSONL file."""
-        data = []
-        with open(self.file_path, "r") as f:
-            for line in f:
-                if line.strip():
-                    data.append(json.loads(line))
-        return data
-
-
-class InMemoryDataSource:
-    """Load data from in-memory list."""
-
-    def __init__(self, data: List[Dict[str, Any]]):
-        self.data = data
-
-    def load(self) -> List[Dict[str, Any]]:
-        """Return the in-memory data."""
-        return self.data
 
 
 class DatasetLoader:
@@ -59,41 +24,37 @@ class DatasetLoader:
 
     def __init__(
         self,
-        base_policy_field: str = "base_policy_logprob",
-        target_policy_logprobs_field: str = "target_policy_logprobs",
         prompt_field: str = "prompt",
         response_field: str = "response",
         reward_field: str = "reward",
     ):
-        self.base_policy_field = base_policy_field
-        self.target_policy_logprobs_field = target_policy_logprobs_field
         self.prompt_field = prompt_field
         self.response_field = response_field
         self.reward_field = reward_field
 
-    def load_from_source(
-        self, source: DataSource, target_policies: Optional[List[str]] = None
+    def load_from_jsonl(
+        self, file_path: str, target_policies: Optional[List[str]] = None
     ) -> Dataset:
-        """Load Dataset from a data source.
+        """Load Dataset from a JSONL file.
 
         Args:
-            source: Data source to load from
-            target_policies: List of target policy names. If None, auto-detected.
+            file_path: Path to JSONL file
+            target_policies: Optional list of target policy names
 
         Returns:
             Dataset instance
         """
-        data = source.load()
+        data = []
+        with open(file_path, "r") as f:
+            for line in f:
+                if line.strip():
+                    data.append(json.loads(line))
         return self._convert_raw_data(data, target_policies)
 
     def _convert_raw_data(
         self, data: List[Dict[str, Any]], target_policies: Optional[List[str]] = None
     ) -> Dataset:
         """Convert raw data to Dataset."""
-        # Auto-detect target policies if needed
-        if target_policies is None:
-            target_policies = self._detect_target_policies(data)
-
         # Convert raw data to samples. Invalid records are FILTERED with a
         # counted warning; if every record is invalid we FAIL loudly.
         samples = []
@@ -121,21 +82,9 @@ class DatasetLoader:
 
         return Dataset(
             samples=samples,
-            target_policies=target_policies,
-            metadata={
-                "source": "loader",
-                "base_policy_field": self.base_policy_field,
-                "target_policy_logprobs_field": self.target_policy_logprobs_field,
-            },
+            target_policies=target_policies or [],
+            metadata={"source": "loader"},
         )
-
-    def _detect_target_policies(self, data: List[Dict[str, Any]]) -> List[str]:
-        """Auto-detect target policies from data."""
-        policies = set()
-        for record in data:
-            if self.target_policy_logprobs_field in record:
-                policies.update(record[self.target_policy_logprobs_field].keys())
-        return sorted(list(policies))
 
     def _convert_record_to_sample(self, record: Dict[str, Any], idx: int = 0) -> Sample:
         """Convert a single record to a Sample.
@@ -182,12 +131,6 @@ class DatasetLoader:
             if reward is not None:
                 reward = float(reward)
 
-        # Get base log prob
-        base_logprob = record.get(self.base_policy_field)
-
-        # Get target log probs
-        target_logprobs = record.get(self.target_policy_logprobs_field, {})
-
         # Extract judge_score and oracle_label - prioritize top-level, fallback to metadata
         judge_score = None
         oracle_label = None
@@ -217,8 +160,10 @@ class DatasetLoader:
             self.prompt_field,
             self.response_field,
             self.reward_field,
-            self.base_policy_field,
-            self.target_policy_logprobs_field,
+            # 0.3.x-era OPE logprob fields: present-and-ignored in Direct
+            # mode (kept out of metadata rather than swept into it).
+            "base_policy_logprob",
+            "target_policy_logprobs",
             "judge_score",  # Now a core field
             "oracle_label",  # Now a core field
             "metadata",
@@ -243,8 +188,6 @@ class DatasetLoader:
             prompt=record.get(self.prompt_field, ""),
             response=record.get(self.response_field, ""),
             reward=reward,
-            base_policy_logprob=base_logprob,
-            target_policy_logprobs=target_logprobs,
             judge_score=judge_score,
             oracle_label=oracle_label,
             metadata=metadata,
@@ -301,7 +244,6 @@ class FreshDrawLoader:
                         draw_idx=data.get(
                             "draw_idx", 0
                         ),  # Default to 0 if not provided
-                        fold_id=data.get("fold_id"),  # Optional
                     )
                 except KeyError as e:
                     raise ValueError(
@@ -320,24 +262,9 @@ class FreshDrawLoader:
         # Create FreshDrawDataset for each policy
         datasets = {}
         for policy, samples in samples_by_policy.items():
-            # Determine draws_per_prompt
-            prompt_counts: Dict[str, int] = defaultdict(int)
-            for sample in samples:
-                prompt_counts[sample.prompt_id] += 1
-
-            # Check consistency
-            draws_counts = list(prompt_counts.values())
-            if draws_counts and len(set(draws_counts)) > 1:
-                logger.warning(
-                    f"Inconsistent draws per prompt for {policy}: {set(draws_counts)}"
-                )
-
-            draws_per_prompt = max(draws_counts) if draws_counts else 1
-
             datasets[policy] = FreshDrawDataset(
                 samples=samples,
                 target_policy=policy,
-                draws_per_prompt=draws_per_prompt,
             )
 
         return datasets

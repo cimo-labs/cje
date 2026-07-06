@@ -158,7 +158,7 @@ def _serialize_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
 
     for key, value in metadata.items():
         # Skip complex objects that aren't easily serializable
-        if key in ["diagnostics", "dr_diagnostics", "dr_calibration_data"]:
+        if key in ["diagnostics"]:
             continue
 
         if isinstance(value, np.ndarray):

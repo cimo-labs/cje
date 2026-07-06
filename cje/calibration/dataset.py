@@ -284,8 +284,6 @@ def calibrate_dataset(
             prompt=sample.prompt,
             response=sample.response,
             reward=reward_value,
-            base_policy_logprob=sample.base_policy_logprob,
-            target_policy_logprobs=sample.target_policy_logprobs,
             judge_score=judge_score_value,
             oracle_label=oracle_label_value,
             metadata=sample.metadata.copy(),  # Preserve other metadata
