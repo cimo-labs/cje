@@ -13,7 +13,6 @@ from typing import Any, List, Tuple, cast
 from cje import (
     simulate_variance_model,
     simulate_planning,
-    simulate_planning_sweep,
     correlation_to_r2,
     SimulationPlanningResult,
     CostModel,
@@ -384,44 +383,6 @@ class TestSimulatePlanning:
         assert "oracle" in explanation.lower()
 
 
-class TestSimulatePlanningSweep:
-    """Tests for simulate_planning_sweep function.
-
-    Note: Sweeps run multiple simulations and are very slow.
-    """
-
-    def test_empty_r2_list(self) -> None:
-        """Empty R² list returns empty results (no simulation needed)."""
-        cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-        results = simulate_planning_sweep([], budget=5000, cost_model=cost)
-        assert results == []
-
-    @pytest.mark.slow
-    def test_returns_correct_number_of_results(self) -> None:
-        """Returns one result per R² value."""
-        cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-        r2_values = [0.5, 0.7]  # Just 2 values to keep test reasonable
-
-        results = simulate_planning_sweep(
-            r2_values, budget=5000, cost_model=cost, verbose=False
-        )
-
-        assert len(results) == len(r2_values)
-
-    @pytest.mark.slow
-    def test_results_correspond_to_r2_values(self) -> None:
-        """Each result has correct R² value."""
-        cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-        r2_values = [0.5, 0.7]
-
-        results = simulate_planning_sweep(
-            r2_values, budget=5000, cost_model=cost, verbose=False
-        )
-
-        for r2, result in zip(r2_values, results):
-            assert result.r2 == r2
-
-
 class TestTopLevelImports:
     """Test that new API is accessible from top-level cje package."""
 
@@ -436,12 +397,6 @@ class TestTopLevelImports:
         from cje import simulate_planning
 
         assert callable(simulate_planning)
-
-    def test_import_simulate_planning_sweep(self) -> None:
-        """simulate_planning_sweep is importable from cje."""
-        from cje import simulate_planning_sweep
-
-        assert callable(simulate_planning_sweep)
 
     def test_import_correlation_to_r2(self) -> None:
         """correlation_to_r2 is importable from cje."""

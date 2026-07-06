@@ -427,14 +427,14 @@ class TestCombineOracleSourcesKeepsAllPairs:
         )
 
     def test_two_policies_same_prompt_contribute_two_pairs(self) -> None:
-        from cje.interface.service import AnalysisService
+        from cje.interface.analysis import _combine_oracle_sources
 
         fresh_draws = {
             "policy_a": self._fresh_draw("policy_a", "p1", judge=0.4, oracle=0.45),
             "policy_b": self._fresh_draw("policy_b", "p1", judge=0.8, oracle=0.85),
         }
 
-        combined, metadata = AnalysisService()._combine_oracle_sources(
+        combined, metadata = _combine_oracle_sources(
             None,
             None,
             fresh_draws,
@@ -455,14 +455,14 @@ class TestCombineOracleSourcesKeepsAllPairs:
         """Respin M1: with binary/rubric scores, different policies' draws for
         one prompt collide on (judge, oracle); the pair key must identify the
         response (policy + draw), not just the "fresh_draws" family."""
-        from cje.interface.service import AnalysisService
+        from cje.interface.analysis import _combine_oracle_sources
 
         fresh_draws = {
             "policy_a": self._fresh_draw("policy_a", "p1", judge=1.0, oracle=1.0),
             "policy_b": self._fresh_draw("policy_b", "p1", judge=1.0, oracle=1.0),
         }
 
-        combined, metadata = AnalysisService()._combine_oracle_sources(
+        combined, metadata = _combine_oracle_sources(
             None,
             None,
             fresh_draws,
@@ -483,7 +483,7 @@ class TestCombineOracleSourcesKeepsAllPairs:
 
     def test_true_duplicates_are_deduped(self) -> None:
         from cje.data.fresh_draws import FreshDrawDataset, FreshDrawSample
-        from cje.interface.service import AnalysisService
+        from cje.interface.analysis import _combine_oracle_sources
 
         # Distinct draws (draw_idx 0 and 1) are distinct responses: identical
         # (judge, oracle) values keep BOTH pairs. Only a re-ingested copy of
@@ -503,7 +503,7 @@ class TestCombineOracleSourcesKeepsAllPairs:
             ],
         )
 
-        combined, metadata = AnalysisService()._combine_oracle_sources(
+        combined, metadata = _combine_oracle_sources(
             None,
             None,
             {"policy_a": fd},
@@ -518,7 +518,7 @@ class TestCombineOracleSourcesKeepsAllPairs:
     def test_cross_source_conflict_warned_but_both_pairs_kept(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        from cje.interface.service import AnalysisService
+        from cje.interface.analysis import _combine_oracle_sources
 
         def make_dataset(judge: float, oracle: float) -> Dataset:
             sample = Sample(
@@ -535,7 +535,7 @@ class TestCombineOracleSourcesKeepsAllPairs:
         logged_dataset = make_dataset(judge=0.2, oracle=0.2)
 
         with caplog.at_level(logging.WARNING):
-            combined, metadata = AnalysisService()._combine_oracle_sources(
+            combined, metadata = _combine_oracle_sources(
                 calibration_dataset,
                 logged_dataset,
                 None,

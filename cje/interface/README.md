@@ -172,7 +172,7 @@ Provide `fresh_draws_dir` **or** `fresh_draws_data`.
 ### Removed in 0.4.0 (migration errors)
 
 - `analyze_dataset(logged_data_path=...)` raises a `ValueError` explaining that OPE was removed and how to migrate — logged data with `judge_score` + `oracle_label` still works via `calibration_data_path`; IPS/DR users pin `pip install "cje-eval==0.3.*"`.
-- `estimator="calibrated-ips"` / `"raw-ips"` / `"dr-cpo"` / `"mrdr"` / `"tmle"` / `"stacked-dr"` raise the same guidance (CLI and API share one validator in `interface/factory.py`).
+- `estimator="calibrated-ips"` / `"raw-ips"` / `"dr-cpo"` / `"mrdr"` / `"tmle"` / `"stacked-dr"` raise the same guidance (CLI and API share one validator in `interface/_removed.py`).
 
 ## Advanced Usage
 

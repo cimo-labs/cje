@@ -20,7 +20,6 @@ cje/diagnostics/
 ├── models.py               # DirectDiagnostics, Status
 ├── reward_boundary.py      # Coverage badge (boundary_card, REFUSE-LEVEL gate)
 ├── transport.py            # Transportability auditing
-├── display.py              # format_diagnostic_comparison
 ├── robust_inference.py     # Bootstrap + cluster-robust inference
 ├── planning.py             # Budget optimization (Square Root Allocation Law)
 ├── simulation_planning.py  # Simulation-based planning (no pilot data required)
@@ -36,11 +35,11 @@ Field groups:
 - **Identification**: `estimator_type` ("Direct"), `method` (`calibrated_direct` | `naive_direct`, `_bootstrap` suffix when bootstrap inference ran), `policies`
 - **Sample counts**: `n_samples_total`, `n_samples_valid`, per-policy `n_samples_used`
 - **Results**: `estimates`, `standard_errors` (per-policy dicts)
-- **Status**: `status_per_policy` (`Status.CRITICAL` when the policy's coverage badge refuses level claims)
+- **Status**: `status_per_policy` (`Status.WARNING` for a CAUTION coverage badge, `Status.CRITICAL` when the badge refuses level claims; the card→status ladder is canonical in `gates.py`)
 - **Coverage badges**: `boundary_cards` — serialized per-policy `BoundaryCard` dicts, including the `oracle_s_range` they were graded against
 - **Calibration quality**: `calibration_rmse`, `calibration_coverage` (P(|pred − oracle| < 0.1)), `n_oracle_labels` (all None in naive/uncalibrated mode)
 
-Common interface: `validate() -> List[str]` (self-consistency checks), `summary() -> str` (one-line), `to_dict()` / `to_json()` / `to_csv_row()` (serialization), plus computed properties `overall_status` (worst per-policy status), `best_policy`, `filter_rate`, `refuse_level_policies`, `is_calibrated`.
+Common interface: `validate() -> List[str]` (self-consistency checks), `summary() -> str` (one-line), `to_dict()` / `to_json()` (serialization), plus computed properties `overall_status` (worst per-policy status), `best_policy`, `filter_rate`, `refuse_level_policies`, `is_calibrated`.
 
 ```python
 from cje import analyze_dataset
@@ -181,15 +180,11 @@ from cje.diagnostics import CostModel, fit_variance_model, plan_evaluation, plan
 # plan = plan_for_mde(target_mde=0.01, variance_model=model, cost_model=cost)
 ```
 
-No pilot data yet? `simulate_variance_model(r2=...)` builds a variance model from expected judge quality (`correlation_to_r2` converts a Pearson correlation), and `simulate_planning` / `simulate_planning_sweep` wrap the exploration loop. The [planning notebook](../../examples/cje_planning.ipynb) walks through the full workflow, and `plot_planning_dashboard` (viz extra) visualizes the tradeoffs.
-
-## Display
-
-`format_diagnostic_comparison(diag1, diag2, label1="Run 1", label2="Run 2")` renders a side-by-side text table of two `DirectDiagnostics` objects (sample counts, calibration RMSE, per-policy estimates) — useful for before/after comparisons across runs.
+No pilot data yet? `simulate_variance_model(r2=...)` builds a variance model from expected judge quality (`correlation_to_r2` converts a Pearson correlation), and `simulate_planning` wraps the exploration loop. The [planning notebook](../../examples/cje_planning.ipynb) walks through the full workflow, and `plot_planning_dashboard` (viz extra) visualizes the tradeoffs.
 
 ## Key Design Decisions
 
-1. **Diagnostics are data, not behavior** — dataclasses with computed properties, serializable via `to_dict`/`to_json`/`to_csv_row`.
+1. **Diagnostics are data, not behavior** — dataclasses with computed properties, serializable via `to_dict`/`to_json`.
 2. **Push-based flow** — created during estimation, not on demand; every result is born audited.
 3. **Warn loudly, never silently** — gate failures warn, set CRITICAL statuses, and are recorded in `metadata["reliability_gates"]`; numeric estimates are still returned so you can inspect them.
 4. **One threshold source** — every surface imports gate thresholds from `gates.py`.

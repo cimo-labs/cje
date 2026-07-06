@@ -97,7 +97,7 @@ gates = results.metadata["reliability_gates"]        # {policy: {"flagged": bool
 verdict = results.compare_policies(0, 1)             # difference, CI, p-value for pairwise claims
 ```
 
-Use `results.compare_policies(i, j)` and `results.best_policy()` for claims — not eyeballed
+Use `results.compare_policies(i, j)` and `results.best_policy()` (gate-aware PolicyVerdict) for claims — not eyeballed
 point estimates. Boundary cards per policy are OK / CAUTION / REFUSE-LEVEL.
 
 ## One sample: calibrated mean with CI

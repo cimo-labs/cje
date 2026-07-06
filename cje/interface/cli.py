@@ -10,6 +10,10 @@ import argparse
 import json
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..data.models import EstimationResult
 
 # Set up logging
 logging.basicConfig(
@@ -52,9 +56,9 @@ def create_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    # Names are validated by the interface factory so that removed 0.3.x OPE
-    # estimators surface the full migration error instead of an argparse
-    # choices message.
+    # Names are validated by the analysis pipeline (interface/_removed.py) so
+    # that removed 0.3.x OPE estimators surface the full migration error
+    # instead of an argparse choices message.
     analyze_parser.add_argument(
         "--estimator",
         default="calibrated-direct",
@@ -158,36 +162,13 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _unreliable_policies(results: object) -> set:
-    """Policies flagged unreliable by the refusal gates or CRITICAL status."""
-    flagged = set()
-
-    metadata = getattr(results, "metadata", None)
-    if isinstance(metadata, dict):
-        gates = metadata.get("reliability_gates") or {}
-        for policy, info in gates.items():
-            if isinstance(info, dict) and info.get("flagged"):
-                flagged.add(policy)
-
-    diagnostics = getattr(results, "diagnostics", None)
-    status_per_policy = getattr(diagnostics, "status_per_policy", None)
-    if status_per_policy:
-        for policy, status in status_per_policy.items():
-            value = getattr(status, "value", status)
-            if value == "critical":
-                flagged.add(policy)
-
-    return flagged
-
-
-def best_policy_lines(results: object) -> list:
+def best_policy_lines(results: "EstimationResult") -> list:
     """Build the best-policy announcement, demoting unreliable argmaxes.
 
-    The raw argmax previously earned the trophy line even when the winning
-    policy had been flagged UNRELIABLE by the refusal gates (verified on
-    the bundled arena sample, where the adversarial 'unhelpful' policy
-    won). The trophy now goes only to a policy that passed the gates; a
-    flagged argmax is demoted to a warning line.
+    Thin renderer over EstimationResult.best_policy() (which owns the
+    gate/CRITICAL derivation): the trophy goes only to a policy that
+    passed the reliability gates; a flagged argmax is demoted to a
+    warning line.
     """
     import numpy as np
 
@@ -197,37 +178,28 @@ def best_policy_lines(results: object) -> list:
     if estimates is None or len(estimates) == 0 or not target_policies:
         return []
 
-    estimates = np.asarray(estimates, dtype=float)
-    if np.all(np.isnan(estimates)):
+    if np.all(np.isnan(np.asarray(estimates, dtype=float))):
         return [
             "⚠️ No usable estimates: every policy was refused as unreliable "
             "(see diagnostics)."
         ]
 
-    best_idx = int(np.nanargmax(estimates))
-    best_policy = target_policies[best_idx]
-    flagged = _unreliable_policies(results)
+    verdict = results.best_policy(reliable_only=True)
 
-    if best_policy not in flagged:
-        return [f"🏆 Best policy: {best_policy}"]
-
-    lines = [
-        f"⚠️ Best by point estimate: {best_policy} " f"(UNRELIABLE — see diagnostics)"
-    ]
-    reliable = [
-        (float(estimates[i]), policy)
-        for i, policy in enumerate(target_policies)
-        if policy not in flagged and not np.isnan(estimates[i])
-    ]
-    if reliable:
-        _, best_reliable = max(reliable)
-        lines.append(f"🏆 Best reliable policy: {best_reliable}")
-    else:
-        lines.append(
+    if verdict.all_flagged:
+        return [
+            f"⚠️ Best by point estimate: {verdict.name} "
+            f"(UNRELIABLE — see diagnostics)",
             "No policy passed the reliability gates; do not pick a winner "
-            "from this run."
-        )
-    return lines
+            "from this run.",
+        ]
+    if verdict.runner_up is not None:
+        return [
+            f"⚠️ Best by point estimate: {verdict.runner_up} "
+            f"(UNRELIABLE — see diagnostics)",
+            f"🏆 Best reliable policy: {verdict.name}",
+        ]
+    return [f"🏆 Best policy: {verdict.name}"]
 
 
 # Logged-data logprob fields. In fresh draws they are ignored (Direct mode
@@ -298,13 +270,11 @@ def run_analysis(args: argparse.Namespace) -> int:
                 "JSONL file) or --fresh-draws-dir PATH."
             )
 
-        # Prepare kwargs
-        estimator_choice = args.estimator
-        if estimator_choice in (None, "auto"):
-            estimator_choice = "calibrated-direct"
-
+        # Prepare kwargs. The estimator name is passed through unmapped so
+        # the CLI and the API record the same resolved name in
+        # metadata["estimator"] for the same run.
         kwargs = {
-            "estimator": estimator_choice,
+            "estimator": args.estimator,
             "judge_field": args.judge_field,
             "oracle_field": args.oracle_field,
         }

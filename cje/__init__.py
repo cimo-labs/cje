@@ -62,7 +62,6 @@ from .diagnostics.simulation_planning import (
     SimulationPlanningResult,
     simulate_variance_model,
     simulate_planning,
-    simulate_planning_sweep,
     correlation_to_r2,
 )
 
@@ -90,7 +89,6 @@ __all__ = [
     "SimulationPlanningResult",
     "simulate_variance_model",
     "simulate_planning",
-    "simulate_planning_sweep",
     "correlation_to_r2",
 ]
 
@@ -100,7 +98,6 @@ __all__ = [
 # hint (from cje.visualization) instead of an AttributeError.
 _VIZ_EXPORTS = (
     "plot_policy_estimates",
-    "plot_calibration_comparison",
     "plot_planning_dashboard",
 )
 

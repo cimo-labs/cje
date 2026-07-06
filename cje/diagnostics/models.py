@@ -196,49 +196,6 @@ class DirectDiagnostics:
 
         return json.dumps(self.to_dict(), indent=indent, default=str)
 
-    @classmethod
-    def from_dict(cls, data: Dict) -> "DirectDiagnostics":
-        """Create from dictionary."""
-        data = dict(data)
-        # Convert status strings back to enums
-        if data.get("status_per_policy"):
-            data["status_per_policy"] = {
-                policy: Status(status) if isinstance(status, str) else status
-                for policy, status in data["status_per_policy"].items()
-            }
-        # Remove computed fields that aren't in the constructor
-        data.pop("overall_status", None)
-        data.pop("n_policies", None)
-        return cls(**data)
-
-    def to_csv_row(self) -> Dict[str, Any]:
-        """Export key metrics as a flat dict for CSV export."""
-        row: Dict[str, Any] = {
-            "estimator": self.estimator_type,
-            "method": self.method,
-            "n_samples_total": self.n_samples_total,
-            "n_samples_valid": self.n_samples_valid,
-            "filter_rate": self.filter_rate,
-            "overall_status": self.overall_status.value,
-            "n_policies": self.n_policies,
-            "best_policy": self.best_policy if self.policies else None,
-        }
-        # Add per-policy metrics
-        for policy in self.policies:
-            row[f"{policy}_estimate"] = self.estimates.get(policy)
-            row[f"{policy}_se"] = self.standard_errors.get(policy)
-            row[f"{policy}_n"] = self.n_samples_used.get(policy)
-            if self.boundary_cards and policy in self.boundary_cards:
-                card = self.boundary_cards[policy]
-                row[f"{policy}_boundary_status"] = card.get("status")
-                row[f"{policy}_out_of_range"] = card.get("out_of_range")
-        # Add calibration metrics if available
-        if self.calibration_rmse is not None:
-            row["calibration_rmse"] = self.calibration_rmse
-            row["calibration_coverage"] = self.calibration_coverage
-            row["n_oracle_labels"] = self.n_oracle_labels
-        return row
-
 
 # DEPRECATED: 0.3.x name for the estimator diagnostics. Direct mode never
 # had real weight metrics behind it; the shared fields (estimates,

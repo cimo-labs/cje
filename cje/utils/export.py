@@ -93,58 +93,6 @@ def export_results_json(
         json.dump(export_data, f, indent=indent)
 
 
-def export_results_csv(
-    results: EstimationResult,
-    path: str,
-    include_ci: bool = True,
-) -> None:
-    """
-    Export estimation results to CSV format.
-
-    Args:
-        results: EstimationResult object to export
-        path: Output file path
-        include_ci: Whether to include confidence intervals
-    """
-    import csv
-
-    path_obj = Path(path)
-    path_obj.parent.mkdir(parents=True, exist_ok=True)
-
-    # Prepare rows
-    rows = []
-    headers = ["policy", "estimate", "standard_error"]
-
-    if include_ci:
-        headers.extend(["ci_lower", "ci_upper"])
-        ci_lower, ci_upper = results.confidence_interval(alpha=0.05)
-
-    headers.extend(["n_samples", "method"])
-
-    # Add data for each policy
-    target_policies = results.metadata.get("target_policies", [])
-    for i, policy in enumerate(target_policies):
-        row = {
-            "policy": policy,
-            "estimate": results.estimates[i],
-            "standard_error": results.standard_errors[i],
-            "n_samples": results.n_samples_used.get(policy, 0),
-            "method": results.method,
-        }
-
-        if include_ci:
-            row["ci_lower"] = ci_lower[i]
-            row["ci_upper"] = ci_upper[i]
-
-        rows.append(row)
-
-    # Write CSV
-    with open(path_obj, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=headers)
-        writer.writeheader()
-        writer.writerows(rows)
-
-
 def _serialize_array(arr: np.ndarray) -> list:
     """Convert numpy array to JSON-serializable list."""
     if isinstance(arr, np.ndarray):

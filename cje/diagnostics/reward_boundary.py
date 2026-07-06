@@ -16,7 +16,7 @@ import logging
 
 import numpy as np
 
-from .gates import OUT_OF_RANGE_REFUSE_THRESHOLD
+from .gates import OUT_OF_RANGE_REFUSE_THRESHOLD, SATURATION_CAUTION_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ def boundary_card(
     if out_of_range >= OUT_OF_RANGE_REFUSE_THRESHOLD:
         status = "REFUSE-LEVEL"
         note = "Non-trivial judge mass outside oracle range; do not ship levels."
-    elif sat >= 0.20:
+    elif sat >= SATURATION_CAUTION_THRESHOLD:
         status = "CAUTION"
         note = "Boundary effects likely; report partial-ID band and caveat."
     else:

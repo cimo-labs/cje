@@ -56,62 +56,6 @@ class TestPlanningWorkflow:
     """Test complete planning workflows with real data via analyze_dataset()."""
 
     @pytest.mark.slow
-    def test_plan_allocation_convenience_method(self) -> None:
-        """Test EstimationResult.plan_allocation() convenience method.
-
-        This is the user workflow: run pilot → load fresh draws → plan allocation.
-        """
-        from cje.data.fresh_draws import (
-            load_fresh_draws_auto,
-            discover_policies_from_fresh_draws,
-        )
-
-        fresh_draws_dir = ARENA_SAMPLE_DIR / "fresh_draws"
-        if not fresh_draws_dir.exists():
-            pytest.skip(f"Fresh draws not found at {fresh_draws_dir}")
-
-        # Run pilot
-        result = analyze_dataset(
-            fresh_draws_dir=str(fresh_draws_dir),
-            verbose=False,
-        )
-
-        # Load fresh draws for variance model fitting (use base policy)
-        base_data = load_fresh_draws_auto(fresh_draws_dir, "base")
-
-        # Use convenience method (cost_model is required)
-        from cje import CostModel as TopLevelCostModel
-
-        allocation = result.plan_allocation(
-            budget=5000,
-            cost_model=TopLevelCostModel(oracle_cost=16.0),
-            fresh_draws=base_data,
-            verbose=False,
-        )
-
-        # Validate output
-        assert allocation.n_samples > 0
-        assert allocation.m_oracle > 0
-        assert allocation.se_level > 0
-        assert "Evaluation Plan" in allocation.summary()
-
-        # Verify the allocation is valid (oracle can't exceed total samples)
-        assert allocation.m_oracle <= allocation.n_samples
-        # Note: High oracle fraction (even 100%) can be optimal when calibration
-        # variance dominates and cost ratio is moderate. The arena data has a
-        # highly predictive judge, so σ²_eval ≈ 0 is expected.
-
-        # Test with different cost model
-        allocation_custom = result.plan_allocation(
-            budget=5000,
-            cost_model=TopLevelCostModel(oracle_cost=32.0),  # More expensive oracle
-            fresh_draws=base_data,
-            verbose=False,
-        )
-        # More expensive oracle → fewer oracle labels
-        assert allocation_custom.m_oracle <= allocation.m_oracle
-
-    @pytest.mark.slow
     def test_empirical_variance_model_returns_positive_components(self) -> None:
         """Empirically-fitted variance model should have positive components.
 

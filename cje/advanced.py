@@ -59,19 +59,7 @@ from .diagnostics import (
 # Utilities
 from .utils.export import (
     export_results_json,
-    export_results_csv,
 )
-
-# Visualization (if available)
-try:
-    from .visualization import (
-        plot_calibration_comparison,
-        plot_policy_estimates,
-    )
-
-    _viz_available = True
-except ImportError:
-    _viz_available = False
 
 __all__ = [
     # Estimators
@@ -93,16 +81,7 @@ __all__ = [
     "Status",
     # Utilities
     "export_results_json",
-    "export_results_csv",
 ]
-
-if _viz_available:
-    __all__.extend(
-        [
-            "plot_calibration_comparison",
-            "plot_policy_estimates",
-        ]
-    )
 
 
 # OPE classes removed in 0.4.0. A module __getattr__ turns
@@ -117,6 +96,11 @@ _REMOVED_IN_0_4_0 = (
     "StackedDREstimator",
 )
 
+# Visualization (viz extra) — resolved lazily so `import cje.advanced` never
+# loads matplotlib; access without the extra raises the standard install
+# hint (from cje.visualization).
+_VIZ_EXPORTS = ("plot_policy_estimates",)
+
 
 def __getattr__(name: str) -> object:
     if name in _REMOVED_IN_0_4_0:
@@ -124,10 +108,16 @@ def __getattr__(name: str) -> object:
             f"cje.advanced.{name} was removed in 0.4.0 — "
             f'pip install "cje-eval==0.3.*" for OPE'
         )
-    if name in ("plot_calibration_comparison", "plot_policy_estimates"):
-        # Only reached when the viz imports above failed (matplotlib missing)
-        raise ImportError(
-            f"{name} requires the viz extra. "
-            f'Install with: pip install "cje-eval[viz]"'
-        )
+    if name in _VIZ_EXPORTS:
+        from . import visualization
+
+        return getattr(visualization, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# Advertise the plot_* names in __all__ only when the viz extra is
+# installed (checked without importing matplotlib, which is slow).
+from importlib.util import find_spec as _find_spec
+
+if _find_spec("matplotlib") is not None:
+    __all__.extend(_VIZ_EXPORTS)

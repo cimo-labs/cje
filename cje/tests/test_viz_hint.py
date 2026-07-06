@@ -16,7 +16,6 @@ pytestmark = pytest.mark.unit
 
 VIZ_NAMES = (
     "plot_policy_estimates",
-    "plot_calibration_comparison",
     "plot_planning_dashboard",
 )
 
@@ -28,6 +27,44 @@ def test_viz_names_resolve_when_matplotlib_installed() -> None:
     for name in VIZ_NAMES:
         assert callable(getattr(cje, name))
         assert name in cje.__all__
+
+
+def test_transport_comparison_reexport_with_matplotlib() -> None:
+    """The plot moved to cje.visualization.transport in 0.5.0, but the
+    cje.diagnostics import path the demo notebook uses must keep working."""
+    pytest.importorskip("matplotlib")
+    from cje.diagnostics import plot_transport_comparison
+    from cje.visualization.transport import (
+        plot_transport_comparison as viz_plot_transport_comparison,
+    )
+
+    assert plot_transport_comparison is viz_plot_transport_comparison
+
+
+def test_import_cje_advanced_is_matplotlib_free() -> None:
+    """`import cje.advanced` must not load matplotlib (D8): the 0.4.x eager
+    try/except viz import block is gone; plot_* resolves lazily."""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    env = os.environ.copy()
+    repo_root = str(Path(__file__).resolve().parents[2])
+    env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
+
+    code = (
+        "import cje.advanced, sys\n"
+        "assert 'matplotlib' not in sys.modules, 'matplotlib was imported'\n"
+        "print('matplotlib' in sys.modules)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False"
 
 
 def test_unknown_attribute_still_raises_attribute_error() -> None:
@@ -65,7 +102,16 @@ def test_viz_hint_when_matplotlib_missing(monkeypatch: pytest.MonkeyPatch) -> No
 
         # ...including through the top-level lazy attribute
         with pytest.raises(ImportError, match=r"cje-eval\[viz\]"):
-            _ = cje.plot_calibration_comparison
+            _ = cje.plot_planning_dashboard
+
+        # The lazily re-exported transport plot stays importable without
+        # matplotlib (the demo notebook imports it eagerly) and raises the
+        # hint only when CALLED
+        from cje.diagnostics import plot_transport_comparison
+
+        assert callable(plot_transport_comparison)
+        with pytest.raises(ImportError, match=r"cje-eval\[viz\]"):
+            plot_transport_comparison({})
 
         # Unknown names still raise AttributeError, not the hint
         with pytest.raises(AttributeError):

@@ -23,9 +23,9 @@ import numpy as np
 import logging
 from dataclasses import dataclass
 
-from ..data.models import EstimationResult
+from ..data.models import CIInfo, EstimationResult
 from ..diagnostics.models import DirectDiagnostics, Status
-from ..diagnostics.gates import worst_status
+from ..diagnostics.gates import BOUNDARY_CARD_STATUS_TO_STATUS, worst_status
 from ..diagnostics.robust_inference import (
     combine_cluster_and_oracle,
     oracle_jackknife_estimates,
@@ -472,6 +472,21 @@ class CalibratedDirectEstimator:
         # Boundary gate: coverage badges + reliability gates for the CLI
         self._attach_reliability_metadata(metadata, diagnostics)
 
+        # Typed CI record (metadata mirrors stay the serialized source of
+        # truth). Bootstrap results carry their precomputed percentile CIs
+        # here; the analytic path fills ci_info in _store_df_info once the
+        # OUA-adjusted degrees of freedom are known.
+        ci_info: Optional[CIInfo] = None
+        boot_ci = extra_metadata.get("bootstrap_ci")
+        if isinstance(boot_ci, dict) and boot_ci.get("method") == "percentile":
+            ci_info = CIInfo(
+                method="percentile",
+                alpha=float(boot_ci.get("alpha", 0.05)),
+                lower=[float(v) for v in boot_ci["lower"]],
+                upper=[float(v) for v in boot_ci["upper"]],
+                df_per_policy=None,
+            )
+
         result = EstimationResult(
             estimates=np.array(estimates),
             standard_errors=np.array(standard_errors),
@@ -480,6 +495,7 @@ class CalibratedDirectEstimator:
             influence_functions=influence_functions,
             diagnostics=diagnostics,
             metadata=metadata,
+            ci_info=ci_info,
         )
         self._results = result
         return result
@@ -792,6 +808,8 @@ class CalibratedDirectEstimator:
 
         # Coverage badges (paper REFUSE-LEVEL gate): judge-score mass
         # outside the oracle calibration range refuses level claims
+        # (CRITICAL); a CAUTION card (boundary saturation) yields WARNING.
+        # The card-status -> Status ladder is canonical in gates.py.
         boundary_cards: Dict[str, Dict[str, Any]] = {}
         status_per_policy: Dict[str, Status] = {p: Status.GOOD for p in policies}
         for policy in policies:
@@ -799,10 +817,12 @@ class CalibratedDirectEstimator:
             if card is None:
                 continue
             boundary_cards[policy] = card
-            if card.get("status") == "REFUSE-LEVEL":
-                status_per_policy[policy] = worst_status(
-                    status_per_policy[policy], Status.CRITICAL
-                )
+            card_status = BOUNDARY_CARD_STATUS_TO_STATUS.get(
+                str(card.get("status")), Status.GOOD
+            )
+            status_per_policy[policy] = worst_status(
+                status_per_policy[policy], card_status
+            )
 
         diagnostics = DirectDiagnostics(
             estimator_type="Direct",
@@ -990,10 +1010,17 @@ class CalibratedDirectEstimator:
                 f"method={self._se_methods.get(policy, 'standard')}"
             )
 
-        # Store in metadata
+        # Store in metadata (serialized mirror) and as the typed CI record
         if not isinstance(result.metadata, dict):
             result.metadata = {}
         result.metadata["degrees_of_freedom"] = df_info
+        result.ci_info = CIInfo(
+            method="t",
+            alpha=0.05,
+            lower=None,
+            upper=None,
+            df_per_policy=df_info,
+        )
 
     def _estimate_with_bootstrap(self, bootstrap_reason: str) -> EstimationResult:
         """Compute estimates using cluster bootstrap with calibrator refit.
