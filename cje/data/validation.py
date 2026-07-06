@@ -16,6 +16,8 @@ fields — so validation reported "Missing required field: prompt_id" and
 from typing import Any, Dict, List, Tuple
 import logging
 
+from .ingest import read_aliased_field
+
 logger = logging.getLogger(__name__)
 
 #: Entries in the returned issues list that start with this prefix are
@@ -41,17 +43,12 @@ _LOGPROB_SCAN_LIMIT = 100
 def read_record_field(record: Dict[str, Any], field: str) -> Any:
     """Read a field from the top level first, then from metadata.
 
-    Mirrors the loaders' lookup order so validation accepts exactly the
-    shapes the loaders accept. Falsy-but-valid values (0, "") are
-    returned as-is; only absent/None counts as missing.
+    Delegates to the shared ingest helper — the loaders use the same
+    lookup, so validation accepts exactly the shapes the loaders accept.
+    Falsy-but-valid values (0, "") are returned as-is; only absent/None
+    counts as missing.
     """
-    value = record.get(field)
-    if value is not None:
-        return value
-    metadata = record.get("metadata")
-    if isinstance(metadata, dict):
-        return metadata.get(field)
-    return None
+    return read_aliased_field(record, field)
 
 
 def _window_size(n: int) -> int:

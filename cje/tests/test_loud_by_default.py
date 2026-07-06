@@ -196,13 +196,15 @@ class TestPromptIdHandling:
     def test_all_records_invalid_raises(self, caplog: pytest.LogCaptureFixture) -> None:
         from cje.data.loaders import DatasetLoader
 
-        # Out-of-range judge scores -> every record fails validation
+        # Non-numeric judge scores -> every record fails validation.
+        # (Out-of-range numeric scores are a dataset-level hard error now,
+        # tested in test_ingestion_unification.py.)
         records = [
             {
                 "prompt_id": f"p{i}",
                 "prompt": "prompt",
                 "response": "response",
-                "judge_score": 5.0,  # must be in [0, 1]
+                "judge_score": "not_a_number",
             }
             for i in range(3)
         ]
@@ -215,7 +217,10 @@ class TestPromptIdHandling:
     ) -> None:
         from cje.data.loaders import DatasetLoader
 
-        records = [self._record("p0"), {"prompt_id": "p1", "judge_score": 5.0}]
+        records = [
+            self._record("p0"),
+            {"prompt_id": "p1", "judge_score": "not_a_number"},
+        ]
         with caplog.at_level(logging.WARNING):
             dataset = DatasetLoader()._convert_raw_data(records)
 

@@ -6,10 +6,12 @@ following the Single Responsibility Principle.
 
 import json
 import logging
+import math
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
 from pathlib import Path
 
+from .ingest import read_aliased_field, resolve_prompt_id
 from .models import Dataset, Sample
 from .fresh_draws import FreshDrawSample, FreshDrawDataset
 
@@ -51,10 +53,47 @@ class DatasetLoader:
                     data.append(json.loads(line))
         return self._convert_raw_data(data, target_policies)
 
+    def _check_score_ranges(self, data: List[Dict[str, Any]]) -> None:
+        """Hard-fail on judge/oracle values outside [0, 1].
+
+        Out-of-range records used to be silently FILTERED with only a
+        warning, so a 0-100-scale calibration file died later with an
+        unhelpful "No valid samples" error. A wrong scale is a dataset-level
+        problem, not a per-record one: fail loudly with the observed range
+        and the fix.
+        """
+        for field in ("judge_score", "oracle_label"):
+            values: List[float] = []
+            for record in data:
+                raw = read_aliased_field(record, field)
+                if raw is None:
+                    continue
+                try:
+                    value = float(raw)
+                except (TypeError, ValueError):
+                    # Non-numeric values keep their per-record handling
+                    # (filtered with a counted warning below).
+                    continue
+                if not math.isnan(value):
+                    values.append(value)
+            n_out_of_range = sum(1 for v in values if v < 0.0 or v > 1.0)
+            if n_out_of_range:
+                raise ValueError(
+                    f"Calibration data {field} values outside [0, 1] "
+                    f"(observed range {min(values)}-{max(values)}, "
+                    f"{n_out_of_range} rows). Rescale to [0, 1], or pass your "
+                    f"data in-memory via fresh_draws_data, which "
+                    f"auto-normalizes any bounded scale."
+                )
+
     def _convert_raw_data(
         self, data: List[Dict[str, Any]], target_policies: Optional[List[str]] = None
     ) -> Dataset:
         """Convert raw data to Dataset."""
+        # Wrong-scale judge/oracle values are a dataset-level error, not a
+        # per-record one: fail before the per-record filter loop.
+        self._check_score_ranges(data)
+
         # Convert raw data to samples. Invalid records are FILTERED with a
         # counted warning; if every record is invalid we FAIL loudly.
         samples = []
@@ -93,34 +132,11 @@ class DatasetLoader:
             record: Raw data record
             idx: Index in dataset (used as fallback if prompt is also missing)
         """
-        # Get prompt_id - check top-level first, then metadata, then auto-generate.
-        # Explicit None checks: falsy but valid ids like 0 or "" must not be
-        # treated as missing (and silently hash-replaced).
-        prompt_id = record.get("prompt_id")
-        if prompt_id is None:
-            prompt_id = record.get("metadata", {}).get("prompt_id")
-        if prompt_id is not None:
-            # Coerce to string (fresh-draw loading does the same) so integer
-            # ids like 0 survive validation and join correctly across datasets.
-            prompt_id = str(prompt_id)
-        else:
-            # Auto-generate from prompt hash for consistency across datasets
-            # This ensures fresh draws will map to the same prompt_id
-            prompt = record.get(self.prompt_field, "")
-            if prompt:
-                import hashlib
-
-                # Use first 12 chars of SHA256 for readable but unique ID
-                prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[:12]
-                prompt_id = f"prompt_{prompt_hash}"
-            else:
-                # Fallback to index if no prompt either
-                prompt_id = f"sample_{idx:06d}"
-                logger.warning(
-                    f"Record {idx} missing both 'prompt_id' and 'prompt'. "
-                    f"Using index-based ID '{prompt_id}'. This is fragile - "
-                    f"consider adding explicit prompt_id or prompt text for stability."
-                )
+        # Get prompt_id - check top-level first, then metadata, then
+        # auto-generate (prompt hash, index fallback). Explicit None checks
+        # and string coercion (so integer ids like 0 survive validation and
+        # join correctly across datasets) live in resolve_prompt_id.
+        prompt_id = resolve_prompt_id(record, idx, prompt_field=self.prompt_field)
 
         # Extract reward if present (handle nested format)
         reward = None
@@ -132,26 +148,15 @@ class DatasetLoader:
                 reward = float(reward)
 
         # Extract judge_score and oracle_label - prioritize top-level, fallback to metadata
-        judge_score = None
-        oracle_label = None
+        judge_score = read_aliased_field(record, "judge_score")
+        if judge_score is not None:
+            judge_score = float(judge_score)
+
+        oracle_label = read_aliased_field(record, "oracle_label")
+        if oracle_label is not None:
+            oracle_label = float(oracle_label)
+
         metadata_dict = record.get("metadata", {})
-
-        # Judge score: check top-level first, then metadata
-        if "judge_score" in record and record["judge_score"] is not None:
-            judge_score = float(record["judge_score"])
-        elif (
-            "judge_score" in metadata_dict and metadata_dict["judge_score"] is not None
-        ):
-            judge_score = float(metadata_dict["judge_score"])
-
-        # Oracle label: check top-level first, then metadata
-        if "oracle_label" in record and record["oracle_label"] is not None:
-            oracle_label = float(record["oracle_label"])
-        elif (
-            "oracle_label" in metadata_dict
-            and metadata_dict["oracle_label"] is not None
-        ):
-            oracle_label = float(metadata_dict["oracle_label"])
 
         # Collect all other fields into metadata (excluding judge_score/oracle_label now)
         metadata = {}

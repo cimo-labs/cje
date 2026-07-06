@@ -247,28 +247,6 @@ _LOGPROB_FIELDS = (
 _LOGPROB_SCAN_LIMIT = 100
 
 
-def _read_jsonl_records(path: Path) -> list:
-    """Read a JSONL file into a list of dict records (blank lines skipped)."""
-    records = []
-    with open(path) as f:
-        for line_num, line in enumerate(f, 1):
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError as e:
-                raise ValueError(f"Invalid JSON at {path}:{line_num}: {e}") from e
-            if not isinstance(record, dict):
-                raise ValueError(
-                    f"Expected a JSON object at {path}:{line_num}, "
-                    f"got {type(record).__name__}"
-                )
-            records.append(record)
-    if not records:
-        raise ValueError(f"No records found in {path}")
-    return records
-
-
 def _records_have_logprob_fields(records: list) -> bool:
     return any(
         field in record
@@ -295,39 +273,6 @@ def _dir_has_logprob_fields(directory: Path) -> bool:
                 ):
                     return True
     return False
-
-
-def _fresh_draws_data_from_file(path: Path) -> dict:
-    """Group a single fresh-draws JSONL file by target_policy.
-
-    A file whose records have logged-data logprob fields but no
-    target_policy is an 0.3.x logged dataset: raise the migration error.
-    """
-    from .analysis import LOGGED_DATA_PATH_REMOVED_MESSAGE
-
-    records = _read_jsonl_records(path)
-
-    if not any("target_policy" in record for record in records):
-        if _records_have_logprob_fields(records):
-            # The old `cje analyze logged_data.jsonl` invocation.
-            raise ValueError(LOGGED_DATA_PATH_REMOVED_MESSAGE)
-        raise ValueError(
-            f"{path} does not look like fresh draws: no record has a "
-            f"'target_policy' field. Fresh-draws records need at least "
-            f"prompt_id, judge_score, and target_policy — or pass a "
-            f"directory of per-policy response files instead."
-        )
-
-    fresh_draws_data: dict = {}
-    for idx, record in enumerate(records):
-        policy = record.get("target_policy")
-        if not policy:
-            raise ValueError(
-                f"Record {idx} in {path} is missing 'target_policy' "
-                f"(other records have it — refusing to guess)."
-            )
-        fresh_draws_data.setdefault(str(policy), []).append(record)
-    return fresh_draws_data
 
 
 def run_analysis(args: argparse.Namespace) -> int:
@@ -376,7 +321,9 @@ def run_analysis(args: argparse.Namespace) -> int:
                 logger.info("logprob fields present and ignored (Direct mode)")
             kwargs["fresh_draws_dir"] = str(path_obj)
         elif path_obj.is_file():
-            fresh_draws_data = _fresh_draws_data_from_file(path_obj)
+            from ..data.ingest import fresh_draws_data_from_file
+
+            fresh_draws_data = fresh_draws_data_from_file(path_obj)
             all_records = [r for recs in fresh_draws_data.values() for r in recs]
             if _records_have_logprob_fields(all_records):
                 logger.info("logprob fields present and ignored (Direct mode)")
@@ -439,16 +386,20 @@ def run_analysis(args: argparse.Namespace) -> int:
 
 
 def _resolve_policy_file(directory: Path, policy: str) -> Path:
-    """Locate the per-policy fresh-draws file for a discovered policy."""
-    for candidate in (
-        directory / f"{policy}_responses.jsonl",
-        directory / f"{policy}.jsonl",
-    ):
-        if candidate.exists():
-            return candidate
+    """Locate the per-policy fresh-draws file for a discovered policy.
+
+    Delegates to the canonical POLICY_FILE_PATTERNS resolver so `cje
+    validate` accepts exactly the layouts `cje analyze` loads.
+    """
+    from ..data.ingest import POLICY_FILE_PATTERNS, resolve_policy_file
+
+    candidate = resolve_policy_file(directory, policy)
+    if candidate is not None:
+        return candidate
+    patterns = ", ".join(p.format(policy=policy) for p in POLICY_FILE_PATTERNS)
     raise FileNotFoundError(
         f"No fresh-draws file found for policy '{policy}' in {directory} "
-        f"(expected {policy}_responses.jsonl or {policy}.jsonl)"
+        f"(expected one of: {patterns})"
     )
 
 
@@ -460,11 +411,12 @@ def _read_fresh_draws_dir(directory: Path) -> list:
     per-policy checks and report per-policy counts.
     """
     from ..data.fresh_draws import discover_policies_from_fresh_draws
+    from ..data.ingest import read_jsonl_records
 
     records = []
     for policy in discover_policies_from_fresh_draws(directory):
         file_path = _resolve_policy_file(directory, policy)
-        for record in _read_jsonl_records(file_path):
+        for record in read_jsonl_records(file_path):
             record.setdefault("target_policy", policy)
             records.append(record)
     return records
@@ -478,6 +430,7 @@ def validate_data(args: argparse.Namespace) -> int:
     regenerated prompt_ids and relocated judge/oracle fields, so `cje
     validate` false-failed ALL valid data.
     """
+    from ..data.ingest import read_jsonl_records
     from ..data.validation import NOTE_PREFIX, read_record_field, validate_direct_data
 
     path = Path(args.dataset)
@@ -488,7 +441,7 @@ def validate_data(args: argparse.Namespace) -> int:
         if path.is_dir():
             records = _read_fresh_draws_dir(path)
         elif path.is_file():
-            records = _read_jsonl_records(path)
+            records = read_jsonl_records(path)
         else:
             raise FileNotFoundError(args.dataset)
 

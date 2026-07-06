@@ -59,7 +59,10 @@ def analyze_dataset(
             Accepted only so that passing a value raises a ValueError with the
             migration guidance. Logged data with judge scores and oracle labels
             still works as the calibration source via calibration_data_path.
-        fresh_draws_dir: Directory containing fresh draw response files.
+        fresh_draws_dir: Directory containing per-policy fresh draw response
+            files, or a single JSONL file whose records carry a target_policy
+            field. Judge scores on any bounded scale (0-100, Likert 1-5, ...)
+            are auto-normalized, exactly as with fresh_draws_data.
         fresh_draws_data: In-memory alternative to fresh_draws_dir. Dict mapping policy names
             to lists of records. Each record needs: prompt_id, judge_score. Optional: oracle_label.
             Example: {"policy_a": [{"prompt_id": "1", "judge_score": 0.8}, ...], ...}

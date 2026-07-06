@@ -54,7 +54,7 @@ cis = result.ci()                      # (lower, upper) tuples: percentile boots
 diagnostics = result.diagnostics       # DirectDiagnostics incl. boundary cards
 ```
 
-Fresh draws are auto-discovered from a `fresh_draws_dir` by `load_fresh_draws_auto(...)` under these names: `{policy}_responses.jsonl`, `responses/{policy}_responses.jsonl`, `{policy}_fresh.jsonl`, `fresh_draws/{policy}.jsonl`.
+Fresh draws are auto-discovered from a `fresh_draws_dir` under the canonical `POLICY_FILE_PATTERNS` names: `{policy}_responses.jsonl`, `{policy}.jsonl`, `responses/{policy}.jsonl`, `fresh_draws/{policy}.jsonl`.
 
 ## Standard Errors
 
