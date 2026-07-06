@@ -15,19 +15,15 @@ from typing import (
     Callable,
     TYPE_CHECKING,
     Literal,
-    Union,
 )
 from dataclasses import dataclass, field
 from scipy import stats
 import logging
-import warnings
 
 if TYPE_CHECKING:
     from ..data.fresh_draws import FreshDrawDataset
 
 logger = logging.getLogger(__name__)
-
-BoolLike = Union[bool, np.bool_]
 
 
 # ========== Residual-Augmented Estimator (AIPW-style) ==========
@@ -126,24 +122,32 @@ def get_oof_predictions(
     judge_scores: np.ndarray,
     oracle_mask: np.ndarray,
     covariates: Optional[np.ndarray] = None,
+    oracle_fold_ids: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Get cluster-out-of-fold predictions for oracle samples.
 
     For each oracle sample, returns the prediction from a calibrator
-    trained on data NOT including that sample's cluster/fold.
-
-    NOTE: The calibrator's _fold_ids are aligned with the oracle samples
-    (since fit_cv was called with only oracle samples). We need to map
-    these back to the original indices.
+    trained on data NOT including that sample's cluster/fold, via the
+    calibrator's single OOF entry point (`predict_oof`).
 
     Args:
         calibrator: Fitted JudgeCalibrator with fold models
         judge_scores: (n,) judge scores for all samples
         oracle_mask: (n,) boolean mask for oracle samples
         covariates: Optional (n, d) covariate array
+        oracle_fold_ids: (n_oracle,) fold assignment for the oracle samples,
+            aligned with ``judge_scores[oracle_mask]``. Pass the
+            ``fold_ids`` returned by the ``fit_cv`` call that fitted this
+            calibrator (fit_cv was called with only the oracle rows, so its
+            fold ids cover exactly these samples).
 
     Returns:
         oof_predictions: (n,) OOF predictions (NaN for non-oracle samples)
+
+    Raises:
+        ValueError: If ``oracle_fold_ids`` is missing or misaligned with the
+            oracle rows — silently substituting full-model predictions here
+            would break the out-of-fold contract of θ̂_aug.
     """
     n = len(judge_scores)
     oof_predictions = np.full(n, np.nan)
@@ -154,53 +158,129 @@ def get_oof_predictions(
     oracle_judge = judge_scores[oracle_mask]
     oracle_cov = covariates[oracle_mask] if covariates is not None else None
 
-    if not hasattr(calibrator, "_fold_ids") or calibrator._fold_ids is None:
-        logger.warning("Calibrator has no fold info, using full model for OOF")
-        oof_predictions[oracle_indices] = calibrator.predict(
-            oracle_judge, covariates=oracle_cov
+    if oracle_fold_ids is None:
+        raise ValueError(
+            "get_oof_predictions requires oracle_fold_ids (the fold_ids "
+            "returned by the fit_cv call that fitted the calibrator). "
+            "Full-model predictions are not a valid substitute for "
+            "out-of-fold predictions."
         )
-        return oof_predictions
-
-    # fold_ids is aligned with oracle samples (length = n_oracle)
-    fold_ids = calibrator._fold_ids
-    if len(fold_ids) != n_oracle:
-        logger.warning(
-            f"fold_ids length ({len(fold_ids)}) != n_oracle ({n_oracle}), "
-            "using full model for OOF"
-        )
-        oof_predictions[oracle_indices] = calibrator.predict(
-            oracle_judge, covariates=oracle_cov
-        )
-        return oof_predictions
-
-    # Check if flexible calibrator or standard isotonic
-    if (
-        hasattr(calibrator, "_flexible_calibrator")
-        and calibrator._flexible_calibrator is not None
-    ):
-        # Use flexible calibrator's OOF predictions
-        oof_preds = calibrator._flexible_calibrator.predict(
-            oracle_judge, fold_ids, oracle_cov
-        )
-        oof_predictions[oracle_indices] = np.clip(oof_preds, 0.0, 1.0)
-    elif hasattr(calibrator, "_fold_models") and calibrator._fold_models:
-        # Standard isotonic per-fold models
-        # fold_ids is aligned with oracle samples, so iterate over oracle indices
-        for fold_id, model in calibrator._fold_models.items():
-            # Find which oracle samples belong to this fold
-            fold_oracle_mask = fold_ids == fold_id
-            if np.any(fold_oracle_mask):
-                fold_oracle_indices = oracle_indices[fold_oracle_mask]
-                fold_oracle_judge = oracle_judge[fold_oracle_mask]
-                preds = model.predict(fold_oracle_judge)
-                oof_predictions[fold_oracle_indices] = np.clip(preds, 0.0, 1.0)
-    else:
-        logger.warning("No fold models available, using full model")
-        oof_predictions[oracle_indices] = calibrator.predict(
-            oracle_judge, covariates=oracle_cov
+    oracle_fold_ids = np.asarray(oracle_fold_ids)
+    if len(oracle_fold_ids) != n_oracle:
+        raise ValueError(
+            f"oracle_fold_ids length ({len(oracle_fold_ids)}) != number of "
+            f"oracle samples ({n_oracle}); the calibrator was fitted on "
+            f"different data than oracle_mask selects."
         )
 
+    oof_predictions[oracle_indices] = np.clip(
+        calibrator.predict_oof(oracle_judge, oracle_fold_ids, oracle_cov),
+        0.0,
+        1.0,
+    )
     return oof_predictions
+
+
+# ========== Oracle-Uncertainty (OUA) Jackknife Recipes ==========
+
+
+def oracle_jackknife_variance(jack: np.ndarray) -> float:
+    """Delete-one-fold jackknife variance of the calibration (OUA) component.
+
+    Var_cal = (K-1)/K * Σ_k (ψ^(−k) − ψ̄)²
+
+    This is the standard delete-a-group jackknife (paper Alg. 6). Note the sum,
+    not the mean, over folds: dividing by K here understates the variance by a
+    factor of K.
+
+    Args:
+        jack: Array of K leave-one-oracle-fold estimates
+
+    Returns:
+        Jackknife variance estimate (0.0 if fewer than 2 folds)
+    """
+    jack = np.asarray(jack, dtype=float)
+    K = len(jack)
+    if K < 2:
+        return 0.0
+    psi_bar = float(np.mean(jack))
+    return (K - 1) / K * float(np.sum((jack - psi_bar) ** 2))
+
+
+def oracle_jackknife_estimates(
+    calibrator: Any,
+    judge_scores: np.ndarray,
+    covariates: Optional[np.ndarray] = None,
+) -> Optional[np.ndarray]:
+    """Leave-one-oracle-fold estimates of the mean calibrated reward.
+
+    For each oracle fold k, recalibrates the sample with the fold-k model —
+    routed through the calibrator's `predict_oof`, which applies the
+    mode-appropriate transform (two-stage fold models expect the rank index,
+    not raw judge scores) — and records the mean reward.
+
+    Args:
+        calibrator: Fitted calibrator exposing `get_fold_models_for_oua` and
+            `predict_oof`
+        judge_scores: (n,) judge scores for the evaluation sample
+        covariates: Optional (n, d) covariate matrix
+
+    Returns:
+        Array of K leave-one-fold mean estimates, or None when fewer than
+        2 fold models are available
+    """
+    fold_models = calibrator.get_fold_models_for_oua()
+    if not fold_models:
+        return None
+    judge_scores = np.asarray(judge_scores)
+    jack: List[float] = []
+    for fold_id in range(len(fold_models)):
+        if fold_models.get(fold_id) is None:
+            continue
+        fold_ids = np.full(len(judge_scores), fold_id, dtype=int)
+        rewards_loo = np.clip(
+            calibrator.predict_oof(judge_scores, fold_ids, covariates), 0.0, 1.0
+        )
+        jack.append(float(np.mean(rewards_loo)))
+    if len(jack) < 2:
+        return None
+    return np.asarray(jack)
+
+
+def combine_cluster_and_oracle(
+    se_base: float,
+    df_cluster: int,
+    jackknife_variance: float,
+    n_jackknife_folds: int = 0,
+) -> Tuple[float, int]:
+    """Combine a cluster-robust SE with the oracle-jackknife variance.
+
+    The additive decomposition used by cluster-robust inference:
+
+        se_total = sqrt(se_base² + Var_cal)
+
+    with degrees of freedom capped by the jackknife fold count when the
+    oracle component is informative (K >= 2 fold models):
+
+        df = max(min(df_cluster, K - 1), 1)
+
+    Args:
+        se_base: Cluster-robust (or standard) SE of the evaluation mean
+        df_cluster: Degrees of freedom from clustering (typically G - 1)
+        jackknife_variance: Var_cal from `oracle_jackknife_variance` (0.0
+            when the OUA component is skipped or unavailable)
+        n_jackknife_folds: Number of oracle fold models (caps df at K - 1
+            when >= 2; fewer than 2 folds carry no jackknife variance and
+            do not constrain df)
+
+    Returns:
+        Tuple of (se_total, df)
+    """
+    se_total = float(np.sqrt(se_base**2 + max(jackknife_variance, 0.0)))
+    df = int(df_cluster)
+    if n_jackknife_folds >= 2:
+        df = min(df, n_jackknife_folds - 1)
+    return se_total, max(df, 1)
 
 
 # ========== Direct Mode Bootstrap Data Structures ==========
@@ -301,14 +381,20 @@ def build_direct_eval_table(
             else:
                 all_oracle_labels.append(np.nan)
 
-            # Extract covariates if requested
+            # Extract covariates if requested. Missing covariates raise the
+            # same actionable error as CalibratedDirectEstimator.fit() —
+            # NaN-filling would silently feed fabricated covariates to the
+            # bootstrap's calibrator refits.
             if covariate_names:
                 row_covs = []
                 for cov_name in covariate_names:
-                    if cov_name in sample.metadata:
-                        row_covs.append(float(sample.metadata[cov_name]))
-                    else:
-                        row_covs.append(np.nan)
+                    if cov_name not in sample.metadata:
+                        raise ValueError(
+                            f"Covariate '{cov_name}' not found in fresh draw metadata "
+                            f"for policy '{policy_name}', sample {sample.prompt_id}. "
+                            f"Available metadata: {list(sample.metadata.keys())}"
+                        )
+                    row_covs.append(float(sample.metadata[cov_name]))
                 all_covariates.append(row_covs)
 
     # Convert to numpy arrays
@@ -391,7 +477,6 @@ def cluster_bootstrap_direct_with_refit(
     seed: int = 42,
     use_augmented_estimator: bool = True,
     calibration_policy_idx: Optional[int] = None,
-    use_multipolicy_eif: Optional[BoolLike] = None,
 ) -> Dict[str, Any]:
     """Cluster bootstrap with calibrator refit for Direct mode.
 
@@ -422,9 +507,6 @@ def cluster_bootstrap_direct_with_refit(
             oracle samples (for transport experiments). Residual corrections in θ̂_aug
             still use all policies' oracle samples. If None, use all oracle samples
             for both calibration and residuals (default behavior).
-        use_multipolicy_eif: Legacy compatibility shim. Multi-policy EIF has been
-            removed. Passing True raises a ValueError. Passing False emits a
-            deprecation warning and is otherwise ignored.
 
     Returns:
         Dictionary with:
@@ -439,27 +521,6 @@ def cluster_bootstrap_direct_with_refit(
         - metadata: additional diagnostic information
         - augmentation_diagnostics: (if use_augmented_estimator) per-policy diagnostics
     """
-    if use_multipolicy_eif is not None and not isinstance(
-        use_multipolicy_eif, (bool, np.bool_)
-    ):
-        raise TypeError(
-            "use_multipolicy_eif must be a boolean or None. "
-            f"Got {type(use_multipolicy_eif).__name__}."
-        )
-
-    if use_multipolicy_eif is not None and bool(use_multipolicy_eif):
-        raise ValueError(
-            "use_multipolicy_eif=True is no longer supported. "
-            "CJE now uses per-policy residual correction only."
-        )
-    if use_multipolicy_eif is not None and not bool(use_multipolicy_eif):
-        warnings.warn(
-            "use_multipolicy_eif is deprecated and ignored. "
-            "CJE now uses per-policy residual correction only.",
-            FutureWarning,
-            stacklevel=2,
-        )
-
     rng = np.random.default_rng(seed)
 
     # Extract arrays from eval table
@@ -508,7 +569,7 @@ def cluster_bootstrap_direct_with_refit(
         ]
 
         n_cal_oracle_full = int(np.sum(calibration_oracle_mask))
-        calibrator.fit_cv(
+        cal_result = calibrator.fit_cv(
             judge_scores=judge_scores[calibration_oracle_mask],
             oracle_labels=oracle_labels[calibration_oracle_mask],
             n_folds=min(
@@ -526,9 +587,14 @@ def cluster_bootstrap_direct_with_refit(
         if use_augmented_estimator:
             # Use θ̂_aug (AIPW-style debiasing)
             # Get cluster-out-of-fold predictions for CALIBRATION oracle samples
-            # (fold_ids will match calibration_oracle_mask length)
+            # (fit_cv saw only the calibration-oracle rows, so its fold ids
+            # align with calibration_oracle_mask)
             oof_predictions = get_oof_predictions(
-                calibrator, judge_scores, calibration_oracle_mask, covariates
+                calibrator,
+                judge_scores,
+                calibration_oracle_mask,
+                covariates,
+                oracle_fold_ids=cal_result.fold_ids,
             )
 
             # For NON-CALIBRATION oracle (target policies), use full-model predictions
@@ -623,7 +689,7 @@ def cluster_bootstrap_direct_with_refit(
                 boot_prompt_ids[i] for i in np.where(boot_calibration_mask)[0]
             ]
 
-            boot_calibrator.fit_cv(
+            boot_cal_result = boot_calibrator.fit_cv(
                 judge_scores=boot_judge[boot_calibration_mask],
                 oracle_labels=boot_oracle[boot_calibration_mask],
                 n_folds=min(5, n_cal_oracle_boot // 4),  # Reduce folds if low oracle
@@ -654,9 +720,14 @@ def cluster_bootstrap_direct_with_refit(
         # 7. Compute policy estimates (augmented or plug-in)
         if use_augmented_estimator:
             # Use θ̂_aug for bootstrap replicate
-            # Get OOF predictions for CALIBRATION oracle (fold_ids will match)
+            # Get OOF predictions for CALIBRATION oracle (the refit saw only
+            # the calibration-oracle rows, so its fold ids align)
             boot_oof_preds = get_oof_predictions(
-                boot_calibrator, boot_judge, boot_calibration_mask, boot_covariates
+                boot_calibrator,
+                boot_judge,
+                boot_calibration_mask,
+                boot_covariates,
+                oracle_fold_ids=boot_cal_result.fold_ids,
             )
 
             # For NON-CALIBRATION oracle, use full-model predictions
@@ -752,64 +823,6 @@ def cluster_bootstrap_direct_with_refit(
         "use_augmented_estimator": use_augmented_estimator,
         "augmentation_diagnostics": augmentation_diagnostics,
         "calibration_policy_idx": calibration_policy_idx,  # For transport experiments
-    }
-
-
-def compare_policies_bootstrap(
-    bootstrap_result: Dict[str, Any],
-    policy_a: int,
-    policy_b: int,
-    alpha: float = 0.05,
-) -> Dict[str, Any]:
-    """Compute pairwise policy comparison from bootstrap results.
-
-    This uses the stored bootstrap matrix to compute contrasts between policies.
-    Because the same cluster resampling was used for both policies in each
-    replicate, the correlation structure is preserved, yielding tighter CIs
-    for paired designs than naive independence assumptions.
-
-    Args:
-        bootstrap_result: Result from cluster_bootstrap_direct_with_refit()
-        policy_a: Index of first policy
-        policy_b: Index of second policy
-        alpha: Significance level for CI
-
-    Returns:
-        Dictionary with:
-        - diff_estimate: point estimate of difference (a - b)
-        - diff_se: bootstrap SE of difference
-        - ci_lower, ci_upper: percentile CI bounds
-        - p_value: two-sided bootstrap p-value
-    """
-    bootstrap_matrix = bootstrap_result["bootstrap_matrix"]
-    estimates = bootstrap_result["estimates"]
-
-    # Compute difference distribution
-    diff_samples = bootstrap_matrix[:, policy_a] - bootstrap_matrix[:, policy_b]
-    diff_estimate = estimates[policy_a] - estimates[policy_b]
-
-    # Bootstrap SE and CI
-    diff_se = np.nanstd(diff_samples, ddof=1)
-    ci_lower = np.nanpercentile(diff_samples, 100 * alpha / 2)
-    ci_upper = np.nanpercentile(diff_samples, 100 * (1 - alpha / 2))
-
-    # Two-sided bootstrap p-value (fraction of replicates on opposite side of 0)
-    n_valid = np.sum(~np.isnan(diff_samples))
-    if diff_estimate >= 0:
-        p_value = 2 * np.nanmean(diff_samples <= 0)
-    else:
-        p_value = 2 * np.nanmean(diff_samples >= 0)
-    p_value = min(p_value, 1.0)  # Cap at 1.0
-
-    return {
-        "diff_estimate": float(diff_estimate),
-        "diff_se": float(diff_se),
-        "ci_lower": float(ci_lower),
-        "ci_upper": float(ci_upper),
-        "p_value": float(p_value),
-        "policy_a": policy_a,
-        "policy_b": policy_b,
-        "n_valid_replicates": int(n_valid),
     }
 
 

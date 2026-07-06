@@ -21,14 +21,6 @@ class AnalysisService:
     def __init__(self) -> None:
         pass
 
-    def _metadata_estimator_config(
-        self, estimator_config: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Drop legacy compatibility keys that are no longer operational."""
-        sanitized = dict(estimator_config)
-        sanitized.pop("use_multipolicy_eif", None)
-        return sanitized
-
     def _build_covariate_list(
         self, config: AnalysisConfig, dataset: Optional[Dataset] = None
     ) -> Optional[List[str]]:
@@ -61,33 +53,6 @@ class AnalysisService:
                 covariates.insert(0, "response_length")
 
         return covariates if covariates else None
-
-    def _direct_calibration_folds(self, n_oracle: int, n_folds: int = 5) -> int:
-        """Choose the number of calibration folds for Direct mode.
-
-        Cross-fitted calibration needs at least 2 oracle samples per fold.
-        When fewer than 2 * n_folds oracle labels are available (but at
-        least 4), reduce the fold count instead of failing outright.
-
-        Args:
-            n_oracle: Number of oracle-labeled samples available for calibration
-            n_folds: Desired number of CV folds
-
-        Returns:
-            Number of folds to use (possibly reduced)
-        """
-        if n_oracle >= n_folds * 2 or n_oracle < 4:
-            # Enough labels for the requested folds, or too few to calibrate
-            # at all (let the calibrator raise its actionable error).
-            return n_folds
-        reduced_folds = max(2, n_oracle // 2)
-        logger.warning(
-            f"Only {n_oracle} oracle-labeled samples available; reducing "
-            f"calibration folds from {n_folds} to {reduced_folds}. Results "
-            f"will be noisier — provide at least {n_folds * 2} oracle labels "
-            f"for stable calibration."
-        )
-        return reduced_folds
 
     def run(self, config: AnalysisConfig) -> EstimationResult:
         """Run the single Direct-mode flow.
@@ -216,20 +181,16 @@ class AnalysisService:
 
             # Covariate list (validates response fields when
             # include_response_length is set), then learn the calibration
+            # (calibrate_dataset auto-reduces the fold count when labels
+            # are scarce)
             covariate_names = self._build_covariate_list(
                 config, calibration_dataset_for_rewards
-            )
-            n_oracle_for_calibration = sum(
-                1
-                for s in calibration_dataset_for_rewards.samples
-                if s.oracle_label is not None
             )
             _, calibration_result = calibrate_dataset(
                 calibration_dataset_for_rewards,
                 judge_field=config.judge_field,
                 oracle_field=config.oracle_field,
                 enable_cross_fit=True,
-                n_folds=self._direct_calibration_folds(n_oracle_for_calibration),
                 covariate_names=covariate_names,
             )
         else:
@@ -272,7 +233,6 @@ class AnalysisService:
                     judge_field=config.judge_field,
                     oracle_field=config.oracle_field,
                     enable_cross_fit=True,
-                    n_folds=self._direct_calibration_folds(n_with_oracle),
                     covariate_names=covariate_names,
                 )
             else:
@@ -290,7 +250,6 @@ class AnalysisService:
             reward_calibrator=(
                 calibration_result.calibrator if calibration_result else None
             ),
-            run_diagnostics=True,
             oua_jackknife=(
                 calibration_result is not None
             ),  # Include calibration uncertainty if calibrated
@@ -388,11 +347,8 @@ class AnalysisService:
                 # Only set oracle_coverage for fresh-draws-only calibration
                 results.metadata["oracle_coverage"] = oracle_coverage
 
-        metadata_estimator_config = self._metadata_estimator_config(
-            config.estimator_config
-        )
-        if metadata_estimator_config:
-            results.metadata["estimator_config"] = metadata_estimator_config
+        if config.estimator_config:
+            results.metadata["estimator_config"] = dict(config.estimator_config)
 
         if oracle_sources_metadata:
             results.metadata["oracle_sources"] = oracle_sources_metadata

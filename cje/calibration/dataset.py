@@ -1,15 +1,14 @@
 """Dataset calibration utilities for reward calibration.
 
-This module provides the main entry points for calibrating datasets with judge
+This module provides the main entry point for calibrating datasets with judge
 scores to match oracle labels, creating calibrated rewards for CJE analysis.
 It supports monotone and flexible two-stage calibration.
 """
 
 from typing import Dict, List, Any, Optional, Tuple, Literal, cast, Callable
-from copy import deepcopy
 import numpy as np
 from ..data.models import Dataset, Sample
-from .judge import JudgeCalibrator, CalibrationResult
+from .judge import JudgeCalibrator, CalibrationResult, resolve_n_folds
 
 
 # Auto-computable covariates registry
@@ -43,12 +42,12 @@ def calibrate_dataset(
         dataset: Dataset containing judge scores and oracle labels
         judge_field: Field name in metadata containing judge scores
         oracle_field: Field name in metadata containing oracle labels
-        enable_cross_fit: If True, fits cross-fitted models for DR estimation and
-                         calibration-aware inference via the oracle jackknife. Default True.
-        n_folds: Number of CV folds (only used if enable_cross_fit=True)
+        enable_cross_fit: Must be True (the default). Cross-fitted calibration
+                         is the only mode since 0.5.0; passing False raises.
+        n_folds: Number of CV folds (auto-reduced when labels are scarce)
         calibration_mode: Calibration mode ('auto', 'monotone', 'two_stage').
                          If None, defaults to 'two_stage' when covariates present,
-                         'auto' for cross-fit without covariates, 'monotone' otherwise.
+                         'auto' otherwise.
         use_response_length: If True, includes response length as a covariate
                             for two-stage calibration. Auto-computed from response text.
         covariate_names: Optional list of additional metadata field names to use as
@@ -80,6 +79,13 @@ def calibrate_dataset(
         ...     covariate_names=["domain"]
         ... )
     """
+    if not enable_cross_fit:
+        raise ValueError(
+            "enable_cross_fit=False (a single non-cross-fitted isotonic fit) "
+            "was removed in 0.5.0; cross-fitted calibration is the only mode. "
+            "Remove the argument."
+        )
+
     # Extract judge scores, oracle labels, and prompt_ids
     judge_scores = []
     oracle_labels = []
@@ -221,18 +227,20 @@ def calibrate_dataset(
     oracle_coverage = len(oracle_labels_array) / len(dataset.samples)
     has_full_coverage = oracle_coverage >= 1.0
 
+    # Auto-reduce the fold count when labels are scarce, so the reduced
+    # value is what lands in the calibration metadata below (fit_cv applies
+    # the same rule and would be a no-op after this).
+    n_folds = resolve_n_folds(len(oracle_labels_array), n_folds)
+
     # Determine calibration mode
     if calibration_mode is None:
         # Default based on whether we have covariates
         if all_covariate_names:
             # With covariates, default to two-stage (flexible calibration)
             calibration_mode = "two_stage"
-        elif enable_cross_fit:
-            # Cross-fit without covariates: use auto-selection
-            calibration_mode = "auto"
         else:
-            # Simple case: monotone calibration
-            calibration_mode = "monotone"
+            # No covariates: use auto-selection
+            calibration_mode = "auto"
 
     # Calibrate judge scores (even with 100% coverage, we need f̂ for DR models)
     calibrator = JudgeCalibrator(
@@ -242,25 +250,15 @@ def calibrate_dataset(
         covariate_names=all_covariate_names if all_covariate_names else None,
         random_seed=random_seed,
     )
-    if enable_cross_fit:
-        # Use cross-fitted calibration for DR support
-        # Pass prompt_ids to enable unified fold system
-        result = calibrator.fit_cv(
-            judge_scores_array,
-            oracle_labels_array,
-            oracle_mask_array,
-            n_folds,
-            prompt_ids=prompt_ids,
-            covariates=covariates_array,
-        )
-    else:
-        # Use standard calibration (backward compatible)
-        result = calibrator.fit_transform(
-            judge_scores_array,
-            oracle_labels_array,
-            oracle_mask_array,
-            covariates=covariates_array,
-        )
+    # Cross-fitted calibration; prompt_ids enable the unified fold system
+    result = calibrator.fit_cv(
+        judge_scores_array,
+        oracle_labels_array,
+        oracle_mask_array,
+        n_folds,
+        prompt_ids=prompt_ids,
+        covariates=covariates_array,
+    )
 
     # Create new samples with calibrated rewards
     calibrated_samples = []
@@ -302,13 +300,11 @@ def calibrate_dataset(
         "oracle_coverage": oracle_coverage,
         "using_direct_oracle": has_full_coverage,
         "method": (
-            "direct_oracle"
-            if has_full_coverage
-            else ("cross_fitted_isotonic" if enable_cross_fit else "isotonic")
+            "direct_oracle" if has_full_coverage else "cross_fitted_isotonic"
         ),  # Will be updated below
-        "n_folds": n_folds if enable_cross_fit else None,
-        "oof_rmse": result.oof_rmse if enable_cross_fit else None,
-        "oof_coverage": result.oof_coverage_at_01 if enable_cross_fit else None,
+        "n_folds": n_folds,
+        "oof_rmse": result.oof_rmse,
+        "oof_coverage": result.oof_coverage_at_01,
         "calibration_mode": calibration_mode,
     }
 
@@ -368,27 +364,16 @@ def calibrate_dataset(
     dataset_metadata["fold_seed"] = random_seed
 
     # Store selected calibration mode and update method field
-    selected_mode: Optional[str] = calibration_mode  # Default to the requested mode
-    if (
-        hasattr(calibrator, "_flexible_calibrator")
-        and calibrator._flexible_calibrator is not None
-    ):
-        selected_mode = calibrator._flexible_calibrator.selected_mode
-        if selected_mode is not None:
-            dataset_metadata["calibration_info"]["selected_mode"] = selected_mode
-    elif calibration_mode == "auto" and hasattr(calibrator, "selected_mode"):
-        selected_mode = calibrator.selected_mode
-        if selected_mode is not None:
-            dataset_metadata["calibration_info"]["selected_mode"] = selected_mode
+    selected_mode: Optional[str] = calibrator.selected_mode or calibration_mode
+    if calibrator.selected_mode is not None:
+        dataset_metadata["calibration_info"]["selected_mode"] = calibrator.selected_mode
 
     # Update method field to reflect actual calibration mode used
     if has_full_coverage:
         # With 100% coverage, we use oracle labels directly
         dataset_metadata["calibration_info"]["method"] = "direct_oracle"
     elif selected_mode:
-        dataset_metadata["calibration_info"]["method"] = (
-            f"cross_fitted_{selected_mode}" if enable_cross_fit else selected_mode
-        )
+        dataset_metadata["calibration_info"]["method"] = f"cross_fitted_{selected_mode}"
 
     calibrated_dataset = Dataset(
         samples=calibrated_samples,
@@ -397,98 +382,3 @@ def calibrate_dataset(
     )
 
     return calibrated_dataset, result
-
-
-def calibrate_from_raw_data(
-    data: List[Dict[str, Any]],
-    judge_field: str = "judge_score",
-    oracle_field: str = "oracle_label",
-    reward_field: str = "reward",
-    calibration_mode: Optional[Literal["auto", "monotone", "two_stage"]] = "auto",
-    random_seed: int = 42,
-) -> Tuple[List[Dict[str, Any]], CalibrationResult]:
-    """Calibrate judge scores in raw data to create calibrated rewards.
-
-    This is a lower-level function that works with raw dictionaries
-    instead of Dataset objects. Note: This function doesn't support covariates.
-    Use calibrate_dataset() for full functionality.
-
-    Args:
-        data: List of dictionaries containing judge scores and oracle labels
-        judge_field: Field name containing judge scores
-        oracle_field: Field name containing oracle labels
-        reward_field: Field name to store calibrated rewards
-        calibration_mode: Calibration mode ('auto', 'monotone', 'two_stage').
-                         Defaults to 'auto' (automatic selection).
-
-    Returns:
-        Tuple of (calibrated_data, calibration_result)
-    """
-    # Extract judge scores and oracle labels
-    judge_scores = []
-    oracle_labels = []
-    oracle_mask = []
-
-    for idx, record in enumerate(data):
-        # Extract judge score
-        judge_score = record.get(judge_field)
-        if judge_score is None:
-            raise ValueError(f"Judge field '{judge_field}' not found in record {idx}")
-
-        if isinstance(judge_score, dict):
-            judge_score = judge_score.get("mean", judge_score.get("value"))
-        if judge_score is None:
-            raise ValueError(f"Judge score is None for record {idx}")
-        judge_scores.append(float(judge_score))
-
-        # Check for oracle label
-        oracle_label = record.get(oracle_field)
-        if oracle_label is not None:
-            oracle_labels.append(float(oracle_label))
-            oracle_mask.append(True)
-        else:
-            oracle_mask.append(False)
-
-    # Convert to arrays
-    judge_scores_array = np.array(judge_scores)
-    oracle_labels_array = np.array(
-        oracle_labels
-    )  # Now always same length as judge_scores
-    oracle_mask_array = np.array(oracle_mask)
-
-    if len(oracle_labels_array) == 0:
-        raise ValueError(f"No oracle labels found in field '{oracle_field}'")
-
-    # Calibrate judge scores
-    calibrator = JudgeCalibrator(
-        calibration_mode=cast(
-            Literal["monotone", "two_stage", "auto"], calibration_mode
-        ),
-        random_seed=random_seed,
-    )
-    result = calibrator.fit_transform(
-        judge_scores_array, oracle_labels_array, oracle_mask_array
-    )
-
-    # Add calibrated rewards to data
-    calibrated_data = []
-    for i, record in enumerate(data):
-        record_copy = record.copy()
-        record_copy[reward_field] = float(result.calibrated_scores[i])
-
-        # Deep copy metadata to avoid mutating caller's nested dict
-        metadata = deepcopy(record_copy.get("metadata", {}))
-        metadata[judge_field] = judge_scores[i]
-        if oracle_mask[i]:
-            # Find the index of this oracle label
-            oracle_idx = np.sum(oracle_mask_array[: i + 1]) - 1
-            metadata[oracle_field] = (
-                float(oracle_labels_array[oracle_idx])
-                if oracle_labels_array is not None
-                else None
-            )
-        record_copy["metadata"] = metadata
-
-        calibrated_data.append(record_copy)
-
-    return calibrated_data, result

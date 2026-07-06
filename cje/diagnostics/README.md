@@ -147,15 +147,14 @@ CJE's uncertainty has two independent sources: **evaluation sampling** (which pr
 
 **1. Cluster bootstrap with calibrator refit (the default)** — `cluster_bootstrap_direct_with_refit(eval_table, calibrator_factory, n_bootstrap=2000, ...)`. Each replicate resamples prompt clusters (shared across policies, preserving the paired design) and refits the calibrator on the replicate's oracle subset, capturing the calibration/evaluation covariance analytic SEs miss. By default it uses the augmented estimator θ̂_aug = mean(f̂_full(S)) + mean(Y − f̂_oof(S)), an AIPW-style debiasing of the plug-in. Returns percentile CIs plus the `bootstrap_matrix` for paired contrasts. `calibration_policy_idx` restricts calibrator fitting to one policy's labels (transport-aware bootstrap: the residual term then absorbs transport bias on the other policies).
 
-**2. Cluster-robust SE + oracle jackknife** — `cluster_robust_se(data, cluster_ids, statistic_fn, ...)` computes CRV1 sandwich SEs with t-based CIs (df = G−1 clusters). The estimator augments this with the delete-one-oracle-fold jackknife variance (`oracle_jackknife_variance` in `cje.estimators.base_estimator`), added once, so calibration uncertainty is never dropped. This is the automatic fallback when the evaluation draws carry no oracle labels at all (calibration-data-only runs) — there the calibration/evaluation covariance is exactly zero and the additive decomposition is exact, recorded in `result.metadata["inference"]`.
+**2. Cluster-robust SE + oracle jackknife** — `cluster_robust_se(data, cluster_ids, statistic_fn, ...)` computes CRV1 sandwich SEs with t-based CIs (df = G−1 clusters). The estimator augments this with the delete-one-oracle-fold jackknife variance (`oracle_jackknife_variance` in `cje.diagnostics.robust_inference`), added once, so calibration uncertainty is never dropped. This is the automatic fallback when the evaluation draws carry no oracle labels at all (calibration-data-only runs) — there the calibration/evaluation covariance is exactly zero and the additive decomposition is exact, recorded in `result.metadata["inference"]`.
 
-Supporting pieces: `build_direct_eval_table(fresh_draws_per_policy, covariate_names=None)` builds the long-format `DirectEvalTable` the bootstrap resamples; `make_calibrator_factory(mode, ...)` produces fresh `JudgeCalibrator` instances per replicate (mode fixed to the full-data selection, never "auto"); `compare_policies_bootstrap(bootstrap_result, policy_a, policy_b)` computes paired contrasts from the stored bootstrap matrix (same resampled clusters on both sides → tighter CIs than independence).
+Supporting pieces: `build_direct_eval_table(fresh_draws_per_policy, covariate_names=None)` builds the long-format `DirectEvalTable` the bootstrap resamples; `make_calibrator_factory(mode, ...)` produces fresh `JudgeCalibrator` instances per replicate (mode fixed to the full-data selection, never "auto"). The returned `bootstrap_matrix` supports paired contrasts directly (same resampled clusters on both sides → tighter CIs than independence): `diff = boot["bootstrap_matrix"][:, a] - boot["bootstrap_matrix"][:, b]`.
 
 ```python
 from cje.diagnostics import (
     build_direct_eval_table,
     cluster_bootstrap_direct_with_refit,
-    compare_policies_bootstrap,
     make_calibrator_factory,
 )
 
@@ -164,7 +163,7 @@ from cje.diagnostics import (
 # boot = cluster_bootstrap_direct_with_refit(
 #     eval_table, make_calibrator_factory("monotone"), n_bootstrap=2000
 # )
-# contrast = compare_policies_bootstrap(boot, policy_a=0, policy_b=1)
+# diff = boot["bootstrap_matrix"][:, 0] - boot["bootstrap_matrix"][:, 1]
 ```
 
 Most users never call these directly — `analyze_dataset` / `CalibratedDirectEstimator` route through them and record the SE decomposition in `result.metadata["se_components"]` and the method actually used in `result.metadata["inference"]`.

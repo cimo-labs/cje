@@ -609,114 +609,16 @@ class FlexibleCalibrator:
             logger.info("  → Selected: monotone (simpler model preferred)")
             return "monotone"
 
-    def index(
-        self,
-        S: np.ndarray,
-        folds: Optional[np.ndarray] = None,
-        covariates: Optional[np.ndarray] = None,
-    ) -> np.ndarray:
-        """Return the index used for isotonic regression.
+    def fold_models(self) -> Dict[int, Any]:
+        """Per-fold isotonic models for the selected mode.
 
-        For monotone mode: Returns S (or normalized S)
-        For two-stage mode: Returns rank_transform(g(S, X_cov))
-
-        Args:
-            S: Judge scores
-            folds: Optional fold assignments for OOF transformation
-            covariates: Optional covariate matrix (n_samples, n_covariates)
+        For two-stage mode these are the final isotonic stages and expect the
+        RANK INDEX, not raw judge scores — route predictions through
+        `JudgeCalibrator.predict_oof`, which applies the full transform.
 
         Returns:
-            Index values for isotonic regression
+            Dict of fold_id -> fitted isotonic model (may be empty pre-fit).
         """
-        mode = self.selected_mode or self.mode
-
-        if mode == "monotone":
-            if covariates is not None:
-                raise ValueError("Covariates not supported in monotone mode")
-            # In monotone mode, the index is just S
-            return S
-
-        elif mode == "two_stage":
-            if folds is None:
-                # Use full model for inference
-                if self._full_g_model is not None:
-                    # Build feature matrix
-                    if covariates is not None:
-                        X = np.column_stack([S, covariates])
-                    else:
-                        X = S.reshape(-1, 1)
-
-                    g_pred = self._full_g_model.predict(X)
-                    if self._full_ecdf is not None:
-                        return np.asarray(self._full_ecdf(g_pred))
-                    else:
-                        # Fallback to rank transform if ECDF not available
-                        return self._rank_transform(g_pred)
-                else:
-                    # Fallback: ensemble average
-                    g_ensemble = np.zeros_like(S)
-                    count = 0
-                    for g_model in self._g_models.values():
-                        if g_model is not None:
-                            # Build feature matrix
-                            if covariates is not None:
-                                X = np.column_stack([S, covariates])
-                            else:
-                                X = S.reshape(-1, 1)
-                            g_ensemble += g_model.predict(X)
-                            count += 1
-                    if count > 0:
-                        g_ensemble /= count
-                        return self._rank_transform(g_ensemble)
-                    else:
-                        return S  # Ultimate fallback
-            else:
-                # OOF transformation for training
-                T = np.zeros_like(S)
-                for k in np.unique(folds):
-                    mask = folds == k
-                    if k in self._g_models and k in self._ecdf_models:
-                        if self._g_models[k] is not None:
-                            # Build feature matrix for this fold
-                            if covariates is not None:
-                                X_fold = np.column_stack([S[mask], covariates[mask]])
-                            else:
-                                X_fold = S[mask].reshape(-1, 1)
-                            g_pred = self._g_models[k].predict(X_fold)
-                            T[mask] = self._ecdf_models[k](g_pred)
-                        else:
-                            # Fallback to ECDF on raw scores
-                            T[mask] = self._ecdf_models[k](S[mask])
-                    else:
-                        # Ultimate fallback
-                        T[mask] = S[mask]
-                return T
-        else:
-            # Fallback for unknown modes
-            return S
-
-    def _rank_transform(self, x: np.ndarray) -> np.ndarray:
-        """Simple rank transformation to [0, 1]."""
-        from scipy.stats import rankdata
-
-        ranks = rankdata(x, method="average")
-        return np.asarray((ranks - 0.5) / len(x))
-
-    def get_diagnostics(self) -> Dict[str, Any]:
-        """Get diagnostics about the fitted calibrator."""
-        return {
-            "mode": self.selected_mode or self.mode,
-            "n_folds": len(self._monotone_models or self._iso_models),
-            "has_two_stage": bool(self._g_models),
-            "has_monotone": bool(self._monotone_models),
-        }
-
-    @property
-    def iso_reg(self) -> Optional[Any]:
-        """Get the isotonic regression model for compatibility."""
-        mode = self.selected_mode or self.mode
-        if mode == "monotone":
-            return self._full_monotone_model
-        else:
-            # For two-stage, return the final isotonic model
-            return self._full_iso_model
+        if (self.selected_mode or self.mode) == "two_stage":
+            return dict(self._iso_models)
+        return dict(self._monotone_models)

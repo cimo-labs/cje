@@ -42,7 +42,6 @@ from .robust_inference import (
     build_direct_eval_table,
     make_calibrator_factory,
     cluster_bootstrap_direct_with_refit,
-    compare_policies_bootstrap,
     cluster_robust_se,
 )
 
@@ -50,6 +49,7 @@ from .robust_inference import (
 from .reward_boundary import (
     BoundaryCard,
     boundary_card,
+    boundary_card_dict,
 )
 
 # Budget optimization / Planning
@@ -91,11 +91,11 @@ __all__ = [
     "build_direct_eval_table",
     "make_calibrator_factory",
     "cluster_bootstrap_direct_with_refit",
-    "compare_policies_bootstrap",
     "cluster_robust_se",
     # Reward boundary / coverage badge
     "BoundaryCard",
     "boundary_card",
+    "boundary_card_dict",
     # Budget optimization / Planning
     "CostModel",
     "FittedVarianceModel",

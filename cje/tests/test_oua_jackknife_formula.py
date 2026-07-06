@@ -14,29 +14,20 @@ import numpy as np
 import pytest
 
 from cje.data.models import EstimationResult
-from cje.estimators.base_estimator import (
-    BaseCJEEstimator,
-    oracle_jackknife_variance,
-)
+from cje.diagnostics.robust_inference import oracle_jackknife_variance
+from cje.estimators.direct_method import CalibratedDirectEstimator
 
 
-class _JackknifeStub(BaseCJEEstimator):
+class _JackknifeStub(CalibratedDirectEstimator):
     """Minimal estimator exposing a fixed jackknife array."""
 
     def __init__(self, jack: np.ndarray):
         super().__init__(
             target_policies=["policy_a"],
-            run_diagnostics=False,
             reward_calibrator=object(),  # non-None so OUA path runs
             oua_jackknife=True,
         )
         self._jack = np.asarray(jack, dtype=float)
-
-    def fit(self) -> None:  # pragma: no cover - not used
-        pass
-
-    def estimate(self) -> EstimationResult:  # pragma: no cover - not used
-        raise NotImplementedError
 
     def get_oracle_jackknife(self, policy: str) -> np.ndarray:
         return self._jack

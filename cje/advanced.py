@@ -27,7 +27,6 @@ Example:
 
 # Estimators
 from .estimators import (
-    BaseCJEEstimator,
     CalibratedDirectEstimator,
 )
 
@@ -46,7 +45,6 @@ from .data.fresh_draws import (
 # Calibration
 from .calibration import (
     calibrate_dataset,
-    calibrate_judge_scores,
     JudgeCalibrator,
     CalibrationResult,
 )
@@ -77,7 +75,6 @@ except ImportError:
 
 __all__ = [
     # Estimators
-    "BaseCJEEstimator",
     "CalibratedDirectEstimator",
     # Data
     "Dataset",
@@ -88,7 +85,6 @@ __all__ = [
     "load_fresh_draws_auto",
     # Calibration
     "calibrate_dataset",
-    "calibrate_judge_scores",
     "JudgeCalibrator",
     "CalibrationResult",
     # Diagnostics

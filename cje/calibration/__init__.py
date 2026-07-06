@@ -7,20 +7,18 @@ This module contains all calibration functionality:
 
 from .judge import (
     JudgeCalibrator,
-    calibrate_judge_scores,
     CalibrationResult,
+    resolve_n_folds,
 )
 from .dataset import (
     calibrate_dataset,
-    calibrate_from_raw_data,
 )
 
 __all__ = [
     # Judge calibration
     "JudgeCalibrator",
-    "calibrate_judge_scores",
     "CalibrationResult",
+    "resolve_n_folds",
     # Dataset calibration
     "calibrate_dataset",
-    "calibrate_from_raw_data",
 ]
