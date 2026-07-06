@@ -11,7 +11,7 @@ Consolidated module for all diagnostic functionality:
 from typing import Any
 
 # Data models. IPSDiagnostics is a DEPRECATED alias of DirectDiagnostics
-# (0.3.x name); it will be removed in 0.5.0.
+# (0.3.x name); it will be removed in a future release.
 from .models import (
     DirectDiagnostics,
     IPSDiagnostics,
@@ -70,7 +70,7 @@ from .simulation_planning import (
 )
 
 __all__ = [
-    # Data models (IPSDiagnostics is a deprecated alias, removed in 0.5.0)
+    # Data models (IPSDiagnostics is a deprecated alias slated for removal)
     "DirectDiagnostics",
     "IPSDiagnostics",
     "Status",
@@ -122,4 +122,11 @@ def __getattr__(name: str) -> Any:
         from ..visualization.transport import plot_transport_comparison
 
         return plot_transport_comparison
+    if name == "compare_policies_bootstrap":
+        raise ImportError(
+            "cje.diagnostics.compare_policies_bootstrap was removed in "
+            "0.5.0 — use EstimationResult.compare_policies(i, j) for "
+            "pairwise claims, or compute paired contrasts from the "
+            "bootstrap_matrix returned by cluster_bootstrap_direct_with_refit."
+        )
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

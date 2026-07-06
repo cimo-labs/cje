@@ -21,7 +21,7 @@ Logprob fields from 0.3.x logged data are accepted and ignored.
 
 1. `fresh_draws_data={policy_name: [records]}` — in-memory, the default choice when you reshaped the user's data yourself.
 2. `fresh_draws_dir="responses/"` — one JSONL per policy, named `{policy}_responses.jsonl` (also accepted: `{policy}.jsonl`). Policy name comes from the filename; keep names identical everywhere. A single JSONL file path (records grouped by `target_policy`) also works here.
-3. `calibration_data_path="labeled.jsonl"` — a separate judge+oracle file (e.g. historical labeled logs) used as the calibration source. With `combine_oracle_sources=True` (default) any `oracle_label`s in the fresh draws are pooled with it; `metadata["oracle_sources"]` reports provenance and cross-source conflicts.
+3. `calibration_data_path="labeled.jsonl"` — a separate judge+oracle file (e.g. historical labeled logs) used as the calibration source. Values must already be in [0, 1]; out-of-range files raise a hard error naming the observed range (rescale, or pass the data in-memory via `fresh_draws_data`, which auto-normalizes). With `combine_oracle_sources=True` (default) any `oracle_label`s in the fresh draws are pooled with it; `metadata["oracle_sources"]` reports provenance and cross-source conflicts.
 
 Field names differ in the user's data? Pass `judge_field="score"`, `oracle_field="human_rating"` instead of renaming.
 
@@ -35,7 +35,7 @@ results = analyze_dataset(
     fresh_draws_dir=None,
     calibration_data_path=None,   # separate judge+oracle JSONL
     combine_oracle_sources=True,
-    estimator="auto",             # "auto" -> calibrated-direct; also "direct" (no calibration)
+    estimator="auto",             # "auto"/"direct"/"calibrated-direct": same estimator (see below)
     judge_field="judge_score",
     oracle_field="oracle_label",
     calibration_covariates=None,  # e.g. ["domain"] — fields from record metadata
@@ -44,6 +44,11 @@ results = analyze_dataset(
 )
 ```
 
+`estimator` values are aliases of the one calibrated estimator: whether calibration
+runs is driven solely by oracle-label availability (0 labels → the loud `naive_direct`
+fallback), never by this parameter — its only observable effect is which name lands in
+`metadata["estimator"]` (`"auto"` records `"direct"`).
+
 **`EstimationResult`:**
 
 - `.estimates` (np.ndarray, order matches `metadata["target_policies"]`), `.standard_errors`
@@ -51,6 +56,8 @@ results = analyze_dataset(
 - `.compare_policies(i, j, alpha=0.05)` → dict with difference, SE, CI, p-value — use this for pairwise claims
 - `.best_policy()` → PolicyVerdict (name, index, estimate, flagged, all_flagged, runner_up); gate-aware — a flagged argmax is demoted to `runner_up` and the best reliable policy wins
 - `.calibrator` → fitted calibrator, reusable in `transport_audit`
+- `.summary()` → compact text report (per-policy estimate + 95% CI + gate flags, best-policy line)
+- `.gates` → `Dict[str, GateResult]` (typed view of `metadata["reliability_gates"]`); `.target_policies`
 - `.metadata` keys: `target_policies`, `reliability_gates` (`{policy: {"flagged": bool, ...}}`),
   `boundary_cards`, `normalization`, `oracle_sources`, `bootstrap_ci`
 - `.diagnostics` (DirectDiagnostics): `overall_status` (GOOD/WARNING/CRITICAL), `status_per_policy`,
@@ -67,7 +74,7 @@ result = calibrated_mean_ci(
     cluster_ids=None,      # cluster by prompt when there are multiple draws per prompt
     covariates=None,       # (n, d) matrix for two-stage calibration
     alpha=0.05,
-    n_folds=5,             # 10-19 labels -> folds auto-reduce with a warning (noisier)
+    n_folds=5,             # 4-9 labels -> folds auto-reduce with a warning (noisier); <4 raises
     inference="auto",      # "bootstrap" (default when calibrated) | "cluster_robust"
     n_bootstrap=2000,
     seed=42,
@@ -138,10 +145,38 @@ trophy 🏆 goes to the best *reliable* policy. Run `cje validate` first on user
 
 | Symptom | Meaning / fix |
 |---|---|
-| `Too few oracle samples (N). Need at least 10.` | Hard floor (1–9 labels). Run the labeling loop (SKILL.md §Labeling); never invent labels. |
+| `Too few oracle samples (N) for 5-fold CV. Need at least 10 (2 per fold).` | Hard floor (1–3 labels). Run the labeling loop (SKILL.md §Labeling); never invent labels. |
 | `No oracle labels found` → `method="naive_direct"` | 0 labels: raw judge means with a loud warning. Never report these as the answer — treat as blocked and run the labeling loop. |
-| `reducing calibration folds from 5 to K` warning | 10–19 labels: valid but noisier. Recommend more labels to the user. |
+| `reducing calibration folds from 5 to K` warning | 4–9 labels: valid but noisier. Recommend ≥10 labels to the user. |
 | `ImportError: ... pip install "cje-eval[viz]"` | Plotting needs the viz extra; estimates work without it. |
 | Scores on 0–100 / Likert | Pass as-is — auto-normalized, results returned in the original scale. |
+| `... outside [0, 1]` error on a calibration file | `calibration_data_path` values must be in [0, 1]. Rescale the file, or pass the data via `fresh_draws_data` (auto-normalizes). |
 | `logged_data_path` / `calibrated-ips` errors | OPE removed in 0.4.0. Logged judge+oracle data still works via `calibration_data_path`. For IPS/DR pin `pip install "cje-eval==0.3.*"` (Python ≤3.12). |
-| Python version | 0.4.x supports 3.9–3.13. |
+| Python version | 0.4.0+ supports 3.9–3.13. |
+
+## Migrating from 0.4.x
+
+0.5.0 is a consolidation release: same statistics on the default paths, smaller API.
+
+- **`results.best_policy()` returns a `PolicyVerdict`** (was a naive argmax `int`).
+  It is gate-aware: a flagged argmax is demoted to `runner_up` and the best reliable
+  policy wins. Use `verdict.index` for the old integer; `verdict.name` for the name.
+- **`estimator_config` unknown keys now raise** a ValueError listing the valid keys
+  (`oua_jackknife`, `inference_method`, `n_bootstrap`, `bootstrap_seed`,
+  `use_augmented_estimator`, `paired_comparison`). Typos no longer pass silently.
+- **Calibration files must be in [0, 1]** — out-of-range `calibration_data_path`
+  values raise a hard error instead of being silently filtered. Rescale, or pass the
+  data in-memory via `fresh_draws_data` (auto-normalizes any bounded scale).
+- **New typed accessors** on `EstimationResult`: `.summary()` (text report),
+  `.best_policy()` → PolicyVerdict, `.gates` → `Dict[str, GateResult]`,
+  `.target_policies`; metadata mirrors are unchanged and stay the serialized form.
+- **Removed names** (each raises an ImportError/ValueError pointing at the
+  replacement): `BaseCJEEstimator` (merged into `CalibratedDirectEstimator`);
+  `calibrate_from_raw_data`/`calibrate_judge_scores` (use `calibrate_dataset`,
+  `JudgeCalibrator.fit_cv`, or `calibrated_mean_ci`); `JudgeCalibrator.fit_transform`
+  (use `fit_cv`); `compare_policies_bootstrap` (use `results.compare_policies`);
+  `plot_calibration_comparison`; `EstimationResult.plan_allocation` (use
+  `fit_variance_model` + `plan_evaluation`); `simulate_planning_sweep` (loop
+  `simulate_planning`); `export_results_csv` (JSON export stays);
+  `AnalysisService`/`AnalysisConfig`/`create_estimator` (call `analyze_dataset`);
+  `calibrate_dataset(enable_cross_fit=False)` (cross-fitting is the only mode).

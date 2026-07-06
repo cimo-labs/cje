@@ -1,10 +1,11 @@
 [tool.poetry]
 name = "cje-eval"
-version = "0.4.3"
+version = "0.5.0"
 description = "Causal Judge Evaluation - Calibrated LLM-judge evaluation with honest confidence intervals"
 authors = ["Eddie Landesberg <eddie@cimolabs.com>"]
 license = "MIT"
 packages = [{ include = "cje" }]
+exclude = ["cje/tests", "cje/tests/**/*"]
 readme = "README.md"
 homepage = "https://cimolabs.com/cje"
 repository = "https://github.com/cimo-labs/cje"
@@ -19,32 +20,28 @@ classifiers = [
 python = ">=3.9,<3.14"
 # Core dependencies
 numpy = ">=1.26,<3.0"  # numpy 2.x validated on py3.13 (fast suite green)
-pandas = "^2.2"
 scipy = "^1.11.0"
 scikit-learn = "^1.4"
 pydantic = ">=2.6,<3.0"
 
 # Optional dependency groups
 matplotlib = {version = "^3.8", optional = true}
-seaborn = {version = "^0.13.2", optional = true}
 
 [tool.poetry.extras]
-viz = ["matplotlib", "seaborn"]
-all = ["matplotlib", "seaborn"]
+viz = ["matplotlib"]
+all = ["matplotlib"]
 
 [tool.poetry.scripts]
 cje = "cje.interface.cli:main"
 
 [tool.poetry.group.dev.dependencies]
-black = "^24.3"
+black = "^25.1"
 mypy = "^1.10"
 pytest = "^8.0"
 pytest-cov = "^5.0"
 pre-commit = "^3.7"
-types-PyYAML = "^6.0"
 ipykernel = "^6.29.5"
 # Documentation now hosted on cimolabs.com - Sphinx dependencies removed
-watchdog = "^6.0.0"
 pytest-xdist = "^3.7.0"
 matplotlib = "^3.8"  # Required for testing visualization code
 
@@ -61,7 +58,7 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 check_untyped_defs = true
 ignore_missing_imports = true
-exclude = ["docs/", "cje/experiments/", "examples/", "concat_for_chat.py"]
+exclude = ["examples/"]
 
 [tool.pytest.ini_options]
 # Pytest configuration

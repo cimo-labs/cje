@@ -66,6 +66,7 @@ def test_analyze_dataset_eight_labels_reduces_folds() -> None:
     assert any("reducing" in msg and "calibration folds" in msg for msg in records_seen)
 
 
+@pytest.mark.slow
 def test_direct_mode_with_calibration_data() -> None:
     """Direct mode with a dedicated calibration dataset (judge+oracle labels)."""
     dataset_path, responses_dir = _arena_paths()
@@ -96,6 +97,7 @@ def test_direct_mode_without_fresh_draws_raises_error() -> None:
         analyze_dataset(estimator="direct")
 
 
+@pytest.mark.slow
 def test_direct_only_mode_works() -> None:
     """Test that Direct-only mode works with just fresh_draws_dir (no logged data)."""
     _, responses_dir = _arena_paths()
@@ -197,6 +199,7 @@ def test_direct_estimates_clone_accurately() -> None:
     )
 
 
+@pytest.mark.slow
 def test_direct_ranks_unhelpful_as_worst() -> None:
     """Direct mode should rank unhelpful as the worst policy.
 

@@ -1,45 +1,165 @@
 # Changelog
 
-## 0.5.0 (unreleased)
+## [0.5.0] - 2026-07-06
 
-Interface flattening and a typed results surface (0.5.0 PR4). The README quickstart output is byte-identical.
+Consolidation release. One calibrator path, one estimator, one ingestion layer, a flattened
+interface with typed results, and slimmer packaging. The README quickstart output is
+byte-identical to 0.4.3, and all estimates and standard errors on the default paths are
+unchanged to float equality. (Combines the 0.5.0 work merged as PRs #28-#31 plus this
+release PR.)
 
-- **Flattened the interface stack**: `analyze_dataset` (cje/interface/analysis.py) now owns the whole Direct-mode pipeline as module-level functions; `cje/interface/service.py` (`AnalysisService`), `cje/interface/config.py` (`AnalysisConfig`), and `cje/interface/factory.py` (`BuilderFn`/`REGISTRY`/`create_estimator`/`get_estimator_names`) are deleted. Estimator-name validation lives in `cje/interface/_removed.py` (`REMOVED_ESTIMATORS`, `REMOVED_ESTIMATOR_MESSAGE`, `validate_estimator_name`); every 0.4.0 migration-error message is unchanged verbatim. The never-called `_check_distribution_mismatch` is deleted and the twin oracle/judge denormalization branches are folded into one parameterized helper.
-- **`estimator_config` is validated**: a user `oua_jackknife` now OVERRIDES the pipeline default instead of raising a duplicate-keyword TypeError; unknown keys raise a ValueError listing the valid keys (`oua_jackknife`, `inference_method`, `n_bootstrap`, `bootstrap_seed`, `use_augmented_estimator`, `paired_comparison`); passing `reward_calibrator` raises "reward_calibrator is managed by analyze_dataset".
-- **Typed results on `EstimationResult`** (metadata mirrors keep being written and stay the serialized source of truth):
-  - `result.target_policies` property (reads `metadata["target_policies"]`, `[]` if absent).
-  - `result.gates` -> `Dict[str, GateResult]` (typed view of `metadata["reliability_gates"]`).
-  - `result.ci_info` (`CIInfo`) written by the estimator on both inference paths; `confidence_interval()` consults it first (raise-free), falling back to metadata sniffing for older results. Requesting a different `alpha` than the stored bootstrap alpha now logs a warning on both paths (the stored intervals are returned).
-  - **BREAKING**: `result.best_policy()` returns a gate-aware `PolicyVerdict` (name, index, estimate, flagged, all_flagged, runner_up) instead of a naive argmax int — a flagged argmax is demoted (recorded as `runner_up`) and the best reliable policy wins; if everything is flagged, the argmax returns with `all_flagged=True`. Use `verdict.index` for the old value. The CLI's best-policy rendering now consumes this verdict (its duplicated derivation logic is gone).
-  - `result.summary()` -> compact text report (per-policy estimate + 95% CI + gate flags, best-policy line, method) — the `cje` package docstring example now runs as written.
-  - `compare_policies` gained its first tests and a docstring note that its influence-function z-test SE basis differs from the headline bootstrap SEs.
-- **Status ladder (D11)**: canonical mappings in `cje.diagnostics.gates` — `BOUNDARY_CARD_STATUS_TO_STATUS` ({OK: GOOD, CAUTION: WARNING, REFUSE-LEVEL: CRITICAL}) and `TRANSPORT_STATUS_TO_STATUS` ({PASS: GOOD, WARN: WARNING, FAIL: CRITICAL}); the CAUTION saturation threshold (`SATURATION_CAUTION_THRESHOLD` = 0.20) and the transport WARN/FAIL split (`TRANSPORT_FAIL_DELTA_THRESHOLD` = 0.05) moved to gates.py. A CAUTION boundary card now yields `Status.WARNING` for that policy (previously unreachable — CAUTION left the policy GOOD); WARNING does not flag the policy or refuse level claims.
-- **Viz hygiene (D8)**: `cje.visualization._require_viz(name)` is the single source of the `pip install "cje-eval[viz]"` ImportError hint. `TransportDiagnostics.plot` and `plot_transport_comparison` moved to `cje.visualization.transport` (matplotlib-free until called); `from cje.diagnostics import plot_transport_comparison` still works via a lazy re-export, and `TransportDiagnostics.plot()` delegates. `import cje.advanced` no longer loads matplotlib (the eager try/except viz import is gone; plot names resolve lazily).
-- **CLI/API estimator-name parity**: the CLI's pre-mapping of the estimator name is deleted, so `metadata["estimator"]` records the same resolved name for the same run from both surfaces.
-- **Planning polish**: `simulate_planning` gained `m_min` (forwarded to `plan_evaluation`; default 30, matching); `FittedVarianceModel.fit_ok` property (`r_squared >= 0.5`); `plan_evaluation`/`plan_for_mde` log a warning when planning on a model with `fit_ok` False (previously the only guard was a verbose-mode print).
-- **Removed (public API)**:
-  - `cje.interface.config.AnalysisConfig`, `cje.interface.service.AnalysisService`, `cje.interface.factory` (`create_estimator`, `get_estimator_names`, `REGISTRY`, `BuilderFn`).
-  - `EstimationResult.plan_allocation` — use `fit_variance_model` + `plan_evaluation`.
-  - `cje.simulate_planning_sweep` (also from `cje.diagnostics`) — loop `simulate_planning` yourself.
-  - `plot_calibration_comparison` (whole `cje/visualization/calibration.py`; also the `cje` and `cje.advanced` re-exports).
-  - `cje.utils.export.export_results_csv` (JSON export stays — the CLI uses it), `cje.utils` legacy matplotlib re-exports, `cje.utils.aggregate_diagnostics`, `cje.utils.analyze_diagnostics`.
-  - `cje.diagnostics.display.format_diagnostic_comparison`, `DirectDiagnostics.to_csv_row`, `DirectDiagnostics.from_dict`.
+### Breaking
 
-Statistical-core consolidation (0.5.0 PR3). The README quickstart output is byte-identical; all estimates and standard errors on the default paths are unchanged to float equality.
+- **`result.best_policy()` returns a gate-aware `PolicyVerdict`** (name, index, estimate,
+  flagged, all_flagged, runner_up) instead of a naive argmax `int`. A flagged argmax is
+  demoted (recorded as `runner_up`) and the best reliable policy wins; if everything is
+  flagged, the argmax returns with `all_flagged=True`. Use `verdict.index` for the old
+  value. The CLI's best-policy rendering consumes this verdict.
+- **`estimator_config` is validated**: unknown keys raise a ValueError listing the valid
+  keys (`oua_jackknife`, `inference_method`, `n_bootstrap`, `bootstrap_seed`,
+  `use_augmented_estimator`, `paired_comparison`); a user `oua_jackknife` now OVERRIDES
+  the pipeline default instead of raising a duplicate-keyword TypeError; passing
+  `reward_calibrator` raises "reward_calibrator is managed by analyze_dataset".
+- **Calibration files must be in [0, 1]**: `calibration_data_path` values outside [0, 1]
+  raise a hard error naming the observed range instead of being silently filtered.
+  Rescale the file, or pass the data in-memory via `fresh_draws_data` / on disk via
+  `fresh_draws_dir` (both auto-normalize any bounded scale).
+- **`fit_cv` without `prompt_ids`** now synthesizes stable row-index ids and uses the
+  canonical hash-fold path (the legacy KFold+blake2b fallback is deleted), so fold
+  assignments change for prompt-id-less direct `fit_cv` calls.
+- **The undocumented `{policy}_fresh.jsonl` file pattern is dropped** — use
+  `{policy}_responses.jsonl` or `{policy}.jsonl` (see `cje.data.ingest.POLICY_FILE_PATTERNS`).
+- **Packaging**: the wheel no longer ships `cje.tests`; `pandas` is no longer a dependency;
+  `seaborn` is no longer installed by the `viz`/`all` extras (they now pull matplotlib only).
+- **Removed names** (tombstones raise ImportError/ValueError pointing at the replacement):
 
-- **One cross-fitted isotonic implementation.** Monotone cross-fit calibration existed twice — `JudgeCalibrator`'s own per-fold isotonic path and `FlexibleCalibrator._fit_monotone` — and the default flow exercised both (full-data fit via FlexibleCalibrator, bootstrap refits via the native path). `JudgeCalibrator` now delegates every mode (monotone / two_stage / auto) to one `FlexibleCalibrator`; the two implementations are numerically equivalent for oracle labels in [0, 1] (the native path fit isotonic without `y_min`/`y_max` and clipped at predict time; the survivor clips fitted values at fit time — identical when labels are in range, which every supported entry point guarantees). `predict_oof(scores, fold_ids, covariates)` is the single OOF entry point; it raises on fold ids with no fitted model in every mode (previously only monotone raised; flexible modes silently fell back to the full model).
-- **Fold auto-reduction moved into the calibrator** as `cje.calibration.resolve_n_folds(n_oracle, requested_folds)`: with 4–9 oracle labels the CV fold count reduces with a warning instead of raising; below 4 the actionable too-few-labels error still fires. Previously this rule lived only in `analyze_dataset`'s service layer — now every `fit_cv` caller gets it, so e.g. `calibrated_mean_ci` with 8 labels succeeds (with the fold-reduction warning) instead of raising.
-- **Merged `BaseCJEEstimator` into `CalibratedDirectEstimator`** (it had exactly one subclass) and deleted `cje/estimators/base_estimator.py`. `oracle_jackknife_variance` moved to `cje.diagnostics.robust_inference`, joined by the new shared OUA recipes `oracle_jackknife_estimates(calibrator, judge_scores, covariates)` (the leave-one-oracle-fold loop) and `combine_cluster_and_oracle(se_base, df_cluster, jackknife_variance, n_jackknife_folds)` (the SE/df combining rule) — previously triplicated across the base estimator, the direct estimator, and the array API.
-- **Boundary-card helper**: `cje.diagnostics.boundary_card_dict(calibrator, S_policy, R_policy, warn_label=None)` wraps `boundary_card` + serialization + the REFUSE-LEVEL warning, shared by `CalibratedDirectEstimator` and `calibrated_mean_ci`. `BoundaryCard` drops the never-populated `estimator_gap` field (and `boundary_card`'s `est_calips`/`est_dr` params + the dead cross-estimator CAUTION branch) — serialized cards no longer carry an always-None `estimator_gap` key.
-- **Loud-by-default hardening**: `build_direct_eval_table` now raises the same actionable error as `CalibratedDirectEstimator.fit()` when a required covariate is missing from a sample's metadata (it used to NaN-fill silently); `get_oof_predictions` requires the fold ids from the `fit_cv` result instead of silently substituting full-model predictions when fold info looked wrong; `fit_cv` without `prompt_ids` now synthesizes stable row-index ids and uses the canonical hash-fold path (the legacy KFold+blake2b fallback is deleted, so fold assignments for prompt-id-less direct `fit_cv` calls change).
-- **`CalibratedDirectEstimator.fit()` vectorized**: calibrated rewards are computed with one `predict` call per policy instead of one call per sample (numerically identical; large speedup for big eval sets).
-- **Removed (public API)**:
-  - `cje.calibration.calibrate_judge_scores` and `cje.calibration.calibrate_from_raw_data` (also from `cje.advanced`) — use `calibrate_dataset` or `JudgeCalibrator.fit_cv` / `cje.calibrated_mean_ci`.
-  - `JudgeCalibrator.fit_transform` (non-cross-fitted duplication of `fit_cv`), `.predict_all`, `.index`, `.has_fold_models`; `FlexibleCalibrator.index`, `.get_diagnostics`, `.iso_reg`.
-  - `calibrate_dataset(enable_cross_fit=False)` now raises — cross-fitted calibration is the only mode.
-  - `cje.estimators.BaseCJEEstimator` (also from `cje.advanced`); the estimator's dead `get_influence_functions`/`diagnostic_config` members and the `run_diagnostics` constructor knob (diagnostics are always built).
-  - `CalibratedDirectEstimator` params `calibration_data_path` (an inert TODO stub), `calibration_policy` (transport experiments call `cluster_bootstrap_direct_with_refit(calibration_policy_idx=...)` directly, which is unchanged), and the `use_multipolicy_eif` legacy shim (also removed from `cluster_bootstrap_direct_with_refit`); the `"analytical"` inference alias (use `"cluster_robust"`).
-  - `cje.diagnostics.compare_policies_bootstrap` — half-finished with zero production callers; compute paired contrasts from the returned `bootstrap_matrix` directly. A finished pairwise-comparison API is on the roadmap.
+| Removed | Replacement / rationale |
+|---|---|
+| `BaseCJEEstimator` (`cje.estimators`, `cje.advanced`) | Merged into `CalibratedDirectEstimator` — its only subclass. Also gone: `get_influence_functions`, `diagnostic_config`, the `run_diagnostics` knob (diagnostics are always built). |
+| `AnalysisService`, `AnalysisConfig`, `cje.interface.factory` (`create_estimator`, `get_estimator_names`, `REGISTRY`, `BuilderFn`) | Call `analyze_dataset` — it owns the whole Direct-mode pipeline as module-level functions in `cje/interface/analysis.py`. Estimator-name validation lives in `cje/interface/_removed.py`; every 0.4.0 migration-error message is unchanged verbatim. |
+| `calibrate_from_raw_data`, `calibrate_judge_scores` (`cje.calibration`, `cje.advanced`) | `calibrate_dataset`, `JudgeCalibrator.fit_cv`, or `cje.calibrated_mean_ci`. |
+| `JudgeCalibrator.fit_transform`, `.predict_all`, `.index`, `.has_fold_models`; `FlexibleCalibrator.index`, `.get_diagnostics`, `.iso_reg` | `fit_cv` is the only fitting path (cross-fitted). |
+| `calibrate_dataset(enable_cross_fit=False)` | Raises — cross-fitted calibration is the only mode. |
+| `CalibratedDirectEstimator` params `calibration_data_path` (inert TODO stub), `calibration_policy`, `use_multipolicy_eif` shim; the `"analytical"` inference alias | Transport experiments call `cluster_bootstrap_direct_with_refit(calibration_policy_idx=...)` directly; use `inference="cluster_robust"`. |
+| `cje.diagnostics.compare_policies_bootstrap` | Half-finished, zero production callers — `EstimationResult.compare_policies(i, j)`, or paired contrasts from the returned `bootstrap_matrix`. |
+| `plot_calibration_comparison` (`cje`, `cje.visualization`, `cje.advanced`; whole `visualization/calibration.py`) | Removed; calibration quality lives in `results.diagnostics` (`calibration_rmse`, `calibration_coverage`). |
+| `EstimationResult.plan_allocation` | `fit_variance_model` + `plan_evaluation`. |
+| `cje.simulate_planning_sweep` (also from `cje.diagnostics`) | Loop `simulate_planning` yourself. |
+| `cje.utils.export.export_results_csv`, `cje.utils.aggregate_diagnostics`, `cje.utils.analyze_diagnostics`, `cje.utils` matplotlib re-exports | JSON export (`export_results_json`) is the canonical serialized form; plots live in `cje.visualization`. |
+| `cje.diagnostics.display.format_diagnostic_comparison`, `DirectDiagnostics.to_csv_row`, `DirectDiagnostics.from_dict` | Unused display/serialization surface. |
+| `Sample.base_policy_logprob`, `Sample.target_policy_logprobs` (+ validators), `Sample.get_importance_weight`, `LogProbStatus`, `LogProbResult` | OPE-era schema. Logprob fields in input FILES are still accepted-and-ignored; the data model simply no longer carries them (no more fabricated dummy logprobs internally). |
+| `Dataset.validate_policies_exist`, `Dataset.filter_valid_samples`, `Dataset.summary` | Dead data-layer surface. |
+| `DatasetFactory` / `DataSource` / `InMemoryDataSource`, `reward_utils.py` | `load_dataset_from_jsonl` calls `DatasetLoader` directly. |
+| `save_fresh_draws_to_jsonl`, `FreshDrawSample.fold_id`, dead fold helpers, per-prompt `FreshDrawDataset` helpers | Unused; `draws_per_prompt` is now a computed property. |
+| `BoundaryCard.estimator_gap` (+ `boundary_card`'s `est_calips`/`est_dr` params) | Never populated by the 0.4.x pipeline; serialized cards no longer carry an always-None key. |
+
+Note: `IPSDiagnostics` — which the 0.4.0 notes said would be removed in 0.5.0 — is RETAINED
+as a deprecated alias of `DirectDiagnostics` and is now slated for a future release.
+
+### Fixed
+
+- **`estimator="direct"` vs `"calibrated-direct"`**: the names are aliases of the one
+  calibrated estimator. The CLI's pre-mapping of the name is deleted so
+  `metadata["estimator"]` records the same resolved name from both surfaces, and the docs
+  no longer claim `"direct"` skips calibration (whether calibration runs is driven solely
+  by oracle-label availability).
+- **CAUTION boundary cards now reach the status ladder**: a CAUTION card yields
+  `Status.WARNING` for that policy (previously unreachable — CAUTION left the policy
+  GOOD); WARNING does not flag the policy or refuse level claims.
+- **`predict_oof` raises on fold ids with no fitted model in every mode** (previously only
+  monotone raised; flexible modes silently fell back to the full model), and
+  `get_oof_predictions` requires the fold ids from the `fit_cv` result instead of silently
+  substituting full-model predictions when fold info looked wrong.
+- **`build_direct_eval_table` raises the same actionable error as
+  `CalibratedDirectEstimator.fit()`** when a required covariate is missing from a sample's
+  metadata (it used to NaN-fill silently).
+- **Bare `{policy}.jsonl` directories now load end-to-end**: discovery, loading, and the
+  CLI resolve policy files from the same pattern list, so any layout that is discovered is
+  guaranteed to load.
+- **0–100/Likert files on `fresh_draws_dir` no longer crash** — directory input gets the
+  same joint scale detection + `NormalizationInfo` as in-memory data (verified
+  dir-vs-dict bit-identity on a 0–100 scale).
+- **`confidence_interval()` is raise-free on both inference paths** (consults the typed
+  `ci_info` first, falling back to metadata sniffing for older results); requesting a
+  different `alpha` than the stored bootstrap alpha logs a warning on both paths.
+- **`import cje.advanced` no longer loads matplotlib** (plot names resolve lazily);
+  `cje.visualization._require_viz(name)` is the single source of the
+  `pip install "cje-eval[viz]"` ImportError hint.
+- **`plan_evaluation`/`plan_for_mde` log a warning when planning on a variance model with
+  `fit_ok` False** (previously the only guard was a verbose-mode print).
+- **`EstimationResult.to_dict()` no longer clobbers diagnostics**, and stale IPS/DR and
+  teacher-forcing error strings were replaced with Direct-mode wording.
+- **Docs truth pass**: subpackage READMEs, PLAYBOOK.md, and the agent skill scrubbed of
+  every removed name; label-tier docs now match measured behavior (0 labels → loud
+  `naive_direct` fallback; 1–3 → hard error; 4–9 → fold auto-reduction with noisier CIs);
+  `compare_policies` gained its first tests and a docstring note that its
+  influence-function z-test SE basis differs from the headline bootstrap SEs.
+
+### Added
+
+- **Typed results on `EstimationResult`** (metadata mirrors keep being written and stay
+  the serialized source of truth): `result.summary()` (compact text report — the `cje`
+  package docstring example runs as written), `result.best_policy()` → `PolicyVerdict`,
+  `result.gates` → `Dict[str, GateResult]`, `result.target_policies`, and `result.ci_info`
+  (`CIInfo`, written by the estimator on both inference paths).
+- **`cje.data.ingest`**: `POLICY_FILE_PATTERNS`, `resolve_policy_file`,
+  `read_aliased_field`, `resolve_prompt_id`, `read_jsonl_records`,
+  `fresh_draws_data_from_file` — one file-pattern resolver shared by discovery, loading,
+  and the CLI. `fresh_draws_dir` also accepts a single multi-policy JSONL file path.
+- **`cje.calibration.resolve_n_folds(n_oracle, requested_folds)`**: the 4–9-label fold
+  auto-reduction moved from `analyze_dataset`'s service layer into `fit_cv`, so every
+  caller gets it — e.g. `calibrated_mean_ci` with 8 labels now succeeds (with the
+  fold-reduction warning) instead of raising.
+- **Shared inference recipes in `cje.diagnostics.robust_inference`**:
+  `oracle_jackknife_estimates` (the leave-one-oracle-fold loop),
+  `combine_cluster_and_oracle` (the SE/df combining rule), and `oracle_jackknife_variance`
+  (moved from the estimator base class) — previously triplicated across the base
+  estimator, the direct estimator, and the array API. Plus
+  `cje.diagnostics.boundary_card_dict` (card + serialization + REFUSE-LEVEL warning,
+  shared by the estimator and `calibrated_mean_ci`).
+- **Planning polish**: `simulate_planning` gained `m_min` (forwarded to `plan_evaluation`;
+  default 30, matching); `FittedVarianceModel.fit_ok` property (`r_squared >= 0.5`).
+- **0.5.0 tombstones**: the highest-traffic removed names (`BaseCJEEstimator`,
+  `calibrate_from_raw_data`/`calibrate_judge_scores`, `plot_calibration_comparison`,
+  `compare_policies_bootstrap`) raise informative ImportErrors naming the replacement;
+  all 0.4.0 tombstones keep working (pinned by tests).
+- **CI**: Python 3.11 added to the test matrix (now 3.9–3.13 complete).
+- **Docs**: "Migrating from 0.4.x" section in the agent-skill reference; typed-results
+  documentation in the data and interface READMEs; canonical status-ladder mappings
+  documented in the diagnostics README.
+
+### Changed
+
+- **One cross-fitted isotonic implementation**: `JudgeCalibrator` delegates every mode
+  (monotone / two_stage / auto) to one `FlexibleCalibrator`; the two previous
+  implementations are numerically equivalent for oracle labels in [0, 1] (which every
+  supported entry point guarantees). `predict_oof(scores, fold_ids, covariates)` is the
+  single OOF entry point.
+- **Normalization on ALL input paths**: `fresh_draws_dir` routes through
+  `fresh_draws_from_dict`, so directory input gets the same auto-normalization as
+  in-memory data; "any bounded scale" now holds everywhere fresh draws enter.
+- **Hard errors replace silent filters**: out-of-range calibration files raise (see
+  Breaking); loud-by-default hardening throughout the eval-table and OOF paths (see Fixed).
+- **Status ladder**: canonical mappings in `cje.diagnostics.gates` —
+  `BOUNDARY_CARD_STATUS_TO_STATUS` ({OK: GOOD, CAUTION: WARNING, REFUSE-LEVEL: CRITICAL})
+  and `TRANSPORT_STATUS_TO_STATUS` ({PASS: GOOD, WARN: WARNING, FAIL: CRITICAL});
+  `SATURATION_CAUTION_THRESHOLD` (0.20) and `TRANSPORT_FAIL_DELTA_THRESHOLD` (0.05) moved
+  to `gates.py`.
+- **`CalibratedDirectEstimator.fit()` vectorized**: one `predict` call per policy instead
+  of per sample (numerically identical; large speedup for big eval sets).
+- **Viz layout**: `TransportDiagnostics.plot` and `plot_transport_comparison` moved to
+  `cje.visualization.transport` (matplotlib-free until called);
+  `from cje.diagnostics import plot_transport_comparison` still works via a lazy re-export.
+- **Packaging/tooling**: version 0.5.0; `pandas` removed from dependencies (zero imports
+  in the package or tests); `seaborn` removed from the `viz`/`all` extras (zero imports
+  anywhere); `watchdog` and `types-PyYAML` removed from dev dependencies (and
+  `types-PyYAML` from the pre-commit mypy hook); tests excluded from the wheel
+  (`exclude = ["cje/tests", "cje/tests/**/*"]`); `black` dev dependency bumped to `^25.1`
+  (matching the pre-commit rev); `setup.py` (advertised a wrong package name/email),
+  `MANIFEST.in` (ignored by poetry-core), and `.python-version` (personal pyenv name)
+  deleted; `make lint` runs `black --check` (no longer mutates the tree); mypy excludes
+  pruned to existing paths; slow-test markers added to the ~27s arena-covariates test and
+  eight ~4.5s integration tests, cutting the fast-suite runtime roughly in half.
 
 ## 0.4.3
 

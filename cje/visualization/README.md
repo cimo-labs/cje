@@ -23,7 +23,7 @@ Diagnostic plots for understanding and validating CJE results: policy-estimate f
 ## Installation
 
 ```bash
-pip install "cje-eval[viz]"   # adds matplotlib + seaborn
+pip install "cje-eval[viz]"   # adds matplotlib
 ```
 
 Without the extra, `import cje` still works with no warnings; *accessing* any

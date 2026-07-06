@@ -49,7 +49,7 @@ from .calibration import (
     CalibrationResult,
 )
 
-# Diagnostics (IPSDiagnostics is a deprecated alias, removed in 0.5.0)
+# Diagnostics (IPSDiagnostics is a deprecated alias slated for removal)
 from .diagnostics import (
     DirectDiagnostics,
     IPSDiagnostics,
@@ -107,6 +107,12 @@ def __getattr__(name: str) -> object:
         raise ImportError(
             f"cje.advanced.{name} was removed in 0.4.0 — "
             f'pip install "cje-eval==0.3.*" for OPE'
+        )
+    if name == "BaseCJEEstimator":
+        raise ImportError(
+            "cje.advanced.BaseCJEEstimator was removed in 0.5.0 — "
+            "CalibratedDirectEstimator is the only estimator (the base "
+            "class had exactly one subclass and was merged into it)."
         )
     if name in _VIZ_EXPORTS:
         from . import visualization

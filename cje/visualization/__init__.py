@@ -5,10 +5,10 @@ This module provides plotting functions organized by domain:
 - Planning dashboards
 - Transport-audit plots
 
-Note: Requires optional 'viz' dependencies (matplotlib, seaborn).
+Note: Requires the optional 'viz' dependency (matplotlib).
 Install with: pip install "cje-eval[viz]"
 
-Without them, importing this module succeeds silently (no import-time
+Without it, importing this module succeeds silently (no import-time
 warning) and accessing any plot_* name raises an ImportError with the
 install hint (produced by _require_viz, the single source for that hint).
 """
@@ -67,4 +67,11 @@ def __getattr__(name: str) -> object:
     """
     if name in _VIZ_EXPORTS:
         _require_viz(name)
+    if name == "plot_calibration_comparison":
+        raise ImportError(
+            "cje.visualization.plot_calibration_comparison was removed in "
+            "0.5.0. Calibration quality lives in results.diagnostics "
+            "(calibration_rmse, calibration_coverage); use "
+            "plot_policy_estimates for estimate plots."
+        )
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

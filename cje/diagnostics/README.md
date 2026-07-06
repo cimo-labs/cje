@@ -28,7 +28,7 @@ cje/diagnostics/
 
 ## DirectDiagnostics
 
-The single diagnostics class in 0.4.0, attached to results as `results.diagnostics`. (`IPSDiagnostics` survives as a deprecated alias of `DirectDiagnostics` for 0.3.x consumers that read the shared attributes; it will be removed in 0.5.0. `DRDiagnostics` and `CJEDiagnostics` were removed with the OPE estimators.)
+The single diagnostics class since 0.4.0, attached to results as `results.diagnostics`. (`IPSDiagnostics` survives as a deprecated alias of `DirectDiagnostics` for 0.3.x consumers that read the shared attributes; it is slated for removal in a future release. `DRDiagnostics` and `CJEDiagnostics` were removed with the OPE estimators.)
 
 Field groups:
 
@@ -60,11 +60,22 @@ if diagnostics.boundary_cards:
 
 ## Status System and Gates
 
-`gates.py` is the single source of truth for thresholds, so a given number receives the same verdict everywhere.
+`gates.py` is the single source of truth for thresholds and status mappings, so a given number receives the same verdict everywhere.
 
 - `Status` enum: `GOOD` / `WARNING` / `CRITICAL`.
 - `worst_status(*statuses)` combines statuses (None entries ignored).
 - `OUT_OF_RANGE_REFUSE_THRESHOLD = 0.05` — the coverage-badge gate (below).
+- `SATURATION_CAUTION_THRESHOLD = 0.20` — calibrated rewards piled near the oracle reward bounds → the badge's CAUTION signal.
+- `TRANSPORT_FAIL_DELTA_THRESHOLD = 0.05` — the transport audit's WARN/FAIL split on `|δ̂|`.
+
+**Canonical status ladder** — every badge/audit verdict maps to a `Status` through these two dicts (both importable from `cje.diagnostics`):
+
+| Mapping | Verdict → Status |
+|---|---|
+| `BOUNDARY_CARD_STATUS_TO_STATUS` | OK → GOOD, CAUTION → WARNING, REFUSE-LEVEL → CRITICAL |
+| `TRANSPORT_STATUS_TO_STATUS` | PASS → GOOD, WARN → WARNING, FAIL → CRITICAL |
+
+A CAUTION boundary card yields `Status.WARNING` for that policy; WARNING does not flag the policy or refuse level claims — only REFUSE-LEVEL (CRITICAL) does.
 
 **Gate failures are loud but non-destructive**: estimates are still returned with warnings, CRITICAL statuses, and per-policy records in `result.metadata["reliability_gates"]` (`{"flagged", "refused", "refuse_level_claims", "reasons"}`). The `cje analyze` CLI consults those gates before crowning a winner — a flagged argmax prints "⚠️ Best by point estimate: X (UNRELIABLE — see diagnostics)" followed by the best reliable policy.
 
@@ -73,10 +84,10 @@ if diagnostics.boundary_cards:
 Judge scores outside the oracle calibration range are the primary identification threat to *level* claims: the calibrator must extrapolate there, and no data exists to check the extrapolation. `boundary_card(S_policy, S_oracle, R_policy, R_min, R_max, ...)` implements the paper's badge (arXiv:2512.11150) with three signals:
 
 - **out_of_range ≥ 5%** (`OUT_OF_RANGE_REFUSE_THRESHOLD`) → status `REFUSE-LEVEL`: do not ship level (absolute) claims; rankings may stand
-- **saturation ≥ 20%** (calibrated rewards piled near the oracle reward bounds) or estimator gap ≥ 0.10 (a cross-estimator signal not computed by the 0.4.x pipeline) → `CAUTION`
+- **saturation ≥ 20%** (`SATURATION_CAUTION_THRESHOLD`; calibrated rewards piled near the oracle reward bounds) → `CAUTION`
 - otherwise → `OK`
 
-The returned `BoundaryCard` dataclass carries `status`, `out_of_range`, `saturation`, `estimator_gap`, `partial_id_width` (a conservative partial-identification band under monotonicity), and a human-readable `note`.
+The returned `BoundaryCard` dataclass carries `status`, `out_of_range`, `saturation`, `partial_id_width` (a conservative partial-identification band under monotonicity), and a human-readable `note`.
 
 **Wiring**: `CalibratedDirectEstimator.estimate()` computes a card per policy automatically, grading each policy's fresh-draw judge scores against the oracle S-range the reward calibrator recorded at fit time. Cards land in `diagnostics.boundary_cards` and `result.metadata["boundary_cards"]`; a REFUSE-LEVEL card triggers a loud warning, sets that policy's status to CRITICAL, and flags it in `result.metadata["reliability_gates"]` (`refuse_level_claims`), which demotes it in the CLI's best-policy announcement.
 
@@ -146,7 +157,7 @@ CJE's uncertainty has two independent sources: **evaluation sampling** (which pr
 
 **1. Cluster bootstrap with calibrator refit (the default)** — `cluster_bootstrap_direct_with_refit(eval_table, calibrator_factory, n_bootstrap=2000, ...)`. Each replicate resamples prompt clusters (shared across policies, preserving the paired design) and refits the calibrator on the replicate's oracle subset, capturing the calibration/evaluation covariance analytic SEs miss. By default it uses the augmented estimator θ̂_aug = mean(f̂_full(S)) + mean(Y − f̂_oof(S)), an AIPW-style debiasing of the plug-in. Returns percentile CIs plus the `bootstrap_matrix` for paired contrasts. `calibration_policy_idx` restricts calibrator fitting to one policy's labels (transport-aware bootstrap: the residual term then absorbs transport bias on the other policies).
 
-**2. Cluster-robust SE + oracle jackknife** — `cluster_robust_se(data, cluster_ids, statistic_fn, ...)` computes CRV1 sandwich SEs with t-based CIs (df = G−1 clusters). The estimator augments this with the delete-one-oracle-fold jackknife variance (`oracle_jackknife_variance` in `cje.diagnostics.robust_inference`), added once, so calibration uncertainty is never dropped. This is the automatic fallback when the evaluation draws carry no oracle labels at all (calibration-data-only runs) — there the calibration/evaluation covariance is exactly zero and the additive decomposition is exact, recorded in `result.metadata["inference"]`.
+**2. Cluster-robust SE + oracle jackknife** — `cluster_robust_se(data, cluster_ids, statistic_fn, ...)` computes CRV1 sandwich SEs with t-based CIs (df = G−1 clusters). The estimator augments this with the delete-one-oracle-fold jackknife variance, added once, so calibration uncertainty is never dropped. The shared OUA recipes live in `cje.diagnostics.robust_inference`: `oracle_jackknife_estimates` (the leave-one-oracle-fold loop), `oracle_jackknife_variance`, and `combine_cluster_and_oracle` (the SE/df combining rule) — one implementation used by both `CalibratedDirectEstimator` and `calibrated_mean_ci`. This is the automatic fallback when the evaluation draws carry no oracle labels at all (calibration-data-only runs) — there the calibration/evaluation covariance is exactly zero and the additive decomposition is exact, recorded in `result.metadata["inference"]`.
 
 Supporting pieces: `build_direct_eval_table(fresh_draws_per_policy, covariate_names=None)` builds the long-format `DirectEvalTable` the bootstrap resamples; `make_calibrator_factory(mode, ...)` produces fresh `JudgeCalibrator` instances per replicate (mode fixed to the full-data selection, never "auto"). The returned `bootstrap_matrix` supports paired contrasts directly (same resampled clusters on both sides → tighter CIs than independence): `diff = boot["bootstrap_matrix"][:, a] - boot["bootstrap_matrix"][:, b]`.
 

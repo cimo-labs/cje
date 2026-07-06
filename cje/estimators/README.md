@@ -23,12 +23,11 @@ The OUA jackknife recipes it shares with the array API (`oracle_jackknife_varian
 from cje.calibration import calibrate_dataset
 from cje.estimators import CalibratedDirectEstimator
 
-# 1. Learn the judge → oracle calibration (cross-fitted)
+# 1. Learn the judge → oracle calibration (always cross-fitted)
 calibrated_dataset, cal_result = calibrate_dataset(
     dataset,
     judge_field="judge_score",
     oracle_field="oracle_label",
-    enable_cross_fit=True,
 )
 
 # 2. Build the estimator

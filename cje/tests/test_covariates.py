@@ -273,6 +273,7 @@ def test_covariate_computation_consistency() -> None:
 
 @pytest.mark.e2e
 @pytest.mark.uses_arena_sample
+@pytest.mark.slow
 def test_covariates_with_real_arena_data(arena_sample: Dataset) -> None:
     """E2E smoke test: Covariates work end-to-end with real arena sample data."""
     from pathlib import Path
