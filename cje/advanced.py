@@ -36,8 +36,6 @@ from .data import (
     Dataset,
     Sample,
     EstimationResult,
-    DatasetFactory,
-    default_factory,
 )
 from .data.fresh_draws import (
     FreshDrawDataset,
@@ -85,8 +83,6 @@ __all__ = [
     "Dataset",
     "Sample",
     "EstimationResult",
-    "DatasetFactory",
-    "default_factory",
     "FreshDrawDataset",
     "load_fresh_draws_from_jsonl",
     "load_fresh_draws_auto",

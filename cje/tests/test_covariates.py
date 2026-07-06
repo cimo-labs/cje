@@ -29,8 +29,6 @@ def test_missing_covariate_error_message() -> None:
                 prompt=f"Question {i}",
                 response=f"Answer {i}",
                 reward=None,
-                base_policy_logprob=-10.0,
-                target_policy_logprobs={"target": -9.5},
                 judge_score=0.5,
                 oracle_label=0.6 if i < 10 else None,
                 metadata={
@@ -111,8 +109,6 @@ def test_covariate_auto_computation_stores_in_metadata() -> None:
                 prompt=f"Question {i}",
                 response=response,
                 reward=None,
-                base_policy_logprob=-10.0,
-                target_policy_logprobs={"target": -9.5},
                 judge_score=0.5,
                 oracle_label=0.6,
                 metadata={},
@@ -232,8 +228,6 @@ def test_covariate_computation_consistency() -> None:
             prompt="test prompt",
             response=response,
             reward=None,
-            base_policy_logprob=-1.0,
-            target_policy_logprobs={},
             judge_score=0.5,
             oracle_label=None,
             metadata={},
@@ -248,12 +242,9 @@ def test_covariate_computation_consistency() -> None:
             judge_score=0.5,
             oracle_label=None,
             draw_idx=0,
-            fold_id=None,
             metadata={},
         )
-        fresh_dataset = FreshDrawDataset(
-            target_policy="test", draws_per_prompt=1, samples=[fresh_sample]
-        )
+        fresh_dataset = FreshDrawDataset(target_policy="test", samples=[fresh_sample])
         fresh_with_covs = compute_response_covariates(
             fresh_dataset, covariate_names=["response_length"]
         )

@@ -688,14 +688,12 @@ class TestLowOracleCoverage:
                     else None
                 ),
                 draw_idx=getattr(sample, "draw_idx", 0),
-                fold_id=getattr(sample, "fold_id", None),
             )
             masked_samples.append(masked_sample)
 
         masked_fd = FreshDrawDataset(
             samples=masked_samples,
             target_policy=policy,
-            draws_per_prompt=fd.draws_per_prompt,
         )
 
         # Fit calibrator on the MASKED oracle slice only
@@ -783,14 +781,12 @@ class TestLowOracleCoverage:
                     sample.oracle_label if sample.prompt_id in keep_prompt_ids else None
                 ),
                 draw_idx=getattr(sample, "draw_idx", 0),
-                fold_id=getattr(sample, "fold_id", None),
             )
             masked_samples.append(masked_sample)
 
         masked_fd = FreshDrawDataset(
             samples=masked_samples,
             target_policy=policy,
-            draws_per_prompt=fd.draws_per_prompt,
         )
 
         # Fit calibrator

@@ -218,14 +218,6 @@ def assert_dataset_valid(dataset: Dataset) -> None:
     for sample in dataset.samples:
         assert sample.prompt is not None
         assert sample.response is not None
-        assert sample.base_policy_logprob is not None
-        assert sample.target_policy_logprobs is not None
-
-        # Check target policies match
-        for policy in dataset.target_policies:
-            assert (
-                policy in sample.target_policy_logprobs
-            ), f"Policy {policy} missing from sample target_policy_logprobs"
 
 
 # ============================================================================

@@ -248,10 +248,10 @@ If all values are already in [0, 1], nothing is transformed. Otherwise the range
 
 ```python
 import numpy as np
-from cje.data.folds import get_fold, get_folds_for_dataset, get_folds_with_oracle_balance
+from cje.data.folds import get_fold, get_folds_for_prompts
 
 fold = get_fold("prompt_123", n_folds=5, seed=42)          # 0-4, stable
-folds = get_folds_for_dataset(dataset, n_folds=5, seed=42)
+folds = get_folds_for_prompts([s.prompt_id for s in dataset.samples], n_folds=5, seed=42)
 ```
 
 - **Deterministic**: `hash(prompt_id) % n_folds` — reproducible across runs

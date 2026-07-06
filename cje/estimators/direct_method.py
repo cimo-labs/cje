@@ -383,7 +383,7 @@ class CalibratedDirectEstimator(BaseCJEEstimator):
             raise ValueError(
                 f"Direct mode requires fresh draws for all target policies. "
                 f"Missing fresh draws for: {missing_policies}. "
-                f"Either provide fresh_draws_dir or use IPS/DR mode."
+                f"Provide fresh_draws_dir or fresh_draws_data."
             )
 
         # Get data for each policy from fresh draws

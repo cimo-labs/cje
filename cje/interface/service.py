@@ -240,8 +240,8 @@ class AnalysisService:
                     )
                     logger.info("Learning calibration from fresh draws")
 
-                # Convert FreshDrawSample to Sample (dummy fields) so the
-                # draws can serve as a calibration dataset
+                # Convert FreshDrawSample to Sample so the draws can serve
+                # as a calibration dataset
                 calibration_samples = []
                 for fd_sample in all_fresh_draws:
                     sample = Sample(
@@ -249,8 +249,6 @@ class AnalysisService:
                         prompt="",  # Not needed for calibration
                         response=fd_sample.response or "",
                         reward=None,  # Will be calibrated
-                        base_policy_logprob=-1.0,  # Dummy value
-                        target_policy_logprobs={p: -1.0 for p in target_policies},
                         judge_score=fd_sample.judge_score,
                         oracle_label=fd_sample.oracle_label,
                         metadata={},
@@ -579,11 +577,6 @@ class AnalysisService:
 
         # Build combined dataset with every accumulated pair
         combined_samples = []
-        # Use target policies parameter - cast to Dict[str, Optional[float]] for variance
-        target_policies_dict: Dict[str, Optional[float]] = {
-            policy: -1.0 for policy in target_policies
-        }
-
         for prompt_id, source, judge_val, oracle_val in pairs:
             # Create Sample with judge and oracle
             sample = Sample(
@@ -591,8 +584,6 @@ class AnalysisService:
                 prompt="",  # Not needed for calibration
                 response="",
                 reward=None,  # Will be calibrated
-                base_policy_logprob=-1.0,  # Dummy
-                target_policy_logprobs=target_policies_dict.copy(),  # Match logged dataset policies
                 judge_score=judge_val,
                 oracle_label=oracle_val,
                 metadata={"source": source},

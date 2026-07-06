@@ -69,7 +69,6 @@ def create_transport_test_data(
             oracle_label=float(base_oracle[i]) if oracle_mask[i] else None,
             draw_idx=0,
             response="",
-            fold_id=None,
         )
         base_samples.append(sample)
 
@@ -83,7 +82,6 @@ def create_transport_test_data(
             oracle_label=float(target_oracle[i]) if oracle_mask[i] else None,
             draw_idx=0,
             response="",
-            fold_id=None,
         )
         target_samples.append(sample)
 
@@ -91,12 +89,10 @@ def create_transport_test_data(
         "base": FreshDrawDataset(
             samples=base_samples,
             target_policy="base",
-            draws_per_prompt=1,
         ),
         "target": FreshDrawDataset(
             samples=target_samples,
             target_policy="target",
-            draws_per_prompt=1,
         ),
     }
 
@@ -336,7 +332,6 @@ class TestBootstrapWithCalibrationPolicyIdx:
                     oracle_label=np.random.uniform(0.3, 0.7) if has_oracle else None,
                     draw_idx=0,
                     response="",
-                    fold_id=None,
                 )
             )
 
@@ -352,17 +347,12 @@ class TestBootstrapWithCalibrationPolicyIdx:
                     oracle_label=np.random.uniform(0.3, 0.7) if has_oracle else None,
                     draw_idx=0,
                     response="",
-                    fold_id=None,
                 )
             )
 
         fresh_draws = {
-            "base": FreshDrawDataset(
-                samples=base_samples, target_policy="base", draws_per_prompt=1
-            ),
-            "target": FreshDrawDataset(
-                samples=target_samples, target_policy="target", draws_per_prompt=1
-            ),
+            "base": FreshDrawDataset(samples=base_samples, target_policy="base"),
+            "target": FreshDrawDataset(samples=target_samples, target_policy="target"),
         }
 
         eval_table = build_direct_eval_table(fresh_draws)

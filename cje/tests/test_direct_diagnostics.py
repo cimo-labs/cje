@@ -59,8 +59,6 @@ def _calibration_dataset(
                 prompt=f"question {i}",
                 response=f"answer {i}",
                 reward=None,
-                base_policy_logprob=-10.0,
-                target_policy_logprobs={POLICY: -10.0},
                 judge_score=s,
                 oracle_label=y if has_oracle else None,
             )
@@ -75,13 +73,12 @@ def _fresh(policy: str, scores: np.ndarray) -> FreshDrawDataset:
             judge_score=float(s),
             oracle_label=None,
             response=None,
-            fold_id=None,
             target_policy=policy,
             draw_idx=0,
         )
         for i, s in enumerate(scores)
     ]
-    return FreshDrawDataset(samples=samples, target_policy=policy, draws_per_prompt=1)
+    return FreshDrawDataset(samples=samples, target_policy=policy)
 
 
 def _run_direct(

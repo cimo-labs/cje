@@ -13,7 +13,7 @@ Test categories:
 import numpy as np
 import pytest
 
-from cje.data.normalization import ScaleInfo, detect_range, detect_and_normalize
+from cje.data.normalization import ScaleInfo, detect_range
 from cje.data.fresh_draws import fresh_draws_from_dict, NormalizationInfo
 from cje import analyze_dataset
 
