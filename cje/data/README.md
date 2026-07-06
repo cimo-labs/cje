@@ -175,9 +175,12 @@ Budget planning from a pilot:
 from cje import CostModel
 from cje.data.fresh_draws import load_fresh_draws_auto
 
+from cje import fit_variance_model, plan_evaluation
+
 pilot_data = load_fresh_draws_auto("responses/", "base")
 cost_model = CostModel(surrogate_cost=0.01, oracle_cost=0.16)  # real dollar costs
-allocation = result.plan_allocation(budget=5000, cost_model=cost_model, fresh_draws=pilot_data)
+variance_model = fit_variance_model(pilot_data)
+allocation = plan_evaluation(budget=5000, variance_model=variance_model, cost_model=cost_model)
 print(allocation.summary())
 ```
 

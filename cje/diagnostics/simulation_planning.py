@@ -490,6 +490,7 @@ def simulate_planning(
     n_total: int = 1000,
     oracle_fraction: float = 0.4,
     n_replicates: int = 5,
+    m_min: int = 30,
     power: float = 0.8,
     alpha: float = 0.05,
     seed: int = 42,
@@ -511,6 +512,8 @@ def simulate_planning(
         n_total: Simulated dataset size (default 1000).
         oracle_fraction: Fraction with oracle labels in simulation (default 0.4).
         n_replicates: Bootstrap replicates per measurement (default 5).
+        m_min: Minimum oracle labels in the plan (forwarded to
+            plan_evaluation; default 30, matching plan_evaluation).
         power: Statistical power for MDE calculation (default 0.8).
         alpha: Significance level for MDE calculation (default 0.05).
         seed: Random seed for reproducibility.
@@ -544,6 +547,7 @@ def simulate_planning(
         budget=budget,
         variance_model=variance_model,
         cost_model=cost_model,
+        m_min=m_min,
         power=power,
         alpha=alpha,
     )
@@ -564,76 +568,3 @@ def simulate_planning(
         eval_variance_fraction=eval_fraction,
         cal_variance_fraction=cal_fraction,
     )
-
-
-def simulate_planning_sweep(
-    r2_values: List[float],
-    budget: float,
-    cost_model: CostModel,
-    n_total: int = 1000,
-    oracle_fraction: float = 0.4,
-    n_replicates: int = 5,
-    power: float = 0.8,
-    alpha: float = 0.05,
-    seed: int = 42,
-    verbose: bool = False,
-) -> List[SimulationPlanningResult]:
-    """Run planning across multiple R² values for sensitivity analysis.
-
-    Note: Each R² value runs a simulation taking roughly 25-30 seconds at the
-    default n_total/n_replicates, so a sweep over N values takes about N/2
-    minutes.
-
-    Args:
-        r2_values: List of R² values to evaluate.
-        budget: Total budget in cost units.
-        cost_model: Cost parameters.
-        n_total: Simulated dataset size per R² value (default 1000).
-        oracle_fraction: Fraction with oracle labels (default 0.4).
-        n_replicates: Bootstrap replicates per measurement (default 5).
-        power: Statistical power for MDE calculation.
-        alpha: Significance level for MDE calculation.
-        seed: Base random seed (incremented for each R² value).
-        verbose: Print progress per simulation (default False for sweeps).
-
-    Returns:
-        List of SimulationPlanningResult, one per R² value.
-
-    Example:
-        >>> from cje import simulate_planning_sweep, CostModel
-        >>> cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-        >>> # Note: This takes ~25-30 seconds per R² value (~1.5 min for 3)
-        >>> results = simulate_planning_sweep([0.5, 0.7, 0.9], budget=5000, cost_model=cost)
-        >>> for r in results:
-        ...     print(f"R²={r.r2}: MDE={r.plan.mde:.1%}, oracle={r.plan.oracle_fraction:.0%}")
-    """
-    if len(r2_values) > 0:
-        print(
-            f"Running {len(r2_values)} simulations "
-            f"(~{len(r2_values) * 25}-{len(r2_values) * 30} s total)..."
-        )
-
-    results = []
-    for i, r2 in enumerate(r2_values):
-        if not verbose:
-            print(
-                f"  Simulating R²={r2:.2f} ({i+1}/{len(r2_values)})...",
-                end="",
-                flush=True,
-            )
-        result = simulate_planning(
-            r2=r2,
-            budget=budget,
-            cost_model=cost_model,
-            n_total=n_total,
-            oracle_fraction=oracle_fraction,
-            n_replicates=n_replicates,
-            power=power,
-            alpha=alpha,
-            seed=seed + i * 1000,  # Different seed per R² value
-            verbose=verbose,
-        )
-        if not verbose:
-            print(f" MDE={result.plan.mde:.1%}")
-        results.append(result)
-    return results

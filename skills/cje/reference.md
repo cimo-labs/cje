@@ -49,7 +49,7 @@ results = analyze_dataset(
 - `.estimates` (np.ndarray, order matches `metadata["target_policies"]`), `.standard_errors`
 - `.ci(alpha=0.05)` → list of `(lo, hi)` per policy; `.confidence_interval()` → `(lo_array, hi_array)`
 - `.compare_policies(i, j, alpha=0.05)` → dict with difference, SE, CI, p-value — use this for pairwise claims
-- `.best_policy()` → index of argmax (check gates before reporting it as the winner)
+- `.best_policy()` → PolicyVerdict (name, index, estimate, flagged, all_flagged, runner_up); gate-aware — a flagged argmax is demoted to `runner_up` and the best reliable policy wins
 - `.calibrator` → fitted calibrator, reusable in `transport_audit`
 - `.metadata` keys: `target_policies`, `reliability_gates` (`{policy: {"flagged": bool, ...}}`),
   `boundary_cards`, `normalization`, `oracle_sources`, `bootstrap_ci`

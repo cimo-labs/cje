@@ -6,11 +6,12 @@ compare full message strings, not substrings, so any drift in the copy fails
 loudly. Covered surfaces:
 
 - analyze_dataset(logged_data_path=...)   (API kwarg kept solely to raise)
-- estimator='<removed name>'              (factory, shared by CLI and API)
+- estimator='<removed name>'              (_removed.py, shared by CLI and API)
 - cje.advanced.<RemovedClass>             (module __getattr__ ImportError)
 - the CLI's old logged-dataset positional (`cje analyze logged_data.jsonl`)
 """
 
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -18,11 +19,8 @@ from pathlib import Path
 import pytest
 
 from cje import analyze_dataset
-from cje.interface.config import AnalysisConfig
-from cje.interface.factory import (
+from cje.interface._removed import (
     REMOVED_ESTIMATORS,
-    create_estimator,
-    get_estimator_names,
     validate_estimator_name,
 )
 
@@ -101,36 +99,31 @@ class TestLoggedDataPathMigrationError:
             )
         assert str(excinfo.value) == EXPECTED_LOGGED_DATA_PATH_MESSAGE
 
-    def test_config_never_sees_logged_data_path(self) -> None:
-        """The field is gone from AnalysisConfig — the kwarg exists only on
-        analyze_dataset, solely to raise the migration error."""
-        assert "logged_data_path" not in AnalysisConfig.model_fields
+    def test_kwarg_exists_solely_to_raise(self) -> None:
+        """logged_data_path stays in analyze_dataset's signature (so passing
+        it raises the migration error, not a TypeError) with a None default —
+        the flattened pipeline itself has no such concept."""
+        params = inspect.signature(analyze_dataset).parameters
+        assert "logged_data_path" in params
+        assert params["logged_data_path"].default is None
 
 
 # ---------------------------------------------------------------------------
-# Removed estimator names (factory — single source for CLI and API)
+# Removed estimator names (_removed.py — single source for CLI and API)
 # ---------------------------------------------------------------------------
 
 
 class TestRemovedEstimatorMigrationError:
     @pytest.mark.parametrize("name", REMOVED_ESTIMATOR_NAMES)
-    def test_factory_raises_exact_message(self, name: str) -> None:
+    def test_validator_raises_exact_message(self, name: str) -> None:
         with pytest.raises(ValueError) as excinfo:
             validate_estimator_name(name)
         assert str(excinfo.value) == EXPECTED_REMOVED_ESTIMATOR_TEMPLATE.format(
             name=name
         )
 
-    @pytest.mark.parametrize("name", REMOVED_ESTIMATOR_NAMES)
-    def test_create_estimator_raises_exact_message(self, name: str) -> None:
-        with pytest.raises(ValueError) as excinfo:
-            create_estimator(name, ["policy_a"], {}, None, False)
-        assert str(excinfo.value) == EXPECTED_REMOVED_ESTIMATOR_TEMPLATE.format(
-            name=name
-        )
-
     def test_api_path_raises_exact_message(self) -> None:
-        """analyze_dataset routes estimator names through the same factory."""
+        """analyze_dataset routes estimator names through the same validator."""
         with pytest.raises(ValueError) as excinfo:
             analyze_dataset(
                 fresh_draws_data=_TINY_FRESH_DRAWS, estimator="calibrated-ips"
@@ -139,12 +132,11 @@ class TestRemovedEstimatorMigrationError:
             name="calibrated-ips"
         )
 
-    def test_factory_removed_list_matches_pinned_names(self) -> None:
+    def test_removed_list_matches_pinned_names(self) -> None:
         assert set(REMOVED_ESTIMATORS) == set(REMOVED_ESTIMATOR_NAMES)
 
     def test_surviving_names_still_validate(self) -> None:
-        assert set(get_estimator_names()) == {"calibrated-direct", "direct"}
-        for name in get_estimator_names():
+        for name in ("calibrated-direct", "direct"):
             assert validate_estimator_name(name) == name
 
     def test_unknown_name_raises_plain_error(self) -> None:

@@ -102,6 +102,16 @@ class FittedVarianceModel:
     r_squared: float
     n_measurements: int
 
+    @property
+    def fit_ok(self) -> bool:
+        """Whether the 1/n + 1/m variance fit is trustworthy (R² >= 0.5).
+
+        The NNLS fitter can return arbitrarily poor fits (r_squared can even
+        go negative when the measurements don't follow the additive form);
+        planning on such a model produces unreliable allocations and MDEs.
+        """
+        return self.r_squared >= 0.5
+
     def predict_variance(self, n: int, m: int) -> float:
         """Predict variance at allocation (n, m)."""
         return self.sigma2_eval / n + self.sigma2_cal / m
@@ -387,6 +397,18 @@ def fit_variance_model(
     return model
 
 
+def _warn_if_poor_fit(variance_model: FittedVarianceModel) -> None:
+    """Warn loudly when planning on a variance model that fit the data badly."""
+    if not variance_model.fit_ok:
+        logger.warning(
+            f"Planning on a poorly fitted variance model "
+            f"(R²={variance_model.r_squared:.3f} < 0.5): the σ²_eval/n + "
+            f"σ²_cal/m form does not describe the measurements, so planned "
+            f"allocations and MDEs may be unreliable. Check labeling "
+            f"ignorability or collect more pilot data."
+        )
+
+
 def plan_evaluation(
     budget: float,
     variance_model: FittedVarianceModel,
@@ -420,7 +442,29 @@ def plan_evaluation(
     Note:
         MDE assumes independent policies; paired evals on a shared prompt set
         typically detect smaller differences (this plan is conservative).
+        Planning on a model with fit_ok False logs a warning.
     """
+    _warn_if_poor_fit(variance_model)
+    return _plan_evaluation(
+        budget=budget,
+        variance_model=variance_model,
+        cost_model=cost_model,
+        m_min=m_min,
+        power=power,
+        alpha=alpha,
+    )
+
+
+def _plan_evaluation(
+    budget: float,
+    variance_model: FittedVarianceModel,
+    cost_model: CostModel,
+    m_min: int,
+    power: float,
+    alpha: float,
+) -> EvaluationPlan:
+    """plan_evaluation body without the poor-fit warning (so iterative
+    callers like plan_for_mde warn once instead of once per iteration)."""
     c_S = cost_model.surrogate_cost
     c_Y = cost_model.oracle_cost
     sigma2_eval = variance_model.sigma2_eval
@@ -537,7 +581,10 @@ def plan_for_mde(
     Note:
         MDE assumes independent policies; paired evals on a shared prompt set
         typically detect smaller differences (this plan is conservative).
+        Planning on a model with fit_ok False logs a warning (once).
     """
+    _warn_if_poor_fit(variance_model)
+
     z_alpha = stats.norm.ppf(1 - alpha / 2)
     z_power = stats.norm.ppf(power)
     critical_value = z_alpha + z_power
@@ -578,7 +625,7 @@ def plan_for_mde(
     # plan_evaluation (n ≥ m ≥ m_min).
     budget_needed = max(budget_needed, m_min * (c_S + c_Y))
 
-    plan = plan_evaluation(
+    plan = _plan_evaluation(
         budget=budget_needed,
         variance_model=variance_model,
         cost_model=cost_model,
@@ -596,7 +643,7 @@ def plan_for_mde(
             break
         scale = max((plan.mde / target_mde) ** 2, 1.0)
         budget_needed = budget_needed * scale + (c_S + c_Y)
-        plan = plan_evaluation(
+        plan = _plan_evaluation(
             budget=budget_needed,
             variance_model=variance_model,
             cost_model=cost_model,

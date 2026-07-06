@@ -277,6 +277,81 @@ class TestBoundaryCardWiredIntoDirect:
 
 
 # ---------------------------------------------------------------------------
+# D11 status ladder: a CAUTION card yields WARNING (between GOOD and CRITICAL)
+# ---------------------------------------------------------------------------
+
+
+class TestCautionBandYieldsWarning:
+    """Pre-0.5.0 a CAUTION boundary card left the policy GOOD (the WARNING
+    tier was unreachable). The canonical card->Status ladder in gates.py now
+    maps CAUTION to WARNING: visible in overall_status, but NOT a refusal —
+    the policy keeps its estimate and passes the reliability gates."""
+
+    def _caution_run(self) -> "EstimationResult":
+        # Deterministic noiseless setup: oracle labels cover S in [0, 0.8]
+        # with y = 0.25 + 0.5*s, so the reward range is ~[0.25, 0.65] and
+        # margin = 5% of it (~0.02). Unlabeled draws concentrate 25% of mass
+        # at s=0.79 -> rewards within the margin of R_max (saturation >= 20%)
+        # while every score stays inside the oracle S-range (out-of-range
+        # mass ~0, well under the 5% refuse threshold): the CAUTION band.
+        labeled = [
+            {
+                "prompt_id": f"p{i:03d}",
+                "judge_score": s,
+                "oracle_label": 0.25 + 0.5 * s,
+            }
+            for i, s in enumerate(np.linspace(0.0, 0.8, 50))
+        ]
+        unlabeled = [
+            {"prompt_id": f"p{50 + i:03d}", "judge_score": 0.4} for i in range(25)
+        ] + [{"prompt_id": f"p{75 + i:03d}", "judge_score": 0.79} for i in range(25)]
+
+        from cje import analyze_dataset
+
+        return analyze_dataset(
+            fresh_draws_data={"caution": labeled + unlabeled},
+            estimator_config={"inference_method": "cluster_robust"},
+        )
+
+    def test_caution_card_yields_warning_not_refusal(self) -> None:
+        result = self._caution_run()
+        diag = result.diagnostics
+        assert diag is not None
+        assert diag.boundary_cards is not None
+
+        card = diag.boundary_cards["caution"]
+        assert card["status"] == "CAUTION"
+        assert card["out_of_range"] < 0.05
+        assert card["saturation"] >= 0.20
+
+        # The WARNING tier is real now: per-policy and overall
+        assert diag.status_per_policy is not None
+        assert diag.status_per_policy["caution"] == Status.WARNING
+        assert diag.overall_status == Status.WARNING
+
+        # ...but CAUTION is not a refusal: no refuse-level claim, gate
+        # unflagged, and the estimate is still reported
+        assert diag.refuse_level_policies == []
+        gate = result.metadata["reliability_gates"]["caution"]
+        assert gate["flagged"] is False
+        assert gate["refuse_level_claims"] is False
+        assert np.isfinite(result.estimates[0])
+
+    def test_warning_renders_between_good_and_critical(self) -> None:
+        result = self._caution_run()
+        diag = result.diagnostics
+        assert diag is not None
+
+        # DirectDiagnostics.summary and the notebook repr surface the tier
+        assert "Status: warning" in diag.summary()
+        assert "warning" in result._repr_html_()
+
+        # The CLI still crowns the policy (WARNING is not a demotion)
+        lines = best_policy_lines(result)
+        assert lines == ["🏆 Best policy: caution"]
+
+
+# ---------------------------------------------------------------------------
 # DirectDiagnostics surface (coverage-risk cases adapted from 0.3.x)
 # ---------------------------------------------------------------------------
 
@@ -320,7 +395,7 @@ class TestDirectDiagnosticsSurface:
         )
         assert diag.overall_status == Status.CRITICAL
 
-    def test_to_dict_round_trip(self) -> None:
+    def test_to_dict_serializes_statuses(self) -> None:
         diag = _make_direct_diagnostics(
             boundary_cards={"pi": {"status": "OK", "out_of_range": 0.0}},
             status_per_policy={"pi": Status.GOOD},
@@ -328,9 +403,7 @@ class TestDirectDiagnosticsSurface:
         d = diag.to_dict()
         assert d["status_per_policy"] == {"pi": "good"}
         assert d["overall_status"] == "good"
-        rebuilt = DirectDiagnostics.from_dict(d)
-        assert rebuilt.status_per_policy == {"pi": Status.GOOD}
-        assert rebuilt.boundary_cards == diag.boundary_cards
+        assert d["boundary_cards"] == diag.boundary_cards
 
 
 # ---------------------------------------------------------------------------

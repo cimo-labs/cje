@@ -12,7 +12,7 @@ Paper gate summary (surviving Direct-mode gates):
   rankings may stand).
 """
 
-from typing import Optional
+from typing import Dict, Optional
 
 from .models import Status
 
@@ -22,6 +22,35 @@ from .models import Status
 # Fraction of target judge-score mass outside the oracle calibration range
 # at or above which level claims are refused (REFUSE-LEVEL).
 OUT_OF_RANGE_REFUSE_THRESHOLD = 0.05
+
+# Fraction of calibrated rewards near the oracle reward bounds at or above
+# which the card downgrades to CAUTION (boundary effects likely) when the
+# out-of-range mass is below the refuse threshold.
+SATURATION_CAUTION_THRESHOLD = 0.20
+
+# Canonical boundary-card status -> per-policy Status ladder: a CAUTION card
+# is a real WARNING tier between GOOD and CRITICAL (it used to leave the
+# policy GOOD, making CAUTION invisible in overall_status).
+BOUNDARY_CARD_STATUS_TO_STATUS: Dict[str, Status] = {
+    "OK": Status.GOOD,
+    "CAUTION": Status.WARNING,
+    "REFUSE-LEVEL": Status.CRITICAL,
+}
+
+# ---------------------------------------------------------------------------
+# Transport audit (audit_transportability)
+# ---------------------------------------------------------------------------
+# |delta_hat| below this splits WARN (marginal bias, monitor) from FAIL
+# (clear bias, refit) once the residual CI excludes zero.
+TRANSPORT_FAIL_DELTA_THRESHOLD = 0.05
+
+# Canonical transport status -> Status ladder for consumers that grade
+# TransportDiagnostics alongside other diagnostics.
+TRANSPORT_STATUS_TO_STATUS: Dict[str, Status] = {
+    "PASS": Status.GOOD,
+    "WARN": Status.WARNING,
+    "FAIL": Status.CRITICAL,
+}
 
 
 _STATUS_ORDER = {Status.GOOD: 0, Status.WARNING: 1, Status.CRITICAL: 2}
