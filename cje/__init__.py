@@ -30,7 +30,7 @@ def _resolve_version() -> str:
 
         return _dist_version("cje-eval")
     except Exception:  # PackageNotFoundError, or metadata unavailable
-        return "0.4.3"
+        return "0.5.0"
 
 
 __version__ = _resolve_version()
@@ -107,6 +107,13 @@ def __getattr__(name: str) -> object:
         from . import visualization
 
         return getattr(visualization, name)
+    if name == "plot_calibration_comparison":
+        raise ImportError(
+            "cje.plot_calibration_comparison was removed in 0.5.0. "
+            "Calibration quality lives in results.diagnostics "
+            "(calibration_rmse, calibration_coverage); use "
+            "plot_policy_estimates for estimate plots."
+        )
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

@@ -267,3 +267,67 @@ class TestCLIMigrationErrors:
         assert EXPECTED_REMOVED_ESTIMATOR_TEMPLATE.format(name="tmle") in (
             capsys.readouterr().err
         )
+
+
+# ---------------------------------------------------------------------------
+# 0.5.0 tombstones. Unlike the 0.4.0 pins above these are deliberately NOT
+# verbatim: they assert only that the removed name raises ImportError and
+# that the message names the replacement, so the copy can be rewordsmithed
+# without breaking tests.
+# ---------------------------------------------------------------------------
+
+
+class TestRemovedIn050Tombstones:
+    """Highest-traffic names removed in 0.5.0 raise pointers, not attribute
+    errors."""
+
+    @pytest.mark.parametrize("module_name", ["cje.estimators", "cje.advanced"])
+    def test_base_cje_estimator_points_at_direct_estimator(
+        self, module_name: str
+    ) -> None:
+        import importlib
+
+        module = importlib.import_module(module_name)
+        with pytest.raises(ImportError, match="CalibratedDirectEstimator"):
+            getattr(module, "BaseCJEEstimator")
+
+    @pytest.mark.parametrize(
+        "name", ["calibrate_from_raw_data", "calibrate_judge_scores"]
+    )
+    def test_removed_calibration_helpers_point_at_survivors(self, name: str) -> None:
+        import cje.calibration
+
+        with pytest.raises(ImportError, match="calibrate_dataset"):
+            getattr(cje.calibration, name)
+        with pytest.raises(ImportError, match="fit_cv"):
+            getattr(cje.calibration, name)
+
+    @pytest.mark.parametrize("module_name", ["cje", "cje.visualization"])
+    def test_plot_calibration_comparison_removed(self, module_name: str) -> None:
+        import importlib
+
+        module = importlib.import_module(module_name)
+        with pytest.raises(ImportError, match="removed in 0.5.0"):
+            getattr(module, "plot_calibration_comparison")
+
+    def test_compare_policies_bootstrap_points_at_compare_policies(self) -> None:
+        import cje.diagnostics
+
+        with pytest.raises(ImportError, match="compare_policies"):
+            getattr(cje.diagnostics, "compare_policies_bootstrap")
+
+    def test_040_tombstones_still_fire(self) -> None:
+        """The 0.4.0 removals must keep raising after the 0.5.0 additions."""
+        import cje.advanced
+
+        with pytest.raises(ImportError, match="0.3"):
+            getattr(cje.advanced, "CalibratedIPS")
+
+    def test_unknown_names_still_raise_attribute_error(self) -> None:
+        import cje.calibration
+        import cje.estimators
+
+        with pytest.raises(AttributeError):
+            getattr(cje.estimators, "definitely_not_a_real_name")
+        with pytest.raises(AttributeError):
+            getattr(cje.calibration, "definitely_not_a_real_name")

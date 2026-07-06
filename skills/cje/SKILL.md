@@ -6,18 +6,20 @@ description: Runs CJE (Causal Judge Evaluation, pip install cje-eval) to compare
 # CJE — calibrated LLM-judge evaluation
 
 LLM-judge scores are cheap but miscalibrated: in CJE's benchmark, naive 95% CIs built on raw
-judge scores covered the truth 0% of the time. CJE calibrates the judge against ≥10 pooled
-ground-truth labels, evaluates every policy at scale, and refuses claims the data can't support.
+judge scores covered the truth 0% of the time. CJE calibrates the judge against a pooled slice
+of ground-truth labels (≥10 recommended; 4 is the hard floor), evaluates every policy at scale,
+and refuses claims the data can't support.
 
 **Hard rule: never report a raw judge-score average as a policy comparison or a quality level.**
 
 ## Decide the flow
 
 - No judge scores at all → **Step 0** below, then continue.
-- Judge scores but <10 oracle labels total → **Labeling loop**. Do not fabricate labels; do not
-  fall back to raw means.
-- 10–19 labels → proceed, but tell the user CIs will be noisier (folds auto-reduce) and more
-  labels are recommended.
+- Judge scores but <4 oracle labels total → **Labeling loop**. Do not fabricate labels; do not
+  fall back to raw means (0 labels runs only as a loudly-flagged `naive_direct` fallback;
+  1–3 labels raise a hard error).
+- 4–9 labels → runs, but calibration folds auto-reduce with a warning and CIs are noisier.
+  Report results as provisional and run the labeling loop toward ≥10.
 - ≥10 labels, two or more policies → **Canonical flow** (`analyze_dataset`).
 - One sample of scores, want a calibrated mean + CI → `calibrated_mean_ci`.
 - Reusing a previously fitted calibrator on new data (new month/domain/policy family) →
@@ -136,10 +138,11 @@ use the planning API in `reference.md`.
 
 ## Refusal discipline — hard rules
 
-- **<10 pooled labels**: CJE refuses to calibrate — 1–9 labels raise a hard error, and 0 labels
-  fall back to raw judge means marked `naive_direct` with a loud warning. Never report those
-  naive numbers as the answer, and never fabricate, impute, or self-generate oracle labels to
-  get past the floor — run the labeling loop.
+- **Too few pooled labels**: 0 labels fall back to raw judge means marked `naive_direct` with a
+  loud warning — never report those naive numbers as the answer. 1–3 labels raise a hard error.
+  4–9 labels calibrate with reduced folds — report the CIs as noisier and provisional, and
+  recommend ≥10. Never fabricate, impute, or self-generate oracle labels to get past the floor —
+  run the labeling loop.
 - **REFUSE-LEVEL badge on a policy**: never state an absolute quality number for that policy.
   Rankings may still stand — say explicitly which claims survive and which are refused.
 - **Flagged reliability gate**: report the best *reliable* policy as the winner, not the
@@ -163,7 +166,7 @@ for anything refused, the one-line reason plus the concrete fix (e.g. "collect ~
 | Buying labels under every policy | Labels pool; calibration transfers across policies |
 | Reusing last month's calibrator silently | `transport_audit` with a 40–60-label probe |
 | Rescaling Likert/0–100 scores before calling | Pass as-is; bounded scales auto-normalize |
-| Running with <10 labels, or inventing labels | Hard error by design; run the labeling loop |
+| Running with <4 labels, or inventing labels | Hard error by design (0 labels only yields a flagged naive fallback); run the labeling loop |
 
 Full signatures, `fresh_draws_dir`/CLI usage, planning API, diagnostics glossary, and
 troubleshooting: read `reference.md` in this directory.

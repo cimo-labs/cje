@@ -20,3 +20,13 @@ __all__ = [
     "Dataset",
     "EstimationResult",
 ]
+
+
+def __getattr__(name: str) -> object:
+    if name == "BaseCJEEstimator":
+        raise ImportError(
+            "cje.estimators.BaseCJEEstimator was removed in 0.5.0 — "
+            "CalibratedDirectEstimator is the only estimator (the base "
+            "class had exactly one subclass and was merged into it)."
+        )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

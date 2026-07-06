@@ -11,6 +11,5 @@ repos:
     rev: v1.15.0
     hooks:
       - id: mypy
-        additional_dependencies: [types-PyYAML]
         language_version: python3.10
         args: [--ignore-missing-imports, --no-strict-optional, --no-warn-unused-ignores]

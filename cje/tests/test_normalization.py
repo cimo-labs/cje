@@ -205,6 +205,7 @@ class TestFreshDrawsFromDictNormalization:
 
 @pytest.mark.integration
 @pytest.mark.uses_arena_sample
+@pytest.mark.slow
 class TestAnalyzeDatasetNormalization:
     """E2E tests for analyze_dataset with auto-normalization using real arena data.
 

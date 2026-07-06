@@ -6,7 +6,8 @@ This module contains the diagnostics for the Direct-mode estimator:
   (boundary cards), and calibration quality.
 
 ``IPSDiagnostics`` is a DEPRECATED alias of DirectDiagnostics kept for
-0.3.x consumers that read shared attributes; it will be removed in 0.5.0.
+0.3.x consumers that read shared attributes; it will be removed in a
+future release.
 
 Computation logic is in the sibling modules (reward_boundary.py,
 transport.py, robust_inference.py, etc.).
@@ -200,5 +201,5 @@ class DirectDiagnostics:
 # DEPRECATED: 0.3.x name for the estimator diagnostics. Direct mode never
 # had real weight metrics behind it; the shared fields (estimates,
 # standard_errors, status_per_policy, boundary_cards, ...) live on
-# DirectDiagnostics. Removed in 0.5.0.
+# DirectDiagnostics. Slated for removal in a future release.
 IPSDiagnostics = DirectDiagnostics

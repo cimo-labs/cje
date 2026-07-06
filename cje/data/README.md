@@ -26,14 +26,13 @@ The data module handles data loading, validation, and preparation for Direct-mod
 ```
 data/
 ├── __init__.py           # Public API exports
-├── models.py             # Pydantic models (Sample, Dataset, EstimationResult)
-├── loaders.py            # DatasetLoader, FreshDrawLoader, DataSource protocol
-├── factory.py            # DatasetFactory (dependency-injected loading)
+├── models.py             # Pydantic models (Sample, Dataset, EstimationResult + typed results)
+├── loaders.py            # DatasetLoader, FreshDrawLoader
+├── ingest.py             # POLICY_FILE_PATTERNS, record/field readers shared by API + CLI
 ├── fresh_draws.py        # FreshDrawSample/FreshDrawDataset + loading utilities
 ├── folds.py              # Unified hash-based cross-validation folds
 ├── normalization.py      # Auto-normalization of bounded label scales
-├── validation.py         # validate_direct_data on raw records
-└── reward_utils.py       # Reward manipulation utilities
+└── validation.py         # validate_direct_data on raw records
 ```
 
 ## Data Format
@@ -57,7 +56,7 @@ The minimal record is two fields:
 - `target_policy`: Optional in per-policy files (inferred from the filename); **required** per record in a single combined JSONL file
 - `metadata`: Optional dict for per-response covariates
 
-**Logprob fields are ignored.** 0.3.x-era logged data carries `base_policy_logprob` / `target_policy_logprobs`; in 0.4.0 (Direct-mode only) these are present-and-ignored, with an INFO note. Off-policy estimation lives on the frozen 0.3.x line (`pip install "cje-eval==0.3.*"`).
+**Logprob fields are ignored.** 0.3.x-era logged data carries `base_policy_logprob` / `target_policy_logprobs`; since 0.4.0 (Direct-mode only) these are present-and-ignored, with an INFO note. Off-policy estimation lives on the frozen 0.3.x line (`pip install "cje-eval==0.3.*"`).
 
 ### Fresh-draws directory layout
 
@@ -161,6 +160,13 @@ cis = result.ci()  # [(lower, upper), ...]
 # Compare two policies (paired when prompts are shared)
 comparison = result.compare_policies(0, 1)
 print(f"Difference: {comparison['difference']:.3f} (p={comparison['p_value']:.3f})")
+
+# Typed results (0.5.0) — metadata mirrors stay the serialized source of truth
+print(result.summary())              # per-policy estimates + CIs + gate flags
+verdict = result.best_policy()       # PolicyVerdict: gate-aware best policy
+print(verdict.name, verdict.flagged, verdict.runner_up)
+gates = result.gates                 # {policy: GateResult(flagged, refuse_level_claims, reasons)}
+policies_typed = result.target_policies  # == metadata["target_policies"]
 
 # Export
 result_dict = result.to_dict()

@@ -9,7 +9,7 @@ test:  ## Run tests
 	poetry run pytest cje/tests/ -v
 
 lint:  ## Run linting
-	poetry run black cje/
+	poetry run black --check cje/
 	poetry run mypy cje/ --ignore-missing-imports
 
 format:  ## Format code

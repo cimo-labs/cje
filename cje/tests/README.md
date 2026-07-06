@@ -191,8 +191,8 @@ pip install -e .
 
 - **E2E tests**: < 2 seconds each
 - **Infrastructure tests**: < 1 second each
-- **Fast suite** (`-m "not slow"`): ~2 minutes for ~415 tests
-- **Full suite**: ~440 collected tests; the 22 slow tests (Monte Carlo coverage, planning, notebook execution) add several more minutes
+- **Fast suite** (`-m "not slow"`): ~1 minute for ~450 tests
+- **Full suite**: ~490 collected tests; the 28 slow tests (Monte Carlo coverage, planning, notebook execution, and the slowest arena integration tests) add 20+ minutes
 
 Test execution tips:
 - Use `-x` to stop on first failure
