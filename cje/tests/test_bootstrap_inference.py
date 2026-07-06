@@ -16,7 +16,6 @@ from cje.diagnostics.robust_inference import (
     build_direct_eval_table,
     cluster_bootstrap_direct_with_refit,
     make_calibrator_factory,
-    compare_policies_bootstrap,
 )
 from cje.estimators.direct_method import CalibratedDirectEstimator
 from cje.calibration.judge import JudgeCalibrator
@@ -220,55 +219,6 @@ class TestBootstrapE2EWorkflows:
                 f"CI [{lower_boot[i]:.4f}, {upper_boot[i]:.4f}]"
             )
 
-    def test_bootstrap_pairwise_comparison(
-        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
-    ) -> None:
-        """Test pairwise policy comparison using bootstrap.
-
-        Verifies that paired contrasts preserve correlation structure.
-        """
-        if len(arena_fresh_draws) < 2:
-            pytest.skip("Need at least 2 policies for comparison")
-
-        policies = list(arena_fresh_draws.keys())[:2]
-        fd_dict = {p: arena_fresh_draws[p] for p in policies}
-
-        # Collect oracle data
-        first_policy = policies[0]
-        oracle_scores = []
-        oracle_labels = []
-        for sample in fd_dict[first_policy].samples:
-            if sample.oracle_label is not None:
-                oracle_scores.append(sample.judge_score)
-                oracle_labels.append(sample.oracle_label)
-
-        if len(oracle_scores) < 30:
-            pytest.skip("Not enough oracle labels")
-
-        # Build eval table and run bootstrap
-        table = build_direct_eval_table(fd_dict)
-        factory = make_calibrator_factory(mode="monotone", seed=42)
-
-        bootstrap_result = cluster_bootstrap_direct_with_refit(
-            eval_table=table,
-            calibrator_factory=factory,
-            n_bootstrap=100,
-            min_oracle_per_replicate=10,
-            seed=42,
-        )
-
-        # Test pairwise comparison
-        comparison = compare_policies_bootstrap(
-            bootstrap_result, policy_a=0, policy_b=1
-        )
-
-        assert "diff_estimate" in comparison
-        assert "diff_se" in comparison
-        assert "ci_lower" in comparison
-        assert "ci_upper" in comparison
-        assert "p_value" in comparison
-        assert 0 <= comparison["p_value"] <= 1
-
 
 # ============================================================================
 # Infrastructure Tests - Core Data Structures
@@ -362,15 +312,6 @@ class TestDirectEstimatorDefaults:
         assert estimator.inference_method == "bootstrap"
         assert estimator.use_augmented_estimator is True
 
-    def test_analytical_alias_maps_to_cluster_robust(self) -> None:
-        calibrator = JudgeCalibrator(calibration_mode="monotone")
-        estimator = CalibratedDirectEstimator(
-            target_policies=["base"],
-            reward_calibrator=calibrator,
-            inference_method="analytical",
-        )
-        assert estimator.inference_method == "cluster_robust"
-
     def test_invalid_inference_method_raises(self) -> None:
         calibrator = JudgeCalibrator(calibration_mode="monotone")
         with pytest.raises(ValueError, match="Invalid inference_method"):
@@ -378,47 +319,6 @@ class TestDirectEstimatorDefaults:
                 target_policies=["base"],
                 reward_calibrator=calibrator,
                 inference_method="oua_jackknife",
-            )
-
-    def test_legacy_false_multipolicy_flag_warns_and_is_ignored(self) -> None:
-        calibrator = JudgeCalibrator(calibration_mode="monotone")
-        with pytest.warns(FutureWarning, match="deprecated and ignored"):
-            estimator = CalibratedDirectEstimator(
-                target_policies=["base", "target"],
-                reward_calibrator=calibrator,
-                use_multipolicy_eif=False,
-            )
-
-        assert estimator.inference_method == "bootstrap"
-        assert estimator.use_augmented_estimator is True
-        assert estimator.use_multipolicy_eif is False
-
-    def test_legacy_true_multipolicy_flag_raises(self) -> None:
-        calibrator = JudgeCalibrator(calibration_mode="monotone")
-        with pytest.raises(ValueError, match="no longer supported"):
-            CalibratedDirectEstimator(
-                target_policies=["base", "target"],
-                reward_calibrator=calibrator,
-                use_multipolicy_eif=True,
-            )
-
-    def test_numpy_bool_multipolicy_flag_follows_legacy_behavior(self) -> None:
-        calibrator = JudgeCalibrator(calibration_mode="monotone")
-
-        with pytest.warns(FutureWarning, match="deprecated and ignored"):
-            estimator = CalibratedDirectEstimator(
-                target_policies=["base", "target"],
-                reward_calibrator=calibrator,
-                use_multipolicy_eif=np.bool_(False),
-            )
-
-        assert estimator.use_multipolicy_eif is False
-
-        with pytest.raises(ValueError, match="no longer supported"):
-            CalibratedDirectEstimator(
-                target_policies=["base", "target"],
-                reward_calibrator=calibrator,
-                use_multipolicy_eif=np.bool_(True),
             )
 
 
@@ -429,77 +329,6 @@ class TestDirectEstimatorDefaults:
 
 class TestBootstrapBehavior:
     """Test bootstrap-specific behaviors."""
-
-    def test_bootstrap_legacy_false_multipolicy_flag_warns(
-        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
-    ) -> None:
-        if not arena_fresh_draws:
-            pytest.skip("No fresh draws available")
-
-        table = build_direct_eval_table(arena_fresh_draws)
-        factory = make_calibrator_factory(mode="monotone", seed=42)
-
-        with pytest.warns(FutureWarning, match="deprecated and ignored"):
-            result = cluster_bootstrap_direct_with_refit(
-                eval_table=table,
-                calibrator_factory=factory,
-                n_bootstrap=5,
-                min_oracle_per_replicate=5,
-                seed=42,
-                use_multipolicy_eif=False,
-            )
-
-        assert result["n_valid_replicates"] > 0
-
-    def test_bootstrap_legacy_true_multipolicy_flag_raises(
-        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
-    ) -> None:
-        if not arena_fresh_draws:
-            pytest.skip("No fresh draws available")
-
-        table = build_direct_eval_table(arena_fresh_draws)
-        factory = make_calibrator_factory(mode="monotone", seed=42)
-
-        with pytest.raises(ValueError, match="no longer supported"):
-            cluster_bootstrap_direct_with_refit(
-                eval_table=table,
-                calibrator_factory=factory,
-                n_bootstrap=5,
-                min_oracle_per_replicate=5,
-                seed=42,
-                use_multipolicy_eif=True,
-            )
-
-    def test_bootstrap_numpy_bool_multipolicy_flag_follows_legacy_behavior(
-        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
-    ) -> None:
-        if not arena_fresh_draws:
-            pytest.skip("No fresh draws available")
-
-        table = build_direct_eval_table(arena_fresh_draws)
-        factory = make_calibrator_factory(mode="monotone", seed=42)
-
-        with pytest.warns(FutureWarning, match="deprecated and ignored"):
-            result = cluster_bootstrap_direct_with_refit(
-                eval_table=table,
-                calibrator_factory=factory,
-                n_bootstrap=5,
-                min_oracle_per_replicate=5,
-                seed=42,
-                use_multipolicy_eif=np.bool_(False),
-            )
-
-        assert result["n_valid_replicates"] > 0
-
-        with pytest.raises(ValueError, match="no longer supported"):
-            cluster_bootstrap_direct_with_refit(
-                eval_table=table,
-                calibrator_factory=factory,
-                n_bootstrap=5,
-                min_oracle_per_replicate=5,
-                seed=42,
-                use_multipolicy_eif=np.bool_(True),
-            )
 
     def test_resample_until_valid(
         self, arena_fresh_draws: Dict[str, FreshDrawDataset]

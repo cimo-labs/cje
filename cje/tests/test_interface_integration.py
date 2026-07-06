@@ -27,6 +27,45 @@ def _arena_paths() -> tuple[Path, Path]:
     return dataset_path, fresh_draws_dir
 
 
+def test_analyze_dataset_eight_labels_reduces_folds() -> None:
+    """4-9 oracle labels: calibration folds auto-reduce with a warning and the
+    analysis succeeds (the reduction rule moved from the service layer into the
+    calibrator in 0.5.0 — analyze_dataset behavior is unchanged)."""
+    import logging
+
+    import numpy as np
+
+    rng = np.random.default_rng(11)
+    records = []
+    for i in range(40):
+        s = float(rng.uniform(0.1, 0.9))
+        rec = {"prompt_id": f"p{i:02d}", "judge_score": s}
+        if i < 8:
+            rec["oracle_label"] = float(np.clip(s + rng.normal(0, 0.05), 0, 1))
+        records.append(rec)
+
+    logger = logging.getLogger("cje.calibration.judge")
+    records_seen = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records_seen.append(record.getMessage())
+
+    handler = _Capture(level=logging.WARNING)
+    logger.addHandler(handler)
+    try:
+        results = analyze_dataset(
+            fresh_draws_data={"policy_a": records},
+            estimator_config={"n_bootstrap": 50},
+        )
+    finally:
+        logger.removeHandler(handler)
+
+    assert np.all(np.isfinite(results.estimates))
+    assert np.all(np.isfinite(results.standard_errors))
+    assert any("reducing" in msg and "calibration folds" in msg for msg in records_seen)
+
+
 def test_direct_mode_with_calibration_data() -> None:
     """Direct mode with a dedicated calibration dataset (judge+oracle labels)."""
     dataset_path, responses_dir = _arena_paths()
@@ -156,27 +195,6 @@ def test_direct_estimates_clone_accurately() -> None:
         f"Direct ({clone_direct:.3f}) differs from truth ({ground_truth:.3f}) by "
         f"{abs(clone_direct - ground_truth):.3f}"
     )
-
-
-def test_direct_legacy_multipolicy_flag_is_stripped_from_metadata() -> None:
-    """Legacy use_multipolicy_eif configs should warn, be ignored, and not persist in metadata."""
-    dataset_path, fresh_draws_dir = _arena_paths()
-
-    with pytest.warns(FutureWarning, match="deprecated and ignored"):
-        results = analyze_dataset(
-            fresh_draws_dir=str(fresh_draws_dir),
-            calibration_data_path=str(dataset_path),
-            estimator="direct",
-            estimator_config={
-                "inference_method": "cluster_robust",
-                "use_multipolicy_eif": False,
-            },
-            verbose=False,
-        )
-
-    estimator_config = results.metadata.get("estimator_config", {})
-    assert "use_multipolicy_eif" not in estimator_config
-    assert estimator_config.get("inference_method") == "cluster_robust"
 
 
 def test_direct_ranks_unhelpful_as_worst() -> None:

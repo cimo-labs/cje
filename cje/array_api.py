@@ -12,22 +12,24 @@ or `CalibratedDirectEstimator` directly.
 """
 
 import logging
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import numpy as np
 from scipy import stats
 
 from .calibration.judge import JudgeCalibrator
-from .diagnostics.reward_boundary import boundary_card
+from .diagnostics.reward_boundary import boundary_card_dict
 from .diagnostics.robust_inference import (
     DirectEvalTable,
     cluster_bootstrap_direct_with_refit,
     cluster_robust_se,
+    combine_cluster_and_oracle,
     make_calibrator_factory,
+    oracle_jackknife_estimates,
+    oracle_jackknife_variance,
 )
 from .diagnostics.transport import TransportDiagnostics, audit_transportability
-from .estimators.base_estimator import oracle_jackknife_variance
 
 logger = logging.getLogger(__name__)
 
@@ -169,52 +171,6 @@ def _validate_inputs(
     return judge, labels, mask, cov
 
 
-def _boundary_diagnostics(
-    calibrator: Any, judge: np.ndarray, rewards: np.ndarray
-) -> Optional[Dict[str, Any]]:
-    """Coverage badge vs the calibrator's oracle S-range (paper's REFUSE-LEVEL gate)."""
-    s_range = getattr(calibrator, "oracle_s_range", None)
-    r_range = getattr(calibrator, "oracle_reward_range", None)
-    if s_range is None or r_range is None:
-        return None
-    card = boundary_card(
-        S_policy=judge,
-        S_oracle=np.asarray(s_range, dtype=float),
-        R_policy=rewards,
-        R_min=float(r_range[0]),
-        R_max=float(r_range[1]),
-    )
-    card_dict: Dict[str, Any] = asdict(card)
-    card_dict["oracle_s_range"] = [float(s_range[0]), float(s_range[1])]
-    if card.status == "REFUSE-LEVEL":
-        logger.warning(
-            f"REFUSE-LEVEL coverage badge: {card.out_of_range:.1%} of judge "
-            f"scores fall outside the oracle calibration range "
-            f"[{s_range[0]:.3f}, {s_range[1]:.3f}]. Do not ship level "
-            f"(absolute) claims from this estimate."
-        )
-    return card_dict
-
-
-def _oracle_jackknife_estimates(
-    calibrator: Any, judge: np.ndarray, cov: Optional[np.ndarray]
-) -> Optional[np.ndarray]:
-    """Leave-one-oracle-fold estimates of the mean (CalibratedDirectEstimator's recipe)."""
-    fold_models = calibrator.get_fold_models_for_oua()
-    if not fold_models:
-        return None
-    jack: List[float] = []
-    for fold_id in range(len(fold_models)):
-        if fold_models.get(fold_id) is None:
-            continue
-        fold_ids = np.full(len(judge), fold_id, dtype=int)
-        rewards_loo = np.clip(calibrator.predict_oof(judge, fold_ids, cov), 0.0, 1.0)
-        jack.append(float(np.mean(rewards_loo)))
-    if len(jack) < 2:
-        return None
-    return np.asarray(jack)
-
-
 def calibrated_mean_ci(
     judge_scores: Any,
     oracle_labels: Any,
@@ -344,7 +300,7 @@ def calibrated_mean_ci(
             "oracle_coverage": calibrator.oracle_coverage,
         },
     }
-    boundary = _boundary_diagnostics(calibrator, judge, rewards)
+    boundary = boundary_card_dict(calibrator, judge, rewards)
     if boundary is not None:
         diagnostics["boundary_card"] = boundary
 
@@ -407,21 +363,17 @@ def calibrated_mean_ci(
         df = int(res["df"])
 
         # Oracle-jackknife augmentation (skipped at 100% oracle coverage,
-        # mirroring BaseCJEEstimator._apply_oua_jackknife).
+        # mirroring CalibratedDirectEstimator._apply_oua_jackknife).
         var_oracle = 0.0
         n_jack = 0
         coverage = getattr(calibrator, "oracle_coverage", None)
         if coverage is None or coverage < 1.0:
-            jack = _oracle_jackknife_estimates(calibrator, judge, cov)
+            jack = oracle_jackknife_estimates(calibrator, judge, cov)
             if jack is not None:
                 n_jack = len(jack)
                 var_oracle = oracle_jackknife_variance(jack)
         fold_models = calibrator.get_fold_models_for_oua()
-        if fold_models and len(fold_models) >= 2:
-            df = min(df, len(fold_models) - 1)
-        df = max(df, 1)
-
-        se = float(np.sqrt(se_base**2 + var_oracle))
+        se, df = combine_cluster_and_oracle(se_base, df, var_oracle, len(fold_models))
         t_crit = float(stats.t.ppf(1 - alpha / 2, df))
         ci = (estimate - t_crit * se, estimate + t_crit * se)
         diagnostics["cluster_robust"] = {

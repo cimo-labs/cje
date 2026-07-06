@@ -1,11 +1,10 @@
 """Core CJE estimators and types.
 
 This module contains:
-- Estimators: CalibratedDirectEstimator and the base class
+- Estimators: CalibratedDirectEstimator
 - Data models: Pydantic models for type safety
 """
 
-from .base_estimator import BaseCJEEstimator
 from .direct_method import CalibratedDirectEstimator
 from ..data.models import (
     Sample,
@@ -15,7 +14,6 @@ from ..data.models import (
 
 __all__ = [
     # Estimators
-    "BaseCJEEstimator",
     "CalibratedDirectEstimator",
     # Data models
     "Sample",

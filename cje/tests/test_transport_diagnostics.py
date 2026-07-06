@@ -397,7 +397,7 @@ def test_transport_missing_judge_score_raises() -> None:
     judge_scores = np.linspace(0.3, 0.8, 15)
     oracle_labels = 0.2 + 0.5 * judge_scores + np.random.normal(0, 0.05, 15)
     oracle_labels = np.clip(oracle_labels, 0, 1)
-    calibrator.fit_transform(judge_scores, oracle_labels)
+    calibrator.fit_cv(judge_scores, oracle_labels)
 
     # Create probe sample without judge_score in metadata
     probe_samples = [
@@ -427,7 +427,7 @@ def test_transport_missing_oracle_label_raises() -> None:
     judge_scores = np.linspace(0.3, 0.8, 15)
     oracle_labels = 0.2 + 0.5 * judge_scores + np.random.normal(0, 0.05, 15)
     oracle_labels = np.clip(oracle_labels, 0, 1)
-    calibrator.fit_transform(judge_scores, oracle_labels)
+    calibrator.fit_cv(judge_scores, oracle_labels)
 
     # Create probe sample without oracle_label
     probe_samples = [
@@ -482,7 +482,7 @@ def test_transport_monotone_uses_quantile_binning() -> None:
 
     # Fit monotone calibrator
     calibrator = JudgeCalibrator(calibration_mode="monotone")
-    calibrator.fit_transform(train_scores, train_labels)
+    calibrator.fit_cv(train_scores, train_labels)
 
     # Create probe with same distribution (identical policy)
     n_probe = 200

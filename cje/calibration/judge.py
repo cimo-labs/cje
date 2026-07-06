@@ -3,20 +3,51 @@
 This module calibrates cheap LLM judge scores to oracle labels using
 monotonic regression on a labeled subset. It supports both monotone and
 two-stage calibration, with automatic mode selection when requested.
+
+All modes share ONE cross-fitted implementation (`FlexibleCalibrator`):
+`JudgeCalibrator` handles input parsing, fold assignment, and diagnostics,
+then delegates model fitting and prediction.
 """
 
 import numpy as np
 from typing import Optional, Tuple, Dict, List, Literal, TYPE_CHECKING, Any
-from sklearn.isotonic import IsotonicRegression
-from sklearn.model_selection import KFold
 from dataclasses import dataclass
 import logging
-import hashlib
 
 if TYPE_CHECKING:
     from .flexible_calibrator import FlexibleCalibrator
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_n_folds(n_oracle: int, requested_folds: int) -> int:
+    """Choose the number of calibration CV folds for the available labels.
+
+    Cross-fitted calibration needs at least 2 oracle samples per fold. When
+    fewer than ``2 * requested_folds`` oracle labels are available (but at
+    least 4), reduce the fold count instead of failing outright. Below 4
+    labels the requested count is returned unchanged so that ``fit_cv``'s
+    actionable too-few-labels error fires.
+
+    Args:
+        n_oracle: Number of oracle-labeled samples available for calibration
+        requested_folds: Desired number of CV folds
+
+    Returns:
+        Number of folds to use (possibly reduced)
+    """
+    if n_oracle >= requested_folds * 2 or n_oracle < 4:
+        # Enough labels for the requested folds, or too few to calibrate
+        # at all (let the calibrator raise its actionable error).
+        return requested_folds
+    reduced_folds = max(2, n_oracle // 2)
+    logger.warning(
+        f"Only {n_oracle} oracle-labeled samples available; reducing "
+        f"calibration folds from {requested_folds} to {reduced_folds}. Results "
+        f"will be noisier — provide at least {requested_folds * 2} oracle labels "
+        f"for stable calibration."
+    )
+    return reduced_folds
 
 
 def _index_mask_to_bool(
@@ -125,13 +156,10 @@ class JudgeCalibrator:
         self.covariate_names = covariate_names or []
         # Store selected mode (for auto, this gets updated after selection)
         self.selected_mode: Optional[str] = (
-            None if calibration_mode == "auto" else calibration_mode
+            None if self.calibration_mode == "auto" else self.calibration_mode
         )
-        self._final_calibrator: Optional[IsotonicRegression] = None
-        self._flexible_calibrator: Optional["FlexibleCalibrator"] = (
-            None  # Will hold FlexibleCalibrator if needed
-        )
-        self._fold_models: Dict[int, IsotonicRegression] = {}
+        # The single cross-fitted implementation for every mode
+        self._flexible_calibrator: Optional["FlexibleCalibrator"] = None
         self._fold_ids: Optional[np.ndarray] = None
         self._n_folds: int = 5
         self._prompt_ids: Optional[List[str]] = (
@@ -146,186 +174,8 @@ class JudgeCalibrator:
         self.oracle_s_range: Optional[Tuple[float, float]] = None
         self.oracle_reward_range: Optional[Tuple[float, float]] = None
         # Fit-time quality metrics, exposed via get_calibration_info() for
-        # estimator diagnostics (empty until fit_transform/fit_cv runs).
+        # estimator diagnostics (empty until fit_cv runs).
         self._calibration_info: Dict[str, Any] = {}
-
-    def fit_transform(
-        self,
-        judge_scores: np.ndarray,
-        oracle_labels: Optional[np.ndarray] = None,
-        oracle_mask: Optional[np.ndarray] = None,
-        covariates: Optional[np.ndarray] = None,
-    ) -> CalibrationResult:
-        """Calibrate judge scores using oracle labels.
-
-        Args:
-            judge_scores: Raw judge scores for all data
-            oracle_labels: True labels for oracle subset (if oracle_mask provided)
-            oracle_mask: Boolean mask indicating which samples have oracle labels
-            covariates: Optional covariate matrix (n_samples, n_covariates) for two-stage mode
-
-        Returns:
-            CalibrationResult with calibrated scores and diagnostics
-
-        Example:
-            # With explicit mask
-            calibrator = JudgeCalibrator()
-            result = calibrator.fit_transform(
-                judge_scores=all_scores,
-                oracle_labels=oracle_values,
-                oracle_mask=has_oracle_label
-            )
-
-            # Or with implicit mask (oracle_labels shorter than judge_scores)
-            result = calibrator.fit_transform(
-                judge_scores=all_scores,
-                oracle_labels=oracle_subset_labels
-            )
-        """
-        judge_scores = np.asarray(judge_scores)
-        n_total = len(judge_scores)
-
-        # Handle different input formats
-        if oracle_mask is not None:
-            # Explicit mask provided (can be boolean array or indices)
-            oracle_mask_array = np.asarray(oracle_mask)
-            if oracle_labels is None:
-                raise ValueError("oracle_labels required when oracle_mask provided")
-            oracle_labels = np.asarray(oracle_labels)
-
-            # Check if mask is indices (integers) or boolean
-            if oracle_mask_array.dtype in [np.int32, np.int64, int]:
-                # Convert indices to a boolean mask, reordering labels to the
-                # ascending-index order produced by boolean fancy-indexing.
-                oracle_mask, oracle_labels = _index_mask_to_bool(
-                    oracle_mask_array, oracle_labels, n_total
-                )
-            else:
-                # Already boolean
-                oracle_mask = oracle_mask_array.astype(bool)
-
-            # Extract oracle subset
-            oracle_scores = judge_scores[oracle_mask]
-            oracle_y = oracle_labels
-
-        elif oracle_labels is not None and len(oracle_labels) < n_total:
-            # Oracle labels provided for first n samples
-            n_oracle = len(oracle_labels)
-            oracle_scores = judge_scores[:n_oracle]
-            oracle_y = np.asarray(oracle_labels)
-            oracle_mask = np.zeros(n_total, dtype=bool)
-            oracle_mask[:n_oracle] = True
-
-        elif oracle_labels is not None:
-            # All data has oracle labels (no holdout)
-            oracle_labels = np.asarray(oracle_labels)
-            if len(oracle_labels) != n_total:
-                raise ValueError(
-                    f"oracle_labels length ({len(oracle_labels)}) must match "
-                    f"judge_scores length ({n_total}) or be shorter for partial labeling"
-                )
-            oracle_scores = judge_scores
-            oracle_y = oracle_labels
-            oracle_mask = np.ones(n_total, dtype=bool)
-        else:
-            # No oracle labels provided
-            raise ValueError(
-                "oracle_labels is required for calibration. "
-                "Provide oracle labels for at least a subset of samples."
-            )
-
-        n_oracle = len(oracle_y)
-        self.oracle_coverage = (
-            n_oracle / n_total
-        )  # Store for calibration-uncertainty checks
-
-        if n_oracle < 10:
-            raise ValueError(f"Too few oracle samples ({n_oracle}). Need at least 10.")
-
-        # Initialize calibrated scores
-        calibrated_scores = np.copy(judge_scores)
-
-        # Extract oracle covariates if provided
-        oracle_covariates = None
-        if covariates is not None:
-            if len(covariates) != n_total:
-                raise ValueError(
-                    f"Covariates length ({len(covariates)}) must match judge_scores length ({n_total})"
-                )
-            oracle_covariates = covariates[oracle_mask]
-
-        # Use appropriate calibration based on mode
-        if self.calibration_mode != "monotone":
-            # Use flexible calibrator for auto/two_stage modes
-            from .flexible_calibrator import FlexibleCalibrator
-
-            self._flexible_calibrator = FlexibleCalibrator(
-                mode=self.calibration_mode,
-                random_seed=self.random_seed,
-                covariate_names=self.covariate_names,
-            )
-            # Create simple fold split for flexible calibrator
-            oracle_folds = np.arange(len(oracle_y)) % 5
-            self._flexible_calibrator.fit(
-                oracle_scores, oracle_y, oracle_folds, oracle_covariates
-            )
-
-            # Log selected mode if auto was used
-            if self.calibration_mode == "auto":
-                selected = self._flexible_calibrator.selected_mode
-                self.selected_mode = selected  # Store for metadata
-                logger.info(f"Auto-calibration selected: {selected}")
-
-            # Transform all scores
-            calibrated_scores = np.clip(
-                self._flexible_calibrator.predict(judge_scores, covariates=covariates),
-                0.0,
-                1.0,
-            )
-
-            # Store isotonic for compatibility (if available)
-            if hasattr(self._flexible_calibrator, "iso_reg"):
-                self._final_calibrator = self._flexible_calibrator.iso_reg
-        else:
-            # Standard monotone calibration
-            self._final_calibrator = IsotonicRegression(out_of_bounds="clip")
-            self._final_calibrator.fit(oracle_scores, oracle_y)
-            self._warn_if_constant_monotone_fit(oracle_scores, oracle_y)
-
-            # Apply calibration to all samples using full model
-            # Clip to [0,1] to ensure rewards stay in valid range even if oracle labels exceed bounds
-            calibrated_scores = np.clip(
-                self._final_calibrator.predict(judge_scores), 0.0, 1.0
-            )
-
-        # Compute diagnostics on oracle subset
-        oracle_calibrated = calibrated_scores[oracle_mask]
-        rmse = np.sqrt(np.mean((oracle_calibrated - oracle_y) ** 2))
-        coverage_01 = np.mean(np.abs(oracle_calibrated - oracle_y) <= 0.1)
-
-        # Record the training support for coverage badges (boundary cards)
-        self._store_oracle_ranges(oracle_scores, oracle_calibrated)
-
-        # Log summary
-        logger.info(
-            f"Calibration complete: {n_oracle} oracle samples, "
-            f"RMSE={rmse:.3f}, coverage@0.1={coverage_01:.1%}"
-        )
-
-        self._calibration_info = {
-            "rmse": float(rmse),
-            "coverage_at_01": float(coverage_01),
-            "n_oracle_labels": int(n_oracle),
-        }
-
-        return CalibrationResult(
-            calibrated_scores=calibrated_scores,
-            calibration_rmse=float(rmse),
-            coverage_at_01=float(coverage_01),
-            n_oracle=n_oracle,
-            calibrator=self,
-            fold_ids=self._fold_ids,
-        )
 
     def _store_oracle_ranges(
         self, oracle_scores: np.ndarray, oracle_calibrated: np.ndarray
@@ -356,9 +206,11 @@ class JudgeCalibrator:
         oracle fits a single constant (the oracle mean): every calibrated
         reward becomes identical and all policy differences vanish silently.
         """
-        if self._final_calibrator is None:
+        if self._flexible_calibrator is None:
             return
-        fitted = np.asarray(self._final_calibrator.predict(oracle_scores))
+        fitted = np.asarray(
+            self._flexible_calibrator.predict(np.asarray(oracle_scores), folds=None)
+        )
         if len(np.unique(fitted)) == 1 and len(np.unique(np.asarray(oracle_y))) > 1:
             logger.warning(
                 f"Monotone calibration collapsed to a constant "
@@ -381,27 +233,24 @@ class JudgeCalibrator:
         Returns:
             Calibrated scores
         """
-        if self._flexible_calibrator is not None:
-            # Use flexible calibrator for predictions
-            return np.clip(
-                self._flexible_calibrator.predict(
-                    judge_scores, folds=None, covariates=covariates
-                ),
-                0.0,
-                1.0,
-            )
-
-        if self._final_calibrator is None:
+        if self._flexible_calibrator is None:
             raise RuntimeError("Calibrator must be fitted before prediction")
 
-        if covariates is not None:
+        if (
+            covariates is not None
+            and (self.selected_mode or self.calibration_mode) == "monotone"
+        ):
             raise ValueError(
                 "Covariates provided but calibrator was fitted in monotone mode without covariate support"
             )
 
-        # Predict and clip to [0,1] to ensure rewards stay in valid range
-        result = self._final_calibrator.predict(np.asarray(judge_scores))
-        return np.clip(np.asarray(result), 0.0, 1.0)
+        return np.clip(
+            self._flexible_calibrator.predict(
+                np.asarray(judge_scores), folds=None, covariates=covariates
+            ),
+            0.0,
+            1.0,
+        )
 
     def fit_cv(
         self,
@@ -416,16 +265,19 @@ class JudgeCalibrator:
         """Fit both global and cross-fitted calibration models.
 
         This method:
-        1. Fits a global model f_all on all oracle data (for stable rewards)
-        2. Fits per-fold models f^(-k) for cross-fitted predictions (for DR)
-        3. Assigns fold IDs to all samples (labeled by CV, unlabeled by hash)
+        1. Assigns fold IDs to all samples (canonical hash-based folds)
+        2. Fits per-fold models f^(-k) for cross-fitted predictions
+        3. Fits a global model f_all on all oracle data (for stable rewards)
 
         Args:
             judge_scores: Raw judge scores for all data
             oracle_labels: True labels for oracle subset
             oracle_mask: Boolean mask indicating which samples have oracle labels
-            n_folds: Number of CV folds
-            prompt_ids: Optional prompt IDs for fold assignment
+            n_folds: Number of CV folds (auto-reduced when labels are scarce;
+                see `resolve_n_folds`)
+            prompt_ids: Optional prompt IDs for fold assignment. When None,
+                stable row-index ids are synthesized so every caller shares
+                the canonical hash-fold path.
             covariates: Optional covariate matrix (n_samples, n_covariates)
             quiet: Log fit progress at DEBUG instead of INFO. Used by the
                 per-replicate bootstrap refits, which would otherwise emit
@@ -437,9 +289,8 @@ class JudgeCalibrator:
         fit_log_level = logging.DEBUG if quiet else logging.INFO
         judge_scores = np.asarray(judge_scores)
         n_total = len(judge_scores)
-        self._n_folds = n_folds
 
-        # Handle different input formats (same as fit_transform)
+        # Handle different input formats
         if oracle_mask is not None:
             # Explicit mask provided (can be boolean array or indices)
             oracle_mask_array = np.asarray(oracle_mask)
@@ -487,6 +338,11 @@ class JudgeCalibrator:
             n_oracle / n_total
         )  # Store for calibration-uncertainty checks
 
+        # Auto-reduce the fold count when labels are scarce (4-9 labels);
+        # below 4 the check right after fires with the actionable error.
+        n_folds = resolve_n_folds(n_oracle, n_folds)
+        self._n_folds = n_folds
+
         if n_oracle < n_folds * 2:
             raise ValueError(
                 f"Too few oracle samples ({n_oracle}) for {n_folds}-fold CV. "
@@ -495,47 +351,19 @@ class JudgeCalibrator:
                 f"policies)."
             )
 
-        # Step 1: Assign fold IDs to all samples first (unified approach)
-        if prompt_ids is not None:
-            # Use the unified fold system when prompt_ids are available
-            # ALWAYS use hash-based folds to ensure consistency across all components
-            from ..data.folds import get_folds_for_prompts
+        # Step 1: Assign fold IDs to all samples via the canonical hash-based
+        # fold system. When no prompt_ids are given, synthesize stable
+        # row-index ids so every caller shares the same path.
+        from ..data.folds import get_folds_for_prompts
 
-            self._prompt_ids = prompt_ids
-            # Always use hash-based folds for consistency
-            self._fold_ids = get_folds_for_prompts(
-                prompt_ids, n_folds, self.random_seed
-            )
-        else:
-            # Fallback to old system for backward compatibility
-            self._fold_ids = np.zeros(n_total, dtype=int)
+        if prompt_ids is None:
+            prompt_ids = [f"row_{i}" for i in range(n_total)]
+        self._prompt_ids = prompt_ids
+        self._fold_ids = get_folds_for_prompts(prompt_ids, n_folds, self.random_seed)
 
-            # Labeled samples: assign by KFold
-            oracle_indices = np.where(oracle_mask)[0]
-            kf = KFold(n_splits=n_folds, shuffle=True, random_state=self.random_seed)
-            for fold_id, (_, test_idx) in enumerate(kf.split(oracle_indices)):
-                fold_samples = oracle_indices[test_idx]
-                self._fold_ids[fold_samples] = fold_id
-
-            # Unlabeled samples: assign deterministically by stable hash
-            unlabeled_mask = ~oracle_mask
-            unlabeled_indices = np.where(unlabeled_mask)[0]
-            if len(unlabeled_indices) > 0:
-
-                def _fold_for_idx(i: int, seed: int, n_folds: int) -> int:
-                    """Stable hash-based fold assignment."""
-                    h = hashlib.blake2b(f"{i}-{seed}".encode(), digest_size=2)
-                    return int.from_bytes(h.digest(), "big") % n_folds
-
-                for idx in unlabeled_indices:
-                    self._fold_ids[idx] = _fold_for_idx(
-                        int(idx), self.random_seed, n_folds
-                    )
-
-        # Extract oracle fold IDs for use in flexible calibrator
+        # Extract oracle fold IDs / covariates for the cross-fitted models
         oracle_fold_ids = self._fold_ids[oracle_mask]
 
-        # Extract oracle covariates if provided
         oracle_covariates = None
         if covariates is not None:
             if len(covariates) != n_total:
@@ -544,87 +372,53 @@ class JudgeCalibrator:
                 )
             oracle_covariates = covariates[oracle_mask]
 
-        # Step 2: Fit global model
-        if self.calibration_mode != "monotone":
-            logger.log(fit_log_level, f"Calibration mode: {self.calibration_mode}")
+        # Step 2: Fit the single cross-fitted implementation (per-fold models
+        # plus the full model for inference) for whatever mode was requested.
+        from .flexible_calibrator import FlexibleCalibrator
 
-            # Use flexible calibration
-            from .flexible_calibrator import FlexibleCalibrator
+        logger.log(fit_log_level, f"Calibration mode: {self.calibration_mode}")
+        logger.log(
+            fit_log_level,
+            f"Fitting FlexibleCalibrator with {n_oracle} oracle samples",
+        )
+        self._flexible_calibrator = FlexibleCalibrator(
+            mode=self.calibration_mode,
+            random_seed=self.random_seed,
+            covariate_names=self.covariate_names,
+        )
+        self._flexible_calibrator.fit(
+            oracle_scores, oracle_y, oracle_fold_ids, oracle_covariates
+        )
+        self.selected_mode = self._flexible_calibrator.selected_mode
 
-            # Fit flexible calibrator
+        # Log selected mode if auto was used
+        if self.calibration_mode == "auto":
             logger.log(
-                fit_log_level,
-                f"Fitting FlexibleCalibrator with {n_oracle} oracle samples",
+                fit_log_level, f"Auto-calibration selected: {self.selected_mode}"
             )
-            self._flexible_calibrator = FlexibleCalibrator(
-                mode=self.calibration_mode,
-                random_seed=self.random_seed,
-                covariate_names=self.covariate_names,
-            )
-            self._flexible_calibrator.fit(
-                oracle_scores, oracle_y, oracle_fold_ids, oracle_covariates
-            )
+            if self.selected_mode == "two_stage":
+                logger.log(
+                    fit_log_level,
+                    "  → Non-monotone relationship detected, using flexible calibration",
+                )
+            else:
+                logger.log(
+                    fit_log_level,
+                    "  → Monotone relationship confirmed, using standard calibration",
+                )
 
-            # Log selected mode if auto was used
-            if self.calibration_mode == "auto":
-                selected = self._flexible_calibrator.selected_mode
-                self.selected_mode = selected  # Store for metadata
-                logger.log(fit_log_level, f"Auto-calibration selected: {selected}")
-                if selected == "two_stage":
-                    logger.log(
-                        fit_log_level,
-                        "  → Non-monotone relationship detected, using flexible calibration",
-                    )
-                else:
-                    logger.log(
-                        fit_log_level,
-                        "  → Monotone relationship confirmed, using standard calibration",
-                    )
+        # Get calibrated scores using the full model (no folds for inference)
+        # Clip to [0,1] to ensure rewards stay in valid range
+        calibrated_scores = np.clip(
+            self._flexible_calibrator.predict(
+                judge_scores, folds=None, covariates=covariates
+            ),
+            0.0,
+            1.0,
+        )
 
-            # Get calibrated scores using the full model (no folds for inference)
-            calibrated_scores = np.clip(
-                self._flexible_calibrator.predict(
-                    judge_scores, folds=None, covariates=covariates
-                ),
-                0.0,
-                1.0,
-            )
-        else:
-            logger.log(
-                fit_log_level,
-                "Calibration mode: monotone (standard isotonic regression)",
-            )
-            # Use standard monotone calibration
-            self._final_calibrator = IsotonicRegression(out_of_bounds="clip")
-            self._final_calibrator.fit(oracle_scores, oracle_y)
+        if self.selected_mode == "monotone":
             self._warn_if_constant_monotone_fit(oracle_scores, oracle_y)
-            # Clip to [0,1] to ensure rewards stay in valid range even if oracle labels exceed bounds
-            calibrated_scores = np.clip(
-                self._final_calibrator.predict(judge_scores), 0.0, 1.0
-            )
-
-        # Step 3: Fit per-fold models
-        if self._flexible_calibrator is not None:
-            # Flexible calibrator already has per-fold models fitted
-            self._fold_models = {}  # Will use flexible calibrator for predictions
-        else:
-            # Standard isotonic per-fold models
-            self._fold_models = {}
-            for fold_id in range(n_folds):
-                # Get training indices (all oracle samples NOT in this fold)
-                train_mask = oracle_mask & (self._fold_ids != fold_id)
-                train_scores = judge_scores[train_mask]
-                # Get corresponding oracle labels for training samples
-                oracle_fold_mask = self._fold_ids[oracle_mask] != fold_id
-                train_labels = oracle_y[oracle_fold_mask]
-
-                if len(train_scores) > 0:
-                    fold_model = IsotonicRegression(out_of_bounds="clip")
-                    fold_model.fit(train_scores, train_labels)
-                    self._fold_models[fold_id] = fold_model
-                else:
-                    # Fallback to global model if not enough data
-                    self._fold_models[fold_id] = self._final_calibrator
 
         # Compute diagnostics with both global and OOF predictions
         oracle_calibrated = calibrated_scores[oracle_mask]
@@ -635,39 +429,22 @@ class JudgeCalibrator:
         self._store_oracle_ranges(oracle_scores, oracle_calibrated)
 
         # Compute OOF diagnostics for oracle points
-        oracle_oof = np.empty_like(oracle_y)
-        if self._flexible_calibrator is not None:
-            # Get OOF predictions from flexible calibrator
-            oracle_fold_ids = self._fold_ids[oracle_mask]
-            oracle_oof = np.clip(
-                self._flexible_calibrator.predict(
-                    oracle_scores, oracle_fold_ids, oracle_covariates
-                ),
-                0.0,
-                1.0,
-            )
-        else:
-            # Standard isotonic OOF predictions
-            for fold_id, model in self._fold_models.items():
-                mask = self._fold_ids[oracle_mask] == fold_id
-                if np.any(mask):
-                    # Clip predictions to [0,1]
-                    oracle_oof[mask] = np.clip(
-                        model.predict(oracle_scores[mask]), 0.0, 1.0
-                    )
+        oracle_oof = np.clip(
+            self._flexible_calibrator.predict(
+                oracle_scores, oracle_fold_ids, oracle_covariates
+            ),
+            0.0,
+            1.0,
+        )
 
         rmse_oof = float(np.sqrt(np.mean((oracle_oof - oracle_y) ** 2)))
         coverage_01_oof = float(np.mean(np.abs(oracle_oof - oracle_y) <= 0.1))
 
         # Add information about calibration mode to log message
-        mode_str = ""
-        if self._flexible_calibrator is not None:
-            if self.calibration_mode == "auto":
-                mode_str = f" [{self._flexible_calibrator.selected_mode} via auto]"
-            else:
-                mode_str = f" [{self.calibration_mode}]"
+        if self.calibration_mode == "auto":
+            mode_str = f" [{self.selected_mode} via auto]"
         else:
-            mode_str = " [monotone]"
+            mode_str = f" [{self.calibration_mode}]"
 
         logger.log(
             fit_log_level,
@@ -695,45 +472,6 @@ class JudgeCalibrator:
             oof_coverage_at_01=coverage_01_oof,
         )
 
-    def predict_all(self, judge_scores: np.ndarray) -> np.ndarray:
-        """Predict using global model f_all (stable for rewards).
-
-        Args:
-            judge_scores: Judge scores to calibrate
-
-        Returns:
-            Globally calibrated scores
-        """
-        return self.predict(judge_scores)
-
-    def index(
-        self,
-        judge_scores: np.ndarray,
-        folds: Optional[np.ndarray] = None,
-        covariates: Optional[np.ndarray] = None,
-    ) -> np.ndarray:
-        """Get the index used for isotonic regression.
-
-        This returns the appropriate index for outcome modeling:
-        - For monotone calibration: returns judge_scores unchanged
-        - For two-stage calibration: returns the transformed index
-
-        Args:
-            judge_scores: Judge scores to transform
-            folds: Optional fold assignments for OOF transformation
-            covariates: Optional covariate matrix (n_samples, n_covariates)
-
-        Returns:
-            Index values suitable for isotonic regression
-        """
-        if self._flexible_calibrator is not None:
-            return self._flexible_calibrator.index(judge_scores, folds, covariates)
-        else:
-            # Standard monotone calibration uses judge scores directly
-            if covariates is not None:
-                raise ValueError("Covariates not supported in monotone mode")
-            return judge_scores
-
     def get_calibration_info(self) -> Dict[str, Any]:
         """Fit-time calibration quality metrics for estimator diagnostics.
 
@@ -744,18 +482,10 @@ class JudgeCalibrator:
 
         Returns:
             Dict with "rmse", "coverage_at_01" (P(|pred - oracle| <= 0.1)
-            on the oracle slice), "n_oracle_labels", and — after fit_cv —
-            "oof_rmse"/"oof_coverage_at_01". Empty dict before fitting.
+            on the oracle slice), "n_oracle_labels", "oof_rmse", and
+            "oof_coverage_at_01". Empty dict before fitting.
         """
         return dict(self._calibration_info)
-
-    def has_fold_models(self) -> bool:
-        """Check if fold models are available for calibration-aware inference.
-
-        Returns:
-            True if fold models exist, False otherwise
-        """
-        return len(self.get_fold_models_for_oua()) > 0
 
     def get_fold_models_for_oua(self) -> Dict[int, Any]:
         """Get fold models for the oracle jackknife used in calibration-aware inference.
@@ -764,26 +494,14 @@ class JudgeCalibrator:
         the calibration mode (monotone, two_stage, auto) being used.
 
         Returns:
-            Dictionary of fold_id -> model suitable for predict() calls
-            Empty dict if no fold models available
+            Dictionary of fold_id -> model. NOTE: two-stage fold models expect
+            the RANK INDEX, not raw judge scores — route predictions through
+            `predict_oof`, which applies the mode-appropriate transform.
+            Empty dict if no fold models available.
         """
-        # If using FlexibleCalibrator (auto/two_stage modes)
-        if self._flexible_calibrator is not None:
-            # Check which mode was actually selected
-            selected_mode = getattr(self._flexible_calibrator, "selected_mode", None)
-
-            if selected_mode == "two_stage":
-                # For two-stage, the isotonic models are in _iso_models
-                models = getattr(self._flexible_calibrator, "_iso_models", {})
-            else:
-                # For monotone (or as fallback), use _monotone_models
-                models = getattr(self._flexible_calibrator, "_monotone_models", {})
-
-            # Ensure we return a dict even if None
-            return models if models is not None else {}
-
-        # Standard isotonic calibration
-        return self._fold_models if self._fold_models is not None else {}
+        if self._flexible_calibrator is None:
+            return {}
+        return self._flexible_calibrator.fold_models()
 
     def predict_oof(
         self,
@@ -793,6 +511,10 @@ class JudgeCalibrator:
     ) -> np.ndarray:
         """Out-of-fold predictions using cross-fitted models.
 
+        This is the single OOF entry point: it applies the mode-appropriate
+        transform (isotonic for monotone; g(S) -> ECDF rank -> isotonic for
+        two-stage) using the per-fold models fitted by `fit_cv`.
+
         Args:
             judge_scores: Judge scores to calibrate
             fold_ids: Fold assignment for each score
@@ -800,19 +522,20 @@ class JudgeCalibrator:
 
         Returns:
             Cross-fitted calibrated scores
-        """
-        if self._flexible_calibrator is not None:
-            # Use flexible calibrator for OOF predictions
-            return np.clip(
-                self._flexible_calibrator.predict(judge_scores, fold_ids, covariates),
-                0.0,
-                1.0,
-            )
 
-        if not self._fold_models:
+        Raises:
+            RuntimeError: If `fit_cv` has not been called.
+            ValueError: If `fold_ids` contains folds with no fitted model
+                (zero-filling or silently substituting the full model would
+                fabricate reward predictions).
+        """
+        if self._flexible_calibrator is None:
             raise RuntimeError("Must call fit_cv before predict_oof")
 
-        if covariates is not None:
+        if (
+            covariates is not None
+            and (self.selected_mode or self.calibration_mode) == "monotone"
+        ):
             raise ValueError(
                 "Covariates provided but calibrator was fitted in monotone mode without covariate support"
             )
@@ -820,12 +543,11 @@ class JudgeCalibrator:
         judge_scores = np.asarray(judge_scores)
         fold_ids = np.asarray(fold_ids)
 
-        # Fold ids without a fitted model must fail loudly: zero-filling them
-        # would silently fabricate reward predictions of 0.0.
-        fitted_folds = sorted(self._fold_models.keys())
-        unknown_folds = [
-            int(f) for f in np.unique(fold_ids) if f not in self._fold_models
-        ]
+        # Fold ids without a fitted model must fail loudly: falling back to
+        # the full model would silently break the out-of-fold contract.
+        fitted_models = self.get_fold_models_for_oua()
+        fitted_folds = sorted(fitted_models.keys())
+        unknown_folds = [int(f) for f in np.unique(fold_ids) if f not in fitted_models]
         if unknown_folds:
             raise ValueError(
                 f"predict_oof received fold ids {unknown_folds} with no fitted "
@@ -833,50 +555,8 @@ class JudgeCalibrator:
                 f"those used in fit_cv."
             )
 
-        predictions = np.zeros_like(judge_scores)
-        for fold_id, model in self._fold_models.items():
-            fold_mask = fold_ids == fold_id
-            if np.any(fold_mask):
-                # Clip predictions to [0,1] to ensure valid rewards
-                predictions[fold_mask] = np.clip(
-                    model.predict(judge_scores[fold_mask]), 0.0, 1.0
-                )
-
-        return np.clip(predictions, 0.0, 1.0)  # Extra safety clip
-
-
-def calibrate_judge_scores(
-    judge_scores: np.ndarray,
-    oracle_labels: np.ndarray,
-    oracle_mask: Optional[np.ndarray] = None,
-) -> Tuple[np.ndarray, Dict[str, float]]:
-    """Convenience function for judge calibration.
-
-    Args:
-        judge_scores: Raw judge scores for all data
-        oracle_labels: True labels for oracle subset
-        oracle_mask: Optional boolean mask for oracle samples
-
-    Returns:
-        Tuple of (calibrated_scores, diagnostics_dict)
-
-    Example:
-        # Calibrate judge scores with 25% oracle labels
-        cal_scores, stats = calibrate_judge_scores(
-            judge_scores=all_judge_scores,
-            oracle_labels=oracle_subset_labels[:1000]  # First 1000 have labels
+        return np.clip(
+            self._flexible_calibrator.predict(judge_scores, fold_ids, covariates),
+            0.0,
+            1.0,
         )
-
-        print(f"Calibration RMSE: {stats['rmse']:.3f}")
-        print(f"Coverage: {stats['coverage']:.1%}")
-    """
-    calibrator = JudgeCalibrator()
-    result = calibrator.fit_transform(judge_scores, oracle_labels, oracle_mask)
-
-    diagnostics = {
-        "rmse": result.calibration_rmse,
-        "coverage": result.coverage_at_01,
-        "n_oracle": result.n_oracle,
-    }
-
-    return result.calibrated_scores, diagnostics

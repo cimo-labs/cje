@@ -29,7 +29,7 @@ def test_direct_method_skips_oua_at_full_coverage() -> None:
 
     # Create and fit calibrator (100% coverage = all samples have oracle)
     calibrator = JudgeCalibrator(random_seed=42, calibration_mode="monotone")
-    cal_result = calibrator.fit_transform(judge_scores, oracle_labels)
+    cal_result = calibrator.fit_cv(judge_scores, oracle_labels)
 
     # Verify calibrator has oracle_coverage set
     assert calibrator.oracle_coverage is not None
@@ -58,7 +58,7 @@ def test_direct_method_skips_oua_at_full_coverage() -> None:
         target_policies=["policy_a"],
         reward_calibrator=calibrator,
         oua_jackknife=True,  # Enable calibration-aware inference
-        inference_method="analytical",  # Use analytical for speed
+        inference_method="cluster_robust",  # Skip bootstrap for speed
     )
 
     # Add fresh draws using the proper method

@@ -7,7 +7,7 @@ This module implements **reward calibration**: learning the mapping from cheap L
 ## When to Use
 
 - **`calibrate_dataset()`** — you have a `Dataset` with judge scores and a partially-labeled oracle slice and want calibrated rewards plus a reusable calibrator. This is what `analyze_dataset` calls internally.
-- **`JudgeCalibrator`** — you are working with raw numpy arrays or need direct control over fitting (`fit_transform` / `fit_cv`) and prediction (`predict`, `predict_oof`).
+- **`JudgeCalibrator`** — you are working with raw numpy arrays or need direct control over fitting (`fit_cv`) and prediction (`predict`, `predict_oof`).
 - **`FlexibleCalibrator`** — used internally for non-monotone relationships and covariates; you rarely construct it yourself.
 
 ## File Structure
@@ -15,7 +15,7 @@ This module implements **reward calibration**: learning the mapping from cheap L
 ```
 calibration/
 ├── __init__.py             # Public API exports
-├── dataset.py              # calibrate_dataset / calibrate_from_raw_data workflows
+├── dataset.py              # calibrate_dataset workflow
 ├── judge.py                # JudgeCalibrator + CalibrationResult
 └── flexible_calibrator.py  # Two-stage (index → rank → isotonic) calibration
 ```
@@ -111,7 +111,7 @@ print(f"Coverage@0.1: {cal_result.coverage_at_01:.1%}")
 print(cal_result.summary())
 ```
 
-`calibrate_dataset(dataset, judge_field="judge_score", oracle_field="oracle_label", enable_cross_fit=True, n_folds=5, calibration_mode=None, use_response_length=False, covariate_names=None, random_seed=42)` returns `(calibrated_dataset, CalibrationResult)`. When `calibration_mode` is None it defaults to `'two_stage'` with covariates present, `'auto'` for cross-fit without covariates. `calibrate_from_raw_data()` is the same workflow for raw dicts.
+`calibrate_dataset(dataset, judge_field="judge_score", oracle_field="oracle_label", n_folds=5, calibration_mode=None, use_response_length=False, covariate_names=None, random_seed=42)` returns `(calibrated_dataset, CalibrationResult)`. When `calibration_mode` is None it defaults to `'two_stage'` with covariates present, `'auto'` otherwise. Calibration is always cross-fitted; the fold count auto-reduces when labels are scarce (`resolve_n_folds`).
 
 `CalibrationResult` fields: `calibrated_scores`, `calibration_rmse`, `coverage_at_01`, `n_oracle`, `calibrator`, `fold_ids`, `oof_rmse`, `oof_coverage_at_01`.
 
@@ -123,7 +123,7 @@ from cje.calibration import JudgeCalibrator
 calibrator = JudgeCalibrator()  # calibration_mode="auto" by default
 result = calibrator.fit_cv(judge_scores, oracle_labels, oracle_mask, n_folds=5)
 
-rewards = calibrator.predict_all(judge_scores)            # global model
+rewards = calibrator.predict(judge_scores)                # global model
 oof = calibrator.predict_oof(judge_scores, result.fold_ids)  # out-of-fold
 info = calibrator.get_calibration_info()                  # fit-time metrics
 ```

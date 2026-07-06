@@ -310,6 +310,37 @@ class TestValidation:
 
 
 # ============================================================================
+# Fold auto-reduction (resolve_n_folds lives in the calibrator since 0.5.0)
+# ============================================================================
+
+
+def test_eight_labels_reduce_folds_and_return_finite_ci(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """8 labeled of 60 samples: fit_cv auto-reduces the fold count with a
+    warning (instead of raising "Too few oracle samples") and calibrated_mean_ci
+    returns a finite CI."""
+    import logging
+
+    rng = np.random.default_rng(7)
+    scores = rng.uniform(size=60)
+    labels = np.full(60, np.nan)
+    idx = rng.choice(60, size=8, replace=False)
+    labels[idx] = np.clip(scores[idx] + rng.normal(0, 0.1, size=8), 0, 1)
+
+    with caplog.at_level(logging.WARNING):
+        res = calibrated_mean_ci(scores, labels, inference="cluster_robust", seed=42)
+
+    assert np.isfinite(res.estimate)
+    assert np.isfinite(res.ci[0]) and np.isfinite(res.ci[1])
+    assert res.n_oracle == 8
+    assert any(
+        "reducing" in record.message and "calibration folds" in record.message
+        for record in caplog.records
+    )
+
+
+# ============================================================================
 # Boundary diagnostics (coverage badge)
 # ============================================================================
 

@@ -10,14 +10,10 @@ Direct-mode estimation: turn judge-scored fresh draws into per-policy value esti
 
 ```
 estimators/
-├── base_estimator.py   # BaseCJEEstimator (abstract) + oracle_jackknife_variance
 └── direct_method.py    # CalibratedDirectEstimator
 ```
 
-```
-BaseCJEEstimator (abstract)
-└── CalibratedDirectEstimator
-```
+The OUA jackknife recipes it shares with the array API (`oracle_jackknife_variance`, `oracle_jackknife_estimates`, `combine_cluster_and_oracle`) live in `cje.diagnostics.robust_inference`.
 
 ## Common Interface
 
@@ -63,7 +59,7 @@ Fresh draws are auto-discovered from a `fresh_draws_dir` under the canonical `PO
 ### Inference methods (`inference_method` parameter)
 
 - **`"bootstrap"` (default):** cluster bootstrap by prompt with a **calibrator refit per replicate**, applied to the augmented estimate `θ̂_aug = mean(f̂_full(S)) + mean(Y − f̂_oof(S))` (an AIPW-style per-policy residual correction; `use_augmented_estimator=True` by default). Refitting captures the calibration/evaluation covariance that analytic SEs miss — this is what achieves ~95% CI coverage.
-- **`"cluster_robust"`:** CRV1 cluster-robust SE of the plug-in mean (clustered by `prompt_id` for paired comparisons), augmented with the oracle-jackknife variance. Fastest; undercovers when calibration and evaluation are coupled. `"analytical"` is accepted as an alias.
+- **`"cluster_robust"`:** CRV1 cluster-robust SE of the plug-in mean (clustered by `prompt_id` for paired comparisons), augmented with the oracle-jackknife variance. Fastest; undercovers when calibration and evaluation are coupled.
 - **`"auto"`:** uses cluster_robust, switching to bootstrap when there are fewer than 20 prompt clusters or when the calibration data overlaps the evaluation draws (coupling).
 
 ```python
@@ -116,10 +112,6 @@ for policy, card in (result.metadata.get("boundary_cards") or {}).items():
 ### Cross-fitting
 
 Calibration uses k-fold cross-fitting with deterministic fold assignment from the unified fold system in `cje.data.folds` (`hash(prompt_id) % k`), so folds are stable across runs and datasets.
-
-### Custom estimators
-
-Inherit from `BaseCJEEstimator` (`__init__(target_policies, run_diagnostics=True, diagnostic_config=None, reward_calibrator=None, oua_jackknife=True)`) and implement `fit()` and `estimate()`; store per-policy influence functions in `_influence_functions`.
 
 ## Common Issues
 
