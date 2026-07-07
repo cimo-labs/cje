@@ -34,7 +34,7 @@ from .planning import (
     EvaluationPlan,
     CostModel,
     plan_evaluation,
-    _PLANNING_BOOTSTRAP_REPLICATES,
+    _PLANNING_MEASUREMENT_CONFIG,
     _build_measurement_grid,
     _fit_variance_model_from_measurements,
 )
@@ -314,7 +314,7 @@ def simulate_variance_model(
     r2: float,
     n_total: int = 1000,
     oracle_fraction: float = 0.4,
-    n_replicates: int = 5,
+    n_replicates: int = 50,
     seed: int = 42,
     verbose: bool = True,
 ) -> FittedVarianceModel:
@@ -334,7 +334,7 @@ def simulate_variance_model(
             - <0.5: Weak judge (high calibration uncertainty)
         n_total: Simulated dataset size (default 1000).
         oracle_fraction: Fraction with oracle labels (default 0.4).
-        n_replicates: Bootstrap replicates per measurement (default 5).
+        n_replicates: Subsample replicates per measurement (default 50).
         seed: Random seed for reproducibility.
         verbose: Print progress and diagnostics.
 
@@ -437,10 +437,7 @@ def simulate_variance_model(
                 result = analyze_dataset(
                     fresh_draws_data={"synthetic": subsample},
                     verbose=False,
-                    estimator_config={
-                        "inference_method": "bootstrap",
-                        "n_bootstrap": _PLANNING_BOOTSTRAP_REPLICATES,
-                    },
+                    estimator_config=_PLANNING_MEASUREMENT_CONFIG,
                 )
                 if (
                     result.standard_errors is not None
@@ -489,7 +486,7 @@ def simulate_planning(
     cost_model: CostModel,
     n_total: int = 1000,
     oracle_fraction: float = 0.4,
-    n_replicates: int = 5,
+    n_replicates: int = 50,
     m_min: int = 30,
     power: float = 0.8,
     alpha: float = 0.05,
@@ -511,7 +508,7 @@ def simulate_planning(
         cost_model: Cost parameters (surrogate_cost, oracle_cost).
         n_total: Simulated dataset size (default 1000).
         oracle_fraction: Fraction with oracle labels in simulation (default 0.4).
-        n_replicates: Bootstrap replicates per measurement (default 5).
+        n_replicates: Subsample replicates per measurement (default 50).
         m_min: Minimum oracle labels in the plan (forwarded to
             plan_evaluation; default 30, matching plan_evaluation).
         power: Statistical power for MDE calculation (default 0.8).

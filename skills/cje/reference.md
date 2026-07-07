@@ -125,9 +125,12 @@ print(plan.summary())   # n_samples, m_oracle, MDE at 80% power
 ```
 
 `fit_variance_model` needs a real pilot — roughly 200+ prompts with 100+ randomly sampled oracle
-labels (below that it raises "Grid has insufficient variation") — and takes about a minute.
+labels (below that it raises "Grid has insufficient variation") — and runs in seconds since 0.5.1
+(the default `n_replicates=50` gives a stable fit in a few seconds; `n_replicates=150` for an extra-stable fit, ~20s).
 Always pass explicit costs: budget and costs must be in the same units (dollars in ⇒ dollars
-out), and plans floor at `m_min=30` oracle labels regardless of budget.
+out), and plans floor at `m_min=30` oracle labels regardless of budget. Since 0.5.1 the variance
+components come from the analytic cluster-robust + OUA instrument (within ~5% of realized SE on
+the validation grid); budgets planned with pre-0.5.1 versions were ~15-20% inflated at pilot scale.
 
 No pilot data yet? `from cje import simulate_variance_model, correlation_to_r2` — the `r2`
 parameter is the **isotonic R², not the correlation**: call

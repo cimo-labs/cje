@@ -177,7 +177,7 @@ from cje.diagnostics import CostModel, fit_variance_model, plan_evaluation, plan
 base_pilot = load_fresh_draws_auto("responses/pilot", "base")
 variance_model = fit_variance_model(
     base_pilot,
-    n_replicates=150,  # slow, production-grade; the default (5) runs in ~30s
+    n_replicates=150,  # extra-stable fit, ~20s since 0.5.1; the default (50) gives R2~0.85 in a few seconds
     verbose=True,
 )
 
@@ -211,7 +211,7 @@ print(plan_target.total_cost)
 ### Planning caveats (read before trusting the numbers)
 
 - MDE assumes independent policies; paired evals on a shared prompt set typically detect smaller differences (plans are conservative).
-- Variance components are measured from bootstrap SEs, which are conservative at small oracle counts — treat planned budgets as upper bounds.
+- Variance components are measured with the analytic cluster-robust + OUA instrument, which tracked the realized SE of the production estimator within ~5% at every allocation in a pilot-scale validation grid (instrument experiment 2026-07-07, R=400 replicates/cell). Budgets planned with pre-0.5.1 versions used a bootstrap instrument that ran 15-29% hot at pilot-sized label counts — those older budgets were inflated upper bounds; re-running planning on the same pilot will typically return ~15-20% smaller budgets.
 
 ---
 
