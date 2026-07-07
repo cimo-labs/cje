@@ -500,6 +500,29 @@ def _denormalize_results(
     scale_factor = scale.max_val - scale.min_val
     results.standard_errors = results.standard_errors * scale_factor
 
+    # Paired bootstrap replicate matrix: replicates are estimates, so they
+    # get the same affine inverse transform (compare_policies then returns
+    # differences/SEs/CIs on the original scale)
+    if results.bootstrap_samples is not None:
+        results.bootstrap_samples = (
+            results.bootstrap_samples * scale_factor + scale.min_val
+        )
+
+    # Analytic pairwise inference: SEs scale linearly, variances
+    # quadratically (differences are shift-invariant — no min_val offset)
+    pairwise = results.metadata.get("pairwise_inference")
+    if isinstance(pairwise, dict):
+        for pair_entry in pairwise.values():
+            if not isinstance(pair_entry, dict):
+                continue
+            for se_key in ("se", "se_sampling"):
+                se_value = pair_entry.get(se_key)
+                if isinstance(se_value, (int, float)):
+                    pair_entry[se_key] = float(se_value * scale_factor)
+            var_value = pair_entry.get("var_oua_diff")
+            if isinstance(var_value, (int, float)):
+                pair_entry["var_oua_diff"] = float(var_value * scale_factor**2)
+
     # Also denormalize bootstrap CIs if present (metadata mirror AND the
     # typed ci_info record must stay in sync)
     if "bootstrap_ci" in results.metadata:

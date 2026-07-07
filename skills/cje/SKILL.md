@@ -100,7 +100,12 @@ verdict = results.compare_policies(0, 1)             # difference, CI, p-value f
 ```
 
 Use `results.compare_policies(i, j)` and `results.best_policy()` (gate-aware PolicyVerdict) for claims — not eyeballed
-point estimates. Boundary cards per policy are OK / CAUTION / REFUSE-LEVEL.
+point estimates. On the default bootstrap path `compare_policies` does paired inference over the
+bootstrap replicates (`method: "paired_bootstrap"` in the returned dict), so the difference SE
+honestly includes calibrator noise — near-tie pairs come back non-significant instead of
+confidently wrong. Report the `method` key's basis if asked how the p-value was computed. For
+many-pair audits use `results.compare_all_policies(adjust="bh")` (adds Benjamini-Hochberg
+`p_adjusted`/`significant_adjusted`). Boundary cards per policy are OK / CAUTION / REFUSE-LEVEL.
 
 ## One sample: calibrated mean with CI
 
