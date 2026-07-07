@@ -58,6 +58,16 @@ print(results.standard_errors)
 Notes:
 - `bootstrap` + `use_augmented_estimator=True` is the production default.
 
+### Pairwise comparisons
+
+Use `results.compare_policies(i, j)` for any "is A better than B?" claim — never eyeballed
+CI overlap. On the bootstrap path it performs paired inference over the (B × P) replicate
+matrix (`method: "paired_bootstrap"` in the returned dict), so the difference SE includes
+calibrator-refit noise; pre-0.5.1 influence-function difference SEs were anti-conservative
+on near-tie pairs (~90% false significance in the pre-registered benchmark). For many-pair
+sweeps use `results.compare_all_policies(adjust="bh")` (Benjamini-Hochberg-adjusted
+p-values).
+
 ---
 
 ## 2) Run a Transport Audit (Probe Protocol)

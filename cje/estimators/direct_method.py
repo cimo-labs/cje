@@ -655,6 +655,13 @@ class CalibratedDirectEstimator:
         # Store DF info for t-based CIs (computed automatically by EstimationResult.confidence_interval())
         self._store_df_info(result)
 
+        # Store per-pair difference SEs (pairing-aware sampling SE + OUA
+        # variance of the difference) for compare_policies. Uses the
+        # pre-OUA sampling SEs — the OUA term enters per pair as the
+        # jackknife variance of the DIFFERENCE, not per policy.
+        if len(self.target_policies) > 1:
+            self._store_pairwise_inference(result, sampling_ses=standard_errors)
+
         return result
 
     def _apply_oua_jackknife(self, result: EstimationResult) -> None:
@@ -1022,6 +1029,211 @@ class CalibratedDirectEstimator:
             df_per_policy=df_info,
         )
 
+    def _store_pairwise_inference(
+        self, result: EstimationResult, sampling_ses: List[float]
+    ) -> None:
+        """Store per-pair difference inference for the analytic path.
+
+        Writes ``result.metadata["pairwise_inference"]`` with one entry per
+        (i < j) policy pair, keyed ``"i-j"`` in estimate order, that
+        ``EstimationResult.compare_policies`` consumes as its
+        "paired_if_oua" basis. Each entry combines:
+
+        - a sampling SE with an explicit pairing ``basis``:
+          "index_paired" (identical ordered prompt_id lists — per-row IF
+          differences, the pre-0.5.1 SE now justified by verified row
+          alignment), "prompt_paired" (same prompts as multisets but
+          different order — IFs aggregated per prompt_id, paired per
+          prompt), or "independent" (partial/no prompt overlap —
+          independent combination of the per-policy sampling SEs);
+        - the oracle-jackknife variance of the DIFFERENCE,
+          Var_jk(jack_i - jack_j), from the cached per-policy
+          leave-one-fold estimate vectors (shared fold order across
+          policies), so shared-calibrator error cancels where it should
+          (F̂_i ≈ F̂_j on near-tie pairs makes this term ≈ 0 — the
+          analytic near-tie no-op is correct, unlike the bootstrap path's
+          residual-correction noise);
+
+        as se = sqrt(se_sampling² + var_oua_diff) with
+        df = max(min(df_pairs, K - 1), 1) via combine_cluster_and_oracle.
+
+        Args:
+            result: Assembled result (post-OUA standard errors).
+            sampling_ses: PRE-OUA per-policy sampling SEs in
+                target_policies order (the OUA component enters per pair
+                via the jackknife difference variance, never double-counted
+                from the per-policy SEs).
+        """
+        policies = self.target_policies
+        if len(policies) < 2:
+            return
+
+        # Per-policy jackknife vectors (None disables the pair's OUA term),
+        # mirroring the OUA skip conditions in _apply_oua_jackknife.
+        jack_by_policy: Dict[str, Optional[np.ndarray]] = {p: None for p in policies}
+        if self.oua_jackknife and self.reward_calibrator is not None:
+            include_oua = True
+            try:
+                coverage = self._oracle_coverage_for_oua()
+                if coverage is not None and coverage >= 1.0:
+                    include_oua = False
+            except Exception:
+                pass  # Match _apply_oua_jackknife: proceed on coverage errors
+            if include_oua:
+                for policy in policies:
+                    try:
+                        jack_by_policy[policy] = self.get_oracle_jackknife(policy)
+                    except Exception as e:
+                        logger.debug(
+                            f"Pairwise OUA: oracle jackknife failed for "
+                            f"'{policy}': {e}"
+                        )
+
+        pairwise: Dict[str, Dict[str, Any]] = {}
+        for i in range(len(policies)):
+            for j in range(i + 1, len(policies)):
+                try:
+                    entry = self._pairwise_entry(
+                        result, i, j, sampling_ses, jack_by_policy
+                    )
+                except Exception as e:
+                    logger.debug(f"Pairwise inference failed for pair {i}-{j}: {e}")
+                    entry = None
+                if entry is not None:
+                    pairwise[f"{i}-{j}"] = entry
+
+        if pairwise and isinstance(result.metadata, dict):
+            result.metadata["pairwise_inference"] = pairwise
+
+    def _pairwise_entry(
+        self,
+        result: EstimationResult,
+        i: int,
+        j: int,
+        sampling_ses: List[float],
+        jack_by_policy: Dict[str, Optional[np.ndarray]],
+    ) -> Optional[Dict[str, Any]]:
+        """Build one JSON-safe metadata["pairwise_inference"] entry.
+
+        Returns None when the pair cannot support difference inference
+        (NaN estimates, missing data, or a degenerate SE) — the pair is
+        then simply absent and compare_policies falls through to its
+        legacy basis.
+        """
+        policies = self.target_policies
+        p1, p2 = policies[i], policies[j]
+        if i >= len(result.estimates) or j >= len(result.estimates):
+            return None
+        if np.isnan(result.estimates[i]) or np.isnan(result.estimates[j]):
+            return None
+        pd1 = self._policy_data.get(p1)
+        pd2 = self._policy_data.get(p2)
+        if pd1 is None or pd2 is None:
+            return None
+
+        if1 = np.asarray(pd1.calibrated_rewards, dtype=float) - float(
+            result.estimates[i]
+        )
+        if2 = np.asarray(pd2.calibrated_rewards, dtype=float) - float(
+            result.estimates[j]
+        )
+
+        # Sampling SE with explicit pairing basis
+        basis: str
+        se_sampling: float
+        df_pairs: int
+        n_pairs: int
+        if pd1.prompt_ids == pd2.prompt_ids and len(if1) >= 2:
+            # Rows align one-to-one: per-row IF differences
+            diff_if = if1 - if2
+            se_sampling = float(np.std(diff_if, ddof=1) / np.sqrt(len(diff_if)))
+            df_pairs = len(diff_if) - 1
+            n_pairs = len(diff_if)
+            basis = "index_paired"
+        else:
+            from collections import Counter
+
+            same_prompts = Counter(pd1.prompt_ids) == Counter(pd2.prompt_ids)
+            unique_prompts = sorted(set(pd1.prompt_ids))
+            if same_prompts and len(unique_prompts) >= 2:
+                # Same prompts, different order or repeated draws:
+                # aggregate IFs per prompt, pair per prompt
+                means1 = self._per_prompt_means(if1, pd1.prompt_ids)
+                means2 = self._per_prompt_means(if2, pd2.prompt_ids)
+                diffs = np.array(
+                    [means1[pid] - means2[pid] for pid in unique_prompts],
+                    dtype=float,
+                )
+                se_sampling = float(np.std(diffs, ddof=1) / np.sqrt(len(diffs)))
+                df_pairs = len(diffs) - 1
+                n_pairs = len(diffs)
+                basis = "prompt_paired"
+            else:
+                # Partial or no prompt overlap: independent combination of
+                # the per-policy (pre-OUA) sampling SEs
+                se1 = float(sampling_ses[i])
+                se2 = float(sampling_ses[j])
+                if not (np.isfinite(se1) and np.isfinite(se2)):
+                    return None
+                se_sampling = float(np.sqrt(se1**2 + se2**2))
+                df_cluster_map: Dict[str, int] = getattr(self, "_df_cluster", {})
+                df1 = int(df_cluster_map.get(p1, max(len(if1) - 1, 1)))
+                df2 = int(df_cluster_map.get(p2, max(len(if2) - 1, 1)))
+                df_pairs = max(min(df1, df2), 1)
+                n_pairs = 0
+                basis = "independent"
+
+        # Oracle-uncertainty component: jackknife variance of the
+        # DIFFERENCE of the per-policy leave-one-fold estimate vectors
+        # (fold order is shared — both come from the same calibrator's
+        # fold models via get_oracle_jackknife)
+        jack1 = jack_by_policy.get(p1)
+        jack2 = jack_by_policy.get(p2)
+        var_oua_diff = 0.0
+        n_folds = 0
+        if (
+            jack1 is not None
+            and jack2 is not None
+            and len(jack1) == len(jack2)
+            and len(jack1) >= 2
+        ):
+            var_oua_diff = float(
+                oracle_jackknife_variance(
+                    np.asarray(jack1, dtype=float) - np.asarray(jack2, dtype=float)
+                )
+            )
+            n_folds = len(jack1)
+
+        se_total, df_final = combine_cluster_and_oracle(
+            se_sampling, df_pairs, var_oua_diff, n_folds
+        )
+        if not np.isfinite(se_total) or se_total <= 0:
+            return None
+
+        return {
+            "policy1": p1,
+            "policy2": p2,
+            "se": float(se_total),
+            "df": int(df_final),
+            "basis": basis,
+            "se_sampling": float(se_sampling),
+            "var_oua_diff": float(var_oua_diff),
+            "n_pairs": int(n_pairs),
+            "oua_folds": int(n_folds),
+        }
+
+    @staticmethod
+    def _per_prompt_means(
+        values: np.ndarray, prompt_ids: List[str]
+    ) -> Dict[str, float]:
+        """Mean of `values` per prompt_id (for prompt-paired difference SEs)."""
+        sums: Dict[str, float] = {}
+        counts: Dict[str, int] = {}
+        for value, pid in zip(values, prompt_ids):
+            sums[pid] = sums.get(pid, 0.0) + float(value)
+            counts[pid] = counts.get(pid, 0) + 1
+        return {pid: sums[pid] / counts[pid] for pid in sums}
+
     def _estimate_with_bootstrap(self, bootstrap_reason: str) -> EstimationResult:
         """Compute estimates using cluster bootstrap with calibrator refit.
 
@@ -1183,6 +1395,18 @@ class CalibratedDirectEstimator:
             method=f"{self._method_name}_bootstrap",
             extra_metadata=extra_metadata,
         )
+
+        # Attach the paired (B, P) replicate matrix — one joint cluster
+        # resample + calibrator refit per row — so compare_policies can do
+        # honest paired difference inference (its "paired_bootstrap" path).
+        # Attach-only: the per-policy estimates/SEs/CIs above are untouched.
+        # Columns follow eval_table.policy_names == self.target_policies
+        # (the same ordering assumption the estimates above already rely on).
+        bootstrap_matrix = np.asarray(bootstrap_result["bootstrap_matrix"], dtype=float)
+        if bootstrap_matrix.ndim == 2 and bootstrap_matrix.shape[1] == len(
+            self.target_policies
+        ):
+            result.bootstrap_samples = bootstrap_matrix
 
         # Log summary with SE-based CIs (not bootstrap percentile CIs)
         from scipy import stats

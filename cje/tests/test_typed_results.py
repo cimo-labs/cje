@@ -9,7 +9,9 @@ serialized source of truth and keep being written):
 - summary() compact text report
 - ci_info typed CI record + the D9 alpha-mismatch warning (both the ci_info
   path and the legacy metadata-sniffing path)
-- compare_policies (deterministic influence-function z-test)
+- compare_policies (0.5.1 four-path dispatch: paired_bootstrap >
+  paired_if_oua > paired_if_legacy > independent_conservative) and
+  compare_all_policies (+ Benjamini-Hochberg adjustment)
 """
 
 import logging
@@ -38,6 +40,7 @@ def _make_result(
     influence_functions: Optional[Dict[str, np.ndarray]] = None,
     metadata_extra: Optional[Dict[str, Any]] = None,
     ci_info: Optional[CIInfo] = None,
+    bootstrap_samples: Optional[np.ndarray] = None,
 ) -> EstimationResult:
     metadata: Dict[str, Any] = {"target_policies": policies}
     if gates is not None:
@@ -55,6 +58,7 @@ def _make_result(
         diagnostics=None,
         metadata=metadata,
         ci_info=ci_info,
+        bootstrap_samples=bootstrap_samples,
     )
 
 
@@ -375,9 +379,526 @@ class TestComparePolicies:
         assert comparison["p_value"] == pytest.approx(expected_p)
         assert comparison["significant"] == (expected_p < 0.05)
         assert comparison["used_influence"] is True
+        assert comparison["method"] == "paired_if_legacy"
 
     def test_falls_back_to_conservative_se_without_ifs(self) -> None:
         result = _make_result([0.7, 0.6], ["a", "b"], standard_errors=[0.05, 0.04])
         comparison = result.compare_policies(0, 1)
         assert comparison["se_difference"] == pytest.approx(np.sqrt(0.05**2 + 0.04**2))
         assert comparison["used_influence"] is False
+        assert comparison["method"] == "independent_conservative"
+
+
+# ---------------------------------------------------------------------------
+# compare_policies: paired bootstrap path (0.5.1)
+# ---------------------------------------------------------------------------
+
+
+def _paired_matrix(deltas: np.ndarray, base: float = 0.5) -> np.ndarray:
+    """(B, 2) replicate matrix whose column-0 minus column-1 equals deltas."""
+    return np.column_stack([base + deltas, np.full(len(deltas), base)])
+
+
+class TestComparePoliciesPairedBootstrap:
+    def test_paired_bootstrap_deterministic_hand_computed(self) -> None:
+        """Fixed 200x2 matrix with closed-form std / percentiles / sign counts."""
+        deltas = np.linspace(-0.5, 1.5, 200)
+        result = _make_result(
+            [0.72, 0.60], ["a", "b"], bootstrap_samples=_paired_matrix(deltas)
+        )
+        comparison = result.compare_policies(0, 1)
+
+        assert comparison["method"] == "paired_bootstrap"
+        # difference stays the point-estimate difference, NOT the delta mean (0.5)
+        assert comparison["difference"] == pytest.approx(0.12)
+        # sample std of a linspace: h * sqrt(n(n+1)/12) with h = 2/199
+        expected_se = (2 / 199) * np.sqrt(200 * 201 / 12)
+        assert comparison["se_difference"] == pytest.approx(expected_se)
+        # linear-interpolation percentiles land exactly on the grid:
+        # 2.5%: position 0.025*199 = 4.975 -> deltas[4] + 0.975*h = -0.45
+        # 97.5%: position 194.025 -> deltas[194] + 0.025*h = 1.45
+        assert comparison["ci_lower"] == pytest.approx(-0.45)
+        assert comparison["ci_upper"] == pytest.approx(1.45)
+        # 50 deltas <= 0 (k <= 49.75), 150 >= 0, no exact zeros:
+        # p = min(1, 2*min(1+50, 1+150)/201) = 102/201
+        assert comparison["p_value"] == pytest.approx(102 / 201)
+        assert comparison["significant"] is False
+        assert comparison["z_score"] == pytest.approx(0.12 / expected_se)
+        assert comparison["n_replicates"] == 200
+        assert comparison["alpha"] == pytest.approx(0.05)
+        assert comparison["used_influence"] is False
+
+    def test_p_value_floor_is_2_over_b_plus_1(self) -> None:
+        deltas = np.linspace(0.01, 0.02, 150)  # every delta positive
+        result = _make_result(
+            [0.7, 0.6], ["a", "b"], bootstrap_samples=_paired_matrix(deltas)
+        )
+        comparison = result.compare_policies(0, 1)
+        assert comparison["p_value"] == pytest.approx(2 / 151)
+        assert comparison["significant"] is True
+
+    def test_nan_replicates_are_filtered(self) -> None:
+        deltas = np.concatenate([np.linspace(-0.1, 0.3, 150), np.full(60, np.nan)])
+        result = _make_result(
+            [0.7, 0.6], ["a", "b"], bootstrap_samples=_paired_matrix(deltas)
+        )
+        comparison = result.compare_policies(0, 1)
+        assert comparison["method"] == "paired_bootstrap"
+        assert comparison["n_replicates"] == 150
+
+    def test_reversed_indices_flip_sign_only(self) -> None:
+        deltas = np.linspace(-0.1, 0.3, 200)
+        result = _make_result(
+            [0.7, 0.6], ["a", "b"], bootstrap_samples=_paired_matrix(deltas)
+        )
+        c01 = result.compare_policies(0, 1)
+        c10 = result.compare_policies(1, 0)
+        assert c10["difference"] == pytest.approx(-c01["difference"])
+        assert c10["se_difference"] == pytest.approx(c01["se_difference"])
+        assert c10["p_value"] == pytest.approx(c01["p_value"])
+        assert c10["ci_lower"] == pytest.approx(-c01["ci_upper"])
+        assert c10["ci_upper"] == pytest.approx(-c01["ci_lower"])
+
+    def test_under_100_deltas_warns_and_falls_through(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # 50 replicates: strongly one-sided, would be "significant" if used —
+        # but below the floor the bootstrap path must decline and fall
+        # through to the legacy IF basis, with a warning.
+        deltas = np.linspace(0.01, 0.02, 50)
+        if_a = np.array([0.1, -0.1, 0.2, -0.2, 0.0])
+        if_b = np.array([0.05, -0.05, 0.1, -0.1, 0.0])
+        result = _make_result(
+            [0.7, 0.6],
+            ["a", "b"],
+            influence_functions={"a": if_a, "b": if_b},
+            bootstrap_samples=_paired_matrix(deltas),
+        )
+        with caplog.at_level(logging.WARNING):
+            comparison = result.compare_policies(0, 1)
+        assert any("50 valid paired bootstrap" in r.message for r in caplog.records)
+        assert comparison["method"] == "paired_if_legacy"
+
+    def test_near_tie_with_shared_noise_is_not_significant(self) -> None:
+        """The ADJUDICATION defect scenario, in miniature.
+
+        Two near-tie policies whose bootstrap replicates share calibrator
+        noise (per-replicate deltas are tiny), plus per-sample influence
+        functions whose z-test SE carries none of that replicate noise.
+        The legacy IF basis declares a confident difference (36-47%
+        wrong-sign in the pre-registered experiment); the paired bootstrap
+        basis correctly declines to call it.
+        """
+        rng = np.random.default_rng(7)
+        n_reps = 500
+        shared = rng.normal(0.0, 0.05, n_reps)  # calibrator noise, common
+        idio_a = rng.normal(0.0, 0.002, n_reps)
+        idio_b = rng.normal(0.0, 0.002, n_reps)
+        offset = 0.0005  # tiny true gap
+        matrix = np.column_stack(
+            [0.70 + offset + shared + idio_a, 0.70 + shared + idio_b]
+        )
+        # IFs engineered so the legacy z-test is confidently wrong: paired
+        # IF differences with std ~0.001 over 400 samples -> SE ~5e-5
+        base_if = rng.normal(0.0, 0.5, 400)
+        if_a = base_if
+        if_b = base_if - rng.normal(0.0, 0.001, 400)
+
+        result = _make_result(
+            [0.7005, 0.7000],
+            ["a", "b"],
+            influence_functions={"a": if_a, "b": if_b},
+            bootstrap_samples=matrix,
+        )
+
+        paired = result.compare_policies(0, 1)
+        assert paired["method"] == "paired_bootstrap"
+        assert paired["significant"] is False
+        assert paired["p_value"] > 0.05
+        assert paired["ci_lower"] < 0.0 < paired["ci_upper"]
+
+        # Contrast: the pre-0.5.1 basis on the same result is anti-conservative
+        result.bootstrap_samples = None
+        legacy = result.compare_policies(0, 1)
+        assert legacy["method"] == "paired_if_legacy"
+        assert legacy["significant"] is True
+
+
+# ---------------------------------------------------------------------------
+# compare_policies: dispatch precedence (0.5.1)
+# ---------------------------------------------------------------------------
+
+
+class TestComparePoliciesDispatch:
+    def _full_stack_result(self) -> EstimationResult:
+        """Result carrying every inference basis at once."""
+        if_a = np.array([0.1, -0.1, 0.2, -0.2, 0.0])
+        if_b = np.array([0.05, -0.05, 0.1, -0.1, 0.0])
+        deltas = np.linspace(-0.01, 0.05, 150)
+        return _make_result(
+            [0.7, 0.6],
+            ["a", "b"],
+            standard_errors=[0.05, 0.04],
+            influence_functions={"a": if_a, "b": if_b},
+            metadata_extra={
+                "pairwise_inference": {
+                    "0-1": {
+                        "policy1": "a",
+                        "policy2": "b",
+                        "se": 0.02,
+                        "df": 4,
+                        "basis": "index_paired",
+                        "se_sampling": 0.015,
+                        "var_oua_diff": 0.000175,
+                        "n_pairs": 5,
+                        "oua_folds": 5,
+                    }
+                }
+            },
+            bootstrap_samples=_paired_matrix(deltas),
+        )
+
+    def test_bootstrap_beats_pairwise_inference(self) -> None:
+        result = self._full_stack_result()
+        assert result.compare_policies(0, 1)["method"] == "paired_bootstrap"
+
+    def test_pairwise_inference_beats_legacy(self) -> None:
+        result = self._full_stack_result()
+        result.bootstrap_samples = None
+        comparison = result.compare_policies(0, 1)
+        assert comparison["method"] == "paired_if_oua"
+        assert comparison["basis"] == "index_paired"
+        assert comparison["used_influence"] is True
+        # t-based numerics from the stored se/df
+        expected_t = 0.1 / 0.02
+        assert comparison["z_score"] == pytest.approx(expected_t)
+        expected_p = 2 * (1 - stats.t.cdf(abs(expected_t), 4))
+        assert comparison["p_value"] == pytest.approx(expected_p)
+        t_crit = float(stats.t.ppf(0.975, 4))
+        assert comparison["ci_lower"] == pytest.approx(0.1 - t_crit * 0.02)
+        assert comparison["ci_upper"] == pytest.approx(0.1 + t_crit * 0.02)
+        assert comparison["df"] == 4
+
+    def test_pairwise_inference_reversed_pair_shares_entry(self) -> None:
+        result = self._full_stack_result()
+        result.bootstrap_samples = None
+        c01 = result.compare_policies(0, 1)
+        c10 = result.compare_policies(1, 0)
+        assert c10["method"] == "paired_if_oua"
+        assert c10["difference"] == pytest.approx(-c01["difference"])
+        assert c10["se_difference"] == pytest.approx(c01["se_difference"])
+        assert c10["p_value"] == pytest.approx(c01["p_value"])
+
+    def test_legacy_beats_independent(self) -> None:
+        result = self._full_stack_result()
+        result.bootstrap_samples = None
+        result.metadata.pop("pairwise_inference")
+        assert result.compare_policies(0, 1)["method"] == "paired_if_legacy"
+
+    def test_independent_when_nothing_else(self) -> None:
+        result = self._full_stack_result()
+        result.bootstrap_samples = None
+        result.metadata.pop("pairwise_inference")
+        result.influence_functions = None
+        comparison = result.compare_policies(0, 1)
+        assert comparison["method"] == "independent_conservative"
+        assert comparison["se_difference"] == pytest.approx(np.sqrt(0.05**2 + 0.04**2))
+
+    def test_unusable_stored_se_falls_through(self) -> None:
+        result = self._full_stack_result()
+        result.bootstrap_samples = None
+        result.metadata["pairwise_inference"]["0-1"]["se"] = 0.0
+        assert result.compare_policies(0, 1)["method"] == "paired_if_legacy"
+
+
+# ---------------------------------------------------------------------------
+# compare_all_policies + Benjamini-Hochberg
+# ---------------------------------------------------------------------------
+
+
+class TestCompareAllPolicies:
+    def test_all_pairs_carry_names_in_index_order(self) -> None:
+        result = _make_result([0.0, 0.1, 0.2], ["a", "b", "c"])
+        comparisons = result.compare_all_policies()
+        assert [(c["policy1"], c["policy2"]) for c in comparisons] == [
+            ("a", "b"),
+            ("a", "c"),
+            ("b", "c"),
+        ]
+        assert all("p_adjusted" not in c for c in comparisons)
+        assert all("method" in c for c in comparisons)
+
+    def test_bh_adjustment_hand_computed(self) -> None:
+        # 4 policies on the independent path with se_diff = 0.05 for every
+        # pair: per-pair p = 2*(1 - Phi(|diff|/0.05)), hand-checkable.
+        se = 0.05 / np.sqrt(2)
+        result = _make_result(
+            [0.0, 0.01, 0.25, 0.45],
+            ["p0", "p1", "p2", "p3"],
+            standard_errors=[se, se, se, se],
+        )
+        comparisons = result.compare_all_policies(alpha=0.05, adjust="bh")
+        assert len(comparisons) == 6
+        by_pair = {(c["policy1"], c["policy2"]): c for c in comparisons}
+
+        def p_of(diff: float) -> float:
+            return float(2 * (1 - stats.norm.cdf(abs(diff) / 0.05)))
+
+        # Ascending p: (p0,p3) z=9, (p1,p3) z=8.8, (p0,p2) z=5,
+        # (p1,p2) z=4.8, (p2,p3) z=4, (p0,p1) z=0.2.
+        # Hand-computed BH threshold at alpha=0.05, m=6: the largest k with
+        # p_(k) <= k/6*0.05 is k=5 (p_(5)=6.33e-5 <= 0.0417; p_(6)=0.84 > 0.05)
+        # -> reject exactly the 5 smallest.
+        assert by_pair[("p0", "p1")]["significant_adjusted"] is False
+        for pair in [
+            ("p0", "p2"),
+            ("p0", "p3"),
+            ("p1", "p2"),
+            ("p1", "p3"),
+            ("p2", "p3"),
+        ]:
+            assert by_pair[pair]["significant_adjusted"] is True
+
+        # Hand-computed adjusted p-values (p_adj_(k) = min_{l>=k} p_(l)*m/l):
+        assert by_pair[("p0", "p1")]["p_adjusted"] == pytest.approx(p_of(0.01))
+        assert by_pair[("p2", "p3")]["p_adjusted"] == pytest.approx(p_of(0.20) * 6 / 5)
+        assert by_pair[("p1", "p2")]["p_adjusted"] == pytest.approx(p_of(0.24) * 6 / 4)
+        assert by_pair[("p0", "p2")]["p_adjusted"] == pytest.approx(
+            min(p_of(0.25) * 6 / 3, p_of(0.24) * 6 / 4)
+        )
+        # Raw p-values and per-pair significance are untouched
+        assert by_pair[("p0", "p1")]["p_value"] == pytest.approx(p_of(0.01))
+        assert by_pair[("p0", "p1")]["significant"] is False
+
+    def test_invalid_adjust_raises(self) -> None:
+        result = _make_result([0.0, 0.1], ["a", "b"])
+        with pytest.raises(ValueError, match="adjust"):
+            result.compare_all_policies(adjust="bonferroni")
+
+    def test_nan_pair_keeps_nan_adjusted_p(self) -> None:
+        result = _make_result([0.0, float("nan"), 0.2], ["a", "b", "c"])
+        comparisons = result.compare_all_policies(adjust="bh")
+        by_pair = {(c["policy1"], c["policy2"]): c for c in comparisons}
+        assert np.isnan(by_pair[("a", "b")]["p_adjusted"])
+        assert by_pair[("a", "b")]["significant_adjusted"] is False
+        assert np.isfinite(by_pair[("a", "c")]["p_adjusted"])
+
+
+# ---------------------------------------------------------------------------
+# compare_policies end-to-end: bootstrap matrix, analytic pairwise metadata,
+# serialization, denormalization
+# ---------------------------------------------------------------------------
+
+
+def _two_policy_draws(
+    n: int = 50, gap: float = 0.03, scale: float = 1.0, seed: int = 11
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Two policies on shared prompts; judge/oracle span the full [0, scale]
+    range so auto-normalization detects exactly (0, scale)."""
+    rng = np.random.default_rng(seed)
+    out: Dict[str, List[Dict[str, Any]]] = {"a": [], "b": []}
+    for i in range(n):
+        s = i / (n - 1)
+        rec_a: Dict[str, Any] = {"prompt_id": f"p{i:03d}", "judge_score": s * scale}
+        if i % 2 == 0 or i == n - 1:
+            y = min(max(s + float(rng.normal(0.0, 0.03)), 0.0), 1.0)
+            if i == 0:
+                y = 0.0
+            if i == n - 1:
+                y = 1.0
+            rec_a["oracle_label"] = y * scale
+        out["a"].append(rec_a)
+        s_b = min(max(s + gap, 0.0), 1.0)
+        out["b"].append({"prompt_id": f"p{i:03d}", "judge_score": s_b * scale})
+    return out
+
+
+class TestComparePoliciesGateFlags:
+    def test_flagged_policy_annotated_and_warned(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        result = _make_result(
+            [0.7, 0.4],
+            ["a", "b"],
+            gates={
+                "a": {"flagged": False, "refuse_level_claims": False, "reasons": []},
+                "b": {
+                    "flagged": True,
+                    "refuse_level_claims": True,
+                    "reasons": ["transport audit FAIL"],
+                },
+            },
+        )
+        with caplog.at_level(logging.WARNING, logger="cje.data.models"):
+            cmp_ = result.compare_policies(0, 1)
+        assert cmp_["gate_flagged"] == ["b"]
+        assert any("gates discipline" in rec.message for rec in caplog.records)
+
+    def test_unflagged_pair_has_empty_gate_flagged(self) -> None:
+        result = _make_result(
+            [0.7, 0.4],
+            ["a", "b"],
+            gates={
+                "a": {"flagged": False, "refuse_level_claims": False, "reasons": []},
+                "b": {"flagged": False, "refuse_level_claims": False, "reasons": []},
+            },
+        )
+        cmp_ = result.compare_policies(0, 1)
+        assert cmp_["gate_flagged"] == []
+
+    def test_no_gates_metadata_yields_empty_list(self) -> None:
+        result = _make_result([0.7, 0.4], ["a", "b"])
+        assert result.compare_policies(0, 1)["gate_flagged"] == []
+
+
+class TestComparePoliciesEndToEnd:
+    def test_bootstrap_run_attaches_matrix_and_dispatches(self, tmp_path: Any) -> None:
+        result = analyze_dataset(
+            fresh_draws_data=_two_policy_draws(),
+            estimator_config={"n_bootstrap": 120},
+        )
+        assert result.bootstrap_samples is not None
+        n_valid = result.metadata["inference"]["n_bootstrap_valid"]
+        assert result.bootstrap_samples.shape == (n_valid, 2)
+        assert n_valid >= 100
+
+        comparison = result.compare_policies(0, 1)
+        assert comparison["method"] == "paired_bootstrap"
+        assert comparison["n_replicates"] == n_valid
+        assert comparison["difference"] == pytest.approx(
+            float(result.estimates[0] - result.estimates[1])
+        )
+        # p-value can never be exactly 0 at finite B
+        assert comparison["p_value"] >= 2 / (n_valid + 1)
+
+        # Serialization must not crash with the matrix present, and must
+        # not embed the raw matrix
+        as_dict = result.to_dict()
+        assert "bootstrap_samples" not in as_dict
+        assert as_dict["bootstrap_samples_summary"]["n_replicates"] == n_valid
+
+        from cje.utils.export import export_results_json
+
+        out_path = tmp_path / "results.json"
+        export_results_json(result, str(out_path))
+        assert out_path.exists() and out_path.stat().st_size > 0
+
+    def test_analytic_run_stores_pairwise_inference(self) -> None:
+        result = analyze_dataset(
+            fresh_draws_data=_two_policy_draws(),
+            estimator_config={"inference_method": "cluster_robust"},
+        )
+        pairwise = result.metadata["pairwise_inference"]
+        entry = pairwise["0-1"]
+        assert entry["basis"] == "index_paired"  # shared ordered prompt ids
+        assert entry["se"] > 0
+        # additive decomposition: se^2 = se_sampling^2 + var_oua_diff
+        assert entry["se"] ** 2 == pytest.approx(
+            entry["se_sampling"] ** 2 + entry["var_oua_diff"]
+        )
+
+        comparison = result.compare_policies(0, 1)
+        assert comparison["method"] == "paired_if_oua"
+        assert comparison["basis"] == "index_paired"
+        assert comparison["se_difference"] == pytest.approx(entry["se"])
+
+    def test_analytic_prompt_paired_basis_when_order_differs(self) -> None:
+        # Same prompts as multisets, different record order: rows no longer
+        # align one-to-one, so the pair must aggregate per prompt
+        draws = _two_policy_draws()
+        draws["b"] = list(reversed(draws["b"]))
+        result = analyze_dataset(
+            fresh_draws_data=draws,
+            estimator_config={"inference_method": "cluster_robust"},
+        )
+        entry = result.metadata["pairwise_inference"]["0-1"]
+        assert entry["basis"] == "prompt_paired"
+        assert entry["n_pairs"] == 50
+        comparison = result.compare_policies(0, 1)
+        assert comparison["method"] == "paired_if_oua"
+        assert comparison["basis"] == "prompt_paired"
+        assert comparison["used_influence"] is True
+
+    def test_analytic_independent_basis_when_prompts_differ(self) -> None:
+        draws = _two_policy_draws()
+        for rec in draws["b"]:
+            rec["prompt_id"] = "x" + str(rec["prompt_id"])
+        result = analyze_dataset(
+            fresh_draws_data=draws,
+            estimator_config={"inference_method": "cluster_robust"},
+        )
+        entry = result.metadata["pairwise_inference"]["0-1"]
+        assert entry["basis"] == "independent"
+        comparison = result.compare_policies(0, 1)
+        assert comparison["method"] == "paired_if_oua"
+        assert comparison["basis"] == "independent"
+        # independent basis does not exploit influence-function pairing
+        assert comparison["used_influence"] is False
+
+    def test_denormalization_returns_oracle_scale_numbers(self) -> None:
+        """0-100-scale run: compare_policies output is on the oracle scale.
+
+        The scaled inputs are exactly 100x the unit-scale inputs and span
+        the full range, so normalization reproduces the unit-scale pipeline
+        bit-for-bit and every reported quantity must be exactly 100x.
+        """
+        config = {"n_bootstrap": 120}
+        result_unit = analyze_dataset(
+            fresh_draws_data=_two_policy_draws(scale=1.0),
+            estimator_config=dict(config),
+        )
+        result_scaled = analyze_dataset(
+            fresh_draws_data=_two_policy_draws(scale=100.0),
+            estimator_config=dict(config),
+        )
+        oracle_range = result_scaled.metadata["normalization"]["oracle_label"][
+            "original_range"
+        ]
+        assert tuple(oracle_range) == (0.0, 100.0)
+
+        # The replicate matrix itself is denormalized
+        assert result_scaled.bootstrap_samples is not None
+        assert result_unit.bootstrap_samples is not None
+        np.testing.assert_allclose(
+            result_scaled.bootstrap_samples,
+            100.0 * result_unit.bootstrap_samples,
+            rtol=1e-10,
+        )
+
+        c_unit = result_unit.compare_policies(0, 1)
+        c_scaled = result_scaled.compare_policies(0, 1)
+        assert c_scaled["method"] == c_unit["method"] == "paired_bootstrap"
+        for key in ("difference", "se_difference", "ci_lower", "ci_upper"):
+            assert c_scaled[key] == pytest.approx(100.0 * c_unit[key], rel=1e-9)
+        # sign-based p-value is scale-invariant
+        assert c_scaled["p_value"] == pytest.approx(c_unit["p_value"])
+
+    def test_denormalization_scales_pairwise_inference(self) -> None:
+        config = {"inference_method": "cluster_robust"}
+        result_unit = analyze_dataset(
+            fresh_draws_data=_two_policy_draws(scale=1.0),
+            estimator_config=dict(config),
+        )
+        result_scaled = analyze_dataset(
+            fresh_draws_data=_two_policy_draws(scale=100.0),
+            estimator_config=dict(config),
+        )
+        entry_unit = result_unit.metadata["pairwise_inference"]["0-1"]
+        entry_scaled = result_scaled.metadata["pairwise_inference"]["0-1"]
+        assert entry_scaled["se"] == pytest.approx(100.0 * entry_unit["se"], rel=1e-9)
+        assert entry_scaled["se_sampling"] == pytest.approx(
+            100.0 * entry_unit["se_sampling"], rel=1e-9
+        )
+        assert entry_scaled["var_oua_diff"] == pytest.approx(
+            100.0**2 * entry_unit["var_oua_diff"], rel=1e-9
+        )
+        assert entry_scaled["df"] == entry_unit["df"]
+
+        c_scaled = result_scaled.compare_policies(0, 1)
+        c_unit = result_unit.compare_policies(0, 1)
+        assert c_scaled["method"] == "paired_if_oua"
+        assert c_scaled["difference"] == pytest.approx(
+            100.0 * c_unit["difference"], rel=1e-9
+        )
+        # t-statistic and p-value are scale-invariant
+        assert c_scaled["p_value"] == pytest.approx(c_unit["p_value"], rel=1e-9)

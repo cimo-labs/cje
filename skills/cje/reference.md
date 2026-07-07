@@ -53,13 +53,27 @@ fallback), never by this parameter — its only observable effect is which name 
 
 - `.estimates` (np.ndarray, order matches `metadata["target_policies"]`), `.standard_errors`
 - `.ci(alpha=0.05)` → list of `(lo, hi)` per policy; `.confidence_interval()` → `(lo_array, hi_array)`
-- `.compare_policies(i, j, alpha=0.05)` → dict with difference, SE, CI, p-value — use this for pairwise claims
+- `.compare_policies(i, j, alpha=0.05)` → dict with difference, SE, CI, p-value — use this for
+  pairwise claims. The `method` key names the inference basis, best-first: `"paired_bootstrap"`
+  (bootstrap runs: paired inference over the replicate matrix — the difference SE includes
+  calibrator noise, honest on near-tie pairs; sign-test p-value floored at 2/(B+1)),
+  `"paired_if_oua"` (cluster-robust runs: t-test from the stored pairwise SE + oracle-jackknife
+  difference variance), `"paired_if_legacy"` (pre-0.5.1 IF z-test, only for deserialized older
+  results), `"independent_conservative"` (no pairing info). `gate_flagged` lists any policy in
+  the pair with a flagged reliability gate — a difference CI cannot repair a biased input
+  (e.g. after a transport-audit FAIL), so treat such comparisons per the gates discipline
+- `.compare_all_policies(alpha=0.05, adjust=None)` → list of comparison dicts for every (i < j)
+  pair with `policy1`/`policy2` names; `adjust="bh"` adds Benjamini-Hochberg
+  `p_adjusted`/`significant_adjusted` for many-pair audits
+- `.bootstrap_samples` → (B, P) bootstrap replicate matrix on bootstrap runs (columns follow
+  `metadata["target_policies"]`); powers the paired comparisons, omitted from JSON export
 - `.best_policy()` → PolicyVerdict (name, index, estimate, flagged, all_flagged, runner_up); gate-aware — a flagged argmax is demoted to `runner_up` and the best reliable policy wins
 - `.calibrator` → fitted calibrator, reusable in `transport_audit`
 - `.summary()` → compact text report (per-policy estimate + 95% CI + gate flags, best-policy line)
 - `.gates` → `Dict[str, GateResult]` (typed view of `metadata["reliability_gates"]`); `.target_policies`
 - `.metadata` keys: `target_policies`, `reliability_gates` (`{policy: {"flagged": bool, ...}}`),
-  `boundary_cards`, `normalization`, `oracle_sources`, `bootstrap_ci`
+  `boundary_cards`, `normalization`, `oracle_sources`, `bootstrap_ci`, `pairwise_inference`
+  (cluster-robust runs: per-pair difference SE/df with pairing basis)
 - `.diagnostics` (DirectDiagnostics): `overall_status` (GOOD/WARNING/CRITICAL), `status_per_policy`,
   `boundary_cards`, `refuse_level_policies`, `calibration_rmse`, `n_oracle_labels`, `.summary()`
 

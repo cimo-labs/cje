@@ -136,6 +136,19 @@ class EstimationResult(BaseModel):
         description="Influence functions for each policy (when store_influence=True)",
     )
 
+    # Paired bootstrap replicates (written by the bootstrap inference path).
+    # Each row is one joint cluster resample + calibrator refit, so column
+    # differences carry the full paired uncertainty (including calibrator
+    # noise) that per-policy plug-in influence functions miss.
+    bootstrap_samples: Optional[np.ndarray] = Field(
+        default=None,
+        description=(
+            "Bootstrap replicate matrix of shape (B, P); columns follow "
+            "metadata['target_policies']. Used by compare_policies for "
+            "paired difference inference. Omitted from to_dict()/JSON export."
+        ),
+    )
+
     # Quality metrics
     diagnostics: Optional["DirectDiagnostics"] = Field(
         None, description="Diagnostic information (DirectDiagnostics)"
@@ -459,17 +472,222 @@ class EstimationResult(BaseModel):
             lines.append(f"Status: {self.diagnostics.overall_status.value}")
         return "\n".join(lines)
 
-    def compare_policies(
-        self, idx1: int, idx2: int, alpha: float = 0.05
-    ) -> Dict[str, Any]:
-        """Compare two policies using influence functions when available.
+    # Minimum NaN-filtered paired deltas required for the paired-bootstrap
+    # comparison path; below this the percentile CI and sign-test p-value
+    # are too coarse and compare_policies falls through to the next basis.
+    _MIN_PAIRED_BOOTSTRAP_DELTAS = 100
 
-        Note: The difference SE is an influence-function z-test basis
-        (per-sample IF differences, capturing within-prompt covariance),
-        which differs from the headline bootstrap SEs/CIs — small
-        discrepancies between this p-value and CI overlap are expected.
+    def compare_policies(
+        self, policy1_idx: int, policy2_idx: int, alpha: float = 0.05
+    ) -> Dict[str, Any]:
+        """Compare two policies with the most honest difference SE available.
+
+        Dispatches over four inference bases, best-first; the winning basis
+        is reported in the returned ``method`` key:
+
+        1. ``paired_bootstrap`` — when ``bootstrap_samples`` is present with
+           both policies' columns and at least 100 NaN-filtered paired
+           replicate deltas. Each bootstrap replicate is one joint cluster
+           resample plus one calibrator refit, so the per-replicate deltas
+           M[:, i] - M[:, j] carry the full paired uncertainty of the
+           difference — including the calibrator/residual-correction noise
+           that per-policy plug-in influence functions miss (the source of
+           anti-conservative CIs on near-tie pairs). ``difference`` stays
+           the point-estimate difference; ``se_difference`` is the delta
+           standard deviation; ``ci_lower``/``ci_upper`` are percentile
+           bounds; ``p_value`` is an add-one smoothed two-sided sign test,
+           min(1, 2*min(1+#{d<=0}, 1+#{d>=0})/(B+1)), floored at 2/(B+1) —
+           it cannot reach 0 at finite B. Because the p-value (sign test)
+           and the CI (percentile) are different functionals of the same
+           deltas, they may disagree by O(1/B) exactly at the significance
+           boundary.
+        2. ``paired_if_oua`` — when the analytic (cluster-robust) path
+           stored ``metadata["pairwise_inference"]`` for this pair:
+           a t-test using the stored difference SE (pairing-aware sampling
+           SE + oracle-jackknife variance of the difference) and degrees of
+           freedom; the pairing ``basis`` is included in the result.
+        3. ``paired_if_legacy`` — the pre-0.5.1 influence-function z-test
+           (per-sample IF differences), kept byte-identical for
+           deserialized older results that carry influence functions but
+           no bootstrap matrix or pairwise-inference metadata. Its SE
+           contains no calibrator noise — anti-conservative on near-tie
+           pairs.
+        4. ``independent_conservative`` — sqrt(se1^2 + se2^2), ignoring
+           covariance (conservative for positively correlated policies).
+
+        Args:
+            policy1_idx: Index of the first policy (order of
+                ``metadata["target_policies"]``).
+            policy2_idx: Index of the second policy.
+            alpha: Significance level for ``significant`` and (paths 1-2)
+                the returned CI.
+
+        Returns:
+            Dict with ``difference``, ``se_difference``, ``z_score``,
+            ``p_value``, ``significant``, ``used_influence``, ``method``,
+            and ``gate_flagged`` (names among the pair whose reliability
+            gates are flagged — a comparison involving a flagged policy
+            inherits that unreliability, however honest the SE); paths 1-2
+            add ``ci_lower``/``ci_upper``/``alpha`` (plus ``n_replicates``
+            for the bootstrap path and ``df``/``basis`` for the analytic
+            path).
+        """
+        result = self._compare_paired_bootstrap(policy1_idx, policy2_idx, alpha)
+        if result is None:
+            result = self._compare_pairwise_inference(policy1_idx, policy2_idx, alpha)
+        if result is None:
+            result = self._compare_legacy(policy1_idx, policy2_idx, alpha)
+        return self._annotate_gate_flags(result, policy1_idx, policy2_idx)
+
+    def _annotate_gate_flags(
+        self, result: Dict[str, Any], idx1: int, idx2: int
+    ) -> Dict[str, Any]:
+        """Surface reliability-gate refusals on the pair.
+
+        A difference CI cannot repair a biased input: when a policy's
+        estimate is unreliable (flagged gate / refused level claims, e.g.
+        after a failed transport audit), every comparison involving it
+        inherits that unreliability regardless of how honest the
+        difference SE is. Adds ``gate_flagged`` (list of flagged policy
+        names, possibly empty) and warns when non-empty.
+        """
+        flagged: List[str] = []
+        policies = self.target_policies
+        gates = self.gates
+        for idx in (idx1, idx2):
+            if 0 <= idx < len(policies):
+                gate = gates.get(policies[idx])
+                if gate is not None and (gate.flagged or gate.refuse_level_claims):
+                    flagged.append(policies[idx])
+        result["gate_flagged"] = flagged
+        if flagged:
+            logger.warning(
+                "compare_policies: %s flagged by reliability gates — the "
+                "difference estimate inherits that unreliability (a paired "
+                "SE cannot correct a biased point estimate). Treat this "
+                "comparison per the gates discipline.",
+                ", ".join(repr(p) for p in flagged),
+            )
+        return result
+
+    def _compare_paired_bootstrap(
+        self, idx1: int, idx2: int, alpha: float
+    ) -> Optional[Dict[str, Any]]:
+        """Paired difference inference from the bootstrap replicate matrix.
+
+        Returns None (caller falls through to the next basis) when the
+        matrix is absent, either column is missing, or fewer than
+        _MIN_PAIRED_BOOTSTRAP_DELTAS NaN-filtered paired deltas remain.
+        """
+        if self.bootstrap_samples is None:
+            return None
+        matrix = np.asarray(self.bootstrap_samples, dtype=float)
+        if matrix.ndim != 2:
+            return None
+        n_cols = int(matrix.shape[1])
+        if not (0 <= idx1 < n_cols and 0 <= idx2 < n_cols):
+            return None
+
+        deltas = matrix[:, idx1] - matrix[:, idx2]
+        valid = deltas[~np.isnan(deltas)]
+        n_valid = int(valid.size)
+        if n_valid < self._MIN_PAIRED_BOOTSTRAP_DELTAS:
+            logger.warning(
+                f"compare_policies: only {n_valid} valid paired bootstrap "
+                f"deltas (< {self._MIN_PAIRED_BOOTSTRAP_DELTAS}); falling "
+                f"through to the next inference basis."
+            )
+            return None
+
+        difference = float(self.estimates[idx1] - self.estimates[idx2])
+        se_difference = float(np.nanstd(deltas, ddof=1))
+        ci_lower = float(np.nanpercentile(deltas, 100 * alpha / 2))
+        ci_upper = float(np.nanpercentile(deltas, 100 * (1 - alpha / 2)))
+
+        # Add-one smoothed two-sided sign test over the replicate deltas.
+        # Floor is 2/(B+1): a finite bootstrap can never certify p=0.
+        n_nonpos = int(np.sum(valid <= 0.0))
+        n_nonneg = int(np.sum(valid >= 0.0))
+        p_value = min(1.0, 2.0 * min(1 + n_nonpos, 1 + n_nonneg) / (n_valid + 1))
+
+        z_score = difference / se_difference if se_difference > 0 else 0.0
+
+        return {
+            "difference": difference,
+            "se_difference": se_difference,
+            "z_score": float(z_score),
+            "p_value": float(p_value),
+            "significant": bool(p_value < alpha),
+            "ci_lower": ci_lower,
+            "ci_upper": ci_upper,
+            "alpha": float(alpha),
+            "n_replicates": n_valid,
+            "used_influence": False,
+            "method": "paired_bootstrap",
+        }
+
+    def _compare_pairwise_inference(
+        self, idx1: int, idx2: int, alpha: float
+    ) -> Optional[Dict[str, Any]]:
+        """t-based comparison from metadata["pairwise_inference"] (analytic path).
+
+        The estimator stores one entry per unordered pair, keyed "i-j" with
+        i < j in estimate order, carrying the pairing-aware sampling SE
+        combined with the oracle-jackknife variance of the difference.
+        Returns None when the pair is absent or its stored SE is unusable.
+        """
+        if not isinstance(self.metadata, dict):
+            return None
+        pairwise = self.metadata.get("pairwise_inference")
+        if not isinstance(pairwise, dict):
+            return None
+        lo, hi = (idx1, idx2) if idx1 <= idx2 else (idx2, idx1)
+        entry = pairwise.get(f"{lo}-{hi}")
+        if not isinstance(entry, dict):
+            return None
+
+        se_raw = entry.get("se")
+        df_raw = entry.get("df")
+        if not isinstance(se_raw, (int, float)) or not isinstance(df_raw, (int, float)):
+            return None
+        se_difference = float(se_raw)
+        df = max(int(df_raw), 1)
+        if not np.isfinite(se_difference) or se_difference <= 0:
+            return None
+
+        from scipy import stats
+
+        difference = float(self.estimates[idx1] - self.estimates[idx2])
+        t_stat = difference / se_difference
+        p_value = float(2.0 * (1.0 - stats.t.cdf(abs(t_stat), df)))
+        t_crit = float(stats.t.ppf(1 - alpha / 2, df))
+        basis = str(entry.get("basis", "unknown"))
+
+        return {
+            "difference": difference,
+            "se_difference": se_difference,
+            "z_score": float(t_stat),
+            "p_value": p_value,
+            "significant": bool(p_value < alpha),
+            "ci_lower": difference - t_crit * se_difference,
+            "ci_upper": difference + t_crit * se_difference,
+            "alpha": float(alpha),
+            "df": df,
+            "basis": basis,
+            "used_influence": basis != "independent",
+            "method": "paired_if_oua",
+        }
+
+    def _compare_legacy(self, idx1: int, idx2: int, alpha: float) -> Dict[str, Any]:
+        """Pre-0.5.1 comparison: IF z-test when possible, else independent SEs.
+
+        Numerics are byte-identical to the 0.5.0 compare_policies. The
+        ``method`` key distinguishes the paired IF z-test
+        ("paired_if_legacy") from the independent-SE fallback
+        ("independent_conservative").
         """
         diff = self.estimates[idx1] - self.estimates[idx2]
+        used_paired_if = False
 
         # Use influence functions for proper variance estimation
         if self.influence_functions and "target_policies" in self.metadata:
@@ -487,6 +705,7 @@ class EstimationResult(BaseModel):
                     if len(if1) == len(if2):
                         diff_if = if1 - if2
                         se_diff = float(np.std(diff_if, ddof=1) / np.sqrt(len(diff_if)))
+                        used_paired_if = True
                     else:
                         # Fall back to conservative estimate if lengths mismatch
                         se_diff = np.sqrt(
@@ -529,7 +748,66 @@ class EstimationResult(BaseModel):
                     self.standard_errors[idx1] ** 2 + self.standard_errors[idx2] ** 2
                 )
             ),
+            "method": (
+                "paired_if_legacy" if used_paired_if else "independent_conservative"
+            ),
         }
+
+    def compare_all_policies(
+        self, alpha: float = 0.05, adjust: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Compare every (i < j) policy pair via ``compare_policies``.
+
+        Args:
+            alpha: Significance level per comparison (and for
+                ``significant_adjusted`` when ``adjust`` is set).
+            adjust: None (default) for raw per-pair p-values, or "bh" to
+                apply the Benjamini-Hochberg step-up procedure across all
+                pairs, adding ``p_adjusted`` and ``significant_adjusted``
+                to each comparison (FDR control at ``alpha`` for the
+                many-pair audit setting).
+
+        Returns:
+            List of comparison dicts (one per pair, in (i, j) index order),
+            each carrying ``policy1``/``policy2`` names in addition to the
+            ``compare_policies`` keys.
+        """
+        if adjust not in (None, "bh"):
+            raise ValueError(f"adjust must be None or 'bh', got {adjust!r}")
+
+        policies = self.target_policies
+        n = len(self.estimates)
+
+        comparisons: List[Dict[str, Any]] = []
+        for i in range(n):
+            for j in range(i + 1, n):
+                comparison = self.compare_policies(i, j, alpha=alpha)
+                comparison["policy1"] = policies[i] if i < len(policies) else str(i)
+                comparison["policy2"] = policies[j] if j < len(policies) else str(j)
+                comparisons.append(comparison)
+
+        if adjust == "bh":
+            # Benjamini-Hochberg step-up: p_adj_(k) = min_{l >= k} p_(l)*m/l,
+            # clipped at 1, over the finite p-values (NaN p-values — e.g.
+            # pairs with a NaN estimate — keep p_adjusted=NaN, not significant).
+            p_values = [float(c["p_value"]) for c in comparisons]
+            finite = [k for k, p in enumerate(p_values) if np.isfinite(p)]
+            m = len(finite)
+            order = sorted(finite, key=lambda k: p_values[k])
+            running = 1.0
+            adjusted: Dict[int, float] = {}
+            for pos in range(m - 1, -1, -1):
+                k = order[pos]
+                running = min(running, p_values[k] * m / (pos + 1))
+                adjusted[k] = min(1.0, running)
+            for k, comparison in enumerate(comparisons):
+                p_adj = adjusted.get(k, float("nan"))
+                comparison["p_adjusted"] = float(p_adj)
+                comparison["significant_adjusted"] = bool(
+                    np.isfinite(p_adj) and p_adj < alpha
+                )
+
+        return comparisons
 
     def _repr_html_(self) -> str:
         """Rich HTML display for Jupyter notebooks."""
@@ -647,7 +925,12 @@ class EstimationResult(BaseModel):
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for serialization."""
+        """Convert to dictionary for serialization.
+
+        The ``bootstrap_samples`` replicate matrix is intentionally omitted
+        (large, and a 2-D array would break flat JSON serialization); only
+        a small shape summary is recorded when it is present.
+        """
         ci_lower, ci_upper = self.confidence_interval()
 
         result = {
@@ -661,6 +944,15 @@ class EstimationResult(BaseModel):
                 "upper": ci_upper.tolist(),
             },
         }
+
+        # Summary only — the (B, P) matrix itself is not serialized
+        if self.bootstrap_samples is not None:
+            matrix = np.asarray(self.bootstrap_samples)
+            if matrix.ndim == 2:
+                result["bootstrap_samples_summary"] = {
+                    "n_replicates": int(matrix.shape[0]),
+                    "n_policies": int(matrix.shape[1]),
+                }
 
         # Add influence functions if present (convert to lists for JSON)
         if self.influence_functions:

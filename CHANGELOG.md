@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.5.1] - Unreleased
+
+Pairwise-inference fix. Per-policy estimates, standard errors, and CIs are bit-identical
+to 0.5.0 on every path (verified at full float precision on the README quickstart); only
+pairwise comparisons change.
+
+### Fixed
+
+- **`compare_policies` difference CIs were anti-conservative on near-tie pairs (bootstrap
+  path)**. In the pre-registered PPI comparison experiment (multi-policy arm, even
+  allocation), near-tie pairs (true gaps ≤ 0.0127) were declared significant in ~90% of
+  replicates, with 36–47% wrong-sign rates among those calls. Mechanism: the reported
+  estimate is θ̂_aug — whose residual correction is a mean over ~10 oracle labels — but
+  the difference SE came from full-data plug-in influence functions that contain none of
+  that noise. `compare_policies` now performs paired inference over the (B × P) bootstrap
+  replicate matrix that `cluster_bootstrap_direct_with_refit` already computes (one joint
+  cluster resample + one calibrator refit per replicate — genuinely paired) and previously
+  discarded: `se_difference` is the standard deviation of the per-replicate deltas, the CI
+  is their percentile interval, and the p-value is an add-one smoothed two-sided sign test
+  with floor 2/(B+1). Reported as `method: "paired_bootstrap"`. Well-separated pairs are
+  unaffected (0% sign errors, power 1.0 in the same experiment).
+
+### Added
+
+- **`EstimationResult.bootstrap_samples`** — typed (B, P) bootstrap replicate matrix
+  (columns follow `metadata["target_policies"]`), attached by the bootstrap inference
+  path and denormalized to the original score scale. Omitted from `to_dict()`/JSON
+  export (a small shape summary is serialized instead).
+- **`compare_policies` reports its inference basis** in a new `method` key, dispatching
+  best-first: `paired_bootstrap` → `paired_if_oua` → `paired_if_legacy` →
+  `independent_conservative`. The `paired_if_legacy` label is the pre-0.5.1 IF z-test
+  with byte-identical numerics; it now fires only for deserialized pre-0.5.1-style
+  results that carry influence functions but no bootstrap matrix or pairwise-inference
+  metadata.
+- **Analytic-path pairwise inference (consistency addition, not a defect fix)** — the
+  cluster-robust path now stores `metadata["pairwise_inference"]` per pair: a sampling SE
+  with an explicit pairing basis (`index_paired` / `prompt_paired` / `independent`)
+  combined with the oracle-jackknife variance of the *difference*, consumed by
+  `compare_policies` as a t-test (`method: "paired_if_oua"`). On this path a near-tie
+  no-op is the correct behavior: both policies share one calibrator, so calibrator error
+  cancels in the difference when F̂_i ≈ F̂_j — unlike the bootstrap path's per-replicate
+  residual-correction noise, which is real and is now measured.
+- **`compare_all_policies(alpha=0.05, adjust=None)`** — every (i < j) pair via
+  `compare_policies`, each dict carrying `policy1`/`policy2` names; `adjust="bh"` adds
+  Benjamini–Hochberg `p_adjusted`/`significant_adjusted` for many-pair audits.
+
 ## [0.5.0] - 2026-07-06
 
 Consolidation release. One calibrator path, one estimator, one ingestion layer, a flattened
