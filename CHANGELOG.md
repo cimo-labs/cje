@@ -2,9 +2,33 @@
 
 ## [0.5.1] - Unreleased
 
-Pairwise-inference fix. Per-policy estimates, standard errors, and CIs are bit-identical
-to 0.5.0 on every path (verified at full float precision on the README quickstart); only
-pairwise comparisons change.
+Pairwise-inference fix and planning-instrument switch. Per-policy estimates, standard
+errors, and CIs are bit-identical to 0.5.0 on every path (verified at full float
+precision on the README quickstart); only pairwise comparisons and planning outputs
+(`fit_variance_model` / `simulate_variance_model` and the plans built on them) change.
+
+### Changed
+
+- **Planning's internal SE instrument switched from bootstrap to analytic
+  cluster-robust (+ OUA)**. `fit_variance_model` and `simulate_variance_model` measured
+  each grid allocation with `{"inference_method": "bootstrap", "n_bootstrap": 200}`; they
+  now use `{"inference_method": "cluster_robust"}` (the OUA oracle jackknife is applied
+  by `analyze_dataset` by default). A pre-registered instrument experiment (2026-07-07,
+  R=400 replicates/cell on the power-review DGP, MC-SE ~0.04) found the bootstrap
+  instrument runs +17–23% hot at pilot-scale label counts — reported-SE/realized-SE
+  ratios 1.232 at (n=200, m=30), 1.184 at (500, 50), 1.166 at (1000, 100), and 1.090 at
+  (4000, 200) — while cluster_robust+OUA tracks the realized SE of the production
+  estimator within [0.976, 1.045] at every cell (1.022, 1.026, 1.045, 0.976
+  respectively). **Heads-up:** budgets planned at pilot scale will come out roughly
+  15–20% smaller than 0.5.0's for the same pilot — the old budgets were inflated by the
+  hot instrument, not by real variance. The analytic instrument is also ~30x faster per
+  measurement, and because its SE has higher subsample-to-subsample dispersion, the
+  default `n_replicates` rises 5 -> 50 in `fit_variance_model` and
+  `simulate_variance_model` (R² ~0.85 on the bundled arena pilot in a few seconds,
+  vs R² 0.26-0.40 at 5; the old bootstrap instrument at 5 replicates took ~30s and
+  its apparent stability came from the same inflation the switch removes). The separate
+  PAIRED-comparison disclosure (MDE assumes independent policies; paired evals typically
+  detect ~1/√2 smaller differences) is unchanged.
 
 ### Fixed
 

@@ -259,6 +259,47 @@ class TestSimulateGridAndFitterUnification:
         assert model == real_fitter(captured_measurements[0])
 
 
+class TestSimulateMeasurementInstrument:
+    """0.5.1 instrument switch: simulation shares planning's cluster_robust
+    measurement config (the bootstrap instrument ran 17-23% hot at pilot-scale
+    label counts in the 2026-07-07 instrument experiment)."""
+
+    def test_simulate_measurement_uses_cluster_robust_config(self) -> None:
+        import cje.interface.analysis as analysis_module
+        from cje.diagnostics.planning import _PLANNING_MEASUREMENT_CONFIG
+
+        captured_configs: List[Any] = []
+
+        def fake_analyze_dataset(**kwargs: Any) -> Any:
+            captured_configs.append(kwargs.get("estimator_config"))
+            records = next(iter(kwargs["fresh_draws_data"].values()))
+            n_recv = len(records)
+            m_recv = sum(1 for r in records if "oracle_label" in r)
+            se = float(np.sqrt(0.05 / n_recv + 0.02 / max(m_recv, 1)))
+            return SimpleNamespace(standard_errors=[se])
+
+        original = analysis_module.analyze_dataset
+        setattr(analysis_module, "analyze_dataset", fake_analyze_dataset)
+        try:
+            simulate_variance_model(
+                r2=0.7,
+                n_total=1000,
+                oracle_fraction=0.4,
+                n_replicates=1,
+                seed=42,
+                verbose=False,
+            )
+        finally:
+            setattr(analysis_module, "analyze_dataset", original)
+
+        assert len(captured_configs) > 0
+        assert all(
+            cfg == {"inference_method": "cluster_robust"} for cfg in captured_configs
+        )
+        # Shared single source of truth with fit_variance_model's instrument
+        assert _PLANNING_MEASUREMENT_CONFIG == {"inference_method": "cluster_robust"}
+
+
 class TestSimulateVarianceModel:
     """Tests for simulate_variance_model (core primitive).
 

@@ -44,9 +44,13 @@ logger = logging.getLogger(__name__)
 
 
 # Planning fits a variance surface by repeatedly re-running the Direct estimator.
-# A smaller bootstrap keeps this repeated measurement loop tractable while still
-# accounting for calibration-induced uncertainty in the reported SEs.
-_PLANNING_BOOTSTRAP_REPLICATES = 200
+# Each measurement uses the analytic cluster-robust SE (analyze_dataset adds the
+# OUA oracle jackknife by default), which tracked the realized SE of the
+# production estimator within ~5% at every grid allocation in the 2026-07-07
+# instrument experiment (R=400 replicates/cell). The previous bootstrap
+# instrument (n_bootstrap=200) ran 17-23% hot at pilot-scale label counts,
+# inflating fitted variance components and planned budgets.
+_PLANNING_MEASUREMENT_CONFIG: Dict[str, Any] = {"inference_method": "cluster_robust"}
 
 
 @dataclass
@@ -233,7 +237,7 @@ def fit_variance_model(
     fresh_draws: "FreshDrawDataset",
     n_grid: Optional[List[int]] = None,
     oracle_fraction_grid: Optional[List[float]] = None,
-    n_replicates: int = 5,
+    n_replicates: int = 50,
     seed: int = 42,
     verbose: bool = True,
 ) -> FittedVarianceModel:
@@ -244,9 +248,12 @@ def fit_variance_model(
     and σ²_cal components.
 
     Note:
-        Variance components are measured from bootstrap SEs, which are
-        conservative at small oracle counts — treat planned budgets as upper
-        bounds.
+        Variance components are measured from analytic cluster-robust (+ OUA)
+        SEs, validated within ~5% of the realized SE of the production
+        estimator across a pilot-scale grid (instrument experiment 2026-07-07,
+        R=400 replicates/cell). Versions before 0.5.1 used a bootstrap
+        instrument that ran 15-29% hot at pilot-sized oracle counts, so
+        budgets planned with them were inflated.
 
     Args:
         fresh_draws: Pilot data from the base policy where calibration will be
@@ -254,7 +261,10 @@ def fit_variance_model(
         n_grid: Sample sizes to measure (default: auto from pilot size).
         oracle_fraction_grid: Relative oracle-label levels used to build the
             calibration grid (default: [0.15, 0.25, 0.40]).
-        n_replicates: Replicates per grid point for stable SE estimates (default 5).
+        n_replicates: Replicates per grid point for stable SE estimates
+            (default 50; the analytic instrument needs more subsample replicates
+            than the old bootstrap one for a stable NNLS fit — 50 gives R2~0.85
+            on the bundled pilot in a few seconds).
         seed: Random seed for reproducibility.
         verbose: Print progress and diagnostics.
 
@@ -730,21 +740,22 @@ def _measure_variance_direct(
     fresh_draws: "FreshDrawDataset",
     n_prompts: int,
     m_oracle: int,
-    n_replicates: int = 5,
+    n_replicates: int = 50,
     seed: int = 42,
 ) -> Dict[str, Any]:
     """Measure variance using the actual CJE pipeline (analyze_dataset).
 
     Runs analyze_dataset on subsampled data and uses the reported SE² as the
     variance estimate. Planning keeps the same Direct estimator family as the
-    production workflow, but uses a lighter bootstrap internally so the repeated
-    grid scan stays tractable.
+    production workflow, measured with the analytic cluster-robust SE (+ the
+    default OUA jackknife) — near-unbiased for the production estimator's
+    realized SE and fast enough that the repeated grid scan stays tractable.
 
     Args:
         fresh_draws: Full pilot dataset
         n_prompts: Number of prompts to subsample (n)
         m_oracle: Number of oracle-labeled prompts to include (m)
-        n_replicates: Number of subsamples to average (default 5 for stability)
+        n_replicates: Number of subsamples to average (default 50 for a stable NNLS fit)
         seed: Random seed
     """
     from ..interface.analysis import analyze_dataset
@@ -813,10 +824,7 @@ def _measure_variance_direct(
             result = analyze_dataset(
                 fresh_draws_data={policy_name: subsampled_records},
                 verbose=False,
-                estimator_config={
-                    "inference_method": "bootstrap",
-                    "n_bootstrap": _PLANNING_BOOTSTRAP_REPLICATES,
-                },
+                estimator_config=_PLANNING_MEASUREMENT_CONFIG,
             )
 
             if (

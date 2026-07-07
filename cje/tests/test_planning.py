@@ -297,8 +297,10 @@ class TestCostModelUnit:
 class TestEmpiricalVarianceMeasurement:
     """Tests for empirical variance measurement utilities."""
 
-    def test_measure_variance_direct_uses_planning_bootstrap_config(self) -> None:
-        """Planning variance measurement should use the lighter bootstrap config."""
+    def test_measure_variance_direct_uses_cluster_robust_config(self) -> None:
+        """Planning variance measurement uses the analytic cluster_robust
+        instrument (0.5.1 switch: the bootstrap instrument ran 17-23% hot at
+        pilot-scale label counts in the 2026-07-07 instrument experiment)."""
         import cje.diagnostics.planning as planning_module
         import cje.interface.analysis as analysis_module
 
@@ -344,9 +346,14 @@ class TestEmpiricalVarianceMeasurement:
 
         assert result["n_valid_replicates"] == 2
         assert captured_configs == [
-            {"inference_method": "bootstrap", "n_bootstrap": 200},
-            {"inference_method": "bootstrap", "n_bootstrap": 200},
+            {"inference_method": "cluster_robust"},
+            {"inference_method": "cluster_robust"},
         ]
+        # The module-level constant is the single source of truth for the
+        # measurement instrument (shared with simulate_variance_model).
+        assert planning_module._PLANNING_MEASUREMENT_CONFIG == {
+            "inference_method": "cluster_robust"
+        }
 
     def test_measure_variance_direct_basic(self) -> None:
         """Basic test that _measure_variance_direct runs without error."""
