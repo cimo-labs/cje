@@ -10,11 +10,19 @@ from pydantic import BaseModel, Field, field_validator
 
 from .ingest import (
     POLICY_FILE_PATTERNS,
+    canonicalize_record,
+    deduplicate_canonical_records,
     read_aliased_field,
     resolve_policy_file,
-    resolve_prompt_id,
 )
-from .normalization import ScaleInfo, detect_range
+from .normalization import (
+    ScaleDeclaration,
+    ScaleInfo,
+    coerce_scale,
+    detect_range,
+    unit_scale,
+    validate_values_on_scale,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +44,13 @@ class FreshDrawSample(BaseModel):
     draw_idx: int = Field(
         ..., ge=0, description="Draw index for this prompt (0, 1, 2...)"
     )
+    row_id: Optional[str] = Field(
+        default=None, description="Stable source-local row identity"
+    )
+    observation_id: Optional[str] = Field(
+        default=None, description="Optional cross-source response identity"
+    )
+    source_id: Optional[str] = Field(default=None, description="Logical input source")
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description="Additional metadata (e.g., computed covariates)",
@@ -116,7 +131,13 @@ _T = TypeVar("_T")
 
 
 def _parse_fresh_draw_record(
-    data: Dict[str, Any], idx: int, policy: str
+    data: Dict[str, Any],
+    idx: int,
+    policy: str,
+    *,
+    source_id: str,
+    judge_field: str = "judge_score",
+    oracle_field: str = "oracle_label",
 ) -> Dict[str, Any]:
     """Parse one raw fresh-draw record into canonical dict form.
 
@@ -129,42 +150,28 @@ def _parse_fresh_draw_record(
       judge_score is never fabricated - fail clearly;
     - float coercion here so type errors surface with file/line context.
     """
-    prompt_id = resolve_prompt_id(data, idx, policy=policy)
-
-    # Check for judge_score properly - don't use 'or' for numeric fields
-    judge_score = read_aliased_field(data, "judge_score")
-    if judge_score is None:
-        # Never fabricate missing data - fail clearly
-        raise ValueError(
-            f"Missing judge_score for prompt_id={prompt_id}. "
-            f"Fresh draws require judge scores."
-        )
-
-    record: Dict[str, Any] = {
-        "prompt_id": prompt_id,
-        "judge_score": float(judge_score),
-        "response": data.get("response", ""),
-    }
-
-    # Extract oracle_label if present (for calibration)
-    oracle_label = read_aliased_field(data, "oracle_label")
-    if oracle_label is not None:
-        record["oracle_label"] = float(oracle_label)
-
-    if "draw_idx" in data:
-        record["draw_idx"] = data["draw_idx"]
-
-    metadata = data.get("metadata")
-    if isinstance(metadata, dict):
-        record["metadata"] = metadata
-
-    return record
+    if not isinstance(data, dict):
+        raise ValueError(f"expected a mapping, got {type(data).__name__}")
+    if read_aliased_field(data, "prompt_id") is None:
+        raise ValueError("missing required field 'prompt_id'.")
+    annotated = dict(data)
+    annotated.setdefault("_cje_source_id", source_id)
+    annotated.setdefault("_cje_row_id", f"{source_id}:line:{idx + 1}")
+    return canonicalize_record(
+        annotated,
+        idx,
+        source_id=source_id,
+        policy=policy,
+        judge_field=judge_field,
+        oracle_field=oracle_field,
+    )
 
 
 def _load_policy_file_records(
     file_path: Path,
     policy: str,
     parse: Callable[[Dict[str, Any], int], _T],
+    on_invalid: str = "error",
 ) -> List[_T]:
     """Read a per-policy fresh-draws file, applying ``parse`` per record.
 
@@ -184,10 +191,19 @@ def _load_policy_file_records(
             except ValueError as e:
                 # Covers json.JSONDecodeError and pydantic ValidationError
                 # (both subclass ValueError). Add file/line context.
-                raise ValueError(
-                    f"Invalid fresh draw record at {file_path}:{idx + 1} "
-                    f"for policy '{policy}': {e}"
-                ) from e
+                if on_invalid == "error":
+                    raise ValueError(
+                        f"Invalid fresh draw record at {file_path}:{idx + 1} "
+                        f"for policy '{policy}': {e}"
+                    ) from e
+                logger.warning(
+                    "Dropping invalid fresh draw record at %s:%d for policy " "%r: %s",
+                    file_path,
+                    idx + 1,
+                    policy,
+                    e,
+                )
+                continue
             results.append(item)
 
     if not results:
@@ -202,12 +218,14 @@ def load_fresh_draws_auto(
     data_dir: Path,
     policy: str,
     verbose: bool = False,
+    judge_field: str = "judge_score",
+    oracle_field: str = "oracle_label",
 ) -> FreshDrawDataset:
     """
     Load fresh draws for a single policy from a fresh-draws directory.
 
-    The file is located via the canonical POLICY_FILE_PATTERNS (first
-    existing match wins):
+    The file is located via the canonical POLICY_FILE_PATTERNS. More than one
+    matching file for the policy is rejected:
     1. {data_dir}/{policy}_responses.jsonl
     2. {data_dir}/{policy}.jsonl
     3. {data_dir}/responses/{policy}.jsonl
@@ -247,28 +265,41 @@ def load_fresh_draws_auto(
     if verbose:
         logger.info(f"Loading fresh draws from {file_path}")
 
-    def _parse_sample(data: Dict[str, Any], idx: int) -> FreshDrawSample:
-        record = _parse_fresh_draw_record(data, idx, policy)
-        return FreshDrawSample(
-            prompt_id=record["prompt_id"],
-            target_policy=policy,
-            response=record["response"],
-            judge_score=record["judge_score"],
-            oracle_label=record.get("oracle_label"),
-            draw_idx=record.get("draw_idx", 0),
+    def _parse_record(data: Dict[str, Any], idx: int) -> Dict[str, Any]:
+        record = _parse_fresh_draw_record(
+            data,
+            idx,
+            policy,
+            source_id=str(file_path.resolve()),
+            judge_field=judge_field,
+            oracle_field=oracle_field,
         )
+        validate_values_on_scale(
+            np.asarray([record["judge_score"]], dtype=float),
+            unit_scale(),
+            field_name=judge_field,
+        )
+        if record.get("oracle_label") is not None:
+            validate_values_on_scale(
+                np.asarray([record["oracle_label"]], dtype=float),
+                unit_scale(),
+                field_name=oracle_field,
+            )
+        return record
 
-    fresh_samples = _load_policy_file_records(file_path, policy, _parse_sample)
-
-    # Create dataset
-    fresh_dataset = FreshDrawDataset(
-        target_policy=policy,
-        samples=fresh_samples,
+    fresh_records = _load_policy_file_records(file_path, policy, _parse_record)
+    datasets, _ = fresh_draws_from_dict(
+        {policy: fresh_records},
+        auto_normalize=False,
+        judge_field=judge_field,
+        oracle_field=oracle_field,
+        on_invalid="error",
     )
+    fresh_dataset = datasets[policy]
 
     if verbose:
         logger.info(
-            f"Loaded {len(fresh_samples)} fresh draws for {policy} "
+            f"Loaded {len(fresh_dataset.samples)} fresh draws for {policy} "
             f"({len(fresh_dataset.get_prompt_ids())} unique prompts)"
         )
 
@@ -278,6 +309,10 @@ def load_fresh_draws_auto(
 def fresh_draws_data_from_dir(
     data_dir: Path,
     verbose: bool = False,
+    judge_field: str = "judge_score",
+    oracle_field: str = "oracle_label",
+    on_invalid: str = "error",
+    exclude_paths: Optional[List[Path]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Read a fresh-draws directory into raw records grouped by policy.
 
@@ -298,10 +333,15 @@ def fresh_draws_data_from_dir(
         ValueError: If the directory is missing or contains no policy files
     """
     data_dir = Path(data_dir)
+    if on_invalid not in {"error", "drop"}:
+        raise ValueError("on_invalid must be 'error' or 'drop'")
     data: Dict[str, List[Dict[str, Any]]] = {}
+    excluded = {Path(path).resolve() for path in (exclude_paths or [])}
 
-    for policy in discover_policies_from_fresh_draws(data_dir):
-        file_path = resolve_policy_file(data_dir, policy)
+    for policy in discover_policies_from_fresh_draws(
+        data_dir, exclude_paths=list(excluded)
+    ):
+        file_path = resolve_policy_file(data_dir, policy, exclude_paths=list(excluded))
         if file_path is None:
             # Discovery and loading share POLICY_FILE_PATTERNS, so this can
             # only happen if the file disappears between the two calls.
@@ -309,15 +349,26 @@ def fresh_draws_data_from_dir(
                 f"Fresh draw file for discovered policy '{policy}' vanished "
                 f"from {data_dir} while loading."
             )
+        if file_path.resolve() in excluded:
+            continue
         if verbose:
             logger.info(f"Loading fresh draws from {file_path}")
 
         def _parse_record(
             record: Dict[str, Any], idx: int, _policy: str = policy
         ) -> Dict[str, Any]:
-            return _parse_fresh_draw_record(record, idx, _policy)
+            return _parse_fresh_draw_record(
+                record,
+                idx,
+                _policy,
+                source_id=str(file_path.resolve()),
+                judge_field=judge_field,
+                oracle_field=oracle_field,
+            )
 
-        data[policy] = _load_policy_file_records(file_path, policy, _parse_record)
+        data[policy] = _load_policy_file_records(
+            file_path, policy, _parse_record, on_invalid=on_invalid
+        )
 
     return data
 
@@ -332,6 +383,8 @@ class NormalizationInfo:
 
     judge_score_scale: ScaleInfo
     oracle_label_scale: Optional[ScaleInfo]
+    judge_scale_origin: str = "observed"
+    oracle_scale_origin: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for serialization in metadata."""
@@ -342,6 +395,7 @@ class NormalizationInfo:
                     self.judge_score_scale.max_val,
                 ),
                 "is_identity": self.judge_score_scale.is_identity(),
+                "origin": self.judge_scale_origin,
             },
         }
         if self.oracle_label_scale:
@@ -351,6 +405,7 @@ class NormalizationInfo:
                     self.oracle_label_scale.max_val,
                 ),
                 "is_identity": self.oracle_label_scale.is_identity(),
+                "origin": self.oracle_scale_origin or "observed",
             }
         result["results_scale"] = "oracle_original"
         return result
@@ -360,6 +415,11 @@ def fresh_draws_from_dict(
     data: Dict[str, List[Dict[str, Any]]],
     verbose: bool = False,
     auto_normalize: bool = True,
+    judge_field: str = "judge_score",
+    oracle_field: str = "oracle_label",
+    judge_scale: ScaleDeclaration = None,
+    oracle_scale: ScaleDeclaration = None,
+    on_invalid: str = "error",
 ) -> Tuple[Dict[str, FreshDrawDataset], Optional[NormalizationInfo]]:
     """Convert in-memory dict to FreshDrawDataset objects with auto-normalization.
 
@@ -405,14 +465,78 @@ def fresh_draws_from_dict(
     """
     if not data:
         raise ValueError("fresh_draws_data is empty")
+    if on_invalid not in {"error", "drop"}:
+        raise ValueError("on_invalid must be 'error' or 'drop'")
+
+    declared_judge_scale = coerce_scale(judge_scale, field_name="fresh_judge_scale")
+    declared_oracle_scale = coerce_scale(oracle_scale, field_name="fresh_oracle_scale")
+
+    canonical_data: Dict[str, List[Dict[str, Any]]] = {}
+    n_dropped = 0
+    for policy, records in data.items():
+        canonical_records: List[Dict[str, Any]] = []
+        for idx, raw_record in enumerate(records):
+            try:
+                if not isinstance(raw_record, dict):
+                    raise ValueError(
+                        f"expected a mapping, got {type(raw_record).__name__}"
+                    )
+                if read_aliased_field(raw_record, "prompt_id") is None:
+                    raise ValueError("missing required field 'prompt_id'.")
+                canonical_records.append(
+                    canonicalize_record(
+                        raw_record,
+                        idx,
+                        source_id=f"in_memory:{policy}",
+                        policy=str(policy),
+                        judge_field=judge_field,
+                        oracle_field=oracle_field,
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                if on_invalid == "error":
+                    raise ValueError(
+                        f"Invalid fresh draw record {idx} for policy "
+                        f"'{policy}': {exc}"
+                    ) from exc
+                n_dropped += 1
+                logger.warning(
+                    "Dropping invalid fresh draw record %s for policy %r: %s",
+                    idx,
+                    policy,
+                    exc,
+                )
+        if not canonical_records:
+            raise ValueError(
+                f"Policy '{policy}' has no valid fresh-draw records after "
+                f"applying on_invalid='{on_invalid}'. Refusing to remove a "
+                "requested evaluation policy silently."
+            )
+        canonical_data[str(policy)] = canonical_records
+
+    if not canonical_data:
+        raise ValueError("No valid fresh draws data found in any policy")
+
+    flattened = [record for records in canonical_data.values() for record in records]
+    flattened, n_duplicate_rows = deduplicate_canonical_records(
+        flattened, context="fresh-draw"
+    )
+    canonical_data = {}
+    for record in flattened:
+        policy = str(record["target_policy"])
+        canonical_data.setdefault(policy, []).append(record)
+    if n_duplicate_rows:
+        logger.warning(
+            "Deduplicated %d repeated fresh-draw source rows", n_duplicate_rows
+        )
 
     # Collect all judge_scores and oracle_labels across all policies for range detection
     all_judge_scores: List[float] = []
     all_oracle_labels: List[float] = []
 
-    for policy, records in data.items():
+    for policy, records in canonical_data.items():
         for record in records:
-            judge_score = record.get("judge_score")
+            judge_score = record["judge_score"]
             if judge_score is not None:
                 all_judge_scores.append(float(judge_score))
             oracle_label = record.get("oracle_label")
@@ -422,10 +546,13 @@ def fresh_draws_from_dict(
     if not all_judge_scores:
         raise ValueError("No judge_score values found in data")
 
-    # Detect ranges and create scale info
+    # Resolve source scales. Explicit declarations are semantic; observed
+    # min/max inference remains only as a compatibility behavior.
     norm_info: Optional[NormalizationInfo] = None
-    judge_scale: Optional[ScaleInfo] = None
-    oracle_scale: Optional[ScaleInfo] = None
+    resolved_judge_scale: Optional[ScaleInfo] = declared_judge_scale
+    resolved_oracle_scale: Optional[ScaleInfo] = declared_oracle_scale
+    judge_origin = "declared" if declared_judge_scale else "unit_default"
+    oracle_origin = "declared" if declared_oracle_scale else "unit_default"
 
     if auto_normalize:
         # Check if values are already in [0, 1] range
@@ -441,40 +568,86 @@ def fresh_draws_from_dict(
             )
 
         # Only normalize if values are OUTSIDE [0, 1]
-        needs_normalization = not judge_in_unit_interval or not oracle_in_unit_interval
+        if resolved_judge_scale is None:
+            resolved_judge_scale = (
+                unit_scale()
+                if judge_in_unit_interval
+                else detect_range(judge_arr, field_name=judge_field)
+            )
+            judge_origin = "unit_default" if judge_in_unit_interval else "observed"
+        validate_values_on_scale(
+            judge_arr, resolved_judge_scale, field_name=judge_field
+        )
 
-        if needs_normalization:
-            # Detect judge score range
-            judge_scale = detect_range(judge_arr, field_name="judge_score")
-
-            # Detect oracle label range if any oracle labels exist
-            if all_oracle_labels:
-                oracle_scale = detect_range(
-                    np.array(all_oracle_labels), field_name="oracle_label"
+        if all_oracle_labels:
+            oracle_arr = np.array(all_oracle_labels)
+            if resolved_oracle_scale is None:
+                resolved_oracle_scale = (
+                    unit_scale()
+                    if oracle_in_unit_interval
+                    else detect_range(oracle_arr, field_name=oracle_field)
                 )
+                oracle_origin = (
+                    "unit_default" if oracle_in_unit_interval else "observed"
+                )
+            validate_values_on_scale(
+                oracle_arr, resolved_oracle_scale, field_name=oracle_field
+            )
 
+        if (
+            not resolved_judge_scale.is_identity()
+            or (
+                resolved_oracle_scale is not None
+                and not resolved_oracle_scale.is_identity()
+            )
+            or declared_judge_scale is not None
+            or declared_oracle_scale is not None
+        ):
             norm_info = NormalizationInfo(
-                judge_score_scale=judge_scale,
-                oracle_label_scale=oracle_scale,
+                judge_score_scale=resolved_judge_scale,
+                oracle_label_scale=resolved_oracle_scale,
+                judge_scale_origin=judge_origin,
+                oracle_scale_origin=(oracle_origin if all_oracle_labels else None),
             )
             if verbose:
                 logger.info(
-                    f"Auto-normalizing: judge_score [{judge_scale.min_val}, {judge_scale.max_val}] -> [0, 1]"
+                    "Normalizing %s scale [%s, %s] -> [0, 1] (%s)",
+                    judge_field,
+                    resolved_judge_scale.min_val,
+                    resolved_judge_scale.max_val,
+                    judge_origin,
                 )
-                if oracle_scale:
+                if resolved_oracle_scale is not None:
                     logger.info(
-                        f"Auto-normalizing: oracle_label [{oracle_scale.min_val}, {oracle_scale.max_val}] -> [0, 1]"
+                        "Normalizing %s scale [%s, %s] -> [0, 1] (%s)",
+                        oracle_field,
+                        resolved_oracle_scale.min_val,
+                        resolved_oracle_scale.max_val,
+                        oracle_origin,
                     )
+    else:
+        resolved_judge_scale = declared_judge_scale or unit_scale()
+        resolved_oracle_scale = declared_oracle_scale or (
+            unit_scale() if all_oracle_labels else None
+        )
+        validate_values_on_scale(
+            np.asarray(all_judge_scores), unit_scale(), field_name=judge_field
+        )
+        if all_oracle_labels:
+            validate_values_on_scale(
+                np.asarray(all_oracle_labels), unit_scale(), field_name=oracle_field
+            )
 
     result: Dict[str, FreshDrawDataset] = {}
 
-    for policy, records in data.items():
+    for policy, records in canonical_data.items():
         if not records:
             logger.warning(f"Policy '{policy}' has no records, skipping")
             continue
 
         samples: List[FreshDrawSample] = []
         prompt_draw_counts: Dict[str, int] = {}
+        used_draw_indices: Dict[str, set] = {}
 
         for idx, record in enumerate(records):
             # Validate required fields
@@ -495,10 +668,13 @@ def fresh_draws_from_dict(
             normalized_judge = float(judge_score)
             normalized_oracle: Optional[float] = None
 
-            if norm_info and judge_scale is not None:
-                normalized_judge = judge_scale.normalize(float(judge_score))
-                if record.get("oracle_label") is not None and oracle_scale:
-                    normalized_oracle = oracle_scale.normalize(
+            if resolved_judge_scale is not None:
+                normalized_judge = resolved_judge_scale.normalize(float(judge_score))
+                if (
+                    record.get("oracle_label") is not None
+                    and resolved_oracle_scale is not None
+                ):
+                    normalized_oracle = resolved_oracle_scale.normalize(
                         float(record["oracle_label"])
                     )
             elif record.get("oracle_label") is not None:
@@ -507,19 +683,54 @@ def fresh_draws_from_dict(
             # Track draw_idx per prompt
             if prompt_id not in prompt_draw_counts:
                 prompt_draw_counts[prompt_id] = 0
-            draw_idx = record.get("draw_idx", prompt_draw_counts[prompt_id])
+                used_draw_indices[prompt_id] = set()
+            draw_idx = record.get("draw_idx")
+            if draw_idx is None:
+                draw_idx = 0
+                while draw_idx in used_draw_indices[prompt_id]:
+                    draw_idx += 1
+            try:
+                sample = FreshDrawSample(
+                    prompt_id=str(prompt_id),
+                    target_policy=policy,
+                    judge_score=normalized_judge,
+                    oracle_label=normalized_oracle,
+                    response=record.get("response"),
+                    draw_idx=draw_idx,
+                    metadata=record.get("metadata", {}),
+                    row_id=record.get("row_id"),
+                    observation_id=record.get("observation_id"),
+                    source_id=record.get("source_id"),
+                )
+                if sample.draw_idx in used_draw_indices[prompt_id]:
+                    raise ValueError(
+                        f"duplicate draw_idx={sample.draw_idx} for "
+                        f"prompt_id={prompt_id!r}"
+                    )
+            except ValueError as exc:
+                if on_invalid == "error":
+                    raise ValueError(
+                        f"Invalid fresh draw record {idx} for policy "
+                        f"'{policy}': {exc}"
+                    ) from exc
+                n_dropped += 1
+                logger.warning(
+                    "Dropping invalid fresh draw record %s for policy %r: %s",
+                    idx,
+                    policy,
+                    exc,
+                )
+                continue
+            used_draw_indices[prompt_id].add(sample.draw_idx)
             prompt_draw_counts[prompt_id] += 1
-
-            sample = FreshDrawSample(
-                prompt_id=str(prompt_id),
-                target_policy=policy,
-                judge_score=normalized_judge,
-                oracle_label=normalized_oracle,
-                response=record.get("response"),
-                draw_idx=draw_idx,
-                metadata=record.get("metadata", {}),
-            )
             samples.append(sample)
+
+        if not samples:
+            raise ValueError(
+                f"Policy '{policy}' has no valid fresh-draw records after "
+                f"applying on_invalid='{on_invalid}'. Refusing to remove a "
+                "requested evaluation policy silently."
+            )
 
         dataset = FreshDrawDataset(
             target_policy=policy,
@@ -537,27 +748,42 @@ def fresh_draws_from_dict(
 
     if not result:
         raise ValueError("No valid fresh draws data found in any policy")
-
+    if n_dropped:
+        logger.warning("Dropped %d invalid fresh-draw records", n_dropped)
     return result, norm_info
 
 
 # File stems that never denote a policy (auxiliary files living next to
 # per-policy fresh draws).
-_NON_POLICY_STEMS = frozenset(["dataset", "data", "logs"])
+_NON_POLICY_STEMS = frozenset(
+    [
+        "dataset",
+        "data",
+        "logs",
+        "calibration",
+        "calibration_data",
+        "human_labels",
+        "oracle_labels",
+    ]
+)
 
 
-def discover_policies_from_fresh_draws(fresh_draws_dir: Path) -> List[str]:
+def discover_policies_from_fresh_draws(
+    fresh_draws_dir: Path,
+    *,
+    exclude_paths: Optional[List[Path]] = None,
+) -> List[str]:
     """Discover target policies from fresh draws directory.
 
-    Recognizes exactly the canonical POLICY_FILE_PATTERNS, checked in
-    order — the first location that yields any policies wins:
+    Recognizes the union of the canonical POLICY_FILE_PATTERNS:
     1. {policy}_responses.jsonl
     2. {policy}.jsonl
     3. responses/{policy}.jsonl
     4. fresh_draws/{policy}.jsonl
 
-    Every discovered policy is guaranteed to load, because loading
-    (resolve_policy_file) resolves through the same pattern list.
+    Every discovered policy is guaranteed to load, because loading resolves
+    through the same pattern list. Multiple files resolving to one policy are
+    rejected instead of selected by precedence.
 
     Args:
         fresh_draws_dir: Directory containing fresh draw files
@@ -571,24 +797,45 @@ def discover_policies_from_fresh_draws(fresh_draws_dir: Path) -> List[str]:
     fresh_draws_path = Path(fresh_draws_dir)
     if not fresh_draws_path.exists():
         raise ValueError(f"Fresh draws directory not found: {fresh_draws_dir}")
+    excluded = {Path(path).resolve() for path in (exclude_paths or [])}
 
-    policies: List[str] = []
+    files_by_policy: Dict[str, List[Path]] = {}
 
-    # Pattern 1: {policy}_responses.jsonl
+    def _record(policy: str, path: Path) -> None:
+        if not policy or policy in _NON_POLICY_STEMS:
+            return
+        resolved = path.resolve()
+        if resolved in excluded:
+            return
+        matches = files_by_policy.setdefault(policy, [])
+        if resolved not in matches:
+            matches.append(resolved)
+
     for path in fresh_draws_path.glob("*_responses.jsonl"):
-        policies.append(path.stem[: -len("_responses")])
+        _record(path.stem[: -len("_responses")], path)
+    for path in fresh_draws_path.glob("*.jsonl"):
+        # Files already interpreted by the more-specific pattern must not
+        # become a second synthetic policy named ``foo_responses``.
+        if not path.stem.endswith("_responses"):
+            _record(path.stem, path)
+    for subdir in ("responses", "fresh_draws"):
+        for path in (fresh_draws_path / subdir).glob("*.jsonl"):
+            _record(path.stem, path)
 
-    # Patterns 2-4: bare {policy}.jsonl at the top level, then in the
-    # responses/ and fresh_draws/ subdirectories. Each is a fallback: it is
-    # only consulted when no earlier pattern matched, so auxiliary .jsonl
-    # files next to *_responses.jsonl files are never mistaken for policies.
-    for glob_pattern in ("*.jsonl", "responses/*.jsonl", "fresh_draws/*.jsonl"):
-        if policies:
-            break
-        for path in fresh_draws_path.glob(glob_pattern):
-            # Skip files that don't look like policy files
-            if path.stem not in _NON_POLICY_STEMS:
-                policies.append(path.stem)
+    ambiguous = {
+        policy: paths for policy, paths in files_by_policy.items() if len(paths) > 1
+    }
+    if ambiguous:
+        details = "; ".join(
+            f"{policy}: {', '.join(str(path) for path in paths)}"
+            for policy, paths in sorted(ambiguous.items())
+        )
+        raise ValueError(
+            "Multiple fresh-draw files resolve to the same policy. "
+            f"Keep exactly one file per policy. {details}"
+        )
+
+    policies = sorted(files_by_policy)
 
     if not policies:
         patterns = ", ".join(f"'{p}'" for p in POLICY_FILE_PATTERNS)
@@ -599,7 +846,7 @@ def discover_policies_from_fresh_draws(fresh_draws_dir: Path) -> List[str]:
         )
 
     logger.info(f"Discovered {len(policies)} policies from fresh draws: {policies}")
-    return sorted(policies)
+    return policies
 
 
 def compute_response_covariates(
@@ -655,10 +902,26 @@ def compute_response_covariates(
                         f"draw {sample.draw_idx}: response is None"
                     )
             else:
-                raise ValueError(
-                    f"Unsupported covariate: {cov_name}. "
-                    f"Currently supported: ['response_length']"
-                )
+                if cov_name not in new_metadata:
+                    raise ValueError(
+                        f"Covariate '{cov_name}' is missing for sample "
+                        f"{sample.prompt_id} draw {sample.draw_idx}. Custom "
+                        "covariates must be supplied in metadata (or as an "
+                        "unknown top-level field, which ingestion promotes)."
+                    )
+                try:
+                    value = float(new_metadata[cov_name])
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"Covariate '{cov_name}' must be numeric for sample "
+                        f"{sample.prompt_id}, got {new_metadata[cov_name]!r}."
+                    ) from exc
+                if not np.isfinite(value):
+                    raise ValueError(
+                        f"Covariate '{cov_name}' must be finite for sample "
+                        f"{sample.prompt_id}."
+                    )
+                new_metadata[cov_name] = value
 
         # Create new sample with updated metadata
         updated_sample = sample.model_copy(update={"metadata": new_metadata})

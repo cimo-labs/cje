@@ -1,5 +1,98 @@
 # Changelog
 
+## [0.6.0rc1] - Unreleased
+
+Correctness and claim-calibration release. This version makes scale handling explicit,
+separates scalar score support from residual transport, and replaces zero-null transport
+testing with a predeclared practical-equivalence contract.
+
+### Breaking
+
+- **The high-level analysis API is keyword-only and no longer exposes the removed
+  `logged_data_path` argument.** Direct evaluation uses `fresh_draws_dir` or
+  `fresh_draws_data`; logged judge-plus-oracle rows remain valid calibration input via
+  `calibration_data_path`. Removed estimator names still return migration guidance for
+  users who need the frozen 0.3.x OPE line.
+- **Residual transport now uses four verdicts and requires a practical margin to
+  grade.** `audit_transportability` and the array `transport_audit` accept
+  `delta_max`, `cluster_ids`, `sample_weights`, `covariates`, `family_size`, and
+  `min_effective_clusters`. `PASS` requires the simultaneous CI for
+  `E[Y - f(S, X)]` to lie wholly inside `[-delta_max, +delta_max]`; `FAIL` requires
+  the CI to be wholly outside; overlap is `INCONCLUSIVE`; omitting `delta_max` is
+  `NOT_GRADED`. Fewer than 20 effective independent clusters is
+  `INCONCLUSIVE`. The former zero-null `PASS` / `WARN` / `FAIL` rule and hard-coded
+  0.05 cutoff are removed. Manually constructed legacy `WARN` diagnostics normalize
+  to `INCONCLUSIVE`, and `coverage` remains a deprecated display-only alias for
+  `probe_bin_occupancy`.
+- **Calibrator objects exposed by public APIs operate in caller units.** Public judge
+  scores go into `predict`; predictions and residual margins use the caller's oracle
+  scale. Internal normalization remains an implementation detail. Mixed source scales
+  must be declared or rejected rather than silently pooled.
+- **Diagnostic evidence no longer selects a different policy estimand.** The highest
+  point estimate remains visible with its limitations. Scalar `REFUSE-LEVEL` metadata
+  restricts absolute level claims from that fit; it does not assert that rankings remain
+  valid.
+
+### Added
+
+- `TransportAuditConfig` integrates independent, per-policy oracle probes with
+  `analyze_dataset`. Every target policy receives an explicit transport state; missing
+  probes are `NOT_CHECKED`, missing margins are `NOT_GRADED`, low-power or boundary-
+  crossing audits are `INCONCLUSIVE`, and an observed `FAIL` augments the existing gate
+  without erasing or replacing the point estimate. Matching CLI flags accept per-policy
+  probe files and margins.
+- Prompt-cluster sandwich uncertainty, Kish effective-cluster counts, analysis weights,
+  fitted covariates, and Bonferroni family adjustment for held-out residual audits.
+- Plan-specific variance components and shares on `EvaluationPlan`, serialized as
+  `sigma2_eval / n` and `sigma2_cal / m` contributions. `SimulationPlanningResult`
+  records a JSON-compatible `scenario_fingerprint` containing its DGP version, inputs,
+  seed, costs, and variance-measurement instrument.
+- Focused regression suites for equivalence boundaries, repeated clusters, weighting,
+  covariates, family adjustment, public-unit residuals, exact two-sided power, score
+  balance terminology, and simulation provenance.
+
+### Fixed
+
+- Exact calibration provenance now retains base sample weights, row identities,
+  prompt clusters, and covariates. Bootstrap refits multiply rather than replace base
+  weights, representative-label augmentation uses the weighted ratio functional, and
+  weighted ECDF ties and integer-score OOF buffers are order- and dtype-safe.
+- Direct estimates are assembled in declared policy order. Fully observed policies use
+  their oracle mean even in mixed-coverage analyses; calibration-only boundary and
+  residual diagnostics remain descriptive but cannot gate an estimate that does not use
+  the calibrator.
+- Bootstrap and analytic inference now share the augmented point functional. Per-policy
+  cluster sufficiency, oracle-jackknife availability, degrees of freedom, full-oracle
+  bootstrap, and paired-versus-unpaired policy comparisons are recorded and enforced
+  route by route.
+- Result serialization preserves percentile-CI alpha, JSON-encodes standard timestamp
+  values, retains recomputable independent comparisons, and rejects invalid policy
+  indices. CLI validation now shares scale, strict-loading, alias-conflict, and graded
+  uncalibrated behavior with analysis.
+- The scalar boundary card is now explicitly limited to observed judge-score range
+  support. It does not stand in for residual transport, covariate support, or ranking
+  validity; empty evidence is inconclusive rather than successful.
+- `EvaluationPlan.power_to_detect` now evaluates both rejection tails. At zero effect it
+  returns `alpha`, and power is symmetric in the effect sign.
+- The planning KS diagnostic is now a **judge-score balance check**. Failure to reject a
+  labeled-vs-unlabeled score difference no longer claims random or ignorable labeling;
+  the sampling design must justify that assumption. The old private helper name remains
+  as a compatibility alias returning the claim-calibrated schema.
+- Planning output no longer presents raw fitted variance coefficients as variance shares.
+- The README quickstart uses the same 20 prompt IDs for both policies, states the
+  calibration-transfer assumption, and documents the separate held-out audit. The
+  operational playbook now uses explicit margins, independent clusters, sampling
+  probabilities, simultaneous inference, and all four residual-audit states.
+
+### Release qualification
+
+- CI installs from the committed Poetry lock, enforces formatting, typing, the fast test
+  suite, and a project coverage floor. A scheduled workflow runs the slow/statistical
+  tests.
+- Publishing is tag-driven. The workflow verifies tag, package version, and changelog
+  agreement; runs the full qualification suite; builds once; installs and smoke-tests the
+  wheel; then publishes those exact artifacts via PyPI trusted publishing.
+
 ## [0.5.1] - Unreleased
 
 Pairwise-inference fix and planning-instrument switch. Per-policy estimates, standard

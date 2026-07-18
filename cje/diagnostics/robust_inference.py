@@ -26,6 +26,190 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+EvaluationKey = Tuple[str, str, int]
+
+
+@dataclass
+class CalibrationProvenance:
+    """Exact rows used to fit a Direct-mode reward calibrator.
+
+    ``row_roles`` distinguishes calibration observations sampled in an
+    external frame from oracle labels attached to evaluation rows.  Evaluation
+    rows carry an exact ``(policy, prompt_id, draw_idx)`` key so their
+    calibration and evaluation weights remain coupled in bootstrap worlds.
+    Judge scores may use any finite raw scale; oracle labels remain in [0, 1].
+    """
+
+    judge_scores: np.ndarray
+    oracle_labels: np.ndarray
+    prompt_ids: List[str]
+    covariates: Optional[np.ndarray] = None
+    row_roles: Optional[List[Literal["external", "evaluation"]]] = None
+    evaluation_keys: Optional[List[Optional[EvaluationKey]]] = None
+    sample_weights: Optional[np.ndarray] = None
+
+    def __post_init__(self) -> None:
+        self.judge_scores = np.asarray(self.judge_scores, dtype=float).copy()
+        self.oracle_labels = np.asarray(self.oracle_labels, dtype=float).copy()
+        self.prompt_ids = list(self.prompt_ids)
+        n = len(self.judge_scores)
+        if self.judge_scores.shape != (n,) or self.oracle_labels.shape != (n,):
+            raise ValueError("Calibration scores and labels must be 1-D and aligned")
+        if len(self.prompt_ids) != n:
+            raise ValueError(
+                f"Calibration prompt_ids length ({len(self.prompt_ids)}) must "
+                f"match rows ({n})"
+            )
+        if n == 0:
+            raise ValueError("Calibration provenance cannot be empty")
+        if not np.all(np.isfinite(self.judge_scores)) or not np.all(
+            np.isfinite(self.oracle_labels)
+        ):
+            raise ValueError("Calibration scores and labels must be finite")
+        if np.any((self.oracle_labels < 0) | (self.oracle_labels > 1)):
+            raise ValueError("Calibration provenance oracle_labels must lie in [0, 1]")
+        if self.covariates is not None:
+            self.covariates = np.asarray(self.covariates, dtype=float).copy()
+            if self.covariates.ndim != 2 or len(self.covariates) != n:
+                raise ValueError(
+                    "Calibration covariates must be a 2-D array aligned to rows"
+                )
+            if not np.all(np.isfinite(self.covariates)):
+                raise ValueError("Calibration covariates must be finite")
+        if self.sample_weights is not None:
+            self.sample_weights = np.asarray(self.sample_weights, dtype=float).copy()
+            if self.sample_weights.shape != (n,):
+                raise ValueError(
+                    "Calibration sample_weights must be 1-D and aligned to rows"
+                )
+            if not np.all(np.isfinite(self.sample_weights)) or np.any(
+                self.sample_weights <= 0
+            ):
+                raise ValueError(
+                    "Calibration sample_weights must be finite and positive"
+                )
+
+        if self.row_roles is None:
+            self.row_roles = ["external"] * n
+        else:
+            self.row_roles = list(self.row_roles)
+        if len(self.row_roles) != n or any(
+            role not in ("external", "evaluation") for role in self.row_roles
+        ):
+            raise ValueError(
+                "row_roles must align to calibration rows and contain only "
+                "'external' or 'evaluation'"
+            )
+        if self.evaluation_keys is None:
+            self.evaluation_keys = [None] * n
+        else:
+            self.evaluation_keys = list(self.evaluation_keys)
+        if len(self.evaluation_keys) != n:
+            raise ValueError("evaluation_keys must align to calibration rows")
+        seen_evaluation_keys: set = set()
+        for row, (role, key) in enumerate(zip(self.row_roles, self.evaluation_keys)):
+            if role == "evaluation" and key is None:
+                raise ValueError("Every evaluation calibration row needs an exact key")
+            if role == "external" and key is not None:
+                raise ValueError(
+                    "External calibration rows cannot carry evaluation keys"
+                )
+            if key is None:
+                continue
+            if (
+                not isinstance(key, tuple)
+                or len(key) != 3
+                or not isinstance(key[0], str)
+                or not isinstance(key[1], str)
+                or not isinstance(key[2], (int, np.integer))
+            ):
+                raise ValueError(
+                    "Evaluation keys must be (policy, prompt_id, draw_idx) tuples"
+                )
+            normalized_key = (key[0], key[1], int(key[2]))
+            if normalized_key[1] != self.prompt_ids[row]:
+                raise ValueError(
+                    f"Evaluation key prompt {normalized_key[1]!r} does not match "
+                    f"calibration prompt_id {self.prompt_ids[row]!r} at row {row}"
+                )
+            if normalized_key in seen_evaluation_keys:
+                raise ValueError(
+                    f"Evaluation key {normalized_key!r} appears twice in provenance"
+                )
+            seen_evaluation_keys.add(normalized_key)
+            self.evaluation_keys[row] = normalized_key
+
+    @classmethod
+    def from_fitted_calibrator(cls, calibrator: Any) -> "CalibrationProvenance":
+        """Compatibility bridge using the exact retained fit rows as external.
+
+        Direct API callers predating the explicit provenance contract can still
+        obtain a valid independent-frame bootstrap.  The estimator records that
+        coupling was unspecified; high-level analysis supplies explicit roles.
+        """
+        scores = getattr(calibrator, "_fit_judge_scores", None)
+        labels = getattr(calibrator, "_fit_oracle_labels", None)
+        prompt_ids = getattr(calibrator, "_fit_prompt_ids", None)
+        if scores is None or labels is None or prompt_ids is None:
+            raise ValueError(
+                "Bootstrap refit requires calibration_provenance or a calibrator "
+                "fitted by JudgeCalibrator.fit_cv with retained fit rows."
+            )
+        return cls(
+            judge_scores=np.asarray(scores, dtype=float),
+            oracle_labels=np.asarray(labels, dtype=float),
+            prompt_ids=list(prompt_ids),
+            covariates=getattr(calibrator, "_fit_covariates", None),
+            row_roles=["external"] * len(scores),
+            evaluation_keys=[None] * len(scores),
+            sample_weights=getattr(calibrator, "_fit_sample_weight", None),
+        )
+
+    def summary(self) -> Dict[str, Any]:
+        roles = list(self.row_roles or [])
+        return {
+            "n_rows": len(self.judge_scores),
+            "n_clusters": len(set(self.prompt_ids)),
+            "n_external": roles.count("external"),
+            "n_evaluation": roles.count("evaluation"),
+            "has_covariates": self.covariates is not None,
+            "has_sample_weights": self.sample_weights is not None,
+        }
+
+
+@dataclass
+class LabelDesign:
+    """Oracle-label observation design for residual augmentation."""
+
+    kind: Literal["representative", "known_propensity", "targeted_unknown"] = (
+        "representative"
+    )
+    propensities: Optional[Dict[str, np.ndarray]] = None
+
+    def __post_init__(self) -> None:
+        if self.kind not in (
+            "representative",
+            "known_propensity",
+            "targeted_unknown",
+        ):
+            raise ValueError(f"Unknown label design: {self.kind}")
+        if self.kind == "known_propensity" and not self.propensities:
+            raise ValueError(
+                "known_propensity label design requires per-policy propensities"
+            )
+        if self.kind != "known_propensity" and self.propensities is not None:
+            raise ValueError("propensities are only valid with kind='known_propensity'")
+
+
+@dataclass
+class DirectPointEstimate:
+    """Output of the single Direct point-estimator implementation."""
+
+    estimates: np.ndarray
+    pseudo_outcomes: Dict[int, np.ndarray]
+    diagnostics: Dict[str, Any]
+
+
 # ========== Residual-Augmented Estimator (AIPW-style) ==========
 
 
@@ -135,11 +319,10 @@ def get_oof_predictions(
         judge_scores: (n,) judge scores for all samples
         oracle_mask: (n,) boolean mask for oracle samples
         covariates: Optional (n, d) covariate array
-        oracle_fold_ids: (n_oracle,) fold assignment for the oracle samples,
-            aligned with ``judge_scores[oracle_mask]``. Pass the
-            ``fold_ids`` returned by the ``fit_cv`` call that fitted this
-            calibrator (fit_cv was called with only the oracle rows, so its
-            fold ids cover exactly these samples).
+        oracle_fold_ids: Fold assignments returned by the ``fit_cv`` call that
+            fitted this calibrator. This may be row-aligned with all
+            ``judge_scores`` or compact and aligned with
+            ``judge_scores[oracle_mask]``.
 
     Returns:
         oof_predictions: (n,) OOF predictions (NaN for non-oracle samples)
@@ -166,11 +349,13 @@ def get_oof_predictions(
             "out-of-fold predictions."
         )
     oracle_fold_ids = np.asarray(oracle_fold_ids)
-    if len(oracle_fold_ids) != n_oracle:
+    if len(oracle_fold_ids) == n:
+        oracle_fold_ids = oracle_fold_ids[oracle_mask]
+    elif len(oracle_fold_ids) != n_oracle:
         raise ValueError(
-            f"oracle_fold_ids length ({len(oracle_fold_ids)}) != number of "
-            f"oracle samples ({n_oracle}); the calibrator was fitted on "
-            f"different data than oracle_mask selects."
+            f"oracle_fold_ids length ({len(oracle_fold_ids)}) matches neither "
+            f"judge_scores ({n}) nor the oracle rows ({n_oracle}); the "
+            "calibrator was fitted on different data than oracle_mask selects."
         )
 
     oof_predictions[oracle_indices] = np.clip(
@@ -234,7 +419,7 @@ def oracle_jackknife_estimates(
         return None
     judge_scores = np.asarray(judge_scores)
     jack: List[float] = []
-    for fold_id in range(len(fold_models)):
+    for fold_id in sorted(fold_models):
         if fold_models.get(fold_id) is None:
             continue
         fold_ids = np.full(len(judge_scores), fold_id, dtype=int)
@@ -311,6 +496,8 @@ class DirectEvalTable:
     # Covariates (optional, for two-stage calibration)
     covariates: Optional[np.ndarray]  # (n_total, n_cov) or None
     covariate_names: Optional[List[str]]
+    row_keys: Optional[List[EvaluationKey]] = None
+    row_keys_synthesized: bool = False
 
     # Precomputed indices for efficient bootstrap (O(1) lookup)
     cluster_to_rows: Dict[int, np.ndarray] = field(default_factory=dict)
@@ -323,6 +510,58 @@ class DirectEvalTable:
 
     def __post_init__(self) -> None:
         """Compute derived fields after initialization."""
+        n_rows = len(self.prompt_ids)
+        for name, values in (
+            ("prompt_id_strings", self.prompt_id_strings),
+            ("policy_indices", self.policy_indices),
+            ("judge_scores", self.judge_scores),
+            ("oracle_labels", self.oracle_labels),
+            ("oracle_mask", self.oracle_mask),
+        ):
+            if len(values) != n_rows:
+                raise ValueError(f"{name} must align to DirectEvalTable rows")
+        if self.row_keys is None and self.policy_names:
+            occurrence: Dict[Tuple[str, str], int] = {}
+            synthesized: List[EvaluationKey] = []
+            for policy_index, prompt_id in zip(
+                self.policy_indices, self.prompt_id_strings
+            ):
+                policy = self.policy_names[int(policy_index)]
+                group = (policy, prompt_id)
+                draw_index = occurrence.get(group, 0)
+                occurrence[group] = draw_index + 1
+                synthesized.append((policy, prompt_id, draw_index))
+            self.row_keys = synthesized
+            self.row_keys_synthesized = True
+        if self.row_keys is not None and len(self.row_keys) != n_rows:
+            raise ValueError("row_keys must align to DirectEvalTable rows")
+        if self.row_keys is not None:
+            for row, key in enumerate(self.row_keys):
+                if (
+                    not isinstance(key, tuple)
+                    or len(key) != 3
+                    or not isinstance(key[0], str)
+                    or not isinstance(key[1], str)
+                    or not isinstance(key[2], (int, np.integer))
+                ):
+                    raise ValueError(
+                        "row_keys must contain (policy, prompt_id, draw_idx) tuples"
+                    )
+                if key[1] != self.prompt_id_strings[row]:
+                    raise ValueError(
+                        f"row key prompt {key[1]!r} does not match prompt_id "
+                        f"{self.prompt_id_strings[row]!r} at row {row}"
+                    )
+                policy_index = int(self.policy_indices[row])
+                if self.policy_names and (
+                    policy_index < 0
+                    or policy_index >= len(self.policy_names)
+                    or key[0] != self.policy_names[policy_index]
+                ):
+                    raise ValueError(
+                        f"row key policy {key[0]!r} does not match policy index "
+                        f"{policy_index} at row {row}"
+                    )
         if len(self.cluster_to_rows) == 0 and len(self.prompt_ids) > 0:
             # Build cluster-to-rows mapping
             self.unique_clusters = np.unique(self.prompt_ids)
@@ -367,6 +606,7 @@ def build_direct_eval_table(
     all_judge_scores: List[float] = []
     all_oracle_labels: List[float] = []
     all_covariates: List[List[float]] = []
+    all_row_keys: List[EvaluationKey] = []
 
     for policy_idx, policy_name in enumerate(policy_names):
         fd = fresh_draws_per_policy[policy_name]
@@ -374,6 +614,9 @@ def build_direct_eval_table(
             all_prompt_ids.append(sample.prompt_id)
             all_policy_indices.append(policy_idx)
             all_judge_scores.append(sample.judge_score)
+            all_row_keys.append(
+                (policy_name, sample.prompt_id, int(getattr(sample, "draw_idx", 0)))
+            )
 
             # Oracle label: use NaN if not present
             if sample.oracle_label is not None:
@@ -428,13 +671,400 @@ def build_direct_eval_table(
         oracle_mask=oracle_mask,
         covariates=covariates,
         covariate_names=covariate_names,
+        row_keys=all_row_keys,
         policy_names=policy_names,
         n_policies=n_policies,
     )
 
 
+def validate_calibration_provenance(
+    provenance: CalibrationProvenance, calibrator: Any
+) -> None:
+    """Verify that provenance describes the supplied fitted calibrator."""
+    fit_scores = getattr(calibrator, "_fit_judge_scores", None)
+    fit_labels = getattr(calibrator, "_fit_oracle_labels", None)
+    fit_prompts = getattr(calibrator, "_fit_prompt_ids", None)
+    if fit_scores is None or fit_labels is None or fit_prompts is None:
+        raise ValueError(
+            "Cannot validate calibration provenance: fitted calibrator does not "
+            "expose its compact fit rows."
+        )
+    if not np.array_equal(np.asarray(fit_scores), provenance.judge_scores):
+        raise ValueError(
+            "calibration_provenance judge_scores do not match the rows used to "
+            "fit reward_calibrator"
+        )
+    if not np.array_equal(np.asarray(fit_labels), provenance.oracle_labels):
+        raise ValueError(
+            "calibration_provenance oracle_labels do not match the rows used to "
+            "fit reward_calibrator"
+        )
+    if list(fit_prompts) != list(provenance.prompt_ids):
+        raise ValueError(
+            "calibration_provenance prompt_ids/order do not match the rows used "
+            "to fit reward_calibrator"
+        )
+    fit_covariates = getattr(calibrator, "_fit_covariates", None)
+    if (fit_covariates is None) != (provenance.covariates is None):
+        raise ValueError(
+            "calibration_provenance covariates do not match reward_calibrator"
+        )
+    if fit_covariates is not None:
+        assert provenance.covariates is not None
+        if not np.array_equal(np.asarray(fit_covariates), provenance.covariates):
+            raise ValueError(
+                "calibration_provenance covariate values/order do not match "
+                "reward_calibrator"
+            )
+    fit_sample_weight = getattr(calibrator, "_fit_sample_weight", None)
+    if (fit_sample_weight is None) != (provenance.sample_weights is None):
+        raise ValueError(
+            "calibration_provenance sample_weights do not match reward_calibrator"
+        )
+    if fit_sample_weight is not None:
+        assert provenance.sample_weights is not None
+        if not np.array_equal(np.asarray(fit_sample_weight), provenance.sample_weights):
+            raise ValueError(
+                "calibration_provenance sample_weight values/order do not match "
+                "reward_calibrator"
+            )
+
+
+def resolve_label_propensities(
+    eval_table: DirectEvalTable,
+    label_design: LabelDesign,
+    observation_weights: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Return row-aligned label inclusion probabilities for augmentation."""
+    propensities = np.full(len(eval_table.judge_scores), np.nan, dtype=float)
+    if label_design.kind == "targeted_unknown":
+        return propensities
+    weights = (
+        np.ones(len(eval_table.judge_scores), dtype=float)
+        if observation_weights is None
+        else np.asarray(observation_weights, dtype=float)
+    )
+    if weights.shape != (len(eval_table.judge_scores),):
+        raise ValueError("observation_weights must align to evaluation rows")
+
+    for policy_index, policy in enumerate(eval_table.policy_names):
+        rows = np.where(eval_table.policy_indices == policy_index)[0]
+        if label_design.kind == "representative":
+            observed = eval_table.oracle_mask[rows]
+            observed_weight = float(np.sum(weights[rows][observed]))
+            if observed_weight > 0:
+                propensities[rows] = observed_weight / float(np.sum(weights[rows]))
+            continue
+
+        assert label_design.propensities is not None
+        if policy not in label_design.propensities:
+            raise ValueError(f"Missing known label propensities for policy '{policy}'")
+        values = np.asarray(label_design.propensities[policy], dtype=float)
+        if values.shape != (len(rows),):
+            raise ValueError(
+                f"Label propensities for policy '{policy}' must have shape "
+                f"({len(rows)},), got {values.shape}"
+            )
+        if not np.all(np.isfinite(values)) or np.any((values <= 0) | (values > 1)):
+            raise ValueError(
+                f"Label propensities for policy '{policy}' must be finite in (0, 1]"
+            )
+        propensities[rows] = values
+    return propensities
+
+
+def residual_predictions_for_evaluation(
+    calibrator: Any,
+    calibrated_full: np.ndarray,
+    eval_table: DirectEvalTable,
+    provenance: Optional[CalibrationProvenance],
+    calibration_fold_ids: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Build residual predictions, using OOF models for linked fit rows.
+
+    Oracle rows that were not used to fit the calibrator use the full-model
+    prediction, which is independent of their labels.  Evaluation rows that
+    also entered calibration use the model excluding their prompt fold.
+    """
+    predictions = np.asarray(calibrated_full, dtype=float).copy()
+    if provenance is None or not any(
+        role == "evaluation" for role in provenance.row_roles or []
+    ):
+        return predictions
+    if eval_table.row_keys is None:
+        raise ValueError(
+            "Evaluation-linked calibration provenance requires DirectEvalTable.row_keys"
+        )
+
+    key_to_row: Dict[EvaluationKey, int] = {}
+    for row, key in enumerate(eval_table.row_keys):
+        if key in key_to_row:
+            raise ValueError(
+                f"Evaluation key {key!r} is duplicated; provenance linkage is ambiguous"
+            )
+        key_to_row[key] = row
+
+    fold_ids = calibration_fold_ids
+    if fold_ids is None:
+        fold_ids = getattr(calibrator, "_oracle_fold_ids", None)
+    if fold_ids is None or len(fold_ids) != len(provenance.judge_scores):
+        raise ValueError(
+            "Evaluation-linked augmentation requires calibration fold ids aligned "
+            "to calibration_provenance"
+        )
+
+    eval_rows: List[int] = []
+    linked_folds: List[int] = []
+    seen_keys: set = set()
+    for provenance_row, (role, provenance_key) in enumerate(
+        zip(provenance.row_roles or [], provenance.evaluation_keys or [])
+    ):
+        if role != "evaluation":
+            continue
+        assert provenance_key is not None
+        if provenance_key in seen_keys:
+            raise ValueError(
+                f"Evaluation key {provenance_key!r} appears twice in provenance"
+            )
+        seen_keys.add(provenance_key)
+        if provenance_key not in key_to_row:
+            raise ValueError(
+                f"Calibration provenance references evaluation row "
+                f"{provenance_key!r}, "
+                "but that row is absent from fresh draws"
+            )
+        eval_row = key_to_row[provenance_key]
+        if (
+            provenance_key[1] != eval_table.prompt_id_strings[eval_row]
+            or provenance.prompt_ids[provenance_row]
+            != eval_table.prompt_id_strings[eval_row]
+        ):
+            raise ValueError(
+                f"Calibration provenance prompt for {provenance_key!r} does not "
+                "match the evaluation row"
+            )
+        if not eval_table.oracle_mask[eval_row]:
+            raise ValueError(
+                f"Calibration provenance links {provenance_key!r}, but its "
+                "evaluation row "
+                "has no oracle label"
+            )
+        if not np.isclose(
+            eval_table.judge_scores[eval_row], provenance.judge_scores[provenance_row]
+        ) or not np.isclose(
+            eval_table.oracle_labels[eval_row], provenance.oracle_labels[provenance_row]
+        ):
+            raise ValueError(
+                f"Calibration provenance values for {provenance_key!r} do not match the "
+                "evaluation row"
+            )
+        if provenance.covariates is not None:
+            if eval_table.covariates is None or not np.array_equal(
+                eval_table.covariates[eval_row],
+                provenance.covariates[provenance_row],
+            ):
+                raise ValueError(
+                    f"Calibration provenance covariates for {provenance_key!r} "
+                    "do not match the evaluation row"
+                )
+        eval_rows.append(eval_row)
+        linked_folds.append(int(fold_ids[provenance_row]))
+
+    if eval_rows:
+        rows_array = np.asarray(eval_rows, dtype=int)
+        covariates = (
+            eval_table.covariates[rows_array]
+            if eval_table.covariates is not None
+            else None
+        )
+        predictions[rows_array] = calibrator.predict_oof(
+            eval_table.judge_scores[rows_array],
+            np.asarray(linked_folds, dtype=int),
+            covariates,
+        )
+    return np.clip(predictions, 0.0, 1.0)
+
+
+def compute_direct_point_estimate(
+    calibrated_full: np.ndarray,
+    eval_table: DirectEvalTable,
+    residual_predictions: Optional[np.ndarray],
+    label_design: LabelDesign,
+    use_augmented_estimator: bool = True,
+    observation_weights: Optional[np.ndarray] = None,
+    label_propensities: Optional[np.ndarray] = None,
+) -> DirectPointEstimate:
+    """Compute the Direct estimand on one (possibly weighted) data world.
+
+    This is the only point-estimator implementation used by analytic and
+    bootstrap inference.  Per-policy routing is:
+
+    * complete evaluation oracle coverage: weighted raw-oracle mean;
+    * partial coverage with a valid label design: calibrated plug-in plus a
+      Horvitz-Thompson residual correction;
+    * targeted/unknown labeling or augmentation disabled: calibrated plug-in.
+    """
+    calibrated = np.asarray(calibrated_full, dtype=float)
+    n_rows = len(eval_table.judge_scores)
+    if calibrated.shape != (n_rows,):
+        raise ValueError("calibrated_full must align to evaluation rows")
+    weights = (
+        np.ones(n_rows, dtype=float)
+        if observation_weights is None
+        else np.asarray(observation_weights, dtype=float)
+    )
+    if (
+        weights.shape != (n_rows,)
+        or not np.all(np.isfinite(weights))
+        or np.any(weights <= 0)
+    ):
+        raise ValueError(
+            "observation_weights must be finite, positive, and row-aligned"
+        )
+
+    if label_propensities is None:
+        label_propensities = resolve_label_propensities(
+            eval_table, label_design, observation_weights=weights
+        )
+    else:
+        label_propensities = np.asarray(label_propensities, dtype=float)
+        if label_propensities.shape != (n_rows,):
+            raise ValueError("label_propensities must align to evaluation rows")
+
+    estimates = np.full(eval_table.n_policies, np.nan, dtype=float)
+    pseudo_outcomes: Dict[int, np.ndarray] = {}
+    diagnostics: Dict[str, Any] = {
+        "routes": [],
+        "plug_in_estimates": [],
+        "residual_corrections": [],
+        "oracle_fractions": [],
+        "label_design": label_design.kind,
+        "augmentation_requested": bool(use_augmented_estimator),
+        "augmentation_effective": False,
+    }
+
+    for policy_index in range(eval_table.n_policies):
+        rows = np.where(eval_table.policy_indices == policy_index)[0]
+        if len(rows) == 0:
+            diagnostics["routes"].append("no_data")
+            diagnostics["plug_in_estimates"].append(float("nan"))
+            diagnostics["residual_corrections"].append(0.0)
+            diagnostics["oracle_fractions"].append(0.0)
+            continue
+        policy_weights = weights[rows]
+        observed = eval_table.oracle_mask[rows]
+        oracle_fraction = float(
+            np.sum(policy_weights[observed]) / np.sum(policy_weights)
+        )
+
+        if np.all(observed):
+            values = eval_table.oracle_labels[rows].astype(float, copy=True)
+            estimate = float(np.average(values, weights=policy_weights))
+            route = "direct_oracle"
+            plug_in = float(np.average(calibrated[rows], weights=policy_weights))
+            correction = estimate - plug_in
+        else:
+            values = calibrated[rows].astype(float, copy=True)
+            plug_in = float(np.average(values, weights=policy_weights))
+            correction = 0.0
+            route = "plug_in"
+            can_augment = (
+                use_augmented_estimator
+                and label_design.kind != "targeted_unknown"
+                and np.any(observed)
+            )
+            if can_augment:
+                if residual_predictions is None:
+                    raise ValueError(
+                        "Residual augmentation requires residual_predictions"
+                    )
+                residual_predictions_array = np.asarray(
+                    residual_predictions, dtype=float
+                )
+                if residual_predictions_array.shape != (n_rows,):
+                    raise ValueError(
+                        "residual_predictions must align to evaluation rows"
+                    )
+                residual = (
+                    eval_table.oracle_labels[rows][observed]
+                    - residual_predictions_array[rows][observed]
+                )
+                if label_design.kind == "representative":
+                    correction = float(
+                        np.average(residual, weights=policy_weights[observed])
+                    )
+                    propensity = oracle_fraction
+                    values += correction
+                    values[observed] += (residual - correction) / propensity
+                    estimate = plug_in + correction
+                else:
+                    prop = label_propensities[rows]
+                    if np.any(~np.isfinite(prop[observed])) or np.any(
+                        (prop[observed] <= 0) | (prop[observed] > 1)
+                    ):
+                        raise ValueError(
+                            "Observed oracle rows require finite label propensities "
+                            "in (0, 1]"
+                        )
+                    values[observed] += residual / prop[observed]
+                    estimate = float(np.average(values, weights=policy_weights))
+                    correction = estimate - plug_in
+                route = "augmented"
+                diagnostics["augmentation_effective"] = True
+            else:
+                estimate = plug_in
+                if use_augmented_estimator and label_design.kind == "targeted_unknown":
+                    route = "plug_in_targeted_unknown"
+
+        estimates[policy_index] = estimate
+        pseudo_outcomes[policy_index] = values
+        diagnostics["routes"].append(route)
+        diagnostics["plug_in_estimates"].append(plug_in)
+        diagnostics["residual_corrections"].append(float(correction))
+        diagnostics["oracle_fractions"].append(oracle_fraction)
+
+    return DirectPointEstimate(estimates, pseudo_outcomes, diagnostics)
+
+
+def direct_oracle_jackknife_estimates(
+    calibrator: Any,
+    eval_table: DirectEvalTable,
+    label_design: LabelDesign,
+    use_augmented_estimator: bool = True,
+) -> Optional[np.ndarray]:
+    """Recompute the Direct estimand under each leave-oracle-fold model."""
+    fold_models = calibrator.get_fold_models_for_oua()
+    if not fold_models:
+        return None
+
+    jackknife: List[np.ndarray] = []
+    for fold_id in sorted(fold_models):
+        if fold_models.get(fold_id) is None:
+            continue
+        fold_ids = np.full(len(eval_table.judge_scores), fold_id, dtype=int)
+        predictions = np.clip(
+            calibrator.predict_oof(
+                eval_table.judge_scores, fold_ids, eval_table.covariates
+            ),
+            0.0,
+            1.0,
+        )
+        point = compute_direct_point_estimate(
+            predictions,
+            eval_table,
+            predictions,
+            label_design,
+            use_augmented_estimator=use_augmented_estimator,
+        )
+        jackknife.append(point.estimates)
+
+    if len(jackknife) < 2:
+        return None
+    return np.vstack(jackknife)
+
+
 def make_calibrator_factory(
-    mode: Literal["monotone", "two_stage"],
+    mode: Literal["monotone", "two_stage", "auto"],
     covariate_names: Optional[List[str]] = None,
     seed: int = 42,
 ) -> Callable[[], Any]:
@@ -443,13 +1073,11 @@ def make_calibrator_factory(
     This factory pattern ensures each bootstrap replicate gets a completely
     fresh calibrator instance, avoiding any state leakage between replicates.
 
-    The mode should be FIXED to the mode selected on full data, not "auto".
-    This focuses bootstrap on capturing calibration/evaluation covariance
-    without adding unnecessary variability from mode re-selection.
+    Passing ``"auto"`` re-runs mode selection in every weighted bootstrap
+    world, matching the estimator users requested on the original data.
 
     Args:
-        mode: Calibration mode ('monotone' or 'two_stage'). Should NOT be 'auto'
-              during bootstrap - use the selected_mode from full-data calibration.
+        mode: Calibration mode ('monotone', 'two_stage', or 'auto').
         covariate_names: Optional list of covariate names for two-stage calibration
         seed: Random seed for reproducibility
 
@@ -461,7 +1089,7 @@ def make_calibrator_factory(
     def factory() -> Any:
         return JudgeCalibrator(
             random_seed=seed,
-            calibration_mode=mode,  # Fixed mode, not "auto"
+            calibration_mode=mode,
             covariate_names=covariate_names,
         )
 
@@ -477,352 +1105,316 @@ def cluster_bootstrap_direct_with_refit(
     seed: int = 42,
     use_augmented_estimator: bool = True,
     calibration_policy_idx: Optional[int] = None,
+    calibration_provenance: Optional[CalibrationProvenance] = None,
+    label_design: Optional[LabelDesign] = None,
+    point_calibrator: Optional[Any] = None,
+    n_folds: int = 5,
 ) -> Dict[str, Any]:
-    """Cluster bootstrap with calibrator refit for Direct mode.
+    """Positive prompt-cluster-weight bootstrap with calibrator refit.
 
-    This bootstrap procedure captures:
-    1. Prompt sampling variance (by resampling clusters)
-    2. Calibrator uncertainty (by refitting on each replicate's oracle subset)
-    3. Calibration/evaluation covariance (the key term missing from analytic SEs)
+    Every requested replicate is evaluated exactly once.  Exponential
+    mean-one weights keep all clusters present, so fold sufficiency is stable
+    and there is no retry-conditioned bootstrap distribution.  Calibration
+    rows linked to evaluation observations reuse that observation's prompt
+    weight; external calibration clusters receive independent weights.
 
-    The algorithm uses "resample-until-valid" to avoid conditioning on
-    "easy bootstrap worlds" with fewer oracle labels, which would shrink CIs.
-
-    When use_augmented_estimator=True (default), uses θ̂_aug (AIPW-style) which
-    debiases the plug-in estimator using cluster-out-of-fold predictions:
-        θ̂_aug = mean(f̂_full(S)) + mean(Y - f̂_oof(S))
-    This corrects for calibrator bias while maintaining valid bootstrap inference.
-
-    Args:
-        eval_table: DirectEvalTable from build_direct_eval_table()
-        calibrator_factory: Factory that creates fresh JudgeCalibrator instances
-            (should have mode fixed to full-data selection, not "auto")
-        n_bootstrap: Number of valid bootstrap replicates to collect (default 2000)
-        min_oracle_per_replicate: Minimum oracle labels required per replicate (default 30)
-        alpha: Significance level for confidence intervals (default 0.05)
-        seed: Random seed for reproducibility
-        use_augmented_estimator: If True (default), use θ̂_aug (AIPW-style debiasing).
-            If False, use plug-in estimator (mean of calibrated scores).
-        calibration_policy_idx: If provided, fit calibrator only on this policy's
-            oracle samples (for transport experiments). Residual corrections in θ̂_aug
-            still use all policies' oracle samples. If None, use all oracle samples
-            for both calibration and residuals (default behavior).
-
-    Returns:
-        Dictionary with:
-        - bootstrap_matrix: (B, P) array of policy means per replicate
-        - estimates: (P,) point estimates from full data
-        - standard_errors: (P,) bootstrap standard errors
-        - ci_lower, ci_upper: (P,) percentile confidence interval bounds
-        - n_valid_replicates: number of successful replicates
-        - n_attempts: total attempts made (for skip rate calculation)
-        - skip_rate: fraction of attempts that were invalid
-        - oracle_count_summary: min/p10/median oracle counts across replicates
-        - metadata: additional diagnostic information
-        - augmentation_diagnostics: (if use_augmented_estimator) per-policy diagnostics
+    ``min_oracle_per_replicate`` remains an accepted compatibility argument but
+    is not used: positive weights preserve the original calibration support.
+    Any invalid replicate aborts inference with an actionable error.
     """
+    if n_bootstrap < 2:
+        raise ValueError("n_bootstrap must be at least 2")
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be in (0, 1)")
     rng = np.random.default_rng(seed)
-
-    # Extract arrays from eval table
-    prompt_ids = eval_table.prompt_ids
-    prompt_id_strings = eval_table.prompt_id_strings
-    policy_indices = eval_table.policy_indices
-    judge_scores = eval_table.judge_scores
-    oracle_labels = eval_table.oracle_labels
-    oracle_mask = eval_table.oracle_mask
-    covariates = eval_table.covariates
-    unique_clusters = eval_table.unique_clusters
-    cluster_to_rows = eval_table.cluster_to_rows
-    n_policies = eval_table.n_policies
-    n_clusters = eval_table.n_clusters
-
-    # Compute separate masks for calibration vs residuals (transport experiments)
-    # - calibration_oracle_mask: used for fitting the calibrator
-    # - oracle_mask: used for computing residual corrections in θ̂_aug
-    if calibration_policy_idx is not None:
-        calibration_oracle_mask = oracle_mask & (
-            policy_indices == calibration_policy_idx
-        )
-        n_cal_oracle = int(np.sum(calibration_oracle_mask))
-        n_total_oracle = int(np.sum(oracle_mask))
-        logger.info(
-            f"Transport mode: calibrating on policy {calibration_policy_idx} "
-            f"({n_cal_oracle} oracle samples), residuals on all policies "
-            f"({n_total_oracle} oracle samples)"
-        )
-    else:
-        calibration_oracle_mask = oracle_mask
-
-    # Compute point estimates from full data (single calibrator for all policies)
-    full_estimates = np.zeros(n_policies)
-    augmentation_diagnostics: Optional[Dict[str, Any]] = None
-    calibrated_full: Optional[np.ndarray] = None
-
-    try:
-        calibrator = calibrator_factory()
-
-        # Pass prompt_id_strings for cluster-level fold assignment
-        # This ensures OOF predictions use cluster-level cross-fitting
-        # Use calibration_oracle_mask (may be subset if calibration_policy_idx is set)
-        cal_oracle_prompt_ids = [
-            prompt_id_strings[i] for i in np.where(calibration_oracle_mask)[0]
-        ]
-
-        n_cal_oracle_full = int(np.sum(calibration_oracle_mask))
-        cal_result = calibrator.fit_cv(
-            judge_scores=judge_scores[calibration_oracle_mask],
-            oracle_labels=oracle_labels[calibration_oracle_mask],
-            n_folds=min(
-                5, max(2, n_cal_oracle_full // 2)
-            ),  # Reduce folds if low oracle
-            prompt_ids=cal_oracle_prompt_ids,  # For cluster-level folds
-            covariates=(
-                covariates[calibration_oracle_mask] if covariates is not None else None
-            ),
+    label_design = label_design or LabelDesign()
+    if calibration_provenance is not None and calibration_policy_idx is not None:
+        raise ValueError(
+            "calibration_policy_idx cannot be combined with explicit "
+            "calibration_provenance; encode the intended fit rows directly"
         )
 
-        # Predict calibrated rewards for all samples (full model)
-        calibrated_full = calibrator.predict(judge_scores, covariates=covariates)
+    full_coverage = []
+    for policy_index in range(eval_table.n_policies):
+        policy_rows = eval_table.policy_indices == policy_index
+        full_coverage.append(
+            bool(np.any(policy_rows) and np.all(eval_table.oracle_mask[policy_rows]))
+        )
+    needs_calibrator = not all(full_coverage)
 
-        if use_augmented_estimator:
-            # Use θ̂_aug (AIPW-style debiasing)
-            # Get cluster-out-of-fold predictions for CALIBRATION oracle samples
-            # (fit_cv saw only the calibration-oracle rows, so its fold ids
-            # align with calibration_oracle_mask)
-            oof_predictions = get_oof_predictions(
-                calibrator,
-                judge_scores,
-                calibration_oracle_mask,
-                covariates,
-                oracle_fold_ids=cal_result.fold_ids,
-            )
-
-            # For NON-CALIBRATION oracle (target policies), use full-model predictions
-            # This captures transport bias correction via the residual term
-            if calibration_policy_idx is not None:
-                non_calibration_oracle = oracle_mask & ~calibration_oracle_mask
-                if np.any(non_calibration_oracle):
-                    non_cal_indices = np.where(non_calibration_oracle)[0]
-                    non_cal_judge = judge_scores[non_calibration_oracle]
-                    non_cal_cov = (
-                        covariates[non_calibration_oracle]
-                        if covariates is not None
-                        else None
-                    )
-                    oof_predictions[non_cal_indices] = calibrator.predict(
-                        non_cal_judge, covariates=non_cal_cov
-                    )
-
-            # Compute augmented estimates using FULL oracle_mask (all policies)
-            # The residual correction will capture transport bias for target policies
-            full_estimates, augmentation_diagnostics = (
-                compute_augmented_estimate_per_policy(
-                    calibrated_full=calibrated_full,
-                    oracle_labels=oracle_labels,
-                    oracle_mask=oracle_mask,  # All policies for residuals
-                    oof_predictions=oof_predictions,
-                    policy_indices=policy_indices,
-                    n_policies=n_policies,
+    # Compatibility for the lower-level transport bootstrap: when no explicit
+    # provenance is supplied, the requested policy's labeled evaluation rows
+    # are the calibration fit sample.
+    if needs_calibrator and calibration_provenance is None:
+        mask = eval_table.oracle_mask.copy()
+        if calibration_policy_idx is not None:
+            mask &= eval_table.policy_indices == calibration_policy_idx
+        rows = np.where(mask)[0]
+        if len(rows) > 0:
+            if eval_table.row_keys is None:
+                raise ValueError(
+                    "Implicit evaluation calibration requires evaluation row keys"
                 )
-            )
-            logger.info(
-                f"Using augmented estimator: residual corrections = "
-                f"{augmentation_diagnostics['residual_corrections']}"
-            )
-        else:
-            # Use plug-in estimator (mean of calibrated scores)
-            for p in range(n_policies):
-                p_mask = policy_indices == p
-                if np.any(p_mask):
-                    full_estimates[p] = np.mean(calibrated_full[p_mask])
-
-    except Exception as e:
-        logger.warning(f"Full data calibration failed: {e}")
-        full_estimates[:] = np.nan
-
-    # Bootstrap loop with resample-until-valid
-    bootstrap_matrix = np.zeros((n_bootstrap, n_policies))
-    oracle_counts: List[int] = []
-    valid_count = 0
-    attempt = 0
-    max_attempts = 5 * n_bootstrap  # Cap to prevent infinite loops
-
-    while valid_count < n_bootstrap and attempt < max_attempts:
-        attempt += 1
-
-        # 1. Resample prompt clusters with replacement
-        sampled_cluster_ids = rng.choice(unique_clusters, size=n_clusters, replace=True)
-
-        # 2. Get all rows for sampled clusters
-        bootstrap_rows: List[int] = []
-        for cluster_id in sampled_cluster_ids:
-            rows = cluster_to_rows.get(int(cluster_id), np.array([], dtype=int))
-            bootstrap_rows.extend(rows.tolist())
-        bootstrap_rows_arr = np.array(bootstrap_rows, dtype=int)
-
-        if len(bootstrap_rows_arr) == 0:
-            continue
-
-        # 3. Extract bootstrap subset
-        boot_judge = judge_scores[bootstrap_rows_arr]
-        boot_oracle = oracle_labels[bootstrap_rows_arr]
-        boot_oracle_mask = oracle_mask[bootstrap_rows_arr]
-        boot_policy = policy_indices[bootstrap_rows_arr]
-        boot_prompt_ids = [prompt_id_strings[i] for i in bootstrap_rows_arr]
-        boot_covariates = (
-            covariates[bootstrap_rows_arr] if covariates is not None else None
-        )
-
-        # 3b. Compute bootstrap calibration mask (subset if calibration_policy_idx set)
-        boot_calibration_mask = calibration_oracle_mask[bootstrap_rows_arr]
-
-        # 4. Check CALIBRATION oracle count - retry if too few
-        # (we need enough calibration oracle for the calibrator to fit)
-        n_cal_oracle_boot = int(np.sum(boot_calibration_mask))
-        if n_cal_oracle_boot < min_oracle_per_replicate:
-            continue
-
-        # 5. Refit calibrator on bootstrap CALIBRATION oracle subset
-        try:
-            boot_calibrator = calibrator_factory()
-            boot_cal_oracle_prompt_ids = [
-                boot_prompt_ids[i] for i in np.where(boot_calibration_mask)[0]
-            ]
-
-            boot_cal_result = boot_calibrator.fit_cv(
-                judge_scores=boot_judge[boot_calibration_mask],
-                oracle_labels=boot_oracle[boot_calibration_mask],
-                n_folds=min(5, n_cal_oracle_boot // 4),  # Reduce folds if low oracle
-                prompt_ids=boot_cal_oracle_prompt_ids,  # For cluster-level folds
+            calibration_provenance = CalibrationProvenance(
+                judge_scores=eval_table.judge_scores[rows],
+                oracle_labels=eval_table.oracle_labels[rows],
+                prompt_ids=[eval_table.prompt_id_strings[i] for i in rows],
                 covariates=(
-                    boot_covariates[boot_calibration_mask]
-                    if boot_covariates is not None
+                    eval_table.covariates[rows]
+                    if eval_table.covariates is not None
                     else None
                 ),
-                # Per-replicate refits log at DEBUG: at n_bootstrap=2000 the
-                # INFO fit lines are a ~4k-line stderr flood. The one-time
-                # full-data fit above keeps its INFO log.
-                quiet=True,
+                row_roles=["evaluation"] * len(rows),
+                evaluation_keys=[eval_table.row_keys[i] for i in rows],
             )
-        except Exception as e:
-            logger.debug(f"Bootstrap replicate {attempt} calibration failed: {e}")
-            continue
-
-        # 6. Predict calibrated rewards on bootstrap evaluation sample
-        try:
-            boot_rewards = boot_calibrator.predict(
-                boot_judge, covariates=boot_covariates
-            )
-        except Exception as e:
-            logger.debug(f"Bootstrap replicate {attempt} prediction failed: {e}")
-            continue
-
-        # 7. Compute policy estimates (augmented or plug-in)
-        if use_augmented_estimator:
-            # Use θ̂_aug for bootstrap replicate
-            # Get OOF predictions for CALIBRATION oracle (the refit saw only
-            # the calibration-oracle rows, so its fold ids align)
-            boot_oof_preds = get_oof_predictions(
-                boot_calibrator,
-                boot_judge,
-                boot_calibration_mask,
-                boot_covariates,
-                oracle_fold_ids=boot_cal_result.fold_ids,
-            )
-
-            # For NON-CALIBRATION oracle, use full-model predictions
-            if calibration_policy_idx is not None:
-                boot_non_cal_mask = boot_oracle_mask & ~boot_calibration_mask
-                if np.any(boot_non_cal_mask):
-                    boot_non_cal_indices = np.where(boot_non_cal_mask)[0]
-                    boot_non_cal_judge = boot_judge[boot_non_cal_mask]
-                    boot_non_cal_cov = (
-                        boot_covariates[boot_non_cal_mask]
-                        if boot_covariates is not None
-                        else None
-                    )
-                    boot_oof_preds[boot_non_cal_indices] = boot_calibrator.predict(
-                        boot_non_cal_judge, covariates=boot_non_cal_cov
-                    )
-
-            # Compute augmented estimates using FULL boot_oracle_mask
-            means_p, _ = compute_augmented_estimate_per_policy(
-                calibrated_full=boot_rewards,
-                oracle_labels=boot_oracle,
-                oracle_mask=boot_oracle_mask,  # All policies for residuals
-                oof_predictions=boot_oof_preds,
-                policy_indices=boot_policy,
-                n_policies=n_policies,
-            )
-        else:
-            # Plug-in estimator via bincount (efficient)
-            sum_p = np.bincount(boot_policy, weights=boot_rewards, minlength=n_policies)
-            cnt_p = np.bincount(boot_policy, minlength=n_policies)
-
-            # Handle zero counts (shouldn't happen in paired design, but be safe)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                means_p = np.where(cnt_p > 0, sum_p / cnt_p, np.nan)
-
-        bootstrap_matrix[valid_count, :] = means_p
-
-        oracle_counts.append(n_cal_oracle_boot)  # Track calibration oracle count
-        valid_count += 1
-
-    # Check if we got enough valid replicates
-    if valid_count < n_bootstrap:
-        logger.warning(
-            f"Bootstrap only collected {valid_count}/{n_bootstrap} valid replicates "
-            f"after {attempt} attempts. Results may be less reliable."
+    effective_augmentation = use_augmented_estimator
+    if needs_calibrator and calibration_provenance is None:
+        raise ValueError(
+            "Partial-oracle Direct bootstrap needs calibration provenance with "
+            "at least four independent prompt clusters"
         )
-        # Trim matrix to actual valid count
-        bootstrap_matrix = bootstrap_matrix[:valid_count, :]
 
-    # Compute standard errors and CIs
-    if valid_count > 1:
-        standard_errors = np.nanstd(bootstrap_matrix, axis=0, ddof=1)
-        ci_lower = np.nanpercentile(bootstrap_matrix, 100 * alpha / 2, axis=0)
-        ci_upper = np.nanpercentile(bootstrap_matrix, 100 * (1 - alpha / 2), axis=0)
+    # Point estimate uses the supplied fitted calibrator, ensuring analytic and
+    # bootstrap inference report the same estimator. Lower-level callers may
+    # omit it, in which case we fit once on the exact provenance rows.
+    point_fit_result: Optional[Any] = None
+    if point_calibrator is None and needs_calibrator:
+        assert calibration_provenance is not None
+        point_calibrator = calibrator_factory()
+        point_fit_result = point_calibrator.fit_cv(
+            calibration_provenance.judge_scores,
+            calibration_provenance.oracle_labels,
+            n_folds=n_folds,
+            prompt_ids=calibration_provenance.prompt_ids,
+            covariates=calibration_provenance.covariates,
+            sample_weight=calibration_provenance.sample_weights,
+        )
+    elif (
+        needs_calibrator
+        and point_calibrator is not None
+        and calibration_provenance is not None
+    ):
+        validate_calibration_provenance(calibration_provenance, point_calibrator)
+
+    if not needs_calibrator:
+        calibrated_point = np.clip(
+            eval_table.judge_scores.astype(float, copy=True), 0.0, 1.0
+        )
+        residual_point = calibrated_point.copy()
+    elif point_calibrator is None:
+        calibrated_point = eval_table.judge_scores.astype(float, copy=True)
+        residual_point = calibrated_point.copy()
     else:
-        standard_errors = np.full(n_policies, np.nan)
-        ci_lower = np.full(n_policies, np.nan)
-        ci_upper = np.full(n_policies, np.nan)
+        calibrated_point = np.clip(
+            point_calibrator.predict(
+                eval_table.judge_scores, covariates=eval_table.covariates
+            ),
+            0.0,
+            1.0,
+        )
+        point_fold_ids = (
+            point_fit_result.fold_ids if point_fit_result is not None else None
+        )
+        residual_point = residual_predictions_for_evaluation(
+            point_calibrator,
+            calibrated_point,
+            eval_table,
+            calibration_provenance,
+            calibration_fold_ids=point_fold_ids,
+        )
 
-    # Oracle count summary
-    oracle_summary = {}
-    if oracle_counts:
-        oracle_summary = {
-            "min": int(np.min(oracle_counts)),
-            "p10": int(np.percentile(oracle_counts, 10)),
-            "median": int(np.median(oracle_counts)),
+    point = compute_direct_point_estimate(
+        calibrated_point,
+        eval_table,
+        residual_point,
+        label_design,
+        use_augmented_estimator=effective_augmentation,
+    )
+
+    # Exact key lookup couples evaluation-linked calibration rows to their
+    # prompt bootstrap weight.
+    key_to_eval_row: Dict[EvaluationKey, int] = {}
+    if eval_table.row_keys is not None:
+        for row, key in enumerate(eval_table.row_keys):
+            if key in key_to_eval_row:
+                raise ValueError(f"Duplicate evaluation key {key!r}")
+            key_to_eval_row[key] = row
+
+    external_clusters: List[str] = []
+    if calibration_provenance is not None:
+        external_clusters = sorted(
+            {
+                prompt_id
+                for prompt_id, role in zip(
+                    calibration_provenance.prompt_ids,
+                    calibration_provenance.row_roles or [],
+                )
+                if role == "external"
+            }
+        )
+
+    bootstrap_matrix = np.empty((n_bootstrap, eval_table.n_policies), dtype=float)
+    for replicate in range(n_bootstrap):
+        eval_cluster_draw = rng.exponential(
+            scale=1.0, size=len(eval_table.unique_clusters)
+        )
+        eval_cluster_weights = {
+            int(cluster): float(weight)
+            for cluster, weight in zip(eval_table.unique_clusters, eval_cluster_draw)
         }
+        eval_weights = np.asarray(
+            [eval_cluster_weights[int(cluster)] for cluster in eval_table.prompt_ids],
+            dtype=float,
+        )
 
-    # Skip rate
-    skip_rate = (attempt - valid_count) / attempt if attempt > 0 else 0.0
+        boot_calibrator: Optional[Any] = None
+        boot_fold_ids: Optional[np.ndarray] = None
+        if needs_calibrator:
+            assert calibration_provenance is not None
+            external_draw = rng.exponential(scale=1.0, size=len(external_clusters))
+            external_weights = dict(zip(external_clusters, external_draw))
+            calibration_weights = np.empty(
+                len(calibration_provenance.judge_scores), dtype=float
+            )
+            base_calibration_weights = (
+                np.ones(len(calibration_provenance.judge_scores), dtype=float)
+                if calibration_provenance.sample_weights is None
+                else calibration_provenance.sample_weights
+            )
+            for i, (role, prompt_id, calibration_key) in enumerate(
+                zip(
+                    calibration_provenance.row_roles or [],
+                    calibration_provenance.prompt_ids,
+                    calibration_provenance.evaluation_keys or [],
+                )
+            ):
+                if role == "external":
+                    bootstrap_weight = external_weights[prompt_id]
+                else:
+                    assert calibration_key is not None
+                    if calibration_key not in key_to_eval_row:
+                        raise ValueError(
+                            f"Evaluation-linked calibration key "
+                            f"{calibration_key!r} is absent"
+                        )
+                    bootstrap_weight = eval_weights[key_to_eval_row[calibration_key]]
+                calibration_weights[i] = base_calibration_weights[i] * bootstrap_weight
 
-    # Use simple percentile intervals (BCa removed - negligible benefit, expensive)
-    # The ~95% coverage comes from θ̂_aug + bootstrap refit, not BCa corrections
+            boot_calibrator = calibrator_factory()
+            try:
+                fit_result = boot_calibrator.fit_cv(
+                    calibration_provenance.judge_scores,
+                    calibration_provenance.oracle_labels,
+                    n_folds=n_folds,
+                    prompt_ids=calibration_provenance.prompt_ids,
+                    covariates=calibration_provenance.covariates,
+                    quiet=True,
+                    sample_weight=calibration_weights,
+                )
+                boot_fold_ids = fit_result.fold_ids
+                calibrated_boot = np.clip(
+                    boot_calibrator.predict(
+                        eval_table.judge_scores,
+                        covariates=eval_table.covariates,
+                    ),
+                    0.0,
+                    1.0,
+                )
+                residual_boot = residual_predictions_for_evaluation(
+                    boot_calibrator,
+                    calibrated_boot,
+                    eval_table,
+                    calibration_provenance,
+                    calibration_fold_ids=boot_fold_ids,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Positive-weight bootstrap replicate {replicate} failed; "
+                    "no replicates were discarded or retried. Check calibration "
+                    f"fold support/model compatibility. Original error: {exc}"
+                ) from exc
+        else:
+            calibrated_boot = calibrated_point
+            residual_boot = residual_point
 
-    policy_names = eval_table.policy_names
+        replicate_point = compute_direct_point_estimate(
+            calibrated_boot,
+            eval_table,
+            residual_boot,
+            label_design,
+            use_augmented_estimator=effective_augmentation,
+            observation_weights=eval_weights,
+        )
+        if not np.all(np.isfinite(replicate_point.estimates)):
+            raise RuntimeError(
+                f"Positive-weight bootstrap replicate {replicate} produced "
+                "non-finite estimates; no retry was attempted."
+            )
+        bootstrap_matrix[replicate] = replicate_point.estimates
+
+    standard_errors = np.std(bootstrap_matrix, axis=0, ddof=1)
+    ci_lower = np.percentile(bootstrap_matrix, 100 * alpha / 2, axis=0)
+    ci_upper = np.percentile(bootstrap_matrix, 100 * (1 - alpha / 2), axis=0)
+    policy_cluster_counts = np.asarray(
+        [
+            len(
+                np.unique(
+                    eval_table.prompt_ids[eval_table.policy_indices == policy_index]
+                )
+            )
+            for policy_index in range(eval_table.n_policies)
+        ],
+        dtype=int,
+    )
+    unavailable = policy_cluster_counts < 2
+    standard_errors[unavailable] = np.nan
+    ci_lower[unavailable] = np.nan
+    ci_upper[unavailable] = np.nan
+    bootstrap_matrix[:, unavailable] = np.nan
+    n_calibration = (
+        len(calibration_provenance.judge_scores)
+        if calibration_provenance is not None
+        else 0
+    )
+    oracle_summary = {
+        "min": n_calibration,
+        "p10": n_calibration,
+        "median": n_calibration,
+    }
 
     return {
         "bootstrap_matrix": bootstrap_matrix,
-        "estimates": full_estimates,
+        "estimates": point.estimates,
         "standard_errors": standard_errors,
         "ci_lower": ci_lower,
         "ci_upper": ci_upper,
-        "n_valid_replicates": valid_count,
-        "n_attempts": attempt,
-        "skip_rate": float(skip_rate),
+        "n_valid_replicates": n_bootstrap,
+        "n_attempts": n_bootstrap,
+        "skip_rate": 0.0,
         "oracle_count_summary": oracle_summary,
-        "policy_names": policy_names,
-        "n_clusters": n_clusters,
-        "n_policies": n_policies,
+        "policy_names": eval_table.policy_names,
+        "n_clusters": eval_table.n_clusters,
+        "n_policies": eval_table.n_policies,
+        "policy_cluster_counts": policy_cluster_counts.tolist(),
+        "inference_unavailable_policies": [
+            eval_table.policy_names[index] for index in np.where(unavailable)[0]
+        ],
+        "inference_unavailable_reason": (
+            "fewer_than_two_independent_clusters" if np.any(unavailable) else None
+        ),
         "alpha": alpha,
         "seed": seed,
-        "min_oracle_per_replicate": min_oracle_per_replicate,
-        "use_augmented_estimator": use_augmented_estimator,
-        "augmentation_diagnostics": augmentation_diagnostics,
-        "calibration_policy_idx": calibration_policy_idx,  # For transport experiments
+        "min_oracle_per_replicate": None,
+        "use_augmented_estimator": effective_augmentation,
+        "augmentation_diagnostics": point.diagnostics,
+        "calibration_policy_idx": calibration_policy_idx,
+        "bootstrap_scheme": "positive_exponential_cluster_weights",
+        "provenance_summary": (
+            calibration_provenance.summary()
+            if calibration_provenance is not None
+            else {"n_rows": 0, "n_clusters": 0}
+        ),
+        "label_design": label_design.kind,
     }
 
 
@@ -887,17 +1479,10 @@ def cluster_robust_se(
     df = max(G - 1, 1)
 
     if G < 2:
-        # Fallback to naive SE if we don't have clustering
-        se_naive = float(np.std(influences, ddof=1) / np.sqrt(n))
-        t_crit = stats.t.ppf(1 - alpha / 2, df=max(n - 1, 1))
-        return {
-            "estimate": float(estimate),
-            "se": se_naive,
-            "ci_lower": float(estimate - t_crit * se_naive),
-            "ci_upper": float(estimate + t_crit * se_naive),
-            "n_clusters": int(G),
-            "df": int(max(n - 1, 1)),
-        }
+        raise ValueError(
+            "Cluster-robust inference requires at least two independent "
+            "clusters; row-level IID SE is not a valid fallback."
+        )
 
     # Cluster totals of IF
     T = np.array(

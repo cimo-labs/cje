@@ -9,8 +9,8 @@ risk never silently "low") and pins the 0.4.0 wiring:
   S-range the calibrator stored at fit time, sets CRITICAL statuses, and
   writes metadata["boundary_cards"] + metadata["reliability_gates"];
 - DirectDiagnostics surfaces the badge (validate/summary/overall_status);
-- the CLI trophy demotion fires for a boundary-violating argmax;
-- IPSDiagnostics is a deprecated alias of DirectDiagnostics (gone in 0.5.0).
+- the CLI qualifies a boundary-violating point-estimate argmax;
+- the removed IPSDiagnostics alias raises actionable migration guidance.
 """
 
 from typing import Tuple
@@ -24,7 +24,6 @@ from cje.data.models import Dataset, EstimationResult, Sample
 from cje.diagnostics import (
     BoundaryCard,
     DirectDiagnostics,
-    IPSDiagnostics,
     Status,
     boundary_card,
 )
@@ -235,10 +234,10 @@ class TestBoundaryCardWiredIntoDirect:
         assert "boundary_cards" not in result.metadata
         assert "reliability_gates" not in result.metadata
 
-    def test_cli_trophy_demotes_boundary_violating_argmax(self) -> None:
+    def test_cli_qualifies_boundary_violating_argmax(self) -> None:
         # End-to-end: the violating policy wins the raw argmax (isotonic
         # clipping maps its out-of-range scores to the top reward) but the
-        # CLI demotes it and crowns the best RELIABLE policy instead.
+        # CLI keeps it visible and attaches the limitation.
         rng = np.random.default_rng(9)
         dataset = _calibration_dataset(rng, s_max=0.6)
         _, cal_result = calibrate_dataset(
@@ -268,12 +267,9 @@ class TestBoundaryCardWiredIntoDirect:
         assert gates["safe"]["flagged"] is False
 
         lines = best_policy_lines(result)
-        assert any(
-            "Best by point estimate: violator" in line and "UNRELIABLE" in line
-            for line in lines
-        )
-        assert not any(line.startswith("🏆 Best policy:") for line in lines)
-        assert any("Best reliable policy: safe" in line for line in lines)
+        assert lines[0] == "Best by point estimate: violator"
+        assert any("reliability gates flagged" in line for line in lines)
+        assert not any("Best reliable policy" in line for line in lines)
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +344,10 @@ class TestCautionBandYieldsWarning:
 
         # The CLI still crowns the policy (WARNING is not a demotion)
         lines = best_policy_lines(result)
-        assert lines == ["🏆 Best policy: caution"]
+        assert lines == [
+            "Best by point estimate: caution",
+            "Limitations: residual transport NOT_CHECKED",
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -453,16 +452,15 @@ class TestCalibrationInfoPopulated:
 
 
 # ---------------------------------------------------------------------------
-# Deprecated alias
+# Removed alias
 # ---------------------------------------------------------------------------
 
 
-class TestDeprecatedAlias:
-    def test_ips_diagnostics_is_direct_diagnostics(self) -> None:
-        # 0.3.x name kept as an alias until 0.5.0 — same object, not a copy
-        assert IPSDiagnostics is DirectDiagnostics
+class TestRemovedAlias:
+    def test_ips_diagnostics_removed_from_diagnostics(self) -> None:
+        with pytest.raises(ImportError, match="use DirectDiagnostics"):
+            from cje.diagnostics import IPSDiagnostics  # noqa: F401
 
-    def test_alias_importable_from_advanced(self) -> None:
-        from cje.advanced import IPSDiagnostics as AdvancedAlias
-
-        assert AdvancedAlias is DirectDiagnostics
+    def test_ips_diagnostics_removed_from_advanced(self) -> None:
+        with pytest.raises(ImportError, match="use DirectDiagnostics"):
+            from cje.advanced import IPSDiagnostics  # noqa: F401

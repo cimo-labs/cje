@@ -49,10 +49,8 @@ from .calibration import (
     CalibrationResult,
 )
 
-# Diagnostics (IPSDiagnostics is a deprecated alias slated for removal)
 from .diagnostics import (
     DirectDiagnostics,
-    IPSDiagnostics,
     Status,
 )
 
@@ -77,7 +75,6 @@ __all__ = [
     "CalibrationResult",
     # Diagnostics
     "DirectDiagnostics",
-    "IPSDiagnostics",
     "Status",
     # Utilities
     "export_results_json",
@@ -103,6 +100,12 @@ _VIZ_EXPORTS = ("plot_policy_estimates",)
 
 
 def __getattr__(name: str) -> object:
+    if name == "IPSDiagnostics":
+        raise ImportError(
+            "cje.advanced.IPSDiagnostics was removed in 0.6.0; "
+            "use DirectDiagnostics. OPE estimators remain available only "
+            "on the frozen cje-eval 0.3.x line."
+        )
     if name in _REMOVED_IN_0_4_0:
         raise ImportError(
             f"cje.advanced.{name} was removed in 0.4.0 — "

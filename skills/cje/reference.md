@@ -67,8 +67,9 @@ fallback), never by this parameter — its only observable effect is which name 
   `p_adjusted`/`significant_adjusted` for many-pair audits
 - `.bootstrap_samples` → (B, P) bootstrap replicate matrix on bootstrap runs (columns follow
   `metadata["target_policies"]`); powers the paired comparisons, omitted from JSON export
-- `.best_policy()` → PolicyVerdict (name, index, estimate, flagged, all_flagged, runner_up); gate-aware — a flagged argmax is demoted to `runner_up` and the best reliable policy wins
-- `.calibrator` → fitted calibrator, reusable in `transport_audit`
+- `.best_policy()` → PolicyVerdict (name, index, estimate, flagged, all_flagged, runner_up); returns the highest point estimate with limitations attached. Pass `reliable_only=True` only when an operational fallback among gate-passing policies is explicitly desired
+- `.calibrator` → fitted calibrator when calibration is required; complete oracle coverage may return `None`
+- `.metadata["transport_audits"]` → per-policy PASS / FAIL / INCONCLUSIVE / NOT_GRADED / NOT_CHECKED records when using `TransportAuditConfig`; FAIL adds a hard result gate only when the current estimate depends on that calibrator
 - `.summary()` → compact text report (per-policy estimate + 95% CI + gate flags, best-policy line)
 - `.gates` → `Dict[str, GateResult]` (typed view of `metadata["reliability_gates"]`); `.target_policies`
 - `.metadata` keys: `target_policies`, `reliability_gates` (`{policy: {"flagged": bool, ...}}`),
@@ -102,14 +103,26 @@ belong in `analyze_dataset` (paired, gate-aware).
 **Transport audit** — before reusing `result.calibrator` (or `results.calibrator`) on new data:
 
 ```python
-diag = transport_audit(probe_scores, probe_labels, calibrator, group_label="policy:gpt-5.6-mini")
+diag = transport_audit(
+    probe_scores,
+    probe_labels,
+    calibrator,
+    group_label="policy:gpt-5.6-mini",
+    delta_max=0.03,
+    cluster_ids=prompt_ids,
+    family_size=n_groups,
+)
 print(diag.summary())
 ```
 
-- Probe: 40–60 fresh oracle labels from the new setting.
-- `TransportDiagnostics`: `status` (PASS/WARN/FAIL), `delta_hat` (mean residual), `delta_ci`
-  (t-based, df = n_probe − 1), `recommended_action`, `n_probe`, `.summary()`, `.plot()` (viz extra).
-- `decile_residuals` are display-only (4–6 rows per bin at recommended probe sizes) — never gate on them.
+- Probe: held out, probability sampled, and at least 20 effective independent clusters; size
+  for the desired CI width.
+- `TransportDiagnostics`: `status` (PASS/FAIL/INCONCLUSIVE/NOT_GRADED), `delta_hat` (mean
+  residual), simultaneous `delta_ci`, `effective_clusters`, `recommended_action`, `.summary()`,
+  and `.plot()` (viz extra).
+- `delta_max` is predeclared in public oracle units. Pass analysis weights for unequal sampling
+  probabilities and `family_size` for all groups used in the decision.
+- `decile_residuals` and probe-bin occupancy are display-only; never gate on them.
 
 ## Planning: "how many labels do I need?"
 
@@ -146,17 +159,18 @@ cje analyze PATH [--calibration-data F]     # per-policy estimates + 95% CIs
             [--judge-field NAME] [--oracle-field NAME]
 ```
 
-`cje analyze` is gate-aware: a flagged point-estimate winner prints `⚠️ ... (UNRELIABLE)` and the
-trophy 🏆 goes to the best *reliable* policy. Run `cje validate` first on user-provided directories.
+`cje analyze` surfaces the highest point estimate together with any diagnostic limitations; it
+does not silently substitute a different winner. Run `cje validate` first on user-provided
+directories.
 
 ## Diagnostics glossary
 
 | Signal | Values | What to tell the user |
 |---|---|---|
 | `overall_status` | GOOD / WARNING / CRITICAL | CRITICAL: results shipped with explicit caveats only |
-| Boundary card | OK / CAUTION / REFUSE-LEVEL | REFUSE-LEVEL (≥5% of a policy's judge mass outside the oracle calibration range): no absolute numbers for that policy; rankings may stand; collect labels covering the missing score range |
-| `reliability_gates[p]["flagged"]` | bool | Flagged winner → report the best reliable policy instead |
-| Transport `status` | PASS / WARN / FAIL | PASS: reuse. WARN: rankings only, say why. FAIL: do not reuse; follow `recommended_action` |
+| Boundary card | OK / CAUTION / REFUSE-LEVEL | Scalar score-range support only. REFUSE-LEVEL: no absolute level claim from this fit; it does not establish ranking validity |
+| `reliability_gates[p]["flagged"]` | bool | Surface the point estimate with the limitation; do not substitute another policy silently |
+| Transport `status` | PASS / FAIL / INCONCLUSIVE / NOT_GRADED | Equivalence verdict for the declared residual margin; interpret only for the audited population and family |
 
 ## Troubleshooting
 
@@ -176,8 +190,9 @@ trophy 🏆 goes to the best *reliable* policy. Run `cje validate` first on user
 0.5.0 is a consolidation release: same statistics on the default paths, smaller API.
 
 - **`results.best_policy()` returns a `PolicyVerdict`** (was a naive argmax `int`).
-  It is gate-aware: a flagged argmax is demoted to `runner_up` and the best reliable
-  policy wins. Use `verdict.index` for the old integer; `verdict.name` for the name.
+  The highest point estimate remains the default winner and carries its gate limitations;
+  `reliable_only=True` requests a gate-passing operational fallback. Use `verdict.index`
+  for the old integer and `verdict.name` for the name.
 - **`estimator_config` unknown keys now raise** a ValueError listing the valid keys
   (`oua_jackknife`, `inference_method`, `n_bootstrap`, `bootstrap_seed`,
   `use_augmented_estimator`, `paired_comparison`). Typos no longer pass silently.

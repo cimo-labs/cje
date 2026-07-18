@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "cje-eval"
-version = "0.5.1"
-description = "Causal Judge Evaluation - Calibrated LLM-judge evaluation with honest confidence intervals"
+version = "0.6.0rc1"
+description = "Causal Judge Evaluation - Calibrated LLM-judge evaluation with calibration-aware confidence intervals"
 authors = ["Eddie Landesberg <eddie@cimolabs.com>"]
 license = "MIT"
 packages = [{ include = "cje" }]
@@ -68,6 +68,12 @@ addopts = [
 ]
 testpaths = ["cje/tests"]
 
+[tool.coverage.run]
+omit = ["cje/tests/*"]
+
+[tool.coverage.report]
+omit = ["cje/tests/*"]
+
 [build-system]
-requires = ["poetry-core>=1.0.0"]
+requires = ["poetry-core==1.9.1"]
 build-backend = "poetry.core.masonry.api"

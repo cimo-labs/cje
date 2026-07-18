@@ -6,7 +6,6 @@ end-to-end without crashing.
 """
 
 import json
-import logging
 import tempfile
 from pathlib import Path
 
@@ -157,15 +156,13 @@ def test_calibration_data_path_direct_mode_no_combining(tmp_path: Path) -> None:
 
 
 def test_calibration_data_only_without_eval_oracle_returns_finite_estimates(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path,
 ) -> None:
-    """Regression for the NaN-bootstrap gap (pre-existing, found by WP3).
+    """External calibration rows support joint bootstrap inference.
 
     With --calibration-data only and NO oracle labels in the fresh draws,
-    the default bootstrap path built an eval table with zero oracle rows:
-    the calibrator refit failed, every replicate was skipped, and NaN
-    estimates came back quietly. The estimator must now fall back to
-    cluster-robust SEs with the oracle jackknife, loudly.
+    exact calibration provenance lets the bootstrap resample and refit the
+    calibration source independently from the evaluation prompt clusters.
     """
     # Calibration data: old logged data (judge + oracle), 40 samples.
     # The logprob fields are present-and-ignored, as in real 0.3.x logs.
@@ -200,28 +197,27 @@ def test_calibration_data_only_without_eval_oracle_returns_finite_estimates(
             "\n".join(json.dumps(r) for r in records) + "\n"
         )
 
-    # Default estimator config -> inference_method="bootstrap" (the gap)
-    with caplog.at_level(logging.WARNING, logger="cje.estimators.direct_method"):
-        results = analyze_dataset(
-            fresh_draws_dir=str(fresh_draws_dir),
-            calibration_data_path=str(calib_path),
-        )
+    # Supplying only n_bootstrap retains the default bootstrap inference route.
+    results = analyze_dataset(
+        fresh_draws_dir=str(fresh_draws_dir),
+        calibration_data_path=str(calib_path),
+        estimator_config={"n_bootstrap": 50},
+    )
 
     # Finite estimates and SEs — not the quiet NaNs
     assert np.all(np.isfinite(results.estimates)), results.estimates
     assert np.all(np.isfinite(results.standard_errors)), results.standard_errors
-    assert results.method == "calibrated_direct"  # calibrated, not naive
+    assert results.method == "calibrated_direct_bootstrap"
 
-    # The fallback is loud and recorded in metadata
-    assert any(
-        "falling back to cluster-robust" in record.message for record in caplog.records
-    )
     inference = results.metadata["inference"]
-    assert inference["method"] == "cluster_robust"
-    assert inference["requested_method"] == "bootstrap"
-    assert inference["fallback_reason"] == "no_oracle_labels_in_evaluation_data"
+    assert inference["method"] == "cluster_bootstrap_refit"
+    assert inference["bootstrap_scheme"] == "positive_exponential_cluster_weights"
+    assert inference["n_bootstrap_requested"] == 50
+    assert inference["n_bootstrap_valid"] == 50
+    assert inference["skip_rate"] == 0.0
+    assert results.metadata["calibration_provenance_explicit"] is True
 
-    # Oracle (calibration) uncertainty is still included, via the jackknife
+    # Joint bootstrap inference includes finite calibration-sample uncertainty.
     assert results.metadata["se_components"]["includes_oracle_uncertainty"] is True
 
 
@@ -275,12 +271,13 @@ def test_minimal_calibration_file_loads_and_analyzes(tmp_path: Path) -> None:
     results = analyze_dataset(
         fresh_draws_dir=str(fresh_draws_dir),
         calibration_data_path=str(calib_path),
+        estimator_config={"n_bootstrap": 50},
     )
 
     assert len(results.estimates) == 2
     assert np.all(np.isfinite(results.estimates)), results.estimates
     assert np.all(np.isfinite(results.standard_errors)), results.standard_errors
-    assert results.method == "calibrated_direct"  # calibrated, not naive
+    assert results.method == "calibrated_direct_bootstrap"
     assert results.metadata["oracle_sources"]["calibration_data"]["n_oracle"] == 30
 
 

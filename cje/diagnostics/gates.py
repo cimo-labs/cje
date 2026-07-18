@@ -5,11 +5,11 @@ Single source of truth for the CJE paper's diagnostic gates
 thresholds from this module so that a given number receives the same
 verdict everywhere.
 
-Paper gate summary (surviving Direct-mode gates):
+Diagnostic summary:
 
-- Coverage badge: >= 5% of target judge-score mass outside the oracle
-  calibration range triggers REFUSE-LEVEL (level claims refused;
-  rankings may stand).
+- Scalar range support: >= 5% of target judge-score mass outside the labeled
+  calibration range triggers REFUSE-LEVEL for absolute claims. This check does
+  not establish residual transport or the validity of policy rankings.
 """
 
 from typing import Dict, Optional
@@ -35,21 +35,26 @@ BOUNDARY_CARD_STATUS_TO_STATUS: Dict[str, Status] = {
     "OK": Status.GOOD,
     "CAUTION": Status.WARNING,
     "REFUSE-LEVEL": Status.CRITICAL,
+    "INCONCLUSIVE": Status.WARNING,
 }
 
 # ---------------------------------------------------------------------------
 # Transport audit (audit_transportability)
 # ---------------------------------------------------------------------------
-# |delta_hat| below this splits WARN (marginal bias, monitor) from FAIL
-# (clear bias, refit) once the residual CI excludes zero.
+# Deprecated compatibility constant. Residual audits are graded against an
+# explicit, user-declared delta_max; this value is not used by the classifier.
 TRANSPORT_FAIL_DELTA_THRESHOLD = 0.05
 
 # Canonical transport status -> Status ladder for consumers that grade
 # TransportDiagnostics alongside other diagnostics.
 TRANSPORT_STATUS_TO_STATUS: Dict[str, Status] = {
     "PASS": Status.GOOD,
-    "WARN": Status.WARNING,
     "FAIL": Status.CRITICAL,
+    "INCONCLUSIVE": Status.WARNING,
+    "NOT_GRADED": Status.WARNING,
+    "NOT_CHECKED": Status.WARNING,
+    # Compatibility for previously serialized diagnostics only.
+    "WARN": Status.WARNING,
 }
 
 

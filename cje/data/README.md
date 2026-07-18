@@ -163,7 +163,7 @@ print(f"Difference: {comparison['difference']:.3f} (p={comparison['p_value']:.3f
 
 # Typed results (0.5.0) — metadata mirrors stay the serialized source of truth
 print(result.summary())              # per-policy estimates + CIs + gate flags
-verdict = result.best_policy()       # PolicyVerdict: gate-aware best policy
+verdict = result.best_policy()       # highest point estimate plus limitations
 print(verdict.name, verdict.flagged, verdict.runner_up)
 gates = result.gates                 # {policy: GateResult(flagged, refuse_level_claims, reasons)}
 policies_typed = result.target_policies  # == metadata["target_policies"]

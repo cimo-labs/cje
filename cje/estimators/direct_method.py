@@ -27,9 +27,17 @@ from ..data.models import CIInfo, EstimationResult
 from ..diagnostics.models import DirectDiagnostics, Status
 from ..diagnostics.gates import BOUNDARY_CARD_STATUS_TO_STATUS, worst_status
 from ..diagnostics.robust_inference import (
+    CalibrationProvenance,
+    DirectEvalTable,
+    DirectPointEstimate,
+    LabelDesign,
+    build_direct_eval_table,
     combine_cluster_and_oracle,
-    oracle_jackknife_estimates,
+    compute_direct_point_estimate,
+    direct_oracle_jackknife_estimates,
     oracle_jackknife_variance,
+    residual_predictions_for_evaluation,
+    validate_calibration_provenance,
 )
 
 logger = logging.getLogger(__name__)
@@ -96,10 +104,12 @@ class CalibratedDirectEstimator:
         reward_calibrator: Optional[Any] = None,
         paired_comparison: bool = True,
         oua_jackknife: bool = True,
-        inference_method: str = "bootstrap",
+        inference_method: Optional[str] = None,
         n_bootstrap: int = 2000,
         bootstrap_seed: int = 42,
         use_augmented_estimator: bool = True,
+        calibration_provenance: Optional[CalibrationProvenance] = None,
+        label_design: Optional[LabelDesign] = None,
     ):
         self.target_policies = list(target_policies)
         self.reward_calibrator = reward_calibrator
@@ -108,7 +118,11 @@ class CalibratedDirectEstimator:
         self._fitted = False
         self._results: Optional[EstimationResult] = None
 
-        normalized_inference = inference_method.strip().lower()
+        normalized_inference = (
+            inference_method.strip().lower()
+            if inference_method is not None
+            else ("bootstrap" if reward_calibrator is not None else "cluster_robust")
+        )
         if normalized_inference not in self._VALID_INFERENCE_METHODS:
             allowed = ", ".join(sorted(self._VALID_INFERENCE_METHODS))
             raise ValueError(
@@ -118,24 +132,37 @@ class CalibratedDirectEstimator:
                 "oua_jackknife=True with a valid inference_method."
             )
 
-        # Auto-detect: when reward_calibrator=None, bootstrap would create a new
-        # calibrator internally, defeating "naive" (uncalibrated) mode.
-        # Default to cluster_robust in this case.
-        if reward_calibrator is None and normalized_inference == "bootstrap":
-            logger.info(
-                "reward_calibrator=None with inference_method='bootstrap' would create "
-                "a calibrator during bootstrap. Defaulting to 'cluster_robust' for "
-                "uncalibrated estimation. Pass inference_method='cluster_robust' explicitly "
-                "to silence this message."
-            )
-            normalized_inference = "cluster_robust"
-
         self.inference_method = normalized_inference
         self.n_bootstrap = n_bootstrap
         self.bootstrap_seed = bootstrap_seed
         self.use_augmented_estimator = use_augmented_estimator
+        if calibration_provenance is not None and reward_calibrator is None:
+            raise ValueError(
+                "calibration_provenance requires a fitted reward_calibrator"
+            )
+        self._provenance_explicit = calibration_provenance is not None
+        self._provenance_linkage_validated = self._provenance_explicit
+        self.calibration_provenance = calibration_provenance
+        if self.calibration_provenance is None and reward_calibrator is not None:
+            try:
+                self.calibration_provenance = (
+                    CalibrationProvenance.from_fitted_calibrator(reward_calibrator)
+                )
+            except ValueError:
+                self.calibration_provenance = None
+        if (
+            self.calibration_provenance is not None
+            and self._provenance_explicit
+            and reward_calibrator is not None
+        ):
+            validate_calibration_provenance(
+                self.calibration_provenance, reward_calibrator
+            )
+        self.label_design = label_design or LabelDesign()
         self._policy_data: Dict[str, PolicyData] = {}
         self._fresh_draws: Dict[str, Any] = {}  # Storage for fresh draws
+        self._eval_table: Optional[Any] = None
+        self._last_point: Optional[DirectPointEstimate] = None
 
     @property
     def is_fitted(self) -> bool:
@@ -169,11 +196,14 @@ class CalibratedDirectEstimator:
         Without a reward calibrator the estimator averages raw judge scores,
         so labeling the result 'calibrated_direct' would be misleading.
         """
-        return (
-            "calibrated_direct"
-            if self.reward_calibrator is not None
-            else "naive_direct"
-        )
+        routes = self._point_routes()
+        if routes and all(route == "direct_oracle" for route in routes):
+            return "direct_oracle"
+        if self.reward_calibrator is not None:
+            return "calibrated_direct"
+        if any(route == "direct_oracle" for route in routes):
+            return "mixed_direct"
+        return "naive_direct"
 
     def add_fresh_draws(self, policy: str, fresh_draws: Any) -> None:
         """Add fresh draws for a target policy.
@@ -186,6 +216,74 @@ class CalibratedDirectEstimator:
         logger.info(
             f"Added fresh draws for policy '{policy}': "
             f"{len(fresh_draws.samples)} samples"
+        )
+
+    def _ordered_fresh_draws(self) -> Dict[str, Any]:
+        """Return evaluation draws in the public target-policy order."""
+        return {policy: self._fresh_draws[policy] for policy in self.target_policies}
+
+    def _build_eval_table(
+        self, *, couple_policy_prompts: bool = True
+    ) -> DirectEvalTable:
+        """Build a row table in target order, optionally decoupling policies."""
+        covariate_names = (
+            self.reward_calibrator.covariate_names
+            if self.reward_calibrator is not None
+            and hasattr(self.reward_calibrator, "covariate_names")
+            else None
+        )
+        table = build_direct_eval_table(
+            fresh_draws_per_policy=self._ordered_fresh_draws(),
+            covariate_names=covariate_names,
+        )
+        if couple_policy_prompts or len(self.target_policies) < 2:
+            return table
+
+        cluster_by_policy_prompt: Dict[Tuple[int, str], int] = {}
+        independent_cluster_ids: List[int] = []
+        for policy_index, prompt_id in zip(
+            table.policy_indices, table.prompt_id_strings
+        ):
+            key = (int(policy_index), str(prompt_id))
+            if key not in cluster_by_policy_prompt:
+                cluster_by_policy_prompt[key] = len(cluster_by_policy_prompt)
+            independent_cluster_ids.append(cluster_by_policy_prompt[key])
+
+        return DirectEvalTable(
+            prompt_ids=np.asarray(independent_cluster_ids, dtype=np.int64),
+            prompt_id_strings=list(table.prompt_id_strings),
+            policy_indices=table.policy_indices,
+            judge_scores=table.judge_scores,
+            oracle_labels=table.oracle_labels,
+            oracle_mask=table.oracle_mask,
+            covariates=table.covariates,
+            covariate_names=table.covariate_names,
+            row_keys=list(table.row_keys) if table.row_keys is not None else None,
+            row_keys_synthesized=table.row_keys_synthesized,
+            policy_names=list(table.policy_names),
+        )
+
+    def _point_routes(self) -> List[str]:
+        if self._last_point is None:
+            return []
+        return [str(route) for route in self._last_point.diagnostics.get("routes", [])]
+
+    def _route_for_policy(self, policy: str) -> Optional[str]:
+        try:
+            index = self.target_policies.index(policy)
+        except ValueError:
+            return None
+        routes = self._point_routes()
+        return routes[index] if index < len(routes) else None
+
+    def _all_policies_have_complete_oracle_coverage(self) -> bool:
+        return bool(self.target_policies) and all(
+            bool(self._fresh_draws[policy].samples)
+            and all(
+                sample.oracle_label is not None
+                for sample in self._fresh_draws[policy].samples
+            )
+            for policy in self.target_policies
         )
 
     def _calibration_overlaps_evaluation(self) -> Tuple[bool, int]:
@@ -201,15 +299,25 @@ class CalibratedDirectEstimator:
             - coupled: True if there's any cluster overlap
             - overlap_count: Number of clusters that appear in both sets
         """
-        # Oracle labels come from fresh draws (coupled when any overlap)
+        # Explicit provenance is authoritative.  Legacy direct constructor
+        # calls lack row roles, so retain the historical heuristic only for
+        # their metadata/auto-routing.
         cal_clusters: set = set()
         eval_clusters: set = set()
 
         for fd in self._fresh_draws.values():
             for sample in fd.samples:
                 eval_clusters.add(sample.prompt_id)
-                if sample.oracle_label is not None:
+                if not self._provenance_explicit and sample.oracle_label is not None:
                     cal_clusters.add(sample.prompt_id)
+
+        if self._provenance_explicit and self.calibration_provenance is not None:
+            for role, prompt_id in zip(
+                self.calibration_provenance.row_roles or [],
+                self.calibration_provenance.prompt_ids,
+            ):
+                if role == "evaluation":
+                    cal_clusters.add(prompt_id)
 
         # Compute intersection
         overlap = cal_clusters & eval_clusters
@@ -291,55 +399,50 @@ class CalibratedDirectEstimator:
         and the calibrator's finite-sample uncertainty must still be added
         via the jackknife, so report no coverage and keep the OUA active.
         """
-        coverage = getattr(self.reward_calibrator, "oracle_coverage", None)
-        if coverage is None:
+        n_total = sum(len(fd.samples) for fd in self._fresh_draws.values())
+        if n_total == 0:
             return None
-        coverage_value = float(coverage)
-        if coverage_value >= 1.0 and self._eval_oracle_count() == 0:
+        n_labeled = self._eval_oracle_count()
+        if n_labeled == 0:
             return None
-        return coverage_value
+        return n_labeled / n_total
 
     def _bootstrap_fallback_reason(self) -> Optional[str]:
         """Why bootstrap cannot run on this data (None when it can).
 
-        The bootstrap path refits the calibrator on the EVALUATION data's
-        oracle labels. With a separate calibration source and NO oracle
-        labels in the fresh draws, its eval table has zero oracle rows:
-        the full-data refit fails and every replicate is skipped below
-        min_oracle_per_replicate, so NaN estimates came back quietly
-        (pre-0.4.0 behavior).
-
-        Falling back to cluster-robust + oracle-jackknife is statistically
-        sound here: with a separate calibration source and zero eval-oracle
-        rows, calibration and evaluation are independent samples, so the
-        calibration/evaluation covariance term the bootstrap exists to
-        capture is exactly zero. The additive decomposition — cluster-robust
-        evaluation variance plus the oracle jackknife (which carries the
-        calibrator's oracle uncertainty via its cross-fitted fold models) —
-        is then the correct SE.
+        Refit bootstrap requires the exact calibration rows. Explicit
+        provenance is preferred; JudgeCalibrator retains compact fit rows for
+        backwards-compatible direct construction. If neither is available,
+        return the strongest valid analytic artifact rather than inventing a
+        bootstrap calibration sample.
         """
-        if self._eval_oracle_count() > 0:
+        if (
+            self.reward_calibrator is not None
+            and self.calibration_provenance is not None
+        ):
             return None
 
         if self.reward_calibrator is not None:
             logger.warning(
-                "bootstrap requires oracle labels in the evaluation data; "
+                "bootstrap requires the exact rows used to fit the calibrator; "
                 "falling back to cluster-robust SEs with oracle-jackknife "
-                "(the fresh draws carry no oracle labels, so the bootstrap "
-                "refit would skip every replicate and return NaN estimates; "
-                "the fitted calibrator's oracle uncertainty is included via "
-                "the jackknife)"
+                "because calibration provenance is unavailable"
             )
-            return "no_oracle_labels_in_evaluation_data"
+            return "calibration_provenance_unavailable"
 
-        # No calibrator either (naive mode reached via inference "auto"):
-        # there is nothing to refit, so bootstrap is equally impossible.
+        if self._all_policies_have_complete_oracle_coverage():
+            # The bootstrap point functional routes every policy directly to
+            # observed oracle outcomes, so no calibrator or fit provenance is
+            # needed.
+            return None
+
+        # No calibrator and at least one policy needs a judge-score plug-in.
         logger.warning(
-            "bootstrap requires oracle labels in the evaluation data; "
-            "falling back to cluster-robust SEs (no oracle labels and no "
-            "fitted calibrator — results are uncalibrated judge-score means)"
+            "bootstrap without a fitted calibrator requires complete evaluation "
+            "oracle coverage for every policy; falling back to cluster-robust "
+            "inference for the mixed/uncalibrated routes"
         )
-        return "no_oracle_labels_and_no_calibrator"
+        return "calibrator_unavailable_for_non_oracle_routes"
 
     def _covariate_matrix(self, policy: str) -> Optional[np.ndarray]:
         """Extract the calibrator's covariates from a policy's fresh draws.
@@ -417,10 +520,126 @@ class CalibratedDirectEstimator:
                 f"Loaded fresh draws for policy '{policy}': {len(rewards)} samples"
             )
 
+        self._eval_table = self._build_eval_table()
+        self._resolve_legacy_evaluation_linkage()
+
         self._fitted = True
         logger.info(
             f"Prepared data for {len(self._policy_data)} policies from fresh draws"
         )
+
+    def _resolve_legacy_evaluation_linkage(self) -> None:
+        """Link retained legacy fit rows only when every match is unique.
+
+        High-level analysis always passes explicit provenance. This narrow
+        compatibility bridge handles older direct constructors that fitted a
+        calibrator from the same labeled fresh draws but could not declare row
+        roles. Ambiguous or partial matches remain external.
+        """
+        if (
+            self._provenance_explicit
+            or self.calibration_provenance is None
+            or self._eval_table is None
+            or self._eval_table.row_keys is None
+        ):
+            return
+        table = self._eval_table
+        matched_keys: List[Optional[Tuple[str, str, int]]] = []
+        used_rows: set = set()
+        for score, label, prompt_id in zip(
+            self.calibration_provenance.judge_scores,
+            self.calibration_provenance.oracle_labels,
+            self.calibration_provenance.prompt_ids,
+        ):
+            candidates = [
+                row
+                for row in range(len(table.judge_scores))
+                if row not in used_rows
+                and table.oracle_mask[row]
+                and table.prompt_id_strings[row] == prompt_id
+                and np.isclose(table.judge_scores[row], score)
+                and np.isclose(table.oracle_labels[row], label)
+            ]
+            if len(candidates) != 1:
+                return
+            row = candidates[0]
+            used_rows.add(row)
+            matched_keys.append(table.row_keys[row])
+
+        self.calibration_provenance = CalibrationProvenance(
+            judge_scores=self.calibration_provenance.judge_scores,
+            oracle_labels=self.calibration_provenance.oracle_labels,
+            prompt_ids=self.calibration_provenance.prompt_ids,
+            covariates=self.calibration_provenance.covariates,
+            row_roles=["evaluation"] * len(matched_keys),
+            evaluation_keys=matched_keys,
+            sample_weights=self.calibration_provenance.sample_weights,
+        )
+        self._provenance_linkage_validated = True
+
+    def _effective_augmentation(self) -> bool:
+        """Whether residual augmentation has a defensible provenance contract."""
+        if not self.use_augmented_estimator:
+            return False
+        if self.label_design.kind == "targeted_unknown":
+            return True  # The point routine records an explicit plug-in route.
+        if self._eval_table is not None:
+            full_coverage = []
+            for policy_index in range(self._eval_table.n_policies):
+                rows = self._eval_table.policy_indices == policy_index
+                full_coverage.append(
+                    bool(np.any(rows) and np.all(self._eval_table.oracle_mask[rows]))
+                )
+            if all(full_coverage):
+                return False
+        if self.reward_calibrator is None:
+            return False
+        if self._provenance_linkage_validated:
+            return True
+        logger.warning(
+            "Residual augmentation was requested without explicit calibration "
+            "provenance. Returning the calibrated plug-in estimator; pass "
+            "CalibrationProvenance to distinguish external and evaluation-linked "
+            "fit rows."
+        )
+        return False
+
+    def _compute_point_estimate(self) -> DirectPointEstimate:
+        """Run the single point-estimator implementation on observed data."""
+        if self._eval_table is None:
+            raise RuntimeError("Evaluation table is unavailable; call fit() first")
+        eval_table = self._eval_table
+        if self.reward_calibrator is None:
+            calibrated = eval_table.judge_scores.astype(float, copy=True)
+            residual_predictions = calibrated.copy()
+        else:
+            calibrated = np.clip(
+                self.reward_calibrator.predict(
+                    eval_table.judge_scores, covariates=eval_table.covariates
+                ),
+                0.0,
+                1.0,
+            )
+            residual_predictions = residual_predictions_for_evaluation(
+                self.reward_calibrator,
+                calibrated,
+                eval_table,
+                (
+                    self.calibration_provenance
+                    if self._provenance_linkage_validated
+                    else None
+                ),
+            )
+
+        point = compute_direct_point_estimate(
+            calibrated,
+            eval_table,
+            residual_predictions,
+            self.label_design,
+            use_augmented_estimator=self._effective_augmentation(),
+        )
+        self._last_point = point
+        return point
 
     def _assemble_result(
         self,
@@ -449,8 +668,15 @@ class CalibratedDirectEstimator:
             "paired_comparison": self.paired_comparison,
             "se_methods": getattr(self, "_se_methods", {}),
             "n_clusters": getattr(self, "_n_clusters", {}),
+            "label_design": self.label_design.kind,
         }
         metadata.update(extra_metadata)
+        if self.label_design.kind == "targeted_unknown":
+            metadata.setdefault("limitations", []).append(
+                "Oracle labels were targeted with unknown inclusion "
+                "probabilities; residual augmentation was disabled and partial-"
+                "coverage policies use the calibrated plug-in estimator."
+            )
 
         # Check if prompts are aligned across policies
         if self.paired_comparison and len(self._policy_data) > 1:
@@ -523,12 +749,13 @@ class CalibratedDirectEstimator:
                 return self._estimate_with_bootstrap(bootstrap_reason)
 
         # Standard estimation path (cluster-robust SE + oracle jackknife)
+        point = self._compute_point_estimate()
         estimates = []
         standard_errors = []
         n_samples_used = {}
         influence_functions = {}
 
-        for policy in self.target_policies:
+        for policy_index, policy in enumerate(self.target_policies):
             if policy not in self._policy_data:
                 logger.warning(f"No data for policy '{policy}', using NaN")
                 estimates.append(np.nan)
@@ -538,73 +765,46 @@ class CalibratedDirectEstimator:
 
             pdata = self._policy_data[policy]
 
-            # Simple mean estimator
-            estimate = float(np.mean(pdata.calibrated_rewards))
+            estimate = float(point.estimates[policy_index])
+            pseudo_outcomes = point.pseudo_outcomes[policy_index]
 
-            # Influence function: ψ_i = R_i - V̂
-            if_values = pdata.calibrated_rewards - estimate
+            # Row contributions from the same point estimator used by the
+            # bootstrap (raw oracle, augmented, or plug-in by policy route).
+            if_values = pseudo_outcomes - estimate
             influence_functions[policy] = if_values
 
-            # Determine SE method based on pairing structure
-            n = len(pdata.calibrated_rewards)
-            se_method = "standard"
-            n_clusters = n
-            df_cluster = n - 1  # Degrees of freedom for cluster-robust SE
+            # Prompt is the sampling unit on every analytic path, including a
+            # single policy and unaligned policy samples.
+            n = len(pseudo_outcomes)
+            from ..diagnostics.robust_inference import cluster_robust_se
 
-            # Check if this is paired comparison with aligned prompts
-            if self.paired_comparison and len(self._policy_data) > 1:
-                # Check alignment across all policies
-                prompt_sets = [set(pd.prompt_ids) for pd in self._policy_data.values()]
-                prompts_aligned = all(ps == prompt_sets[0] for ps in prompt_sets)
-
-                if prompts_aligned:
-                    # Paired comparison: use cluster-robust SE by prompt
-                    from ..diagnostics.robust_inference import cluster_robust_se
-
-                    # Map prompt_ids to cluster indices
-                    unique_prompts = sorted(set(pdata.prompt_ids))
-                    prompt_to_cluster = {pid: i for i, pid in enumerate(unique_prompts)}
-                    cluster_ids = np.array(
-                        [prompt_to_cluster[pid] for pid in pdata.prompt_ids]
-                    )
-
-                    try:
-                        res = cluster_robust_se(
-                            data=if_values,
-                            cluster_ids=cluster_ids,
-                            statistic_fn=lambda x: np.mean(x),
-                            influence_fn=lambda x: x,
-                            alpha=0.05,
-                        )
-                        se = res["se"]
-                        se_method = "cluster_robust"
-                        n_clusters = res["n_clusters"]
-                        df_cluster = res.get(
-                            "df", n_clusters - 1
-                        )  # Get DF from cluster-robust SE
-
-                        logger.debug(
-                            f"Using cluster-robust SE for {policy}: "
-                            f"naive={np.std(if_values, ddof=1) / np.sqrt(n):.6f}, "
-                            f"robust={se:.6f}, n_clusters={n_clusters}, df={df_cluster}"
-                        )
-                    except Exception as e:
-                        # Fallback to standard SE if cluster-robust fails
-                        logger.debug(
-                            f"Cluster-robust SE failed for {policy}: {e}, using standard SE"
-                        )
-                        se = float(np.std(if_values, ddof=1) / np.sqrt(n))
-                        se_method = "standard_fallback"
-                        df_cluster = n - 1
-                else:
-                    # Prompts not fully aligned: use standard SE
-                    se = float(np.std(if_values, ddof=1) / np.sqrt(n))
-                    se_method = "standard_unpaired"
-                    df_cluster = n - 1
+            unique_prompts = sorted(set(pdata.prompt_ids))
+            prompt_to_cluster = {pid: i for i, pid in enumerate(unique_prompts)}
+            cluster_ids = np.asarray(
+                [prompt_to_cluster[pid] for pid in pdata.prompt_ids], dtype=int
+            )
+            n_clusters = len(unique_prompts)
+            df_cluster = max(n_clusters - 1, 0)
+            se_method = "cluster_robust"
+            if n_clusters < 2:
+                se = float("nan")
+                se_method = "unavailable_one_cluster"
+                logger.warning(
+                    f"Policy '{policy}' has one unique prompt cluster; returning "
+                    "the point estimate with SE unavailable. Row-level IID "
+                    "inference is not a valid fallback."
+                )
             else:
-                # Single policy or unpaired mode: use standard SE
-                se = float(np.std(if_values, ddof=1) / np.sqrt(n))
-                df_cluster = n - 1
+                res = cluster_robust_se(
+                    data=if_values,
+                    cluster_ids=cluster_ids,
+                    statistic_fn=lambda x: np.mean(x),
+                    influence_fn=lambda x: x,
+                    alpha=0.05,
+                )
+                se = float(res["se"])
+                n_clusters = int(res["n_clusters"])
+                df_cluster = int(res["df"])
 
             # Store SE method and DF for this policy (used in metadata and CI computation later)
             if not hasattr(self, "_se_methods"):
@@ -629,6 +829,13 @@ class CalibratedDirectEstimator:
                 "includes_oracle_uncertainty": False,  # Will be set to True by _apply_oua_jackknife()
                 "includes_mc_variance": False,
             },
+            "point_estimator": point.diagnostics,
+            "calibration_provenance": (
+                self.calibration_provenance.summary()
+                if self.calibration_provenance is not None
+                else None
+            ),
+            "calibration_provenance_explicit": self._provenance_explicit,
         }
 
         # Record a bootstrap-to-cluster-robust downgrade so the SE basis
@@ -676,24 +883,6 @@ class CalibratedDirectEstimator:
         if not (self.oua_jackknife and self.reward_calibrator is not None):
             return
 
-        # Skip oracle-jackknife augmentation at 100% oracle coverage
-        # (the calibrator knows its own coverage; at 100% there is no
-        # calibration uncertainty to add). _oracle_coverage_for_oua returns
-        # None when the calibrator's coverage describes a different dataset
-        # than the evaluation data.
-        try:
-            coverage = self._oracle_coverage_for_oua()
-
-            if coverage is not None and coverage >= 1.0:
-                if isinstance(result.metadata, dict):
-                    result.metadata.setdefault("se_components", {})
-                    result.metadata["se_components"][
-                        "oracle_uncertainty_skipped"
-                    ] = "100% oracle coverage"
-                return
-        except Exception:
-            pass  # Continue with the default path if we can't check coverage
-
         # Check if oracle variance is already included (e.g., by the
         # bootstrap inference path, which refits the calibrator per replicate)
         if isinstance(result.metadata, dict) and result.metadata.get(
@@ -702,46 +891,71 @@ class CalibratedDirectEstimator:
             # Oracle variance already included in standard_errors
             return
 
-        try:
-            var_oracle_map: Dict[str, float] = {}
-            jk_counts: Dict[str, int] = {}
+        var_oracle_map: Dict[str, float] = {}
+        jk_counts: Dict[str, int] = {}
+        status_by_policy: Dict[str, str] = {}
+        skipped_by_policy: Dict[str, str] = {}
+        any_applied = False
 
-            for i, policy in enumerate(self.target_policies):
-                var_orc = 0.0
-                K = 0
-                jack = self.get_oracle_jackknife(policy)
-                if (
-                    jack is not None
-                    and len(jack) >= 2
-                    and i < len(result.standard_errors)
-                ):
+        for i, policy in enumerate(self.target_policies):
+            route = self._route_for_policy(policy)
+            var_orc = 0.0
+            K = 0
+            if route == "direct_oracle":
+                status_by_policy[policy] = "skipped_direct_oracle"
+                skipped_by_policy[policy] = "100% evaluation oracle coverage"
+            else:
+                try:
+                    jack = self.get_oracle_jackknife(policy)
+                except Exception as exc:
+                    logger.debug("Oracle jackknife unavailable for %s: %s", policy, exc)
+                    jack = None
+                if jack is not None and len(jack) >= 2:
                     K = len(jack)
                     var_orc = oracle_jackknife_variance(jack)
-
-                var_oracle_map[policy] = var_orc
-                jk_counts[policy] = K
-
-                # Update standard_errors in place (add oracle variance)
-                if i < len(result.standard_errors):
-                    se_base = float(result.standard_errors[i])
-                    df_cluster = getattr(self, "_df_cluster", {}).get(policy, 1)
-                    se_total, _ = combine_cluster_and_oracle(
-                        se_base, df_cluster, var_orc, K
+                    status_by_policy[policy] = "applied"
+                    any_applied = True
+                    if i < len(result.standard_errors):
+                        se_base = float(result.standard_errors[i])
+                        df_cluster = getattr(self, "_df_cluster", {}).get(policy, 1)
+                        se_total, _ = combine_cluster_and_oracle(
+                            se_base, df_cluster, var_orc, K
+                        )
+                        result.standard_errors[i] = se_total
+                else:
+                    status_by_policy[policy] = "unavailable"
+                    skipped_by_policy[policy] = getattr(
+                        self,
+                        "_oracle_jackknife_unavailable_reason",
+                        "fewer than two fitted calibration fold models",
                     )
-                    result.standard_errors[i] = se_total
 
-            # Record that oracle uncertainty has been added
-            if isinstance(result.metadata, dict):
-                result.metadata.setdefault("se_components", {})
-                result.metadata["se_components"].update(
-                    {
-                        "includes_oracle_uncertainty": True,
-                        "oracle_variance_per_policy": var_oracle_map,
-                        "oracle_jackknife_counts": jk_counts,
-                    }
-                )
-        except Exception as e:
-            logger.debug(f"Calibration-aware oracle jackknife failed: {e}")
+            var_oracle_map[policy] = float(var_orc)
+            jk_counts[policy] = int(K)
+
+        if isinstance(result.metadata, dict):
+            components = result.metadata.setdefault("se_components", {})
+            components.update(
+                {
+                    "includes_oracle_uncertainty": any_applied,
+                    "oracle_variance_per_policy": var_oracle_map,
+                    "oracle_jackknife_counts": jk_counts,
+                    "oracle_jackknife_status_per_policy": status_by_policy,
+                    "oracle_uncertainty_skipped_per_policy": skipped_by_policy,
+                }
+            )
+            if skipped_by_policy and len(skipped_by_policy) == len(
+                self.target_policies
+            ):
+                unique_statuses = set(status_by_policy.values())
+                if unique_statuses == {"skipped_direct_oracle"}:
+                    components["oracle_uncertainty_skipped"] = (
+                        "100% evaluation oracle coverage"
+                    )
+                elif "unavailable" in unique_statuses:
+                    components["oracle_uncertainty_skipped"] = (
+                        "oracle jackknife unavailable"
+                    )
 
     def _compute_policy_boundary_card(self, policy: str) -> Optional[Dict[str, Any]]:
         """Coverage badge (paper REFUSE-LEVEL gate) for one policy.
@@ -765,6 +979,7 @@ class CalibratedDirectEstimator:
                 S_policy=pdata.judge_scores,
                 R_policy=pdata.calibrated_rewards,
                 warn_label=policy,
+                emit_warning=self._route_for_policy(policy) != "direct_oracle",
             )
         except Exception as e:
             logger.debug(f"Could not compute boundary card for policy '{policy}': {e}")
@@ -823,7 +1038,14 @@ class CalibratedDirectEstimator:
             card = self._compute_policy_boundary_card(policy)
             if card is None:
                 continue
+            card = dict(card)
+            applies_to_current_estimate = (
+                self._route_for_policy(policy) != "direct_oracle"
+            )
+            card["applies_to_current_estimate"] = applies_to_current_estimate
             boundary_cards[policy] = card
+            if not applies_to_current_estimate:
+                continue
             card_status = BOUNDARY_CARD_STATUS_TO_STATUS.get(
                 str(card.get("status")), Status.GOOD
             )
@@ -843,8 +1065,16 @@ class CalibratedDirectEstimator:
             status_per_policy=status_per_policy,
             boundary_cards=boundary_cards if boundary_cards else None,
             # Calibration metrics (fit-time, if a calibrator was provided)
-            calibration_rmse=cal_info.get("rmse"),
-            calibration_coverage=cal_info.get("coverage_at_01"),
+            calibration_rmse=cal_info.get("oof_rmse", cal_info.get("rmse")),
+            calibration_coverage=cal_info.get(
+                "oof_coverage_at_01", cal_info.get("coverage_at_01")
+            ),
+            calibration_tolerance=(
+                0.1
+                if cal_info.get("oof_coverage_at_01", cal_info.get("coverage_at_01"))
+                is not None
+                else None
+            ),
             n_oracle_labels=cal_info.get("n_oracle_labels"),
         )
 
@@ -857,14 +1087,19 @@ class CalibratedDirectEstimator:
 
         The CLI's best-policy announcement reads
         ``metadata["reliability_gates"][policy]["flagged"]``: a REFUSE-LEVEL
-        coverage badge demotes the policy from the trophy line.
+        coverage badge qualifies the policy's point-winner announcement.
         """
         if not diagnostics.boundary_cards:
             return
         metadata["boundary_cards"] = diagnostics.boundary_cards
         gates: Dict[str, Dict[str, Any]] = {}
         for policy, card in diagnostics.boundary_cards.items():
-            refuse_level = card.get("status") == "REFUSE-LEVEL"
+            applies_to_current_estimate = bool(
+                card.get("applies_to_current_estimate", True)
+            )
+            refuse_level = (
+                card.get("status") == "REFUSE-LEVEL" and applies_to_current_estimate
+            )
             reasons = []
             if refuse_level:
                 reasons.append(
@@ -879,77 +1114,78 @@ class CalibratedDirectEstimator:
             }
         metadata["reliability_gates"] = gates
 
-    def get_oracle_jackknife(self, policy: str) -> Optional[np.ndarray]:
-        """Compute leave-one-fold-out estimates for oracle uncertainty.
-
-        Args:
-            policy: Policy name
-
-        Returns:
-            Array of K jackknife estimates, or None if not applicable
-        """
-        if not self._fitted:
-            logger.warning("Estimator not fitted")
+    def _oracle_jackknife_matrix(self) -> Optional[np.ndarray]:
+        """Recompute the reported point functional under each fold model."""
+        cached = getattr(self, "_oracle_jackknife_matrix_cache", None)
+        if isinstance(cached, np.ndarray):
+            return cached
+        self._oracle_jackknife_unavailable_reason = "unknown"
+        if not self._fitted or self.reward_calibrator is None:
+            self._oracle_jackknife_unavailable_reason = "calibrator_unavailable"
             return None
-
-        if self.reward_calibrator is None:
-            logger.debug("No reward_calibrator for oracle-jackknife inference")
+        if self._eval_table is None:
+            self._oracle_jackknife_unavailable_reason = "evaluation_table_unavailable"
             return None
-
-        if policy not in self._policy_data:
-            logger.warning(f"No data for policy {policy}")
-            return None
-
-        # Use unified interface to get fold models
-        if not hasattr(self.reward_calibrator, "get_fold_models_for_oua"):
-            if self.oua_jackknife:
-                raise ValueError(
-                    "Calibration-aware oracle jackknife is enabled but the calibrator doesn't support it. "
-                    "Ensure calibrate_dataset() uses enable_cross_fit=True."
-                )
+        if not hasattr(
+            self.reward_calibrator, "get_fold_models_for_oua"
+        ) or not hasattr(self.reward_calibrator, "predict_oof"):
+            self._oracle_jackknife_unavailable_reason = (
+                "calibrator_does_not_expose_cross_fitted_models"
+            )
             return None
 
         fold_models = self.reward_calibrator.get_fold_models_for_oua()
-        if not fold_models:
-            if self.oua_jackknife:
-                logger.warning(
-                    "Calibration-aware oracle jackknife is enabled but no fold models are available"
-                )
+        n_folds = sum(model is not None for model in fold_models.values())
+        if n_folds < 2:
+            self._oracle_jackknife_unavailable_reason = (
+                "fewer_than_two_fitted_calibration_fold_models"
+            )
             return None
 
-        # Cache to avoid recomputation
-        if not hasattr(self, "_oracle_jackknife_cache"):
-            self._oracle_jackknife_cache: Dict[str, np.ndarray] = {}
-
-        if policy in self._oracle_jackknife_cache:
-            return self._oracle_jackknife_cache[policy]
-
+        table = self._eval_table
         try:
-            pdata = self._policy_data[policy]
-            covariates_array = self._covariate_matrix(policy)
-
-            jackknife_array = oracle_jackknife_estimates(
-                self.reward_calibrator, pdata.judge_scores, covariates_array
+            matrix = direct_oracle_jackknife_estimates(
+                self.reward_calibrator,
+                table,
+                self.label_design,
+                use_augmented_estimator=self._effective_augmentation(),
             )
-            if jackknife_array is None:
-                logger.warning(
-                    f"Not enough jackknife estimates for {policy} "
-                    f"(need at least 2 fold models)"
-                )
-                return None
-
-            self._oracle_jackknife_cache[policy] = jackknife_array
-
-            logger.debug(
-                f"Oracle jackknife for {policy}: {len(jackknife_array)} estimates, "
-                f"mean={jackknife_array.mean():.4f}, std={jackknife_array.std():.4f}"
+        except Exception as exc:
+            self._oracle_jackknife_unavailable_reason = (
+                f"point_functional_recomputation_failed: {exc}"
             )
-
-            return jackknife_array
-
-        except Exception as e:
-            logger.error(f"Failed to compute oracle jackknife for {policy}: {e}")
+            logger.warning(
+                "Calibration-aware oracle jackknife could not recompute the "
+                "point functional: %s",
+                exc,
+            )
             return None
+
+        if matrix is None:
+            self._oracle_jackknife_unavailable_reason = (
+                "fewer_than_two_fitted_calibration_fold_models"
+            )
+            return None
+        if matrix.shape != (n_folds, len(self.target_policies)) or not np.all(
+            np.isfinite(matrix)
+        ):
+            self._oracle_jackknife_unavailable_reason = (
+                "non_finite_or_misaligned_jackknife_estimates"
+            )
+            return None
+        self._oracle_jackknife_matrix_cache = matrix
+        self._oracle_jackknife_unavailable_reason = "available"
+        return matrix
+
+    def get_oracle_jackknife(self, policy: str) -> Optional[np.ndarray]:
+        """Return leave-fold estimates of this policy's reported functional."""
+        if policy not in self.target_policies or policy not in self._policy_data:
+            self._oracle_jackknife_unavailable_reason = "policy_unavailable"
+            return None
+        matrix = self._oracle_jackknife_matrix()
+        if matrix is None:
+            return None
+        return matrix[:, self.target_policies.index(policy)].copy()
 
     def _store_df_info(self, result: EstimationResult) -> None:
         """Store degrees of freedom information for t-based CI computation.
@@ -976,9 +1212,25 @@ class CalibratedDirectEstimator:
             return
 
         df_info = {}
+        components = (
+            result.metadata.get("se_components", {})
+            if isinstance(result.metadata, dict)
+            else {}
+        )
+        jk_counts = components.get("oracle_jackknife_counts", {})
+        jk_statuses = components.get("oracle_jackknife_status_per_policy", {})
 
         for i, policy in enumerate(self.target_policies):
             if np.isnan(result.estimates[i]) or np.isnan(result.standard_errors[i]):
+                df_info[policy] = {
+                    "available": False,
+                    "df": None,
+                    "reason": "standard_error_unavailable",
+                    "se_method": self._se_methods.get(policy, "unavailable"),
+                    "n_clusters": self._n_clusters.get(policy, 0),
+                    "oracle_jackknife_status": jk_statuses.get(policy, "not_requested"),
+                    "oracle_jackknife_folds": int(jk_counts.get(policy, 0)),
+                }
                 continue
 
             # Get cluster DF
@@ -986,19 +1238,8 @@ class CalibratedDirectEstimator:
 
             # If oracle-jackknife inference was applied, cap DF by the
             # oracle fold count (shared combining rule)
-            K = 0
-            if self.oua_jackknife and self.reward_calibrator is not None:
-                try:
-                    if hasattr(self.reward_calibrator, "get_fold_models_for_oua"):
-                        fold_models = self.reward_calibrator.get_fold_models_for_oua()
-                        if fold_models:
-                            K = len(fold_models)
-                            logger.debug(
-                                f"Policy {policy}: df_cluster={df_cluster}, "
-                                f"df_oracle={K - 1}"
-                            )
-                except Exception as e:
-                    logger.debug(f"Could not get oracle DF for {policy}: {e}")
+            status = str(jk_statuses.get(policy, "not_requested"))
+            K = int(jk_counts.get(policy, 0)) if status == "applied" else 0
 
             _, df_final = combine_cluster_and_oracle(0.0, df_cluster, 0.0, K)
 
@@ -1006,10 +1247,13 @@ class CalibratedDirectEstimator:
             t_crit = stats.t.ppf(1 - 0.05 / 2, df_final)
 
             df_info[policy] = {
+                "available": True,
                 "df": int(df_final),
                 "t_critical": float(t_crit),
                 "se_method": self._se_methods.get(policy, "standard"),
                 "n_clusters": self._n_clusters.get(policy, len(result.estimates)),
+                "oracle_jackknife_status": status,
+                "oracle_jackknife_folds": K,
             }
 
             logger.debug(
@@ -1072,22 +1316,13 @@ class CalibratedDirectEstimator:
         # mirroring the OUA skip conditions in _apply_oua_jackknife.
         jack_by_policy: Dict[str, Optional[np.ndarray]] = {p: None for p in policies}
         if self.oua_jackknife and self.reward_calibrator is not None:
-            include_oua = True
-            try:
-                coverage = self._oracle_coverage_for_oua()
-                if coverage is not None and coverage >= 1.0:
-                    include_oua = False
-            except Exception:
-                pass  # Match _apply_oua_jackknife: proceed on coverage errors
-            if include_oua:
-                for policy in policies:
-                    try:
-                        jack_by_policy[policy] = self.get_oracle_jackknife(policy)
-                    except Exception as e:
-                        logger.debug(
-                            f"Pairwise OUA: oracle jackknife failed for "
-                            f"'{policy}': {e}"
-                        )
+            for policy in policies:
+                try:
+                    jack_by_policy[policy] = self.get_oracle_jackknife(policy)
+                except Exception as e:
+                    logger.debug(
+                        f"Pairwise OUA: oracle jackknife failed for " f"'{policy}': {e}"
+                    )
 
         pairwise: Dict[str, Dict[str, Any]] = {}
         for i in range(len(policies)):
@@ -1131,57 +1366,66 @@ class CalibratedDirectEstimator:
         if pd1 is None or pd2 is None:
             return None
 
-        if1 = np.asarray(pd1.calibrated_rewards, dtype=float) - float(
-            result.estimates[i]
-        )
-        if2 = np.asarray(pd2.calibrated_rewards, dtype=float) - float(
-            result.estimates[j]
-        )
-
-        # Sampling SE with explicit pairing basis
-        basis: str
-        se_sampling: float
-        df_pairs: int
-        n_pairs: int
-        if pd1.prompt_ids == pd2.prompt_ids and len(if1) >= 2:
-            # Rows align one-to-one: per-row IF differences
-            diff_if = if1 - if2
-            se_sampling = float(np.std(diff_if, ddof=1) / np.sqrt(len(diff_if)))
-            df_pairs = len(diff_if) - 1
-            n_pairs = len(diff_if)
-            basis = "index_paired"
+        if not self.paired_comparison:
+            if i >= len(sampling_ses) or j >= len(sampling_ses):
+                return None
+            se_sampling = float(
+                np.sqrt(float(sampling_ses[i]) ** 2 + float(sampling_ses[j]) ** 2)
+            )
+            df_pairs = min(
+                int(getattr(self, "_df_cluster", {}).get(p1, 1)),
+                int(getattr(self, "_df_cluster", {}).get(p2, 1)),
+            )
+            basis = "independent_requested"
+            n_pairs = 0
         else:
-            from collections import Counter
+            if not result.influence_functions:
+                return None
+            if1 = np.asarray(result.influence_functions.get(p1), dtype=float)
+            if2 = np.asarray(result.influence_functions.get(p2), dtype=float)
+            if if1.shape != (len(pd1.prompt_ids),) or if2.shape != (
+                len(pd2.prompt_ids),
+            ):
+                return None
 
-            same_prompts = Counter(pd1.prompt_ids) == Counter(pd2.prompt_ids)
-            unique_prompts = sorted(set(pd1.prompt_ids))
-            if same_prompts and len(unique_prompts) >= 2:
-                # Same prompts, different order or repeated draws:
-                # aggregate IFs per prompt, pair per prompt
-                means1 = self._per_prompt_means(if1, pd1.prompt_ids)
-                means2 = self._per_prompt_means(if2, pd2.prompt_ids)
-                diffs = np.array(
-                    [means1[pid] - means2[pid] for pid in unique_prompts],
-                    dtype=float,
-                )
-                se_sampling = float(np.std(diffs, ddof=1) / np.sqrt(len(diffs)))
-                df_pairs = len(diffs) - 1
-                n_pairs = len(diffs)
-                basis = "prompt_paired"
+            # Cluster contributions to each policy mean. Taking their
+            # difference over the prompt union handles repeated draws and
+            # partial overlap while retaining requested prompt covariance.
+            contributions1: Dict[str, float] = {}
+            contributions2: Dict[str, float] = {}
+            for value, prompt_id in zip(if1, pd1.prompt_ids):
+                contributions1[prompt_id] = contributions1.get(prompt_id, 0.0) + float(
+                    value
+                ) / len(if1)
+            for value, prompt_id in zip(if2, pd2.prompt_ids):
+                contributions2[prompt_id] = contributions2.get(prompt_id, 0.0) + float(
+                    value
+                ) / len(if2)
+            union_prompts = sorted(set(contributions1) | set(contributions2))
+            G = len(union_prompts)
+            if G < 2:
+                return None
+            cluster_differences = np.asarray(
+                [
+                    contributions1.get(prompt_id, 0.0)
+                    - contributions2.get(prompt_id, 0.0)
+                    for prompt_id in union_prompts
+                ],
+                dtype=float,
+            )
+            cluster_differences -= np.mean(cluster_differences)
+            se_sampling = float(np.sqrt((G / (G - 1)) * np.sum(cluster_differences**2)))
+            df_pairs = G - 1
+            overlap = set(contributions1) & set(contributions2)
+            if len(overlap) == G:
+                basis = "prompt_cluster_paired"
+                n_pairs = G
+            elif overlap:
+                basis = "prompt_cluster_partial_overlap"
+                n_pairs = len(overlap)
             else:
-                # Partial or no prompt overlap: independent combination of
-                # the per-policy (pre-OUA) sampling SEs
-                se1 = float(sampling_ses[i])
-                se2 = float(sampling_ses[j])
-                if not (np.isfinite(se1) and np.isfinite(se2)):
-                    return None
-                se_sampling = float(np.sqrt(se1**2 + se2**2))
-                df_cluster_map: Dict[str, int] = getattr(self, "_df_cluster", {})
-                df1 = int(df_cluster_map.get(p1, max(len(if1) - 1, 1)))
-                df2 = int(df_cluster_map.get(p2, max(len(if2) - 1, 1)))
-                df_pairs = max(min(df1, df2), 1)
+                basis = "prompt_cluster_disjoint"
                 n_pairs = 0
-                basis = "independent"
 
         # Oracle-uncertainty component: jackknife variance of the
         # DIFFERENCE of the per-policy leave-one-fold estimate vectors
@@ -1203,6 +1447,12 @@ class CalibratedDirectEstimator:
                 )
             )
             n_folds = len(jack1)
+        if (
+            self._route_for_policy(p1) == "direct_oracle"
+            and self._route_for_policy(p2) == "direct_oracle"
+        ):
+            n_folds = 0
+            var_oua_diff = 0.0
 
         se_total, df_final = combine_cluster_and_oracle(
             se_sampling, df_pairs, var_oua_diff, n_folds
@@ -1250,7 +1500,6 @@ class CalibratedDirectEstimator:
             EstimationResult with bootstrap-based confidence intervals
         """
         from ..diagnostics.robust_inference import (
-            build_direct_eval_table,
             cluster_bootstrap_direct_with_refit,
             make_calibrator_factory,
         )
@@ -1258,34 +1507,31 @@ class CalibratedDirectEstimator:
         logger.info(f"Using cluster bootstrap inference ({bootstrap_reason})")
 
         # Build evaluation table from fresh draws
-        eval_table = build_direct_eval_table(
-            fresh_draws_per_policy=self._fresh_draws,
-            covariate_names=(
-                self.reward_calibrator.covariate_names
-                if self.reward_calibrator
-                and hasattr(self.reward_calibrator, "covariate_names")
-                else None
-            ),
+        eval_table = self._build_eval_table(
+            couple_policy_prompts=self.paired_comparison
         )
 
-        # Get the calibration mode from the fitted calibrator
-        # (Fixed to full-data selection, not "auto")
+        point = self._compute_point_estimate()
+
+        # Preserve auto mode when it was requested: mode selection is part of
+        # the estimator and is rerun in every weighted bootstrap world.
         from typing import Literal, cast
 
         if self.reward_calibrator is not None:
-            mode_str = getattr(self.reward_calibrator, "selected_mode", None)
-            if mode_str is None:
-                # Fallback to calibration_mode if selected_mode not available
+            if self._provenance_explicit:
                 mode_str = getattr(
                     self.reward_calibrator, "calibration_mode", "monotone"
                 )
-            # Never use "auto" in bootstrap - it should already be resolved
-            if mode_str == "auto" or mode_str not in ("monotone", "two_stage"):
+            else:
+                mode_str = getattr(
+                    self.reward_calibrator, "selected_mode", None
+                ) or getattr(self.reward_calibrator, "calibration_mode", "monotone")
+            if mode_str not in ("monotone", "two_stage", "auto"):
                 mode_str = "monotone"
         else:
             mode_str = "monotone"
 
-        selected_mode = cast(Literal["monotone", "two_stage"], mode_str)
+        selected_mode = cast(Literal["monotone", "two_stage", "auto"], mode_str)
 
         # Create calibrator factory with fixed mode
         calibrator_factory = make_calibrator_factory(
@@ -1299,26 +1545,18 @@ class CalibratedDirectEstimator:
             seed=self.bootstrap_seed,
         )
 
-        # Compute adaptive min_oracle_per_replicate based on available oracle data
-        # This prevents bootstrap from failing at low oracle coverage (e.g., 5-10%)
-        n_oracle_total = int(np.sum(eval_table.oracle_mask))
-        # Use ~1/3 of total oracle as minimum, with floor of 10 and ceiling of 30
-        min_oracle_per_replicate = max(10, min(30, n_oracle_total // 3))
-        logger.info(
-            f"Bootstrap: {n_oracle_total} oracle samples, min_per_replicate={min_oracle_per_replicate}"
-        )
-
-        # Run bootstrap. (Transport experiments use
-        # cluster_bootstrap_direct_with_refit's calibration_policy_idx
-        # directly; the estimator always calibrates on all oracle rows.)
+        # Positive weights retain every calibration cluster, so there is no
+        # minimum-label rejection threshold and exactly B worlds are run.
         bootstrap_result = cluster_bootstrap_direct_with_refit(
             eval_table=eval_table,
             calibrator_factory=calibrator_factory,
             n_bootstrap=self.n_bootstrap,
-            min_oracle_per_replicate=min_oracle_per_replicate,
             alpha=0.05,
             seed=self.bootstrap_seed,
-            use_augmented_estimator=self.use_augmented_estimator,
+            use_augmented_estimator=self._effective_augmentation(),
+            calibration_provenance=self.calibration_provenance,
+            label_design=self.label_design,
+            point_calibrator=self.reward_calibrator,
         )
 
         # ESTIMATOR CONSISTENCY: Use bootstrap's theta_hat as reported estimate.
@@ -1326,6 +1564,11 @@ class CalibratedDirectEstimator:
         # point estimates for consistency. Using self._policy_data (logged-data calibrator)
         # would create an estimator mismatch (expected with small oracle samples).
         estimates = bootstrap_result["estimates"]
+        if not np.allclose(estimates, point.estimates, equal_nan=True):
+            raise RuntimeError(
+                "Internal estimator mismatch: analytic and bootstrap point "
+                "implementations returned different values"
+            )
 
         # Use bootstrap SEs (these correctly capture calibrator uncertainty)
         standard_errors = bootstrap_result["standard_errors"]
@@ -1346,7 +1589,7 @@ class CalibratedDirectEstimator:
                 policy_idx = self.target_policies.index(policy)
                 if not np.isnan(estimates[policy_idx]):
                     influence_functions[policy] = (
-                        pdata.calibrated_rewards - estimates[policy_idx]
+                        point.pseudo_outcomes[policy_idx] - estimates[policy_idx]
                     )
 
         # Bootstrap-specific metadata
@@ -1364,11 +1607,24 @@ class CalibratedDirectEstimator:
                 "coupled": coupled,
                 "coupling_overlap": overlap,
                 "bootstrap_refit_mode": selected_mode,
-                "min_oracle_per_replicate": bootstrap_result[
-                    "min_oracle_per_replicate"
-                ],
+                "bootstrap_scheme": bootstrap_result["bootstrap_scheme"],
                 "oracle_count_summary": bootstrap_result["oracle_count_summary"],
                 "bootstrap_reason": bootstrap_reason,
+                "label_design": self.label_design.kind,
+                "effective_estimator_routes": point.diagnostics["routes"],
+                "paired_comparison": self.paired_comparison,
+                "prompt_weight_coupling": (
+                    "shared_by_prompt"
+                    if self.paired_comparison
+                    else "independent_by_policy_prompt"
+                ),
+                "policy_cluster_counts": bootstrap_result["policy_cluster_counts"],
+                "inference_unavailable_policies": bootstrap_result[
+                    "inference_unavailable_policies"
+                ],
+                "inference_unavailable_reason": bootstrap_result[
+                    "inference_unavailable_reason"
+                ],
             },
             "bootstrap_ci": {
                 "lower": [float(x) for x in bootstrap_result["ci_lower"]],
@@ -1377,14 +1633,29 @@ class CalibratedDirectEstimator:
                 "alpha": 0.05,
             },
             "se_components": {
-                "includes_oracle_uncertainty": True,  # Bootstrap captures this
+                "includes_oracle_uncertainty": bool(
+                    self.reward_calibrator is not None
+                    and any(
+                        route != "direct_oracle"
+                        for route in point.diagnostics["routes"]
+                    )
+                ),
                 "includes_mc_variance": False,
                 "via_bootstrap": True,
-                # Variance decomposition for budget planning (from dual-estimate bootstrap)
-                "oracle_variance_per_policy": bootstrap_result.get(
-                    "variance_decomposition", {}
-                ).get("var_cal_per_policy", {}),
+                "calibration_variance_decomposition": {
+                    "available": False,
+                    "reason": (
+                        "joint bootstrap does not separately identify calibration "
+                        "variance"
+                    ),
+                },
             },
+            "point_estimator": point.diagnostics,
+            "calibration_provenance": bootstrap_result["provenance_summary"],
+            "calibration_provenance_explicit": self._provenance_explicit,
+            "inference_unavailable_policies": bootstrap_result[
+                "inference_unavailable_policies"
+            ],
         }
 
         result = self._assemble_result(
@@ -1408,17 +1679,14 @@ class CalibratedDirectEstimator:
         ):
             result.bootstrap_samples = bootstrap_matrix
 
-        # Log summary with SE-based CIs (not bootstrap percentile CIs)
-        from scipy import stats
-
-        z_crit = stats.norm.ppf(0.975)  # 1.96 for 95% CI
+        # Log the exact percentile interval returned to users.
         for i, policy in enumerate(self.target_policies):
             if not np.isnan(estimates[i]):
-                ci_lower = estimates[i] - z_crit * standard_errors[i]
-                ci_upper = estimates[i] + z_crit * standard_errors[i]
+                ci_lower = bootstrap_result["ci_lower"][i]
+                ci_upper = bootstrap_result["ci_upper"][i]
                 logger.info(
                     f"Bootstrap estimate for '{policy}': {estimates[i]:.4f} ± {standard_errors[i]:.4f} "
-                    f"(95% CI: [{ci_lower:.4f}, {ci_upper:.4f}])"
+                    f"(95% percentile CI: [{ci_lower:.4f}, {ci_upper:.4f}])"
                 )
 
         return result

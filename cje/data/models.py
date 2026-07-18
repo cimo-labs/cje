@@ -1,12 +1,46 @@
 """Data models for CJE using Pydantic."""
 
 import logging
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Any, Set, Tuple
-from pydantic import BaseModel, Field
+import json
+from dataclasses import asdict, dataclass, fields, is_dataclass
+from datetime import date, datetime, time
+from enum import Enum
+from html import escape
+from pathlib import Path
+from typing import Dict, List, Optional, Any, Set, Tuple, cast
+from pydantic import BaseModel, Field, field_validator, model_validator
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+RESULT_SCHEMA_VERSION = "cje.estimation_result/v2"
+
+
+def _validate_alpha(alpha: Any) -> float:
+    """Return a finite significance level strictly between zero and one."""
+    if isinstance(alpha, bool) or not isinstance(
+        alpha, (int, float, np.integer, np.floating)
+    ):
+        raise ValueError(f"alpha must be a finite number in (0, 1), got {alpha!r}")
+    numeric = float(alpha)
+    if not np.isfinite(numeric) or not 0.0 < numeric < 1.0:
+        raise ValueError(f"alpha must be a finite number in (0, 1), got {alpha!r}")
+    return numeric
+
+
+class InferenceUnavailableError(RuntimeError):
+    """Raised when a serialized result omitted required inference state."""
+
+
+class ResultUnits(BaseModel):
+    """Explicit public and internal units for a result and its artifacts."""
+
+    estimand: str
+    output_scale: Dict[str, Any]
+    judge_input_scale: Dict[str, Any]
+    internal_scale: Dict[str, Any] = Field(
+        default_factory=lambda: {"min": 0.0, "max": 1.0, "is_identity": True}
+    )
 
 
 @dataclass
@@ -55,10 +89,10 @@ class PolicyVerdict:
     """Result of ``EstimationResult.best_policy()``.
 
     Attributes:
-        name: The winning policy. With reliable_only=True this is the best
-            policy that passed the reliability gates; the raw point-estimate
-            argmax wins only when it passed, or when every policy is flagged
-            (all_flagged=True).
+        name: The selected policy. By default this is always the raw
+            point-estimate argmax, with limitations reported through
+            ``flagged`` and ``all_flagged``. Callers may explicitly request
+            the best gate-passing policy with ``reliable_only=True``.
         index: Index of ``name`` in the estimates array.
         estimate: Point estimate of ``name``.
         flagged: Whether the returned policy failed the reliability gates.
@@ -92,6 +126,13 @@ class Sample(BaseModel):
     oracle_label: Optional[float] = Field(
         None, ge=0, le=1, description="Ground truth oracle label [0,1]"
     )
+    row_id: Optional[str] = Field(
+        default=None, description="Stable source-local row identity"
+    )
+    observation_id: Optional[str] = Field(
+        default=None, description="Optional cross-source response identity"
+    )
+    source_id: Optional[str] = Field(default=None, description="Logical input source")
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description="Additional metadata (timestamps, model info, etc.)",
@@ -145,7 +186,8 @@ class EstimationResult(BaseModel):
         description=(
             "Bootstrap replicate matrix of shape (B, P); columns follow "
             "metadata['target_policies']. Used by compare_policies for "
-            "paired difference inference. Omitted from to_dict()/JSON export."
+            "paired difference inference. Included only in full-detail "
+            "serialization."
         ),
     )
 
@@ -172,8 +214,103 @@ class EstimationResult(BaseModel):
         default=None,
         description="How confidence intervals were computed (typed accessor)",
     )
+    units: Optional[ResultUnits] = Field(
+        default=None,
+        description="Estimand and scale contract shared by every result artifact",
+    )
 
     model_config = {"arbitrary_types_allowed": True}
+
+    @field_validator("n_samples_used", mode="before")
+    @classmethod
+    def validate_raw_sample_counts(cls, value: Any) -> Any:
+        """Reject booleans before Pydantic can coerce them to integers."""
+        if not isinstance(value, dict):
+            return value
+        for policy, count in value.items():
+            if isinstance(count, bool) or not isinstance(count, (int, np.integer)):
+                raise ValueError(f"n_samples_used[{policy!r}] must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def validate_result_contract(self) -> "EstimationResult":
+        estimates = np.asarray(self.estimates, dtype=float)
+        standard_errors = np.asarray(self.standard_errors, dtype=float)
+        if estimates.ndim != 1 or standard_errors.ndim != 1:
+            raise ValueError("estimates and standard_errors must be one-dimensional")
+        if estimates.shape != standard_errors.shape:
+            raise ValueError(
+                "estimates and standard_errors must have the same length "
+                f"({len(estimates)} != {len(standard_errors)})"
+            )
+        if np.any(np.isinf(estimates)) or np.any(np.isinf(standard_errors)):
+            raise ValueError("estimates and standard_errors cannot contain infinity")
+        finite_se = standard_errors[np.isfinite(standard_errors)]
+        if np.any(finite_se < 0):
+            raise ValueError("standard_errors must be nonnegative")
+        policies = self.target_policies
+        if policies:
+            if len(policies) != len(estimates):
+                raise ValueError(
+                    "metadata['target_policies'] must align with estimates "
+                    f"({len(policies)} != {len(estimates)})"
+                )
+            if len(set(policies)) != len(policies):
+                raise ValueError("metadata['target_policies'] must be unique")
+            if set(self.n_samples_used) != set(policies):
+                raise ValueError(
+                    "n_samples_used keys must exactly match target_policies"
+                )
+        for policy, count in self.n_samples_used.items():
+            if isinstance(count, bool) or not isinstance(count, (int, np.integer)):
+                raise ValueError(f"n_samples_used[{policy!r}] must be an integer")
+            if int(count) < 0:
+                raise ValueError(f"n_samples_used[{policy!r}] must be nonnegative")
+
+        if self.bootstrap_samples is not None:
+            matrix = np.asarray(self.bootstrap_samples, dtype=float)
+            if matrix.ndim != 2 or matrix.shape[1] != len(estimates):
+                raise ValueError(
+                    "bootstrap_samples must have shape (replicates, policies) "
+                    f"with {len(estimates)} policy columns, got {matrix.shape}"
+                )
+            if np.any(np.isinf(matrix)):
+                raise ValueError("bootstrap_samples cannot contain infinity")
+        if self.influence_functions is not None:
+            if policies and not set(self.influence_functions).issubset(set(policies)):
+                raise ValueError("influence_functions contains an unknown policy")
+            for policy, values in self.influence_functions.items():
+                influence = np.asarray(values, dtype=float)
+                if influence.ndim != 1:
+                    raise ValueError(
+                        f"influence_functions[{policy!r}] must be one-dimensional"
+                    )
+                if np.any(np.isinf(influence)):
+                    raise ValueError(
+                        f"influence_functions[{policy!r}] cannot contain infinity"
+                    )
+        if self.ci_info is not None:
+            if not 0 < float(self.ci_info.alpha) < 1:
+                raise ValueError("ci_info.alpha must lie in (0, 1)")
+            if self.ci_info.lower is not None and len(self.ci_info.lower) != len(
+                estimates
+            ):
+                raise ValueError("ci_info.lower must align with estimates")
+            if self.ci_info.upper is not None and len(self.ci_info.upper) != len(
+                estimates
+            ):
+                raise ValueError("ci_info.upper must align with estimates")
+            for name, bounds in (
+                ("lower", self.ci_info.lower),
+                ("upper", self.ci_info.upper),
+            ):
+                if bounds is not None and np.any(
+                    np.isinf(np.asarray(bounds, dtype=float))
+                ):
+                    raise ValueError(f"ci_info.{name} cannot contain infinity")
+        self.estimates = estimates
+        self.standard_errors = standard_errors
+        return self
 
     @property
     def target_policies(self) -> List[str]:
@@ -267,6 +404,8 @@ class EstimationResult(BaseModel):
         """
         from scipy import stats
 
+        alpha = _validate_alpha(alpha)
+
         # Priority 1: the typed CI record written at result-assembly time
         if self.ci_info is not None:
             ci = self.ci_info
@@ -336,25 +475,24 @@ class EstimationResult(BaseModel):
                     flagged.add(policy)
         return flagged
 
-    def best_policy(self, reliable_only: bool = True) -> PolicyVerdict:
-        """Best policy, demoting winners that failed the reliability gates.
+    def best_policy(self, reliable_only: bool = False) -> PolicyVerdict:
+        """Return the highest point estimate, with reliability limitations.
 
-        The raw point-estimate argmax can be an adversarial policy the
-        gates flagged as unreliable (verified on the bundled arena sample,
-        where the 'unhelpful' policy won the raw argmax). With
-        reliable_only=True (default) the verdict names the best policy
-        that PASSED the gates; a flagged argmax is recorded as the
-        demoted ``runner_up``. If every policy is flagged, the argmax is
-        returned with ``all_flagged=True`` — do not crown it.
+        The default never changes the estimand or silently substitutes a
+        lower-scoring policy. Reliability gates are attached to the numerical
+        winner through ``flagged`` and ``all_flagged``. Applications that need
+        a gate-passing operational fallback can explicitly set
+        ``reliable_only=True``; when that changes the selection, the raw
+        point-estimate winner is recorded in ``runner_up``.
 
         Note: This replaced the 0.4.x ``best_policy() -> int`` (naive
         argmax index) in 0.5.0. Use ``verdict.index`` for the old value.
 
         Args:
-            reliable_only: When True, only policies that passed the
-                reliability gates (and are not CRITICAL) can win. When
-                False, return the raw point-estimate argmax with its
-                gate flag.
+            reliable_only: When True, select only among policies that passed the
+                reliability gates (and are not CRITICAL). When
+                False (default), return the raw point-estimate argmax with its
+                limitations.
 
         Returns:
             PolicyVerdict (name, index, estimate, flagged, all_flagged,
@@ -409,8 +547,8 @@ class EstimationResult(BaseModel):
                 runner_up=None,
             )
 
-        # Demote the flagged argmax: the trophy goes to the best reliable
-        # policy (ties broken by policy name, matching the CLI's behavior).
+        # Explicit operational fallback among gate-passing policies. Ties are
+        # broken by policy name for deterministic behavior.
         _, rel_name = max((float(estimates[i]), policy) for i, policy in reliable)
         rel_idx = policies.index(rel_name)
         return PolicyVerdict(
@@ -455,18 +593,23 @@ class EstimationResult(BaseModel):
         except ValueError:
             lines.append("Best policy: none (no usable estimates)")
         else:
-            if verdict.all_flagged:
-                lines.append(
-                    f"Best policy: none reliable (best by point estimate: "
-                    f"{verdict.name}, flagged by the reliability gates)"
+            limitations = []
+            if verdict.flagged:
+                limitations.append(
+                    "no policy passed the reliability gates"
+                    if verdict.all_flagged
+                    else "flagged by the reliability gates"
                 )
-            elif verdict.runner_up is not None:
-                lines.append(
-                    f"Best reliable policy: {verdict.name} (best by point "
-                    f"estimate {verdict.runner_up} failed the reliability gates)"
+            if self.metadata.get("calibration_status") == "UNCALIBRATED":
+                limitations.append("UNCALIBRATED raw judge-score mean")
+            audit = (self.metadata.get("transport_audits") or {}).get(verdict.name, {})
+            if audit and audit.get("status") != "PASS":
+                limitations.append(
+                    f"residual transport {audit.get('status', 'NOT_CHECKED')}"
                 )
-            else:
-                lines.append(f"Best policy: {verdict.name}")
+            lines.append(f"Best by point estimate: {verdict.name}")
+            if limitations:
+                lines.append("Limitations: " + "; ".join(limitations))
 
         if self.diagnostics is not None:
             lines.append(f"Status: {self.diagnostics.overall_status.value}")
@@ -532,12 +675,102 @@ class EstimationResult(BaseModel):
             for the bootstrap path and ``df``/``basis`` for the analytic
             path).
         """
-        result = self._compare_paired_bootstrap(policy1_idx, policy2_idx, alpha)
-        if result is None:
-            result = self._compare_pairwise_inference(policy1_idx, policy2_idx, alpha)
-        if result is None:
-            result = self._compare_legacy(policy1_idx, policy2_idx, alpha)
-        return self._annotate_gate_flags(result, policy1_idx, policy2_idx)
+        n_policies = len(self.estimates)
+        for name, index in (
+            ("policy1_idx", policy1_idx),
+            ("policy2_idx", policy2_idx),
+        ):
+            if isinstance(index, bool) or not isinstance(index, (int, np.integer)):
+                raise TypeError(f"{name} must be an integer, got {index!r}")
+            if int(index) < 0 or int(index) >= n_policies:
+                raise IndexError(
+                    f"{name}={index} is out of range for {n_policies} policies"
+                )
+        policy1_idx = int(policy1_idx)
+        policy2_idx = int(policy2_idx)
+        alpha = _validate_alpha(alpha)
+
+        unavailable_raw = self.metadata.get("inference_unavailable_policies", [])
+        unavailable = (
+            {str(policy) for policy in unavailable_raw}
+            if isinstance(unavailable_raw, (list, tuple, set))
+            else set()
+        )
+        policies = self.target_policies
+        requested = {
+            policies[index]
+            for index in (policy1_idx, policy2_idx)
+            if index < len(policies)
+        }
+        blocked = sorted(requested & unavailable)
+        if blocked:
+            raise InferenceUnavailableError(
+                "Pairwise inference is unavailable for "
+                + ", ".join(repr(policy) for policy in blocked)
+                + ": fewer than two independent evaluation clusters."
+            )
+
+        serialized_state = self.metadata.get("_serialized_pairwise_state")
+        if isinstance(serialized_state, dict):
+            capability = serialized_state.get("capability")
+            if capability == "unavailable":
+                raise InferenceUnavailableError(
+                    "Paired inference was omitted from this serialized result. "
+                    "Re-run analysis or export with detail='portable'/'full'."
+                )
+            if capability == "stored_alpha_only":
+                lo, hi = (
+                    (policy1_idx, policy2_idx)
+                    if policy1_idx <= policy2_idx
+                    else (policy2_idx, policy1_idx)
+                )
+                pair_key = f"{lo}-{hi}"
+                recomputable_pairs = serialized_state.get("recomputable_pairs", [])
+                if pair_key in recomputable_pairs:
+                    recomputed_comparison = self._compare_legacy(
+                        policy1_idx, policy2_idx, alpha
+                    )
+                    return self._annotate_gate_flags(
+                        recomputed_comparison, policy1_idx, policy2_idx
+                    )
+
+                stored_alpha = float(serialized_state.get("alpha", 0.05))
+                if abs(alpha - stored_alpha) > 1e-12:
+                    raise InferenceUnavailableError(
+                        f"This result stores paired comparisons only at "
+                        f"alpha={stored_alpha}; requested alpha={alpha}."
+                    )
+                raw = serialized_state.get("comparisons", {}).get(pair_key)
+                if not isinstance(raw, dict):
+                    raise InferenceUnavailableError(
+                        f"No stored paired comparison exists for {lo}-{hi}."
+                    )
+                serialized_result = dict(raw)
+                if policy1_idx > policy2_idx:
+                    serialized_result["difference"] = -float(
+                        serialized_result["difference"]
+                    )
+                    serialized_result["z_score"] = -float(serialized_result["z_score"])
+                    if (
+                        "ci_lower" in serialized_result
+                        and "ci_upper" in serialized_result
+                    ):
+                        lower = -float(serialized_result["ci_upper"])
+                        upper = -float(serialized_result["ci_lower"])
+                        serialized_result["ci_lower"] = lower
+                        serialized_result["ci_upper"] = upper
+                return self._annotate_gate_flags(
+                    serialized_result, policy1_idx, policy2_idx
+                )
+
+        comparison = self._compare_paired_bootstrap(policy1_idx, policy2_idx, alpha)
+        if comparison is None:
+            comparison = self._compare_pairwise_inference(
+                policy1_idx, policy2_idx, alpha
+            )
+        if comparison is None:
+            comparison = self._compare_legacy(policy1_idx, policy2_idx, alpha)
+        return self._annotate_gate_flags(comparison, policy1_idx, policy2_idx)
 
     def _annotate_gate_flags(
         self, result: Dict[str, Any], idx1: int, idx2: int
@@ -674,7 +907,12 @@ class EstimationResult(BaseModel):
             "alpha": float(alpha),
             "df": df,
             "basis": basis,
-            "used_influence": basis != "independent",
+            "used_influence": basis
+            in {
+                "index_paired",
+                "prompt_paired",
+                "prompt_cluster_paired",
+            },
             "method": "paired_if_oua",
         }
 
@@ -772,6 +1010,7 @@ class EstimationResult(BaseModel):
             each carrying ``policy1``/``policy2`` names in addition to the
             ``compare_policies`` keys.
         """
+        alpha = _validate_alpha(alpha)
         if adjust not in (None, "bh"):
             raise ValueError(f"adjust must be None or 'bh', got {adjust!r}")
 
@@ -828,14 +1067,16 @@ class EstimationResult(BaseModel):
             se = self.standard_errors[i]
             ci_str = f"[{ci_lower[i]:.3f}, {ci_upper[i]:.3f}]"
             rows.append(
-                f"<tr><td>{policy}</td><td>{est:.3f}</td><td>{se:.3f}</td><td>{ci_str}</td></tr>"
+                f"<tr><td>{escape(str(policy))}</td><td>{est:.3f}</td>"
+                f"<td>{se:.3f}</td><td>{ci_str}</td></tr>"
             )
 
         # Build full HTML
         html_parts = [
             '<div style="font-family: monospace;">',
             "<h4>CJE Estimation Results</h4>",
-            f"<p><b>Method:</b> {self.method} | <b>Policies:</b> {len(policies)}</p>",
+            f"<p><b>Method:</b> {escape(str(self.method))} | "
+            f"<b>Policies:</b> {len(policies)}</p>",
             '<table style="border-collapse: collapse; margin-top: 10px; border: 1px solid #ddd;">',
             '<thead style="background-color: #f0f0f0;">',
         ]
@@ -883,7 +1124,7 @@ class EstimationResult(BaseModel):
             Matplotlib figure object
 
         Example:
-            >>> result = analyze_dataset("data.jsonl")
+            >>> result = analyze_dataset(fresh_draws_dir="data.jsonl")
             >>> result.plot_estimates(
             ...     policy_labels={"prompt_v1": "Conversational tone"},
             ...     save_path="estimates.png"
@@ -924,51 +1165,123 @@ class EstimationResult(BaseModel):
             **kwargs,
         )
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for serialization.
+    def to_dict(self, detail: str = "portable") -> Dict[str, Any]:
+        """Return a recursive, versioned serialization payload.
 
-        The ``bootstrap_samples`` replicate matrix is intentionally omitted
-        (large, and a 2-D array would break flat JSON serialization); only
-        a small shape summary is recorded when it is present.
+        ``summary`` explicitly disables paired comparison after loading.
+        ``portable`` stores pairwise results at alpha 0.05 without the large
+        bootstrap matrix. ``full`` includes the matrix and influence arrays.
         """
-        ci_lower, ci_upper = self.confidence_interval()
+        if detail not in {"summary", "portable", "full"}:
+            raise ValueError("detail must be 'summary', 'portable', or 'full'")
+        interval_alpha = 0.05
+        if self.ci_info is not None and self.ci_info.method == "percentile":
+            interval_alpha = float(self.ci_info.alpha)
+        elif isinstance(self.metadata.get("bootstrap_ci"), dict):
+            bootstrap_ci = self.metadata["bootstrap_ci"]
+            if (
+                bootstrap_ci.get("method") == "percentile"
+                and bootstrap_ci.get("alpha") is not None
+            ):
+                interval_alpha = float(bootstrap_ci["alpha"])
+        ci_lower, ci_upper = self.confidence_interval(alpha=interval_alpha)
+        if self.ci_info is not None:
+            interval_method = self.ci_info.method
+        elif isinstance(self.metadata.get("bootstrap_ci"), dict):
+            interval_method = str(
+                self.metadata["bootstrap_ci"].get("method", "percentile")
+            )
+        elif isinstance(self.metadata.get("degrees_of_freedom"), dict):
+            interval_method = "t"
+        else:
+            interval_method = "z"
 
-        result = {
+        source_pairwise_state = self.metadata.get("_serialized_pairwise_state")
+        clean_metadata = dict(self.metadata)
+        clean_metadata.pop("_serialized_pairwise_state", None)
+        result: Dict[str, Any] = {
+            "schema_version": RESULT_SCHEMA_VERSION,
+            "serialization_detail": detail,
             "method": self.method,
-            "estimates": self.estimates.tolist(),
-            "standard_errors": self.standard_errors.tolist(),
+            "estimates": self.estimates,
+            "standard_errors": self.standard_errors,
             "n_samples_used": self.n_samples_used,
+            "target_policies": list(self.target_policies),
             "confidence_intervals": {
-                "alpha": 0.05,
-                "lower": ci_lower.tolist(),
-                "upper": ci_upper.tolist(),
+                "method": interval_method,
+                "alpha": interval_alpha,
+                "lower": ci_lower,
+                "upper": ci_upper,
+            },
+            "metadata": clean_metadata,
+            "units": self.units,
+            "capabilities": {
+                "calibrator_prediction": "unavailable_after_json",
             },
         }
 
-        # Summary only — the (B, P) matrix itself is not serialized
         if self.bootstrap_samples is not None:
             matrix = np.asarray(self.bootstrap_samples)
-            if matrix.ndim == 2:
-                result["bootstrap_samples_summary"] = {
-                    "n_replicates": int(matrix.shape[0]),
-                    "n_policies": int(matrix.shape[1]),
-                }
-
-        # Add influence functions if present (convert to lists for JSON)
-        if self.influence_functions:
-            result["influence_functions"] = {
-                policy: ifs.tolist() for policy, ifs in self.influence_functions.items()
+            result["bootstrap_samples_summary"] = {
+                "n_replicates": int(matrix.shape[0]),
+                "n_policies": int(matrix.shape[1]),
             }
+            if detail == "full":
+                result["bootstrap_samples"] = matrix
 
-        # Add diagnostics if present
+        if detail == "full" and self.influence_functions:
+            result["influence_functions"] = self.influence_functions
+
         if self.diagnostics:
             result["diagnostics"] = self.diagnostics.to_dict()
+        if self.ci_info is not None:
+            result["ci_info"] = asdict(self.ci_info)
 
-        # Add metadata if non-empty
-        if self.metadata:
-            result["metadata"] = self.metadata
+        pairwise_state: Dict[str, Any] = {"capability": "unavailable"}
+        source_capability = (
+            source_pairwise_state.get("capability")
+            if isinstance(source_pairwise_state, dict)
+            else None
+        )
+        if detail == "summary":
+            pairwise_state = {"capability": "unavailable"}
+        elif isinstance(source_pairwise_state, dict) and source_capability in {
+            "unavailable",
+            "stored_alpha_only",
+        }:
+            # Serialization can discard state, never recreate state that a
+            # prior summary/portable load explicitly marked unavailable.
+            pairwise_state = dict(source_pairwise_state)
+        elif detail == "full":
+            pairwise_state = {"capability": "full"}
+        elif detail == "portable" and len(self.estimates) > 1:
+            comparisons: Dict[str, Dict[str, Any]] = {}
+            recomputable_pairs: List[str] = []
+            for i in range(len(self.estimates)):
+                for j in range(i + 1, len(self.estimates)):
+                    try:
+                        comparison = self.compare_policies(i, j, alpha=0.05)
+                    except (InferenceUnavailableError, ValueError):
+                        continue
+                    if comparison.get("method") == "paired_if_legacy":
+                        continue
+                    pair_key = f"{i}-{j}"
+                    if comparison.get("method") == "independent_conservative":
+                        recomputable_pairs.append(pair_key)
+                        continue
+                    comparison = dict(comparison)
+                    comparison.pop("gate_flagged", None)
+                    comparisons[pair_key] = comparison
+            if comparisons or recomputable_pairs:
+                pairwise_state = {
+                    "capability": "stored_alpha_only",
+                    "alpha": 0.05,
+                    "comparisons": comparisons,
+                    "recomputable_pairs": recomputable_pairs,
+                }
+        result["pairwise_inference_state"] = pairwise_state
+        result["capabilities"]["paired_comparison"] = pairwise_state["capability"]
 
-        # Add per-policy results if policies are specified
         if "target_policies" in self.metadata:
             policies = self.metadata["target_policies"]
             result["per_policy_results"] = {}
@@ -981,7 +1294,152 @@ class EstimationResult(BaseModel):
                     "n_samples": self.n_samples_used.get(policy, 0),
                 }
 
-        return result
+        return cast(Dict[str, Any], _json_safe(result))
+
+    @classmethod
+    def from_dict(cls, payload: Dict[str, Any]) -> "EstimationResult":
+        """Reconstruct a result without inventing omitted inference state."""
+        schema = payload.get("schema_version")
+        metadata = dict(payload.get("metadata") or {})
+        policies = metadata.get("target_policies") or payload.get("target_policies")
+        if policies and "target_policies" not in metadata:
+            metadata["target_policies"] = list(policies)
+
+        pairwise_state = payload.get("pairwise_inference_state")
+        if not isinstance(pairwise_state, dict):
+            pairwise_state = {"capability": "unavailable"}
+        if schema != RESULT_SCHEMA_VERSION:
+            pairwise_state = {
+                "capability": "unavailable",
+                "reason": "legacy_unversioned_result",
+            }
+            metadata["serialization_compatibility"] = "legacy_unverified"
+        metadata["_serialized_pairwise_state"] = pairwise_state
+
+        def _numeric_array(values: Any) -> np.ndarray:
+            return np.asarray(
+                [np.nan if value is None else float(value) for value in values],
+                dtype=float,
+            )
+
+        ci_payload = payload.get("ci_info")
+        ci_info = CIInfo(**ci_payload) if isinstance(ci_payload, dict) else None
+        if ci_info is None and isinstance(payload.get("confidence_intervals"), dict):
+            ci = payload["confidence_intervals"]
+            if ci.get("method") == "percentile" and "lower" in ci and "upper" in ci:
+                ci_info = CIInfo(
+                    method="percentile",
+                    alpha=float(ci.get("alpha", 0.05)),
+                    lower=[np.nan if v is None else float(v) for v in ci["lower"]],
+                    upper=[np.nan if v is None else float(v) for v in ci["upper"]],
+                )
+
+        diagnostics = _diagnostics_from_dict(payload.get("diagnostics"))
+        influence = payload.get("influence_functions")
+        if isinstance(influence, dict):
+            influence = {
+                str(policy): _numeric_array(values)
+                for policy, values in influence.items()
+            }
+        else:
+            influence = None
+        bootstrap = payload.get("bootstrap_samples")
+        if bootstrap is not None:
+            bootstrap = np.asarray(
+                [
+                    [np.nan if value is None else float(value) for value in row]
+                    for row in bootstrap
+                ],
+                dtype=float,
+            )
+        units_payload = payload.get("units")
+        units = (
+            ResultUnits.model_validate(units_payload)
+            if isinstance(units_payload, dict)
+            else None
+        )
+        return cls(
+            estimates=_numeric_array(payload["estimates"]),
+            standard_errors=_numeric_array(payload["standard_errors"]),
+            n_samples_used={
+                str(policy): count
+                for policy, count in payload["n_samples_used"].items()
+            },
+            method=str(payload["method"]),
+            influence_functions=influence,
+            bootstrap_samples=bootstrap,
+            diagnostics=diagnostics,
+            calibrator=None,
+            metadata=metadata,
+            ci_info=ci_info,
+            units=units,
+        )
+
+    @classmethod
+    def from_json(cls, path: Any) -> "EstimationResult":
+        """Load a versioned result JSON file."""
+        with open(Path(path)) as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, dict):
+            raise ValueError("EstimationResult JSON must contain an object")
+        return cls.from_dict(payload)
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursively convert supported scientific/Pydantic values to JSON data."""
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, (float, np.floating)):
+        numeric = float(value)
+        return numeric if np.isfinite(numeric) else None
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.ndarray):
+        return _json_safe(value.tolist())
+    if isinstance(value, Enum):
+        return _json_safe(value.value)
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, BaseModel):
+        return _json_safe(value.model_dump())
+    if is_dataclass(value):
+        return _json_safe(asdict(value))  # type: ignore[arg-type]
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return [_json_safe(item) for item in sorted(value, key=str)]
+    raise TypeError(
+        f"Unsupported value in EstimationResult serialization: "
+        f"{type(value).__name__}"
+    )
+
+
+def _diagnostics_from_dict(payload: Any) -> Optional["DirectDiagnostics"]:
+    if not isinstance(payload, dict):
+        return None
+    from ..diagnostics import DirectDiagnostics, Status
+
+    values = dict(payload)
+    values.pop("overall_status", None)
+    raw_statuses = values.get("status_per_policy")
+    if isinstance(raw_statuses, dict):
+        converted = {}
+        for policy, value in raw_statuses.items():
+            try:
+                converted[str(policy)] = Status(value)
+            except (TypeError, ValueError):
+                continue
+        values["status_per_policy"] = converted
+    allowed = {field.name for field in fields(DirectDiagnostics)}
+    return DirectDiagnostics(
+        **{key: value for key, value in values.items() if key in allowed}
+    )
 
 
 # Import at the end to resolve forward references

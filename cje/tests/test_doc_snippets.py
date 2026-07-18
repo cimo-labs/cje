@@ -55,7 +55,7 @@ def test_readmes_found() -> None:
 @pytest.mark.parametrize("path,line,code", SNIPPETS, ids=IDS)
 def test_snippet_compiles(path: str, line: int, code: str) -> None:
     try:
-        compile(code, f"{path}:{line}", "exec")
+        compile(code, f"<doc-snippet {path}:{line}>", "exec")
     except SyntaxError as e:  # pragma: no cover - failure path
         pytest.fail(f"{path}:{line} snippet has a syntax error: {e}")
 
@@ -68,7 +68,9 @@ def test_skill_quickstart_matches_readme() -> None:
     skill_text = (REPO_ROOT / "skills" / "cje" / "SKILL.md").read_text()
     readme_text = (REPO_ROOT / "README.md").read_text()
     quickstart = [
-        code for code in _FENCE_RE.findall(skill_text) if "fresh_draws_data={" in code
+        code
+        for code in _FENCE_RE.findall(skill_text)
+        if "draws = {" in code and "analyze_dataset(fresh_draws_data=draws)" in code
     ]
     assert len(quickstart) == 1, "expected exactly one canonical example in SKILL.md"
     assert quickstart[0] in readme_text, (
@@ -90,7 +92,7 @@ def test_snippet_imports_resolve(path: str, line: int, code: str) -> None:
         pytest.skip("snippet has no imports")
     module = ast.Module(body=import_nodes, type_ignores=[])
     try:
-        exec(compile(module, f"{path}:{line}", "exec"), {})
+        exec(compile(module, f"<doc-snippet {path}:{line}>", "exec"), {})
     except ImportError as e:  # pragma: no cover - failure path
         # Optional-extra dependencies are allowed to be absent in the dev env;
         # docs for those modules state the required extra explicitly.

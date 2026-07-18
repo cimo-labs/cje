@@ -11,6 +11,7 @@ unchanged from 0.3.0.
 
 import json
 import logging
+import runpy
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -103,9 +104,41 @@ def _write_calibration_data(path: Path, n: int = 20, seed: int = 3) -> None:
 
 
 class TestAnalyzeSurface:
+    def test_python_m_cje_entrypoint_help(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(sys, "argv", ["cje", "--help"])
+        with pytest.raises(SystemExit) as exc_info:
+            runpy.run_module("cje.__main__", run_name="__main__")
+
+        assert exc_info.value.code == 0
+        assert "usage:" in capsys.readouterr().out
+
     def test_default_estimator_is_calibrated_direct(self) -> None:
         args = create_parser().parse_args(["analyze", "draws/"])
         assert args.estimator == "calibrated-direct"
+
+    def test_scale_and_strict_options_parse(self) -> None:
+        args = create_parser().parse_args(
+            [
+                "analyze",
+                "draws/",
+                "--fresh-judge-scale",
+                "0",
+                "100",
+                "--calibration-oracle-scale",
+                "1",
+                "5",
+                "--output-scale",
+                "0",
+                "10",
+                "--strict",
+            ]
+        )
+        assert args.fresh_judge_scale == [0.0, 100.0]
+        assert args.calibration_oracle_scale == [1.0, 5.0]
+        assert args.output_scale == [0.0, 10.0]
+        assert args.strict is True
 
     def test_directory_positional_runs(
         self,
@@ -121,7 +154,7 @@ class TestAnalyzeSurface:
         assert exit_code == 0
         out = capsys.readouterr().out
         assert "policy_a" in out and "policy_b" in out
-        assert "Best policy" in out
+        assert "Best by point estimate" in out
 
     def test_file_positional_runs(
         self,
@@ -177,6 +210,127 @@ class TestAnalyzeSurface:
 
         assert exit_code == 0
         assert "policy_a" in capsys.readouterr().out
+
+    def test_calibration_scale_options_run_end_to_end(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        draws = tmp_path / "responses"
+        draws.mkdir()
+        fresh = [{"prompt_id": f"p{i}", "judge_score": 100 * i / 19} for i in range(20)]
+        (draws / "policy_a_responses.jsonl").write_text(
+            "\n".join(json.dumps(record) for record in fresh) + "\n"
+        )
+        calibration = tmp_path / "calibration.jsonl"
+        calibration.write_text(
+            "\n".join(
+                json.dumps(
+                    {
+                        "prompt_id": f"c{i}",
+                        "judge_score": 100 * i / 19,
+                        "oracle_label": 100 * i / 19,
+                    }
+                )
+                for i in range(20)
+            )
+            + "\n"
+        )
+
+        exit_code = _run_cli(
+            monkeypatch,
+            "analyze",
+            str(draws),
+            "--calibration-data",
+            str(calibration),
+            "--fresh-judge-scale",
+            "0",
+            "100",
+            "--calibration-judge-scale",
+            "0",
+            "100",
+            "--calibration-oracle-scale",
+            "0",
+            "100",
+            "--output-scale",
+            "0",
+            "100",
+            "--estimator-config",
+            '{"inference_method": "cluster_robust"}',
+        )
+
+        assert exit_code == 0
+        assert "policy_a" in capsys.readouterr().out
+
+    def test_single_file_default_drops_invalid_rows_but_strict_fails(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        records = _fresh_records("policy_a", n=30, with_oracle=True)
+        records.append(
+            {
+                "prompt_id": "missing-policy",
+                "judge_score": 0.5,
+                "oracle_label": 0.5,
+            }
+        )
+        path = tmp_path / "fresh_draws.jsonl"
+        path.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+
+        assert _run_cli(monkeypatch, "analyze", str(path)) == 0
+        capsys.readouterr()
+
+        assert _run_cli(monkeypatch, "analyze", str(path), "--strict") == 1
+        assert "missing 'target_policy'" in capsys.readouterr().err
+
+    def test_transport_probe_and_margin_options(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        draws = tmp_path / "responses"
+        draws.mkdir()
+        records = [
+            {
+                "prompt_id": f"p{i}",
+                "judge_score": 0.2 + 0.4 * i / 29,
+                "oracle_label": 0.2 + 0.4 * i / 29,
+                "draw_idx": 0,
+            }
+            for i in range(30)
+        ]
+        (draws / "policy_a_responses.jsonl").write_text(
+            "\n".join(json.dumps(record) for record in records) + "\n"
+        )
+        probes = [
+            {
+                "prompt_id": f"probe-{i}",
+                "judge_score": 0.2 + 0.4 * i / 29,
+                "oracle_label": 0.2 + 0.4 * i / 29,
+            }
+            for i in range(30)
+        ]
+        probe_path = tmp_path / "policy_a_probe.jsonl"
+        probe_path.write_text("\n".join(json.dumps(record) for record in probes) + "\n")
+
+        exit_code = _run_cli(
+            monkeypatch,
+            "analyze",
+            str(draws),
+            "--transport-probe",
+            f"policy_a={probe_path}",
+            "--transport-margin",
+            "policy_a=0.05",
+            "--estimator-config",
+            '{"inference_method": "cluster_robust"}',
+        )
+
+        assert exit_code == 0
+        assert "residual transport: PASS" in capsys.readouterr().out
 
     def test_logprob_fields_in_file_ignored_with_info_line(
         self,
@@ -353,9 +507,12 @@ class TestCLIBestPolicy:
             },
         )
         lines = best_policy_lines(results)
-        assert lines == ["🏆 Best policy: good"]
+        assert lines == [
+            "Best by point estimate: good",
+            "Limitations: residual transport NOT_CHECKED",
+        ]
 
-    def test_flagged_argmax_is_demoted(self) -> None:
+    def test_flagged_argmax_is_qualified_not_demoted(self) -> None:
         # The verified 0.3.0 repro: adversarial 'unhelpful' wins the raw
         # argmax while flagged UNRELIABLE by the refusal gates
         results = self._make_results(
@@ -372,15 +529,11 @@ class TestCLIBestPolicy:
             },
         )
         lines = best_policy_lines(results)
-        assert any(
-            "Best by point estimate: unhelpful" in line and "UNRELIABLE" in line
-            for line in lines
-        )
-        assert not any(line.startswith("🏆 Best policy:") for line in lines)
-        # The best RELIABLE policy is named
-        assert any("Best reliable policy: clone" in line for line in lines)
+        assert lines[0] == "Best by point estimate: unhelpful"
+        assert not any("Best reliable policy" in line for line in lines)
+        assert any("reliability gates flagged" in line for line in lines)
 
-    def test_critical_status_also_demotes(self) -> None:
+    def test_critical_status_qualifies_point_winner(self) -> None:
         diag = _make_direct_diagnostics(
             policies=["bad", "ok"],
             estimates={"bad": 0.9, "ok": 0.6},
@@ -389,8 +542,8 @@ class TestCLIBestPolicy:
         )
         results = self._make_results([0.9, 0.6], ["bad", "ok"], diagnostics=diag)
         lines = best_policy_lines(results)
-        assert any("UNRELIABLE" in line for line in lines)
-        assert any("Best reliable policy: ok" in line for line in lines)
+        assert lines[0] == "Best by point estimate: bad"
+        assert any("reliability gates flagged" in line for line in lines)
 
     def test_all_flagged_no_winner(self) -> None:
         results = self._make_results(
@@ -402,9 +555,9 @@ class TestCLIBestPolicy:
             },
         )
         lines = best_policy_lines(results)
-        assert any("do not pick a winner" in line for line in lines)
+        assert any("no policy passed" in line for line in lines)
 
     def test_all_nan_estimates(self) -> None:
         results = self._make_results([float("nan"), float("nan")], ["a", "b"])
         lines = best_policy_lines(results)
-        assert any("every policy was refused" in line for line in lines)
+        assert any("every point estimate is NaN" in line for line in lines)

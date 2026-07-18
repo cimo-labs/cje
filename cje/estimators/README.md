@@ -82,18 +82,18 @@ result.metadata["inference"]
 
 ### Oracle uncertainty (calibration-aware inference)
 
-`oua_jackknife=True` (default) adds the delete-one-oracle-fold jackknife variance so SEs reflect that the calibrator was *learned*, not given. The bootstrap path captures this by construction; the decomposition is reported in `result.metadata["se_components"]` (`includes_oracle_uncertainty`, `oracle_variance_per_policy`). The jackknife is skipped only when the oracle labels live in the evaluation data itself at 100% coverage (no calibration uncertainty left to account for).
+`oua_jackknife=True` (default) adds the delete-one-oracle-fold jackknife variance so SEs reflect that the calibrator was *learned*, not given. Analytic inference reports `oracle_variance_per_policy`; the joint refit bootstrap captures calibration uncertainty by construction but does not claim a separate variance decomposition. The jackknife is skipped per policy when that policy routes directly to complete evaluation oracle labels.
 
 ### Paired comparisons
 
-When multiple policies are evaluated on the same prompts (`paired_comparison=True`, default), SEs cluster by `prompt_id`: 3 policies × 1000 prompts is 1000 independent clusters, not 3000 samples. Per-policy method bookkeeping lives in `result.metadata["se_methods"]` and `["n_clusters"]`.
+When multiple policies are evaluated on the same prompts (`paired_comparison=True`, default), difference inference preserves shared prompt weights and covariance. With `paired_comparison=False`, policy/prompt clusters receive independent weights and analytic differences combine per-policy SEs without prompt covariance. Per-policy method bookkeeping lives in `result.metadata["se_methods"]` and `["n_clusters"]`.
 
 ## The Coverage Gate (boundary cards)
 
 `estimate()` computes the paper's coverage badge per policy: the fraction of that policy's judge scores falling **outside the calibrator's oracle S-range** (`calibrator.oracle_s_range`, recorded at fit time). Isotonic calibration extrapolates flatly outside its support, so out-of-range mass makes *level* claims untrustworthy even when rankings survive.
 
 - Cards are attached to `result.diagnostics.boundary_cards` and `result.metadata["boundary_cards"]`.
-- At ≥ 5% out-of-range mass (`OUT_OF_RANGE_REFUSE_THRESHOLD` in `cje.diagnostics.gates`), the card's status is **REFUSE-LEVEL**: the estimator warns loudly, sets that policy's status to CRITICAL, and flags it in `result.metadata["reliability_gates"]` (`flagged`, `refuse_level_claims`, `reasons`). The `cje analyze` CLI demotes such policies from the best-policy announcement.
+- At ≥ 5% out-of-range mass (`OUT_OF_RANGE_REFUSE_THRESHOLD` in `cje.diagnostics.gates`), the card's status is **REFUSE-LEVEL**: the estimator warns loudly, sets that policy's status to CRITICAL, and flags it in `result.metadata["reliability_gates"]` (`flagged`, `refuse_level_claims`, `reasons`). The `cje analyze` CLI keeps the point winner visible and attaches the limitation.
 - Fix: collect oracle labels covering the missing score range.
 
 ```python
@@ -116,7 +116,7 @@ Calibration uses k-fold cross-fitting with deterministic fold assignment from th
 
 - **"No fresh draws added"** — call `add_fresh_draws()` for every policy in `target_policies` before `fit_and_estimate()`.
 - **"Only N oracle-labeled samples"** — cross-fitted calibration needs at least 2 labels per fold (10 for the default 5 folds); with 4–9 labels CJE reduces the fold count with a warning, below 4 it raises.
-- **REFUSE-LEVEL badge** — not an error: rankings may stand, but do not ship absolute numbers for that policy until labels cover its score range.
+- **REFUSE-LEVEL badge** — not an error: do not ship absolute numbers from that calibration fit until labels cover the policy's score range. The scalar-support check alone does not certify rankings or residual transport.
 
 ## Summary
 

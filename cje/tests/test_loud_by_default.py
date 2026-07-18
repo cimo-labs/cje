@@ -24,12 +24,9 @@ class TestFreshDrawsDataWithLoggedData:
         fresh_draws_data = {
             "pi_target": [{"prompt_id": "p0", "judge_score": 0.7}],
         }
-        with pytest.raises(
-            ValueError,
-            match="'logged_data_path' is no longer accepted",
-        ):
+        with pytest.raises(TypeError, match="logged_data_path"):
             analyze_dataset(
-                logged_data_path="logged.jsonl",
+                logged_data_path="logged.jsonl",  # type: ignore[call-arg]
                 fresh_draws_data=fresh_draws_data,
             )
 
@@ -79,7 +76,7 @@ class TestZeroOracleDirectMode:
         assert "UNCALIBRATED judge-score means" in warning_text
         assert "CIs do not account for judge bias" in warning_text
 
-    def test_with_oracle_labels_still_calibrated_direct(self) -> None:
+    def test_complete_oracle_labels_use_direct_oracle_route(self) -> None:
         rng = np.random.default_rng(11)
         data = {}
         for policy in ["policy_a", "policy_b"]:
@@ -98,8 +95,11 @@ class TestZeroOracleDirectMode:
             data[policy] = records
 
         results = analyze_dataset(fresh_draws_data=data)
-        # Bootstrap inference may be auto-selected, so match the prefix.
-        assert results.method.startswith("calibrated_direct")
+        assert results.method == "direct_oracle_bootstrap"
+        assert results.metadata["point_estimator"]["routes"] == [
+            "direct_oracle",
+            "direct_oracle",
+        ]
 
 
 class TestFreshDrawLoadErrors:
@@ -528,6 +528,7 @@ class TestCombineOracleSourcesKeepsAllPairs:
                 judge_score=judge,
                 oracle_label=oracle,
                 reward=None,
+                observation_id="shared-response-1",
             )
             return Dataset(samples=[sample], target_policies=["policy_a"])
 

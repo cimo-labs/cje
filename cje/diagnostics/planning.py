@@ -108,7 +108,7 @@ class FittedVarianceModel:
 
     @property
     def fit_ok(self) -> bool:
-        """Whether the 1/n + 1/m variance fit is trustworthy (R² >= 0.5).
+        """Whether the 1/n + 1/m variance fit clears the R² warning threshold.
 
         The NNLS fitter can return arbitrarily poor fits (r_squared can even
         go negative when the measurements don't follow the additive form);
@@ -171,6 +171,29 @@ class EvaluationPlan:
         """SE for pairwise comparison (conservative √2 × SE_level)."""
         return float(np.sqrt(2)) * self.se_level
 
+    @property
+    def eval_variance_component(self) -> float:
+        """Evaluation contribution to variance at this plan's allocation."""
+        return self.sigma2_eval / self.n_samples if self.n_samples > 0 else float("nan")
+
+    @property
+    def cal_variance_component(self) -> float:
+        """Calibration contribution to variance at this plan's allocation."""
+        return self.sigma2_cal / self.m_oracle if self.m_oracle > 0 else float("nan")
+
+    @property
+    def eval_variance_fraction(self) -> float:
+        """Evaluation fraction of planned variance, ``(σ²_eval/n) / V``."""
+        total = self.eval_variance_component + self.cal_variance_component
+        if not np.isfinite(total) or total <= 0:
+            return 0.5
+        return self.eval_variance_component / total
+
+    @property
+    def cal_variance_fraction(self) -> float:
+        """Calibration fraction of planned variance, ``(σ²_cal/m) / V``."""
+        return 1.0 - self.eval_variance_fraction
+
     def mde_at_power(self, power: float) -> float:
         """Compute MDE at a different power level."""
         z_alpha = float(stats.norm.ppf(1 - self.alpha / 2))
@@ -188,9 +211,13 @@ class EvaluationPlan:
                 "se_comparison is zero — power to detect is undefined for a "
                 "degenerate (zero-variance) plan"
             )
-        z_alpha = stats.norm.ppf(1 - self.alpha / 2)
-        z = effect_size / self.se_comparison - z_alpha
-        return float(stats.norm.cdf(z))
+        z_alpha = float(stats.norm.ppf(1 - self.alpha / 2))
+        noncentrality = float(effect_size / self.se_comparison)
+        # Exact normal-theory power for rejecting |Z| > z_(1-alpha/2).
+        return float(
+            stats.norm.sf(z_alpha - noncentrality)
+            + stats.norm.cdf(-z_alpha - noncentrality)
+        )
 
     def summary(self) -> str:
         """Human-readable summary of the evaluation plan."""
@@ -200,6 +227,8 @@ class EvaluationPlan:
             f"({self.oracle_fraction:.1%} oracle)\n"
             f"  Cost: ${self.total_cost:,.0f}\n"
             f"  Single-policy SE: {self.se_level:.4f}\n"
+            f"  Planned variance: {self.eval_variance_fraction:.0%} evaluation, "
+            f"{self.cal_variance_fraction:.0%} calibration\n"
             f"  MDE ({self.power:.0%} power): {self.mde:.1%}\n"
             f"  Note: MDE assumes independent policies; paired evals on a shared "
             f"prompt set typically detect smaller differences (this plan is "
@@ -221,6 +250,10 @@ class EvaluationPlan:
             "alpha": self.alpha,
             "sigma2_eval": self.sigma2_eval,
             "sigma2_cal": self.sigma2_cal,
+            "eval_variance_component": self.eval_variance_component,
+            "cal_variance_component": self.cal_variance_component,
+            "eval_variance_fraction": self.eval_variance_fraction,
+            "cal_variance_fraction": self.cal_variance_fraction,
             "cost_model": {
                 "surrogate_cost": self.cost_model.surrogate_cost,
                 "oracle_cost": self.cost_model.oracle_cost,
@@ -288,16 +321,24 @@ def fit_variance_model(
     )
     n_oracle_available = len(oracle_prompt_ids)
 
-    # Check labeling ignorability
-    ignorability = _check_labeling_ignorability(fresh_draws)
+    # Compare observed judge-score distributions across labeling strata. This
+    # is a limited balance check, not a test of the sampling mechanism.
+    score_balance = _check_labeling_score_balance(fresh_draws)
     if verbose:
-        if ignorability.get("is_ignorable"):
-            print(f"  ✓ Labeling is ignorable (KS p={ignorability['ks_pvalue']:.3f})")
-        elif ignorability.get("is_ignorable") is False:
+        if score_balance["score_balance_status"] == "BALANCE_NOT_REJECTED":
             print(
-                f"  ⚠ Labeling may NOT be ignorable (KS p={ignorability['ks_pvalue']:.3f})"
+                "  KS score-balance check did not detect a distribution shift "
+                f"(p={score_balance['ks_pvalue']:.3f})"
             )
-            print(f"    {ignorability['recommendation']}")
+            print("    This does not establish random or ignorable oracle labeling.")
+        elif score_balance["score_balance_status"] == "SHIFT_DETECTED":
+            print(
+                "  Judge-score distributions differ across labeling strata "
+                f"(KS p={score_balance['ks_pvalue']:.3f})"
+            )
+            print(f"    {score_balance['recommendation']}")
+        else:
+            print(f"  {score_balance['recommendation']}")
 
     # Auto-select grid if not provided
     if n_grid is None:
@@ -384,24 +425,24 @@ def fit_variance_model(
         print(f"  σ²_cal  = {model.sigma2_cal:.6f}")
 
         if model.r_squared < 0.85:
-            print("\n  ⚠ Low R² - check if labeling is truly ignorable")
-            print("    (Use a single policy with random oracle sampling)")
+            print("\n  Low R² - inspect the sampling design and variance-model fit")
+            print("    (Prefer random or probability-weighted oracle sampling.)")
 
         # Warn if one component dominates completely (potential identification issue)
         total_sigma2 = model.sigma2_eval + model.sigma2_cal
         if total_sigma2 > 0:
             eval_share = model.sigma2_eval / total_sigma2
             if eval_share < 0.01:
-                print("\n  ⚠ σ²_eval ≈ 0: All variance attributed to calibration.")
+                print("\n  σ²_eval is near the NNLS boundary.")
                 print("    This may indicate:")
-                print("    - Judge scores are highly predictive of oracle (good!)")
+                print("    - Judge scores are highly predictive of oracle values")
                 print(
                     "    - OR grid design couldn't separate components (collect more pilot data)"
                 )
             elif eval_share > 0.99:
-                print("\n  ⚠ σ²_cal ≈ 0: All variance attributed to evaluation.")
+                print("\n  σ²_cal is near the NNLS boundary.")
                 print("    This may indicate:")
-                print("    - Calibration is very stable (good!)")
+                print("    - Calibration estimates are stable in this pilot")
                 print("    - OR need more oracle label variation in grid")
 
     return model
@@ -414,8 +455,8 @@ def _warn_if_poor_fit(variance_model: FittedVarianceModel) -> None:
             f"Planning on a poorly fitted variance model "
             f"(R²={variance_model.r_squared:.3f} < 0.5): the σ²_eval/n + "
             f"σ²_cal/m form does not describe the measurements, so planned "
-            f"allocations and MDEs may be unreliable. Check labeling "
-            f"ignorability or collect more pilot data."
+            f"allocations and MDEs may be unreliable. Inspect the oracle "
+            f"sampling design and collect a more informative pilot grid."
         )
 
 
@@ -748,8 +789,9 @@ def _measure_variance_direct(
     Runs analyze_dataset on subsampled data and uses the reported SE² as the
     variance estimate. Planning keeps the same Direct estimator family as the
     production workflow, measured with the analytic cluster-robust SE (+ the
-    default OUA jackknife) — near-unbiased for the production estimator's
-    realized SE and fast enough that the repeated grid scan stays tractable.
+    default OUA jackknife), which matched realized production-estimator SEs
+    within about 5% in the documented instrument experiment and is fast enough
+    that the repeated grid scan stays tractable.
 
     Args:
         fresh_draws: Full pilot dataset
@@ -893,10 +935,14 @@ def _fit_variance_model_from_measurements(
 # =============================================================================
 
 
-def _check_labeling_ignorability(
+def _check_labeling_score_balance(
     fresh_draws: "FreshDrawDataset",
 ) -> Dict[str, Any]:
-    """Check if oracle labeling appears ignorable (random within policy)."""
+    """Compare judge-score distributions for labeled and unlabeled records.
+
+    A KS test can detect some observed score imbalance. Failure to reject does
+    not establish random sampling, conditional exchangeability, or ignorability.
+    """
     labeled_scores = []
     unlabeled_scores = []
 
@@ -909,28 +955,49 @@ def _check_labeling_ignorability(
 
     if len(labeled_scores) < 10 or len(unlabeled_scores) < 10:
         return {
+            "score_balance_status": "INSUFFICIENT_DATA",
+            "score_shift_detected": None,
+            # Deprecated compatibility key. A score-only test cannot grade
+            # ignorability, so it intentionally never returns a boolean.
             "is_ignorable": None,
             "ks_statistic": None,
             "ks_pvalue": None,
             "n_labeled": len(labeled_scores),
             "n_unlabeled": len(unlabeled_scores),
-            "recommendation": "Not enough samples to test ignorability",
+            "recommendation": (
+                "Not enough labeled and unlabeled records for the KS score-balance "
+                "check; document the oracle sampling design directly."
+            ),
         }
 
     ks_stat, ks_pvalue = stats.ks_2samp(labeled_scores, unlabeled_scores)
-    is_ignorable = ks_pvalue > 0.05
-
-    recommendation = (
-        "Labeling appears ignorable (good for variance model)"
-        if is_ignorable
-        else "Labeling may NOT be ignorable - consider random oracle sampling"
-    )
+    shift_detected = bool(ks_pvalue <= 0.05)
+    status = "SHIFT_DETECTED" if shift_detected else "BALANCE_NOT_REJECTED"
+    if shift_detected:
+        recommendation = (
+            "Judge-score distributions differ across labeling strata; use random "
+            "or probability-weighted oracle sampling and inspect other covariates."
+        )
+    else:
+        recommendation = (
+            "KS did not detect a judge-score distribution difference. This does "
+            "not establish random, representative, or ignorable oracle labeling."
+        )
 
     return {
-        "is_ignorable": is_ignorable,
+        "score_balance_status": status,
+        "score_shift_detected": shift_detected,
+        "is_ignorable": None,
         "ks_statistic": float(ks_stat),
         "ks_pvalue": float(ks_pvalue),
         "n_labeled": len(labeled_scores),
         "n_unlabeled": len(unlabeled_scores),
         "recommendation": recommendation,
     }
+
+
+def _check_labeling_ignorability(
+    fresh_draws: "FreshDrawDataset",
+) -> Dict[str, Any]:
+    """Deprecated alias for :func:`_check_labeling_score_balance`."""
+    return _check_labeling_score_balance(fresh_draws)

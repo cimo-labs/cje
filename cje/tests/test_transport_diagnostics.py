@@ -41,18 +41,14 @@ def test_transport_pass_identical_probe(arena_sample: Dataset) -> None:
     # Run transport audit
     diag = audit_transportability(calibrator, probe_samples)
 
-    # Should PASS/WARN/FAIL - same distribution but may have sparse deciles
-    assert diag.status in ["PASS", "WARN", "FAIL"]
+    # Without a predeclared practical margin, the audit is descriptive only.
+    assert diag.status == "NOT_GRADED"
     assert diag.n_probe >= 15
     # CI should be reasonably close to 0 for same distribution
     assert (
         abs(diag.delta_hat) < 0.10
     ), f"Expected small mean shift, got {diag.delta_hat}"
-    # If FAIL, it should be due to sparse deciles, not mean shift
-    if diag.status == "FAIL":
-        assert (
-            "decile" in diag.recommended_action or diag.coverage < 0.95
-        ), f"FAIL status should be due to coverage/sparse deciles, got: {diag.recommended_action}"
+    assert diag.probe_bin_occupancy == diag.coverage
 
 
 @pytest.mark.e2e
@@ -85,19 +81,12 @@ def test_transport_uniform_shift(arena_sample: Dataset) -> None:
     # Run transport audit
     diag = audit_transportability(calibrator, probe_samples)
 
-    # With simple unbiasedness test, small shifts may not be significant
-    assert diag.status in [
-        "PASS",
-        "WARN",
-        "FAIL",
-    ], f"Got unexpected status: {diag.status}"
+    assert diag.status == "NOT_GRADED"
     assert (
         diag.delta_hat > 0.02
     ), f"Expected positive shift > 0.02, got {diag.delta_hat}"
 
-    # If it passes, 0 is in the CI
-    if diag.status == "PASS":
-        assert diag.delta_ci[0] <= 0 <= diag.delta_ci[1], "PASS should mean 0 in CI"
+    assert diag.reason_code == "margin_not_declared"
 
 
 @pytest.mark.e2e
@@ -179,11 +168,8 @@ def test_transport_regional_fail_synthetic() -> None:
     # Run transport audit
     diag = audit_transportability(calibrator, probe_samples, bins=10)
 
-    # Should detect regional pattern and recommend refit
-    assert diag.status in [
-        "WARN",
-        "FAIL",
-    ], f"Expected WARN/FAIL for U-shaped pattern, got {diag.status}"
+    # Regional bins remain descriptive; a mean-residual margin grades the gate.
+    assert diag.status == "NOT_GRADED"
 
     # Check that regional issues are detected
     valid_residuals = [r for r in diag.decile_residuals if not np.isnan(r)]
@@ -241,7 +227,7 @@ def test_transport_sparse_deciles() -> None:
     diag = audit_transportability(calibrator, probe_samples, bins=10)
 
     # Should handle gracefully (not crash)
-    assert diag.status in ["PASS", "WARN", "FAIL"]
+    assert diag.status == "NOT_GRADED"
     assert diag.n_probe == 10
 
     # With sparse data, binning should adapt (may have fewer bins than requested)
@@ -321,11 +307,7 @@ def test_transport_coverage_failure() -> None:
     # extrapolation to different score ranges may not show large residuals.
     # The simple unbiasedness test focuses on mean shift, not extrapolation per se.
     # This test is now less strict - just check it completes without error.
-    assert diag.status in [
-        "PASS",
-        "WARN",
-        "FAIL",
-    ], f"Got unexpected status: {diag.status}"
+    assert diag.status == "NOT_GRADED"
     assert diag.n_probe == 40
 
     # Simplified test just checks for valid recommended action
@@ -365,7 +347,7 @@ def test_transport_diagnostics_to_dict() -> None:
 def test_transport_diagnostics_summary() -> None:
     """Test TransportDiagnostics summary string."""
     diag = TransportDiagnostics(
-        status="WARN",
+        status="INCONCLUSIVE",
         delta_hat=0.03,
         delta_ci=(0.01, 0.05),
         delta_se=0.01,
@@ -380,10 +362,10 @@ def test_transport_diagnostics_summary() -> None:
     summary = diag.summary()
 
     # Check key info is present
-    assert "WARN" in summary
+    assert "INCONCLUSIVE" in summary
     assert "N=50" in summary
     assert "policy:gpt-5.6-mini" in summary
-    assert "δ̂:" in summary  # mean residual
+    assert "delta:" in summary  # mean residual
     assert "monitor" in summary  # recommended action for WARN
 
 
@@ -524,6 +506,7 @@ def test_transport_monotone_uses_quantile_binning() -> None:
 
     # 2. Should have reasonable coverage (most bins with sufficient samples)
     # For quantized scores, some bins may be empty after quantile collapse
+    assert diag.coverage is not None
     assert (
         diag.coverage >= 0.5
     ), f"Expected reasonable coverage with quantile binning, got {diag.coverage:.1%}"
@@ -589,7 +572,7 @@ def test_transport_dict_input() -> None:
     diag = audit_transportability(calibrator, probe_dicts, group_label="dict_test")
 
     # Validate results
-    assert diag.status in ["PASS", "WARN", "FAIL"]
+    assert diag.status == "NOT_GRADED"
     assert diag.n_probe == n_probe
     assert diag.group_label == "dict_test"
     assert abs(diag.delta_hat) < 0.1  # Same distribution, should be small
@@ -737,29 +720,21 @@ class TestTransportAuditTCriticalValues:
         assert diag.delta_ci[0] < z_lo
         assert diag.delta_ci[1] > z_hi
 
-    def test_boundary_case_z_would_fail_but_t_passes(self) -> None:
-        """|δ̂|/SE = 2.0 at n=40: outside z (1.96) but inside t_0.975(39) ≈ 2.023.
-
-        Pins the t verdict: PASS. Under the old z interval this probe was a
-        FAIL (0 outside the CI and |δ̂| ≥ 0.05).
-        """
+    def test_boundary_case_uses_t_interval_for_margin(self) -> None:
+        """The t interval, rather than a zero-null test, is graded by margin."""
         residuals = _residuals_with_exact_moments(n=40, mean=0.06, se=0.03)
         diag = audit_transportability(
-            _IdentityZeroCalibrator(), _probe_from_residuals(residuals)
+            _IdentityZeroCalibrator(),
+            _probe_from_residuals(residuals),
+            delta_max=0.13,
         )
 
         assert diag.delta_hat == pytest.approx(0.06, rel=1e-12)
         assert diag.delta_se == pytest.approx(0.03, rel=1e-12)
 
-        # The old z interval excludes 0 and |δ̂| >= 0.05 → z verdict was FAIL
-        z_lo = diag.delta_hat - 1.96 * diag.delta_se
-        assert z_lo > 0
-        assert abs(diag.delta_hat) >= 0.05
-
-        # The t interval contains 0 → verdict flips to PASS
-        assert diag.delta_ci[0] <= 0 <= diag.delta_ci[1]
+        assert diag.delta_ci[0] >= -0.13
+        assert diag.delta_ci[1] <= 0.13
         assert diag.status == "PASS"
-        assert diag.recommended_action == "none"
 
     def test_alpha_is_threaded_through(self) -> None:
         residuals = _residuals_with_exact_moments(n=25, mean=0.01, se=0.02)

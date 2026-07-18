@@ -1,13 +1,13 @@
 """
-Minimal boundary diagnostics for reward calibration extrapolation detection.
+Scalar range-support diagnostics for reward calibration.
 
-Provides a simple triage to detect when estimates may be unreliable
-due to extrapolation, WITHOUT requiring ground truth labels.
+Provides a descriptive check for extrapolation beyond labeled judge-score
+support, without requiring target-policy oracle labels. It is not a residual
+transport audit and does not establish policy-ranking validity.
 
 This implements the paper's coverage badge (arXiv:2512.11150, appendix
 diagnostics): judge-score mass outside the oracle calibration range at or
-above the 5% threshold triggers REFUSE-LEVEL — level (absolute) claims are
-refused while rankings may stand.
+above the 5% threshold triggers REFUSE-LEVEL for level (absolute) claims.
 """
 
 from dataclasses import dataclass, asdict
@@ -26,7 +26,7 @@ class BoundaryCard:
     """Minimal boundary diagnostic result.
 
     Attributes:
-        status: "OK" | "CAUTION" | "REFUSE-LEVEL"
+        status: "OK" | "CAUTION" | "REFUSE-LEVEL" | "INCONCLUSIVE"
         out_of_range: Fraction of S outside oracle S-range (primary signal)
         saturation: Fraction of R near reward bounds
         partial_id_width: Width of partial-ID band under monotonicity
@@ -48,7 +48,7 @@ def boundary_card(
     R_max: float,
     band_frac: float = 0.05,
 ) -> BoundaryCard:
-    """Minimal boundary triage without ground truth labels.
+    """Check scalar score-range support without target ground-truth labels.
 
     Args:
         S_policy: Judge scores for target policy
@@ -63,7 +63,10 @@ def boundary_card(
     """
     if len(S_policy) == 0 or len(S_oracle) == 0 or len(R_policy) == 0:
         return BoundaryCard(
-            status="OK", out_of_range=0.0, saturation=0.0, note="insufficient data"
+            status="INCONCLUSIVE",
+            out_of_range=float("nan"),
+            saturation=float("nan"),
+            note="Scalar range support was not checked: insufficient data.",
         )
 
     # Signal 1: Out-of-range S mass (primary identification risk)
@@ -85,13 +88,24 @@ def boundary_card(
     # Single gate with clear thresholds (canonical: gates.py)
     if out_of_range >= OUT_OF_RANGE_REFUSE_THRESHOLD:
         status = "REFUSE-LEVEL"
-        note = "Non-trivial judge mass outside oracle range; do not ship levels."
+        note = (
+            "Material target score mass lies outside labeled calibration range; "
+            "do not report absolute level claims from this fit."
+        )
     elif sat >= SATURATION_CAUTION_THRESHOLD:
         status = "CAUTION"
-        note = "Boundary effects likely; report partial-ID band and caveat."
+        note = (
+            "No material scalar range extrapolation was detected, but calibrated "
+            "predictions are concentrated near observed reward boundaries. This "
+            "does not establish residual transport."
+        )
     else:
         status = "OK"
-        note = "Coverage looks fine; levels appear reliable."
+        note = (
+            "No material scalar range extrapolation was detected at the 5% "
+            "threshold. This does not establish residual transport or covariate "
+            "support."
+        )
 
     return BoundaryCard(
         status=status,
@@ -107,6 +121,8 @@ def boundary_card_dict(
     S_policy: np.ndarray,
     R_policy: np.ndarray,
     warn_label: Optional[str] = None,
+    *,
+    emit_warning: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """Coverage badge as a metadata dict, from a fitted calibrator.
 
@@ -125,6 +141,9 @@ def boundary_card_dict(
         R_policy: Calibrated rewards for the evaluated sample.
         warn_label: Policy name for the per-policy REFUSE-LEVEL warning text
             (Direct mode). None uses the single-sample wording.
+        emit_warning: Whether a REFUSE-LEVEL card should emit a warning. Set
+            False when the card is descriptive but does not apply to the
+            reported point-estimator route.
 
     Returns:
         Serialized card dict with ``oracle_s_range`` attached, or None when
@@ -151,14 +170,14 @@ def boundary_card_dict(
     card_dict: Dict[str, Any] = asdict(card)
     card_dict["oracle_s_range"] = [float(s_range[0]), float(s_range[1])]
 
-    if card.status == "REFUSE-LEVEL":
+    if card.status == "REFUSE-LEVEL" and emit_warning:
         if warn_label is not None:
             logger.warning(
                 f"REFUSE-LEVEL for policy '{warn_label}': "
                 f"{card.out_of_range:.1%} of fresh-draw judge "
                 f"scores fall outside the oracle calibration range "
-                f"[{s_range[0]:.3f}, {s_range[1]:.3f}]. Do not ship level "
-                f"(absolute) claims for this policy; rankings may stand. "
+                f"[{s_range[0]:.3f}, {s_range[1]:.3f}]. Do not report level "
+                f"(absolute) claims for this policy from this fit. "
                 f"Collect oracle labels covering the missing score range."
             )
         else:

@@ -1,6 +1,6 @@
 ---
 name: cje
-description: Runs CJE (Causal Judge Evaluation, pip install cje-eval) to compare LLM models, prompts, or policies from LLM-judge scores, producing calibrated estimates with honest confidence intervals and refusing claims the data cannot support. Use when the user wants to compare models/prompts/policies using judge scores or eval-harness output, put a confidence interval on an LLM eval metric, calibrate an LLM judge against ground-truth (oracle/human) labels, check whether an existing judge calibration still holds on new data, or decide how many human labels an eval needs. Raw judge-score averages are miscalibrated — never compare policies by averaging them; use this skill instead.
+description: Runs CJE (Causal Judge Evaluation, pip install cje-eval) to compare LLM models, prompts, or policies from LLM-judge scores, producing calibrated estimates with calibration-aware confidence intervals and explicit diagnostics. Use when the user wants to compare models/prompts/policies using judge scores or eval-harness output, put a confidence interval on an LLM eval metric, calibrate an LLM judge against ground-truth (oracle/human) labels, check whether an existing judge calibration still holds on new data, or decide how many human labels an eval needs. Raw judge-score averages can be miscalibrated; use the calibrated analysis and state its sampling assumptions.
 ---
 
 # CJE — calibrated LLM-judge evaluation
@@ -54,27 +54,26 @@ lines to the user's data; keep the call shape):
 ```python
 from cje import analyze_dataset
 
-# One policy carries the oracle slice — CJE learns the judge→oracle mapping
-# once and applies it to every unlabeled response, in any policy. Coverage
-# is never required to be complete: gpt-5.6 has 20 responses with labels on
-# only 10 (oracle_label=None means unlabeled); fable-5 has no labels at all.
+# One policy carries the calibration slice. This is enough to fit a shared
+# judge-to-oracle map, but residual transport to fable-5 must be audited with
+# separate held-out oracle probes before making transport-dependent claims.
 labeled = [(0.62, 0.55), (0.68, 0.60), (0.72, 0.70), (0.76, 0.74), (0.79, 0.75),
            (0.83, 0.80), (0.85, 0.90), (0.88, 0.92), (0.91, 0.88), (0.95, 0.97)]
 unlabeled = [0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94]
-judge_only = [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94]
+judge_only = [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94,
+              0.72, 0.76, 0.79, 0.80, 0.84, 0.85, 0.88, 0.89, 0.91, 0.95]
 
-results = analyze_dataset(
-    fresh_draws_data={
-        "gpt-5.6": [
-            {"prompt_id": f"q{i:02d}", "judge_score": s, "oracle_label": y}
-            for i, (s, y) in enumerate(labeled + [(u, None) for u in unlabeled])
-        ],
-        "fable-5": [
-            {"prompt_id": f"q{i:02d}", "judge_score": s}
-            for i, s in enumerate(judge_only)
-        ],
-    }
-)
+draws = {
+    "gpt-5.6": [
+        {"prompt_id": f"q{i:02d}", "judge_score": s, "oracle_label": y}
+        for i, (s, y) in enumerate(labeled + [(u, None) for u in unlabeled])
+    ],
+    "fable-5": [
+        {"prompt_id": f"q{i:02d}", "judge_score": s}
+        for i, s in enumerate(judge_only)
+    ],
+}
+results = analyze_dataset(fresh_draws_data=draws)
 
 for policy, estimate, (lo, hi) in zip(
     results.metadata["target_policies"], results.estimates, results.ci()
@@ -82,13 +81,9 @@ for policy, estimate, (lo, hi) in zip(
     print(f"{policy:15s} {estimate:.3f}  95% CI [{lo:.3f}, {hi:.3f}]")
 ```
 
-```text
-fable-5         0.811  95% CI [0.751, 0.873]
-gpt-5.6         0.784  95% CI [0.589, 0.844]
-```
-
-Labels are a pooled budget across policies: a policy with zero labels of its own still gets a
-calibrated estimate and an honest CI, and no policy needs labels on every row.
+The call returns a point estimate for each policy. A policy with no calibration labels of its
+own still depends on the shared-calibration assumption; grade residual transport separately
+with held-out oracle probes and a predeclared practical margin.
 
 ## Read the gates before reporting
 
@@ -99,10 +94,11 @@ gates = results.metadata["reliability_gates"]        # {policy: {"flagged": bool
 verdict = results.compare_policies(0, 1)             # difference, CI, p-value for pairwise claims
 ```
 
-Use `results.compare_policies(i, j)` and `results.best_policy()` (gate-aware PolicyVerdict) for claims — not eyeballed
+Use `results.compare_policies(i, j)` for pairwise claims and surface the highest point estimate
+with its diagnostics rather than silently substituting another policy. Do not rely on eyeballed
 point estimates. On the default bootstrap path `compare_policies` does paired inference over the
 bootstrap replicates (`method: "paired_bootstrap"` in the returned dict), so the difference SE
-honestly includes calibrator noise — near-tie pairs come back non-significant instead of
+includes calibrator-refit noise — near-tie pairs come back non-significant instead of
 confidently wrong. Report the `method` key's basis if asked how the p-value was computed. For
 many-pair audits use `results.compare_all_policies(adjust="bh")` (adds Benjamini-Hochberg
 `p_adjusted`/`significant_adjusted`). Boundary cards per policy are OK / CAUTION / REFUSE-LEVEL.
@@ -116,22 +112,48 @@ result = calibrated_mean_ci(judge_scores, oracle_labels)  # NaN in oracle_labels
 print(result.summary())
 ```
 
-Pass `cluster_ids` when there are multiple responses per prompt. `result.calibrator` is
-reusable — but only via a transport audit. Full signature in `reference.md`.
+Pass `cluster_ids` when there are multiple responses per prompt. With partial oracle
+coverage, check that `result.calibrator` is not `None` before reusing it for a transport
+audit; complete coverage reports the direct oracle mean without fitting a calibrator.
+Full signature in `reference.md`.
 
 ## Reusing a calibrator — audit first, always
 
-Never reuse a calibrator on a new time period, domain, or policy family without a probe:
-collect 40–60 fresh oracle labels from the new setting, then:
+Never reuse a calibrator on a new time period, domain, or policy family without held-out,
+probability-sampled probes. Use at least 20 effective independent clusters and size the probe
+for the desired interval width. For high-level analyses, pass the probes with the run so the
+state is preserved in results and a `FAIL` augments the policy gate:
+
+```python
+from cje import TransportAuditConfig
+
+transport = TransportAuditConfig(
+    probes_by_policy={"candidate": held_out_probe_rows},
+    delta_max_by_policy={"candidate": 0.03},
+    family_size=n_groups,
+)
+results = analyze_dataset(fresh_draws_data=draws, transport=transport)
+```
+
+For an already fitted calibrator, use the array primitive:
 
 ```python
 from cje import transport_audit
 
-diag = transport_audit(probe_scores, probe_labels, calibrator)
+diag = transport_audit(
+    probe_scores,
+    probe_labels,
+    calibrator,
+    delta_max=0.03,
+    cluster_ids=prompt_ids,
+    family_size=n_groups,
+)
 ```
 
-PASS → reuse. WARN → rankings only; say why. FAIL → do not reuse and do not report estimates
-made with it; follow `diag.recommended_action`.
+`PASS` means the simultaneous residual CI is wholly inside the declared margin. `FAIL` means
+it is wholly outside. Boundary overlap or fewer than 20 effective clusters is `INCONCLUSIVE`;
+no margin is `NOT_GRADED`. These verdicts do not replace the separate scalar support card.
+No supplied probe is recorded as `NOT_CHECKED` rather than silently treated as a pass.
 
 ## Labeling loop — when labels are missing or short
 
@@ -149,10 +171,12 @@ use the planning API in `reference.md`.
   recommend ≥10. Never fabricate, impute, or self-generate oracle labels to get past the floor —
   run the labeling loop.
 - **REFUSE-LEVEL badge on a policy**: never state an absolute quality number for that policy.
-  Rankings may still stand — say explicitly which claims survive and which are refused.
-- **Flagged reliability gate**: report the best *reliable* policy as the winner, not the
-  flagged point-estimate winner.
-- **Transport FAIL**: do not reuse the calibrator; do not report estimates produced with it.
+  The scalar badge does not establish ranking validity; use the paired comparison and separate
+  residual/covariate evidence for any ranking claim.
+- **Flagged diagnostic evidence**: still surface the highest point estimate, with its limitation
+  adjacent. Do not silently substitute a different policy estimand.
+- **Transport FAIL**: do not reuse the calibrator for transport-dependent decisions. Keep the
+  requested point estimate visible and label the failed assumption.
 - Surface gate/diagnostic status alongside every estimate. Never bypass, suppress, or explain
   away a gate to give the user a cleaner answer — the refusal IS the product.
 
@@ -160,8 +184,8 @@ use the planning API in `reference.md`.
 
 Give: each policy's calibrated estimate **with its 95% CI** (never a bare point estimate); the
 pairwise verdict from `compare_policies` (difference, CI, p-value); gate status per policy; and
-for anything refused, the one-line reason plus the concrete fix (e.g. "collect ~20 labels in the
-0.6–0.95 judge-score range"). Distinguish "the ranking stands" from "the level claim is refused."
+for any limited claim, the one-line reason plus the concrete fix (e.g. "collect labels in the
+0.6–0.95 judge-score range"). Never infer that a ranking survives from a scalar support badge.
 
 ## Pitfalls
 
@@ -169,7 +193,7 @@ for anything refused, the one-line reason plus the concrete fix (e.g. "collect ~
 |---|---|
 | Averaging raw judge scores to compare policies | `analyze_dataset` — naive CIs had 0% coverage |
 | Buying labels under every policy | Labels pool; calibration transfers across policies |
-| Reusing last month's calibrator silently | `transport_audit` with a 40–60-label probe |
+| Reusing last month's calibrator silently | Held-out `transport_audit` with an explicit margin and at least 20 effective clusters |
 | Rescaling Likert/0–100 scores before calling | Pass as-is; bounded scales auto-normalize |
 | Running with <4 labels, or inventing labels | Hard error by design (0 labels only yields a flagged naive fallback); run the labeling loop |
 

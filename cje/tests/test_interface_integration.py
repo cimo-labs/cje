@@ -10,7 +10,6 @@ import pytest
 
 from cje.interface.analysis import analyze_dataset
 
-
 pytestmark = [pytest.mark.integration, pytest.mark.uses_arena_sample]
 
 
@@ -27,12 +26,10 @@ def _arena_paths() -> tuple[Path, Path]:
     return dataset_path, fresh_draws_dir
 
 
-def test_analyze_dataset_eight_labels_reduces_folds() -> None:
-    """4-9 oracle labels: calibration folds auto-reduce with a warning and the
-    analysis succeeds (the reduction rule moved from the service layer into the
-    calibrator in 0.5.0 — analyze_dataset behavior is unchanged)."""
-    import logging
-
+def test_analyze_dataset_eight_labels_reduces_folds(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Eight independent labels calibrate after reducing the fold count."""
     import numpy as np
 
     rng = np.random.default_rng(11)
@@ -44,26 +41,20 @@ def test_analyze_dataset_eight_labels_reduces_folds() -> None:
             rec["oracle_label"] = float(np.clip(s + rng.normal(0, 0.05), 0, 1))
         records.append(rec)
 
-    logger = logging.getLogger("cje.calibration.judge")
-    records_seen = []
-
-    class _Capture(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            records_seen.append(record.getMessage())
-
-    handler = _Capture(level=logging.WARNING)
-    logger.addHandler(handler)
-    try:
+    with caplog.at_level("WARNING", logger="cje.calibration.judge"):
         results = analyze_dataset(
             fresh_draws_data={"policy_a": records},
             estimator_config={"n_bootstrap": 50},
         )
-    finally:
-        logger.removeHandler(handler)
 
     assert np.all(np.isfinite(results.estimates))
     assert np.all(np.isfinite(results.standard_errors))
-    assert any("reducing" in msg and "calibration folds" in msg for msg in records_seen)
+    assert results.method == "calibrated_direct_bootstrap"
+    assert results.metadata["calibration_status"] == "CALIBRATED"
+    assert results.metadata["claim_tier"] == "CALIBRATED_ORACLE_MEAN"
+    assert any(
+        "reducing calibration folds" in record.message for record in caplog.records
+    )
 
 
 @pytest.mark.slow
@@ -146,7 +137,7 @@ def test_mode_selection_metadata_populated() -> None:
     assert mode_sel["estimator"] == "direct"
     assert mode_sel["has_fresh_draws"] is True
     assert mode_sel["has_logged_data"] is False
-    assert mode_sel["reason"] == "Direct mode is the only mode in 0.4.x"
+    assert mode_sel["reason"] == "Direct mode is the only supported estimator family"
 
 
 def test_direct_estimates_clone_accurately() -> None:

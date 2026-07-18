@@ -4,7 +4,7 @@
 
 # CJE — Causal Judge Evaluation
 
-**LLM-judge scores are cheap, plentiful, and miscalibrated. In our benchmark, naive 95% confidence intervals built on raw judge scores contained the true value 0% of the time.** CJE calibrates your judge against a small slice of ground truth (5–25% of samples), evaluates your policies at scale, and reports uncertainty you can defend — including telling you when *not* to trust the result.
+**LLM-judge scores are cheap and plentiful, but their scale can differ materially from the oracle outcome you care about.** In the paper's Chatbot Arena benchmark, naive 95% intervals around raw judge-score means had 0% coverage. CJE calibrates a judge against sampled oracle labels, evaluates policies on fresh responses, and reports uncertainty and diagnostics under explicit sampling and transport assumptions.
 
 [![arXiv](https://img.shields.io/badge/arXiv-2512.11150-b31b1b.svg)](https://arxiv.org/abs/2512.11150)
 [![Dataset](https://img.shields.io/badge/HF-Dataset-yellow)](https://huggingface.co/datasets/elandy/cje-chatbot-arena)
@@ -21,32 +21,31 @@
 pip install cje-eval
 ```
 
-Generate responses from each candidate policy on a shared prompt set, judge everything, and attach ground-truth labels (`oracle_label`) to the slice you can afford — human raters, expert review, a downstream KPI. Any bounded scale works (0–1, 0–100, Likert). CJE needs at least 10 labeled rows pooled across policies — they can all come from one policy, and even that policy doesn't need labels on every row:
+Generate one response from each candidate policy on a shared prompt set, judge every response, and attach ground-truth labels (`oracle_label`) to a probability sample you can afford: human ratings, expert review, or a downstream KPI. Any bounded judge and oracle scales work (0–1, 0–100, Likert). This minimal example has 20 shared prompts and 10 labels, all sampled from one policy:
 
 ```python
 from cje import analyze_dataset
 
-# One policy carries the oracle slice — CJE learns the judge→oracle mapping
-# once and applies it to every unlabeled response, in any policy. Coverage
-# is never required to be complete: gpt-5.6 has 20 responses with labels on
-# only 10 (oracle_label=None means unlabeled); fable-5 has no labels at all.
+# One policy carries the calibration slice. This is enough to fit a shared
+# judge-to-oracle map, but residual transport to fable-5 must be audited with
+# separate held-out oracle probes before making transport-dependent claims.
 labeled = [(0.62, 0.55), (0.68, 0.60), (0.72, 0.70), (0.76, 0.74), (0.79, 0.75),
            (0.83, 0.80), (0.85, 0.90), (0.88, 0.92), (0.91, 0.88), (0.95, 0.97)]
 unlabeled = [0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94]
-judge_only = [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94]
+judge_only = [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94,
+              0.72, 0.76, 0.79, 0.80, 0.84, 0.85, 0.88, 0.89, 0.91, 0.95]
 
-results = analyze_dataset(
-    fresh_draws_data={
-        "gpt-5.6": [
-            {"prompt_id": f"q{i:02d}", "judge_score": s, "oracle_label": y}
-            for i, (s, y) in enumerate(labeled + [(u, None) for u in unlabeled])
-        ],
-        "fable-5": [
-            {"prompt_id": f"q{i:02d}", "judge_score": s}
-            for i, s in enumerate(judge_only)
-        ],
-    }
-)
+draws = {
+    "gpt-5.6": [
+        {"prompt_id": f"q{i:02d}", "judge_score": s, "oracle_label": y}
+        for i, (s, y) in enumerate(labeled + [(u, None) for u in unlabeled])
+    ],
+    "fable-5": [
+        {"prompt_id": f"q{i:02d}", "judge_score": s}
+        for i, s in enumerate(judge_only)
+    ],
+}
+results = analyze_dataset(fresh_draws_data=draws)
 
 for policy, estimate, (lo, hi) in zip(
     results.metadata["target_policies"], results.estimates, results.ci()
@@ -54,27 +53,53 @@ for policy, estimate, (lo, hi) in zip(
     print(f"{policy:15s} {estimate:.3f}  95% CI [{lo:.3f}, {hi:.3f}]")
 ```
 
-```text
-fable-5         0.811  95% CI [0.751, 0.873]
-gpt-5.6         0.784  95% CI [0.589, 0.844]
+The call returns a point estimate for every policy, including policies with no calibration labels of their own. Supported inference paths account for evaluation sampling and finite-label calibration uncertainty; interpretation still depends on the declared sampling design and shared-calibration assumptions. CJE automatically reports a **scalar score-support badge** for each policy. That badge checks whether target judge scores extrapolate beyond the labeled score range; it does not test mean residual bias, covariate shift, or ranking validity.
+
+Residual transport is a separate, opt-in equivalence audit on oracle probes that were not used to fit the calibrator. Supply probes with the analysis when you want their states wired into result diagnostics and reliability gates:
+
+```python
+from cje import TransportAuditConfig
+
+transport = TransportAuditConfig(
+    probes_by_policy={"fable-5": held_out_probe_rows},
+    delta_max_by_policy={"fable-5": 0.03},  # public oracle/output units
+)
+results = analyze_dataset(fresh_draws_data=draws, transport=transport)
+print(results.metadata["transport_audits"]["fable-5"]["status"])
 ```
 
-`fable-5` gets a calibrated estimate and an honest CI **without a single label of its own**, and `gpt-5.6`'s ten unlabeled rows are covered by the same transfer — labels are a pooled budget, not a per-row requirement. That transfer is what the labels-under-every-policy workflow wastes money re-buying.
+Policies without supplied probes are explicitly `NOT_CHECKED`. For an already fitted calibrator, the array-first primitive runs the same audit directly:
 
-**And when the data can't support an answer, CJE says so** instead of handing you a confident number. Here a candidate policy's judge scores land mostly *outside* the range where the calibrator saw oracle labels — the run emits the paper's coverage badge and refuses level claims for that policy:
+```python
+from cje import transport_audit
+
+audit = transport_audit(
+    probe_scores,
+    probe_labels,
+    results.calibrator,
+    delta_max=0.03,          # predeclared practical bias margin, in oracle units
+    cluster_ids=prompt_ids,  # independent sampling clusters
+    family_size=2,           # policies/groups audited for this decision
+)
+print(audit.summary())
+```
+
+`PASS` requires the simultaneous residual CI to lie wholly inside `[-delta_max, +delta_max]`; `FAIL` requires it to be wholly outside. An overlapping interval is `INCONCLUSIVE`, fewer than 20 effective clusters is `INCONCLUSIVE`, and omitting the margin is `NOT_GRADED`. Only an observed `FAIL` adds a hard reliability gate; every other unresolved state remains visible as a limitation without suppressing the estimate.
+
+When a policy's judge scores land mostly outside the labeled scalar range, CJE attaches `REFUSE-LEVEL` to the estimate:
 
 ```text
 REFUSE-LEVEL for policy 'candidate': 88.3% of fresh-draw judge scores fall
 outside the oracle calibration range [0.161, 0.595]. Do not ship level
-(absolute) claims for this policy; rankings may stand. Collect oracle labels
-covering the missing score range.
+(absolute) claims for this policy from this fit. Collect oracle labels covering
+the missing score range.
 ```
 
-The `cje analyze` CLI takes the same gates into account before crowning a winner:
+The CLI still surfaces the highest point estimate and places its limitations next to it; diagnostics do not silently replace the requested estimand with a different policy:
 
 ```text
-⚠️ Best by point estimate: candidate (UNRELIABLE — see diagnostics)
-🏆 Best reliable policy: baseline
+Best by point estimate: candidate
+Limitations: REFUSE-LEVEL scalar support; residual transport NOT_CHECKED
 ```
 
 → [Runnable Colab with real data](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb) · [Full docs](https://cimolabs.com/cje)
@@ -84,8 +109,8 @@ The `cje analyze` CLI takes the same gates into account before crowning a winner
 | Your situation | Use |
 |---|---|
 | Rank/compare policies using an LLM judge, with some ground-truth labels | **CJE** |
-| One dataset, labels sampled from it, want a CI on its mean | PPI works; CJE's `calibrated_mean_ci` is the same primitive and adds the transport audit + coverage badge |
-| Evaluate **many** policies without labeling under each — and know when calibration reuse breaks | **CJE** (the transport audit is the point) |
+| One dataset, labels sampled from it, want a CI on its mean | PPI works; CJE's `calibrated_mean_ci` provides the same core primitive plus scalar-support metadata and an optional held-out residual audit |
+| Evaluate **many** policies without labeling under each | **CJE**, provided the shared calibration and sampling assumptions are justified; use held-out probes and an explicit bias margin to grade residual transport |
 | Predict how a *specific response* will score | Not CJE — per-item prediction (conformal methods) |
 | Off-policy estimates from logs only (importance weighting / doubly robust) | `pip install "cje-eval==0.3.*"` — the frozen OPE line; 0.4.x is Direct-mode only (see [Notes on 0.4.0](#notes-on-040)) |
 
@@ -93,13 +118,13 @@ The `cje analyze` CLI takes the same gates into account before crowning a winner
 
 1. **Calibrate**: learn the judge → oracle mapping on the labeled slice (isotonic, two-stage when needed; mean-preserving by construction; cross-fitted).
 2. **Evaluate**: score every policy's fresh responses through the calibrated judge and compare policies on the same prompts.
-3. **Audit & refuse**: a transport audit per policy (does the calibration still hold on this policy's outputs?) and a coverage badge for level claims (were there oracle labels where this policy's scores live?). Failing gates change the output — they are not footnotes.
+3. **Diagnose**: automatically report scalar score-range support, and optionally run a held-out residual equivalence audit with a predeclared practical margin. These answer different questions and are reported separately.
 
-Confidence intervals account for the judge being *learned from a finite label budget* (calibration-aware inference), not just sampling noise.
+Confidence intervals include finite-label calibration uncertainty on supported inference paths. Their interpretation still depends on the oracle sampling design, shared-calibration assumptions, and any transport claims being made.
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/cimo-labs/cje/main/images/forest_plot_n1000_oracle25.png" alt="CJE forest plot showing calibrated policy estimates with confidence intervals" width="80%">
-  <br><em>Calibrated estimates with 95% CIs (valid under the calibration and transport checks CJE runs by default)</em>
+  <br><em>Calibrated estimates with 95% CIs under the experiment's stated sampling and calibration assumptions</em>
 </div>
 
 ## Validation on real ground truth
@@ -109,7 +134,7 @@ Confidence intervals account for the judge being *learned from a finite label bu
 
 ## The array API
 
-`calibrated_mean_ci` is the library's bottom layer — a ppi_py-style primitive that takes plain numpy arrays and returns a calibrated mean with an honest CI. Use it when you have one sample of judge scores and a partial oracle slice; use `analyze_dataset` for multi-policy comparisons.
+`calibrated_mean_ci` is the library's bottom layer: a ppi_py-style primitive that takes plain NumPy arrays and returns a calibrated mean and interval. Use it when you have one sample of judge scores and a probability-sampled oracle slice; use `analyze_dataset` for multi-policy comparisons.
 
 ```python
 import numpy as np
@@ -129,7 +154,7 @@ print(result.summary())
 Calibrated mean: 0.5316 (SE 0.0175, CI [0.4965, 0.5649], n=400, n_oracle=100, bootstrap)
 ```
 
-`result.calibrator` is reusable: `transport_audit(probe_scores, probe_labels, result.calibrator)` checks whether the calibration still holds on a new slice. `result.diagnostics["boundary_card"]` carries the coverage badge.
+When partial oracle coverage requires calibration, `result.calibrator` predicts in the same public judge and oracle units supplied by the caller. Complete oracle coverage returns the direct oracle mean with `result.calibrator is None`. Grade any fitted calibrator's reuse on an independent probe with `transport_audit(..., delta_max=<practical margin>)`; without a margin the result is `NOT_GRADED`. `result.diagnostics["boundary_card"]` carries the separate scalar score-support badge when calibration is fitted.
 
 ## Documentation
 

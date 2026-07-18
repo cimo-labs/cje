@@ -4,7 +4,7 @@ For the operational runbook that combines diagnostics + action policy + budgetin
 
 ## Overview
 
-Diagnostics answer the question the estimates alone cannot: **should you trust this result?** CJE follows a **push-based architecture** — the estimator computes diagnostics during estimation and attaches them to results, so every `analyze_dataset(...)` run arrives with its own audit trail. Failing gates change the output (loud warnings, CRITICAL statuses, a demoted "best policy" in the CLI); they are not footnotes.
+Diagnostics answer the question the estimates alone cannot: **should you trust this result?** CJE follows a **push-based architecture** — the estimator computes diagnostics during estimation and attaches them to results, so every `analyze_dataset(...)` run arrives with its own audit trail. Failing gates qualify the output with loud warnings and CRITICAL statuses; they do not silently replace the highest point estimate with a different policy.
 
 Direct mode has no importance weights, so there are no weight/overlap metrics here (the 0.3.x ESS/tail-index/overlap diagnostics were removed with the OPE estimators — `pip install "cje-eval==0.3.*"` if you need them). The two identification risks that remain, and the two audits that cover them:
 
@@ -28,11 +28,11 @@ cje/diagnostics/
 
 ## DirectDiagnostics
 
-The single diagnostics class since 0.4.0, attached to results as `results.diagnostics`. (`IPSDiagnostics` survives as a deprecated alias of `DirectDiagnostics` for 0.3.x consumers that read the shared attributes; it is slated for removal in a future release. `DRDiagnostics` and `CJEDiagnostics` were removed with the OPE estimators.)
+The single diagnostics class since 0.4.0, attached to results as `results.diagnostics`. The former `IPSDiagnostics` compatibility alias is removed in 0.6.0; use `DirectDiagnostics`. `DRDiagnostics` and `CJEDiagnostics` were removed with the OPE estimators.
 
 Field groups:
 
-- **Identification**: `estimator_type` ("Direct"), `method` (`calibrated_direct` | `naive_direct`, `_bootstrap` suffix when bootstrap inference ran), `policies`
+- **Identification**: `estimator_type` ("Direct"), `method` (`calibrated_direct` | `direct_oracle` | `naive_direct`, `_bootstrap` suffix when bootstrap inference ran), `policies`
 - **Sample counts**: `n_samples_total`, `n_samples_valid`, per-policy `n_samples_used`
 - **Results**: `estimates`, `standard_errors` (per-policy dicts)
 - **Status**: `status_per_policy` (`Status.WARNING` for a CAUTION coverage badge, `Status.CRITICAL` when the badge refuses level claims; the card→status ladder is canonical in `gates.py`)
@@ -51,8 +51,9 @@ diagnostics = results.diagnostics
 if diagnostics.overall_status == Status.CRITICAL:
     print(diagnostics.summary())
 
-# Per-policy coverage badges: any REFUSE-LEVEL card means do NOT ship
-# level (absolute) claims for that policy — rankings may stand.
+# Per-policy scalar-support badges: any REFUSE-LEVEL card means do NOT ship
+# level (absolute) claims for that policy. This check alone does not certify
+# rankings or residual transport.
 if diagnostics.boundary_cards:
     for policy, card in diagnostics.boundary_cards.items():
         print(f"{policy}: {card['status']} (out-of-range={card['out_of_range']:.1%})")
@@ -66,30 +67,30 @@ if diagnostics.boundary_cards:
 - `worst_status(*statuses)` combines statuses (None entries ignored).
 - `OUT_OF_RANGE_REFUSE_THRESHOLD = 0.05` — the coverage-badge gate (below).
 - `SATURATION_CAUTION_THRESHOLD = 0.20` — calibrated rewards piled near the oracle reward bounds → the badge's CAUTION signal.
-- `TRANSPORT_FAIL_DELTA_THRESHOLD = 0.05` — the transport audit's WARN/FAIL split on `|δ̂|`.
+- `TRANSPORT_FAIL_DELTA_THRESHOLD = 0.05` — deprecated compatibility constant; current residual audits require an explicit `delta_max` and do not use this threshold.
 
 **Canonical status ladder** — every badge/audit verdict maps to a `Status` through these two dicts (both importable from `cje.diagnostics`):
 
 | Mapping | Verdict → Status |
 |---|---|
-| `BOUNDARY_CARD_STATUS_TO_STATUS` | OK → GOOD, CAUTION → WARNING, REFUSE-LEVEL → CRITICAL |
-| `TRANSPORT_STATUS_TO_STATUS` | PASS → GOOD, WARN → WARNING, FAIL → CRITICAL |
+| `BOUNDARY_CARD_STATUS_TO_STATUS` | OK → GOOD, CAUTION / INCONCLUSIVE → WARNING, REFUSE-LEVEL → CRITICAL |
+| `TRANSPORT_STATUS_TO_STATUS` | PASS → GOOD, FAIL → CRITICAL, INCONCLUSIVE / NOT_GRADED / NOT_CHECKED → WARNING (`WARN` is legacy-only) |
 
 A CAUTION boundary card yields `Status.WARNING` for that policy; WARNING does not flag the policy or refuse level claims — only REFUSE-LEVEL (CRITICAL) does.
 
-**Gate failures are loud but non-destructive**: estimates are still returned with warnings, CRITICAL statuses, and per-policy records in `result.metadata["reliability_gates"]` (`{"flagged", "refused", "refuse_level_claims", "reasons"}`). The `cje analyze` CLI consults those gates before crowning a winner — a flagged argmax prints "⚠️ Best by point estimate: X (UNRELIABLE — see diagnostics)" followed by the best reliable policy.
+**Gate failures are loud but non-destructive**: estimates are still returned with warnings, CRITICAL statuses, and per-policy records in `result.metadata["reliability_gates"]` (`{"flagged", "refused", "refuse_level_claims", "reasons"}`). The `cje analyze` CLI keeps the highest point estimate visible and prints its `LIMITED` warning and diagnostics beside it.
 
 ## Coverage Badge (`boundary_card`, the REFUSE-LEVEL gate)
 
 Judge scores outside the oracle calibration range are the primary identification threat to *level* claims: the calibrator must extrapolate there, and no data exists to check the extrapolation. `boundary_card(S_policy, S_oracle, R_policy, R_min, R_max, ...)` implements the paper's badge (arXiv:2512.11150) with three signals:
 
-- **out_of_range ≥ 5%** (`OUT_OF_RANGE_REFUSE_THRESHOLD`) → status `REFUSE-LEVEL`: do not ship level (absolute) claims; rankings may stand
+- **out_of_range ≥ 5%** (`OUT_OF_RANGE_REFUSE_THRESHOLD`) → status `REFUSE-LEVEL`: do not ship level (absolute) claims from that fit; the scalar check does not establish ranking validity
 - **saturation ≥ 20%** (`SATURATION_CAUTION_THRESHOLD`; calibrated rewards piled near the oracle reward bounds) → `CAUTION`
 - otherwise → `OK`
 
 The returned `BoundaryCard` dataclass carries `status`, `out_of_range`, `saturation`, `partial_id_width` (a conservative partial-identification band under monotonicity), and a human-readable `note`.
 
-**Wiring**: `CalibratedDirectEstimator.estimate()` computes a card per policy automatically, grading each policy's fresh-draw judge scores against the oracle S-range the reward calibrator recorded at fit time. Cards land in `diagnostics.boundary_cards` and `result.metadata["boundary_cards"]`; a REFUSE-LEVEL card triggers a loud warning, sets that policy's status to CRITICAL, and flags it in `result.metadata["reliability_gates"]` (`refuse_level_claims`), which demotes it in the CLI's best-policy announcement.
+**Wiring**: `CalibratedDirectEstimator.estimate()` computes a card per policy automatically, grading each policy's fresh-draw judge scores against the oracle S-range the reward calibrator recorded at fit time. Cards land in `diagnostics.boundary_cards` and `result.metadata["boundary_cards"]`; for a calibrator-dependent point route, REFUSE-LEVEL triggers a loud warning, sets that policy's status to CRITICAL, and flags it in `result.metadata["reliability_gates"]` (`refuse_level_claims`). A fully observed `direct_oracle` estimate does not use the calibrator, so its card remains descriptive with `applies_to_current_estimate=false` and cannot gate that estimate.
 
 **Fixing a REFUSE-LEVEL badge**: collect oracle labels covering the missing score range (the warning names the range), then re-run.
 
