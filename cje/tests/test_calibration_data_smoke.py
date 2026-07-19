@@ -281,6 +281,106 @@ def test_minimal_calibration_file_loads_and_analyzes(tmp_path: Path) -> None:
     assert results.metadata["oracle_sources"]["calibration_data"]["n_oracle"] == 30
 
 
+def test_fit_cv_unsorted_index_mask_keeps_sample_weight_aligned() -> None:
+    """Compact sample_weight follows its labels for every oracle_mask form.
+
+    Regression: when oracle_mask was an unsorted integer index array,
+    fit_cv reordered the compact labels to ascending-index order but left a
+    compact sample_weight in the caller's order, silently misaligning every
+    (label, weight) pair.
+    """
+    from cje.calibration import JudgeCalibrator
+
+    rng = np.random.default_rng(7)
+    n_total = 40
+    judge_scores = rng.uniform(0.0, 1.0, n_total)
+    idx = rng.permutation(n_total)[:20]  # unsorted oracle indices
+    assert np.any(np.diff(idx) < 0), "test requires an unsorted index array"
+    labels = np.clip(judge_scores[idx] + rng.normal(0.0, 0.2, len(idx)), 0.0, 1.0)
+    weights = rng.uniform(0.1, 10.0, len(idx))  # caller order, like the labels
+
+    cal_unsorted = JudgeCalibrator(calibration_mode="monotone")
+    res_unsorted = cal_unsorted.fit_cv(
+        judge_scores, labels, oracle_mask=idx, sample_weight=weights
+    )
+
+    # Equivalent boolean-mask call: labels/weights pre-sorted to the
+    # ascending-index order that boolean fancy-indexing produces.
+    order = np.argsort(idx)
+    bool_mask = np.zeros(n_total, dtype=bool)
+    bool_mask[idx] = True
+    cal_bool = JudgeCalibrator(calibration_mode="monotone")
+    res_bool = cal_bool.fit_cv(
+        judge_scores,
+        labels[order],
+        oracle_mask=bool_mask,
+        sample_weight=weights[order],
+    )
+
+    # Equivalent sorted-index call (already in ascending-index order).
+    cal_sorted = JudgeCalibrator(calibration_mode="monotone")
+    res_sorted = cal_sorted.fit_cv(
+        judge_scores,
+        labels[order],
+        oracle_mask=np.sort(idx),
+        sample_weight=weights[order],
+    )
+
+    # Stored fit weights must be in ascending-index order (aligned with the
+    # stored labels), not the caller's unsorted order.
+    assert cal_unsorted._fit_sample_weight is not None
+    np.testing.assert_array_equal(cal_unsorted._fit_sample_weight, weights[order])
+
+    # All three mask forms describe the same fit and must agree exactly.
+    np.testing.assert_allclose(
+        res_unsorted.calibrated_scores, res_bool.calibrated_scores
+    )
+    np.testing.assert_allclose(res_sorted.calibrated_scores, res_bool.calibrated_scores)
+    assert res_unsorted.calibration_rmse == pytest.approx(res_bool.calibration_rmse)
+
+
+def test_calibrate_dataset_records_actual_fold_count_with_clustered_labels() -> None:
+    """Calibration metadata records the fold count the cross-fit actually used.
+
+    Regression: calibrate_dataset pre-resolved n_folds from the label count
+    only, but fit_cv further reduces folds by unique oracle prompt clusters.
+    With 50 labels across 5 prompts and 5 requested folds, the metadata
+    claimed 5 folds while the cross-fit used 2.
+    """
+    from cje.calibration import calibrate_dataset
+    from cje.data.models import Dataset, Sample
+
+    rng = np.random.default_rng(11)
+    samples = []
+    for prompt_i in range(5):  # 5 unique prompts, 10 labeled draws each
+        for draw_j in range(10):
+            score = float(rng.uniform(0.05, 0.95))
+            label = float(np.clip(score + rng.normal(0.0, 0.1), 0.0, 1.0))
+            samples.append(
+                Sample(
+                    prompt_id=f"prompt_{prompt_i}",
+                    prompt=f"Question {prompt_i}",
+                    response=f"Answer {prompt_i}-{draw_j}",
+                    judge_score=score,
+                    oracle_label=label,
+                    reward=None,
+                )
+            )
+    dataset = Dataset(samples=samples, target_policies=[])
+
+    calibrated, result = calibrate_dataset(
+        dataset, n_folds=5, calibration_mode="monotone"
+    )
+
+    # 5 unique clusters support only 2 folds (2 clusters per fold), and the
+    # cross-fit fold ids must match what the metadata reports.
+    assert result.fold_ids is not None
+    actual_folds = len(np.unique(result.fold_ids))
+    assert actual_folds == 2
+    assert calibrated.metadata["calibration_info"]["n_folds"] == actual_folds
+    assert calibrated.metadata["n_folds"] == actual_folds
+
+
 if __name__ == "__main__":
     # Run smoke test directly
     import tempfile

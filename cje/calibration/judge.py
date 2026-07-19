@@ -81,7 +81,7 @@ def _balanced_cluster_folds(
 
 def _index_mask_to_bool(
     indices: np.ndarray, oracle_labels: np.ndarray, n_total: int
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Convert an integer index mask to a boolean mask, keeping labels aligned.
 
     Boolean fancy-indexing (``judge_scores[bool_mask]``) returns scores in
@@ -95,7 +95,9 @@ def _index_mask_to_bool(
         n_total: Total number of samples
 
     Returns:
-        Tuple of (bool_mask, oracle_labels reordered to ascending-index order)
+        Tuple of (bool_mask, oracle_labels reordered to ascending-index order,
+        argsort permutation applied to the labels — any other compact array
+        given in caller order, e.g. sample_weight, must be reordered with it)
 
     Raises:
         ValueError: If indices contain duplicates or lengths mismatch
@@ -140,7 +142,7 @@ def _index_mask_to_bool(
     bool_mask[indices] = True
 
     order = np.argsort(indices)
-    return bool_mask, oracle_labels[order]
+    return bool_mask, oracle_labels[order], order
 
 
 @dataclass
@@ -233,6 +235,11 @@ class JudgeCalibrator:
         self._fit_covariates: Optional[np.ndarray] = None
         self._fit_sample_weight: Optional[np.ndarray] = None
         self._oracle_fold_ids: Optional[np.ndarray] = None
+
+    @property
+    def n_folds(self) -> int:
+        """CV fold count actually used by the last `fit_cv` (after auto-reduction)."""
+        return self._n_folds
 
     def _store_oracle_ranges(
         self, oracle_scores: np.ndarray, oracle_calibrated: np.ndarray
@@ -340,6 +347,11 @@ class JudgeCalibrator:
             quiet: Log fit progress at DEBUG instead of INFO. Used by the
                 per-replicate bootstrap refits, which would otherwise emit
                 thousands of identical "CV Calibration complete" lines.
+            sample_weight: Optional positive per-label fit weights. Length
+                must match either judge_scores (aligned with all rows) or
+                oracle_labels (compact, in the caller's label order — kept
+                aligned with the labels even when oracle_mask is an unsorted
+                index array).
 
         Returns:
             CalibrationResult with both global and CV calibration
@@ -348,7 +360,10 @@ class JudgeCalibrator:
         judge_scores = np.asarray(judge_scores)
         n_total = len(judge_scores)
 
-        # Handle different input formats
+        # Handle different input formats.  When an index-array oracle_mask
+        # reorders the compact labels, the same permutation must be applied
+        # to any compact sample_weight below.
+        oracle_label_order: Optional[np.ndarray] = None
         if oracle_mask is not None:
             # Explicit mask provided (can be boolean array or indices)
             oracle_mask_array = np.asarray(oracle_mask)
@@ -363,7 +378,7 @@ class JudgeCalibrator:
             ):
                 # Convert indices to a boolean mask, reordering labels to the
                 # ascending-index order produced by boolean fancy-indexing.
-                oracle_mask, oracle_labels = _index_mask_to_bool(
+                oracle_mask, oracle_labels, oracle_label_order = _index_mask_to_bool(
                     oracle_mask_array, oracle_labels, n_total
                 )
             elif np.issubdtype(oracle_mask_array.dtype, np.bool_):
@@ -474,6 +489,12 @@ class JudgeCalibrator:
             if len(weights) == n_total:
                 oracle_sample_weight = weights[oracle_mask]
             elif len(weights) == n_oracle:
+                # Compact weights arrive in the caller's label order. If an
+                # index-array oracle_mask reordered the labels, reorder the
+                # weights identically so every (label, weight) pair stays
+                # intact.
+                if oracle_label_order is not None:
+                    weights = weights[oracle_label_order]
                 oracle_sample_weight = weights
             else:
                 raise ValueError(
