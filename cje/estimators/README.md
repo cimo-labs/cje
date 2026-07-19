@@ -57,7 +57,7 @@ Fresh draws are auto-discovered from a `fresh_draws_dir` under the canonical `PO
 
 ### Inference methods (`inference_method` parameter)
 
-- **`"bootstrap"` (default):** cluster bootstrap by prompt with a **calibrator refit per replicate**, applied to the augmented estimate `θ̂_aug = mean(f̂_full(S)) + mean(Y − f̂_oof(S))` (an AIPW-style per-policy residual correction; `use_augmented_estimator=True` by default). Refitting captures the calibration/evaluation covariance that analytic SEs miss — this is what achieves ~95% CI coverage.
+- **`"bootstrap"` (default):** cluster bootstrap by prompt — positive exponential mean-one weights per prompt cluster, no replicate discarded or retried — with a **calibrator refit per replicate**, applied to the augmented estimate `θ̂_aug = mean(f̂_full(S)) + mean(Y − f̂_oof(S))` (an AIPW-style per-policy residual correction; `use_augmented_estimator=True` by default). Refitting captures the calibration/evaluation covariance that analytic SEs miss — this is what achieves ~95% CI coverage.
 - **`"cluster_robust"`:** CRV1 cluster-robust SE of the plug-in mean (clustered by `prompt_id` for paired comparisons), augmented with the oracle-jackknife variance. Fastest; undercovers when calibration and evaluation are coupled.
 - **`"auto"`:** uses cluster_robust, switching to bootstrap when there are fewer than 20 prompt clusters or when the calibration data overlaps the evaluation draws (coupling).
 
@@ -110,7 +110,7 @@ for policy, card in (result.metadata.get("boundary_cards") or {}).items():
 
 ### Cross-fitting
 
-Calibration uses k-fold cross-fitting with deterministic fold assignment from the unified fold system in `cje.data.folds` (`hash(prompt_id) % k`), so folds are stable across runs and datasets.
+Calibration uses k-fold cross-fitting. Since 0.6.0, `fit_cv` assigns whole oracle **prompt clusters** to folds by a seeded-blake2b sort with round-robin assignment — deterministic given (prompt ids, seed, k) and balanced (fold sizes differ by at most one cluster, so small oracle slices cannot produce empty folds) — and resolves the fold count from unique labeled clusters. Fold membership depends on the whole oracle cluster set, so the pre-0.6.0 `hash(prompt_id) % k` stability property ("same prompt_id → same fold regardless of the rest of the data") no longer applies to calibration folds; `get_fold`/`get_folds_for_prompts` in `cje.data.folds` remain exported but do not predict calibration fold assignment.
 
 ## Common Issues
 

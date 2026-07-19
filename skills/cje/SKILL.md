@@ -5,8 +5,9 @@ description: Runs CJE (Causal Judge Evaluation, pip install cje-eval) to compare
 
 # CJE — calibrated LLM-judge evaluation
 
-LLM-judge scores are cheap but miscalibrated: in CJE's benchmark, naive 95% CIs built on raw
-judge scores covered the truth 0% of the time. CJE calibrates the judge against a pooled slice
+LLM-judge scores are cheap but can be miscalibrated: in CJE's Chatbot Arena benchmark, naive
+95% CIs built on raw judge scores covered the truth 0% of the time. CJE calibrates the judge
+against a pooled slice
 of ground-truth labels (≥10 recommended; 4 is the hard floor), evaluates every policy at scale,
 and refuses claims the data can't support.
 
@@ -151,9 +152,11 @@ diag = transport_audit(
 ```
 
 `PASS` means the simultaneous residual CI is wholly inside the declared margin. `FAIL` means
-it is wholly outside. Boundary overlap or fewer than 20 effective clusters is `INCONCLUSIVE`;
-no margin is `NOT_GRADED`. These verdicts do not replace the separate scalar support card.
-No supplied probe is recorded as `NOT_CHECKED` rather than silently treated as a pass.
+it is wholly outside (graded even below the 20-effective-cluster floor — an under-sized probe
+cannot defeat the hard gate). Boundary overlap or too few effective clusters is `INCONCLUSIVE`;
+no margin is `NOT_GRADED` and can never PASS or FAIL. These verdicts do not replace the
+separate scalar support card. A policy without a supplied probe is recorded as `NOT_CHECKED`
+rather than silently treated as a pass.
 
 ## Labeling loop — when labels are missing or short
 
@@ -192,7 +195,7 @@ for any limited claim, the one-line reason plus the concrete fix (e.g. "collect 
 | Pitfall | Instead |
 |---|---|
 | Averaging raw judge scores to compare policies | `analyze_dataset` — naive CIs had 0% coverage |
-| Buying labels under every policy | Labels pool; calibration transfers across policies |
+| Buying labels under every policy | Labels pool; one calibration can serve every policy — but grade that transfer with held-out probes before relying on it |
 | Reusing last month's calibrator silently | Held-out `transport_audit` with an explicit margin and at least 20 effective clusters |
 | Rescaling Likert/0–100 scores before calling | Pass as-is; bounded scales auto-normalize |
 | Running with <4 labels, or inventing labels | Hard error by design (0 labels only yields a flagged naive fallback); run the labeling loop |

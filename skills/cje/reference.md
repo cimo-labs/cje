@@ -21,11 +21,14 @@ Logprob fields from 0.3.x logged data are accepted and ignored.
 
 1. `fresh_draws_data={policy_name: [records]}` — in-memory, the default choice when you reshaped the user's data yourself.
 2. `fresh_draws_dir="responses/"` — one JSONL per policy, named `{policy}_responses.jsonl` (also accepted: `{policy}.jsonl`). Policy name comes from the filename; keep names identical everywhere. A single JSONL file path (records grouped by `target_policy`) also works here.
-3. `calibration_data_path="labeled.jsonl"` — a separate judge+oracle file (e.g. historical labeled logs) used as the calibration source. Values must already be in [0, 1]; out-of-range files raise a hard error naming the observed range (rescale, or pass the data in-memory via `fresh_draws_data`, which auto-normalizes). With `combine_oracle_sources=True` (default) any `oracle_label`s in the fresh draws are pooled with it; `metadata["oracle_sources"]` reports provenance and cross-source conflicts.
+3. `calibration_data_path="labeled.jsonl"` — a separate judge+oracle file (e.g. historical labeled logs) used as the calibration source. Values default to [0, 1]; for other scales declare `calibration_judge_scale=(lo, hi)` / `calibration_oracle_scale=(lo, hi)` (external calibration data never infers its scale from observations). Out-of-range files raise a hard error naming the observed range. With `combine_oracle_sources=True` (default) any `oracle_label`s in the fresh draws are pooled with it; `metadata["oracle_sources"]` reports provenance and cross-source conflicts.
 
 Field names differ in the user's data? Pass `judge_field="score"`, `oracle_field="human_rating"` instead of renaming.
 
 ## `analyze_dataset`
+
+All arguments are keyword-only. Provide exactly ONE evaluation source
+(`fresh_draws_data` or `fresh_draws_dir` — passing both raises):
 
 ```python
 from cje import analyze_dataset
@@ -39,9 +42,38 @@ results = analyze_dataset(
     judge_field="judge_score",
     oracle_field="oracle_label",
     calibration_covariates=None,  # e.g. ["domain"] — fields from record metadata
+    include_response_length=False,  # auto word-count covariate (needs "response")
     estimator_config=None,        # e.g. {"n_bootstrap": 4000}
     verbose=False,
+    fresh_judge_scale=None,       # declared (min, max) for evaluation judge scores
+    fresh_oracle_scale=None,      # declared scale for oracle labels in the fresh draws
+    calibration_judge_scale=None,   # declared scale for the calibration file's judge scores
+    calibration_oracle_scale=None,  # declared scale for the calibration file's oracle labels
+    output_scale=None,            # display axis only — never changes the estimand label
+    strict=False,                 # retained for compatibility; invalid records raise by default
+    on_invalid=None,              # default "error" (loud); "drop" filters with counted logging
+    label_design="representative",  # or "known_propensity" / "targeted_unknown"
+    label_propensities=None,      # per-policy inclusion probs for "known_propensity"
+    transport=None,               # TransportAuditConfig with held-out probes (below)
 )
+```
+
+**Wiring transport audits into the analysis** — probes are held-out oracle-labeled
+rows in the same public units and field names as the call; margins are in OUTPUT
+units (the units of `results.estimates`):
+
+```python
+from cje import TransportAuditConfig, analyze_dataset
+
+transport = TransportAuditConfig(
+    probes_by_policy={"candidate": probe_rows},   # {policy: [records]}, held out
+    delta_max_by_policy={"candidate": 0.03},      # OUTPUT units; omitting -> NOT_GRADED
+    bins=10,
+    alpha=0.05,
+    family_size=None,             # defaults to the number of configured probes
+    min_effective_clusters=20.0,
+)
+results = analyze_dataset(fresh_draws_data=draws, transport=transport)
 ```
 
 `estimator` values are aliases of the one calibrated estimator: whether calibration
@@ -67,7 +99,12 @@ fallback), never by this parameter — its only observable effect is which name 
   `p_adjusted`/`significant_adjusted` for many-pair audits
 - `.bootstrap_samples` → (B, P) bootstrap replicate matrix on bootstrap runs (columns follow
   `metadata["target_policies"]`); powers the paired comparisons, omitted from JSON export
-- `.best_policy()` → PolicyVerdict (name, index, estimate, flagged, all_flagged, runner_up); returns the highest point estimate with limitations attached. Pass `reliable_only=True` only when an operational fallback among gate-passing policies is explicitly desired
+- `.best_policy()` → PolicyVerdict (name, index, estimate, flagged, all_flagged, runner_up,
+  runner_up_reasons); defaults to `reliable_only=True`: a gate-flagged argmax is demoted to the
+  best gate-passing policy, loudly (the demoted argmax travels as `runner_up` with its gate
+  reasons, a warning is logged, and `summary()` prints both). Pass `reliable_only=False` for the
+  raw argmax with `flagged=True`. If everything is flagged, the argmax returns with
+  `all_flagged=True` — do not crown it
 - `.calibrator` → fitted calibrator when calibration is required; complete oracle coverage may return `None`
 - `.metadata["transport_audits"]` → per-policy PASS / FAIL / INCONCLUSIVE / NOT_GRADED / NOT_CHECKED records when using `TransportAuditConfig`; FAIL adds a hard result gate only when the current estimate depends on that calibrator
 - `.summary()` → compact text report (per-policy estimate + 95% CI + gate flags, best-policy line)
@@ -100,7 +137,8 @@ result = calibrated_mean_ci(
 This is the ppi-style bottom layer for ONE sample of judge scores. Multi-policy comparisons
 belong in `analyze_dataset` (paired, gate-aware).
 
-**Transport audit** — before reusing `result.calibrator` (or `results.calibrator`) on new data:
+**Transport audit** — before reusing `result.calibrator` (or `results.calibrator`) on new
+data (check it is not `None` first — complete oracle coverage fits no calibrator):
 
 ```python
 diag = transport_audit(
@@ -116,12 +154,16 @@ print(diag.summary())
 ```
 
 - Probe: held out, probability sampled, and at least 20 effective independent clusters; size
-  for the desired CI width.
+  for the desired CI width. Below 20 effective clusters PASS is withheld (INCONCLUSIVE), but a
+  CI wholly outside the margin still grades FAIL.
 - `TransportDiagnostics`: `status` (PASS/FAIL/INCONCLUSIVE/NOT_GRADED), `delta_hat` (mean
   residual), simultaneous `delta_ci`, `effective_clusters`, `recommended_action`, `.summary()`,
   and `.plot()` (viz extra).
-- `delta_max` is predeclared in public oracle units. Pass analysis weights for unequal sampling
-  probabilities and `family_size` for all groups used in the decision.
+- `delta_max` is predeclared. Units: probe oracle-label units for this low-level audit;
+  OUTPUT units (units of `results.estimates`) for `TransportAuditConfig` margins. Omitting it
+  gives NOT_GRADED (never PASS/FAIL) and emits a FutureWarning for one release cycle — 0.5.x
+  graded the same call PASS/WARN/FAIL under a zero-null test. Pass analysis weights for unequal
+  sampling probabilities and `family_size` for all groups used in the decision.
 - `decile_residuals` and probe-bin occupancy are display-only; never gate on them.
 
 ## Planning: "how many labels do I need?"
@@ -157,7 +199,13 @@ cje validate PATH [-v]                      # check a fresh-draws dir/file; exit
 cje analyze PATH [--calibration-data F]     # per-policy estimates + 95% CIs
             [--estimator-config JSON] [-o results.json]
             [--judge-field NAME] [--oracle-field NAME]
+            [--transport-probe POLICY=FILE] [--transport-margin POLICY=DELTA]
+            [--transport-family-size N] [--transport-alpha A]
+            [--transport-min-clusters K] [--transport-bins B]
 ```
+
+`--transport-probe`/`--transport-margin` repeat per policy; margins are in oracle/output
+units (the units of the printed estimates).
 
 `cje analyze` surfaces the highest point estimate together with any diagnostic limitations; it
 does not silently substitute a different winner. Run `cje validate` first on user-provided
@@ -170,7 +218,7 @@ directories.
 | `overall_status` | GOOD / WARNING / CRITICAL | CRITICAL: results shipped with explicit caveats only |
 | Boundary card | OK / CAUTION / REFUSE-LEVEL | Scalar score-range support only. REFUSE-LEVEL: no absolute level claim from this fit; it does not establish ranking validity |
 | `reliability_gates[p]["flagged"]` | bool | Surface the point estimate with the limitation; do not substitute another policy silently |
-| Transport `status` | PASS / FAIL / INCONCLUSIVE / NOT_GRADED | Equivalence verdict for the declared residual margin; interpret only for the audited population and family |
+| Transport `status` | PASS / FAIL / INCONCLUSIVE / NOT_GRADED / NOT_CHECKED | Equivalence verdict for the declared residual margin; interpret only for the audited population and family. NOT_CHECKED = no probe was supplied for that policy — never treat it as a pass |
 
 ## Troubleshooting
 
@@ -181,18 +229,40 @@ directories.
 | `reducing calibration folds from 5 to K` warning | 4–9 labels: valid but noisier. Recommend ≥10 labels to the user. |
 | `ImportError: ... pip install "cje-eval[viz]"` | Plotting needs the viz extra; estimates work without it. |
 | Scores on 0–100 / Likert | Pass as-is — auto-normalized, results returned in the original scale. |
-| `... outside [0, 1]` error on a calibration file | `calibration_data_path` values must be in [0, 1]. Rescale the file, or pass the data via `fresh_draws_data` (auto-normalizes). |
-| `logged_data_path` / `calibrated-ips` errors | OPE removed in 0.4.0. Logged judge+oracle data still works via `calibration_data_path`. For IPS/DR pin `pip install "cje-eval==0.3.*"` (Python ≤3.12). |
-| Python version | 0.4.0+ supports 3.9–3.13. |
+| `... outside [0, 1]` error on a calibration file | `calibration_data_path` defaults to [0, 1]. Declare `calibration_judge_scale`/`calibration_oracle_scale`, rescale the file, or pass the data via `fresh_draws_data` (auto-normalizes). |
+| `TypeError: ... 'logged_data_path'` / `calibrated-ips` errors | OPE removed in 0.4.0; the dead `logged_data_path` kwarg was removed entirely in 0.6.0 (plain TypeError). Logged judge+oracle data still works via `calibration_data_path`. For IPS/DR pin `pip install "cje-eval==0.3.*"` (Python ≤3.12). |
+| `FutureWarning: ... audits without delta_max are NOT_GRADED` | Declare a practical margin (`delta_max=`) — no-margin audits can never PASS or FAIL since 0.6.0. |
+| `results.calibrator is None` | Complete oracle coverage: the estimate is the direct oracle mean; no calibrator was fit. Check for `None` before a transport audit (see MIGRATING-0.6.md §6). |
+| Python version | 0.6.0 requires 3.10–3.13 (3.9 was supported through 0.5.x). |
+
+## Migrating from 0.5.x (0.6.0)
+
+0.6.0 is a breaking correctness release — full guide with before/after snippets in
+[`MIGRATING-0.6.md`](https://github.com/cimo-labs/cje/blob/main/MIGRATING-0.6.md) at the
+repo root. Headlines:
+
+- **Python 3.10+** (3.9 dropped).
+- **`analyze_dataset` is keyword-only**; `logged_data_path` now raises a plain TypeError;
+  provide exactly one of `fresh_draws_data`/`fresh_draws_dir`.
+- **Transport audits regraded**: `delta_max` required to grade; statuses are
+  PASS/FAIL/INCONCLUSIVE/NOT_GRADED/NOT_CHECKED (WARN removed); no-margin calls warn for
+  one release cycle. Update any `status == "PASS"` / `status != "FAIL"` gate code.
+- **Full oracle coverage** routes to the direct oracle mean and `results.calibrator is None`.
+- **`best_policy()` default unchanged** (`reliable_only=True`), demotion is now loud
+  (`runner_up_reasons`, logged warning, both winners in `summary()`).
+- **Ingestion is loud by default** (`on_invalid="error"`); `prompt_id` auto-generation
+  from a `prompt` hash is retained.
+- **Expect numeric drift vs 0.5.x**: new balanced-cluster calibration folds, exponential-
+  weight bootstrap, full-coverage routing. Same data, defensibly different numbers.
+- `IPSDiagnostics` removed — use `DirectDiagnostics`.
 
 ## Migrating from 0.4.x
 
 0.5.0 is a consolidation release: same statistics on the default paths, smaller API.
 
 - **`results.best_policy()` returns a `PolicyVerdict`** (was a naive argmax `int`).
-  The highest point estimate remains the default winner and carries its gate limitations;
-  `reliable_only=True` requests a gate-passing operational fallback. Use `verdict.index`
-  for the old integer and `verdict.name` for the name.
+  A gate-flagged argmax is demoted and the best gate-passing policy wins (recorded in
+  `runner_up`). Use `verdict.index` for the old integer and `verdict.name` for the name.
 - **`estimator_config` unknown keys now raise** a ValueError listing the valid keys
   (`oua_jackknife`, `inference_method`, `n_bootstrap`, `bootstrap_seed`,
   `use_augmented_estimator`, `paired_comparison`). Typos no longer pass silently.

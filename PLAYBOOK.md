@@ -82,7 +82,7 @@ from cje import TransportAuditConfig, analyze_dataset
 probe = [json.loads(line) for line in open("probes/policy_gpt56mini.jsonl")]
 transport = TransportAuditConfig(
     probes_by_policy={"gpt-5.6-mini": probe},
-    delta_max_by_policy={"gpt-5.6-mini": 0.03},
+    delta_max_by_policy={"gpt-5.6-mini": 0.03},  # OUTPUT units (units of results.estimates)
     family_size=4,
 )
 results = analyze_dataset(fresh_draws_data=draws, transport=transport)
@@ -99,7 +99,7 @@ diag = audit_transportability(
     calibrator=results.calibrator,
     probe_samples=probe,
     group_label="policy:gpt-5.6-mini",
-    delta_max=0.03,  # practical mean-bias margin in public oracle units
+    delta_max=0.03,  # practical mean-bias margin, probe oracle-label units
     family_size=4,   # all policy/group audits used in this decision
 )
 
@@ -111,10 +111,10 @@ print(diag.summary())
 
 Predeclare `delta_max` from the smallest mean bias that would change the operational decision. The classifier uses a prompt-clustered CI for `delta = E[Y - f(S, X)]`, Bonferroni-adjusted by `family_size`:
 
-- `PASS`: the entire simultaneous CI lies inside `[-delta_max, +delta_max]`.
-- `FAIL`: the entire simultaneous CI lies outside that interval on either side.
-- `INCONCLUSIVE`: the CI overlaps a margin boundary, or there are fewer than 20 effective clusters.
-- `NOT_GRADED`: probes were evaluated but no practical margin was declared.
+- `PASS`: the entire simultaneous CI lies inside `[-delta_max, +delta_max]` — requires at least 20 effective clusters.
+- `FAIL`: the entire simultaneous CI lies outside that interval on either side. FAIL is graded even below the effective-cluster floor: a decisive out-of-margin interval is evidence of unacceptable bias, not low power, so an under-sized probe cannot defeat the hard gate.
+- `INCONCLUSIVE`: the CI overlaps a margin boundary, or there are fewer than 20 effective clusters without the CI being decisively outside.
+- `NOT_GRADED`: probes were evaluated but no practical margin was declared (the audit emits a `FutureWarning` for one release cycle — 0.5.x graded the same call under a zero-null test).
 - `NOT_CHECKED`: no independent probe was supplied for that policy.
 
 Pass `cluster_ids` when rows share an independence unit, `sample_weights` for unequal-probability probes, and the same fitted covariates used by the calibrator. Score-bin occupancy and decile residual plots are descriptive only; they never determine the verdict.
@@ -265,7 +265,7 @@ Per evaluation cycle:
 
 - Inference: `inference_method="bootstrap"`, `n_bootstrap=2000`
 - Debiasing: `use_augmented_estimator=True`
-- Audit margin: predeclare `delta_max` in public oracle units
+- Audit margin: predeclare `delta_max` — probe oracle-label units for the low-level audit, OUTPUT units (the units of `results.estimates`) for `TransportAuditConfig` margins
 - Probe design: held out, probability sampled, at least 20 effective independent clusters; size for the desired CI width
 - FAIL response: collect target labels under a documented sampling design, re-run with pooled labels, and escalate to refit if residuals are score- or covariate-conditional
 - Planning: `fit_variance_model` + `plan_evaluation` / `plan_for_mde`

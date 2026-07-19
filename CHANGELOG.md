@@ -6,32 +6,59 @@ Correctness and claim-calibration release. This version makes scale handling exp
 separates scalar score support from residual transport, and replaces zero-null transport
 testing with a predeclared practical-equivalence contract.
 
+**Upgrading from 0.5.x? Read [MIGRATING-0.6.md](MIGRATING-0.6.md)** — it covers every
+breaking change with before/after snippets, the transport regrade table, and the
+expected numeric drift.
+
 ### Breaking
 
+- **Python 3.10+ required** (`python = ">=3.10,<3.14"`). Python 3.9 is dropped: the
+  locked numpy 2.2 / scipy 1.15 stack has no 3.9 support, and CI now provably runs
+  every declared interpreter (3.10–3.13) instead of silently testing 3.12 everywhere.
 - **The high-level analysis API is keyword-only and no longer exposes the removed
   `logged_data_path` argument.** Direct evaluation uses `fresh_draws_dir` or
-  `fresh_draws_data`; logged judge-plus-oracle rows remain valid calibration input via
-  `calibration_data_path`. Removed estimator names still return migration guidance for
-  users who need the frozen 0.3.x OPE line.
-- **Residual transport now uses four verdicts and requires a practical margin to
+  `fresh_draws_data` (exactly one — passing both now raises); logged judge-plus-oracle
+  rows remain valid calibration input via `calibration_data_path`.
+  `analyze_dataset(logged_data_path=...)` now raises a plain `TypeError` (the curated
+  migration message survives on the CLI and logged-data file detection); removed
+  estimator names still return migration guidance for users who need the frozen 0.3.x
+  OPE line.
+- **Residual transport is regraded: five states, and a practical margin is required to
   grade.** `audit_transportability` and the array `transport_audit` accept
   `delta_max`, `cluster_ids`, `sample_weights`, `covariates`, `family_size`, and
   `min_effective_clusters`. `PASS` requires the simultaneous CI for
   `E[Y - f(S, X)]` to lie wholly inside `[-delta_max, +delta_max]`; `FAIL` requires
   the CI to be wholly outside; overlap is `INCONCLUSIVE`; omitting `delta_max` is
-  `NOT_GRADED`. Fewer than 20 effective independent clusters is
-  `INCONCLUSIVE`. The former zero-null `PASS` / `WARN` / `FAIL` rule and hard-coded
+  `NOT_GRADED` — and emits a `FutureWarning` for one release cycle, because 0.5.x
+  graded the same call `PASS`/`WARN`/`FAIL` under a zero-null test (un-migrated gate
+  code is otherwise silently fail-open on `status != "FAIL"` and fail-closed on
+  `status == "PASS"`). A policy without a supplied probe is `NOT_CHECKED` in
+  high-level results. Fewer than 20 effective independent clusters withholds `PASS`
+  (`INCONCLUSIVE`), but a CI wholly outside the margin still grades `FAIL` below the
+  floor, so an under-sized probe cannot defeat the hard gate.
+  `simultaneous_confidence_level` reports the family-wise Bonferroni level (1 − α);
+  the new `per_audit_confidence_level` reports each interval's nominal level
+  (1 − α/K). The former zero-null `PASS` / `WARN` / `FAIL` rule and hard-coded
   0.05 cutoff are removed. Manually constructed legacy `WARN` diagnostics normalize
   to `INCONCLUSIVE`, and `coverage` remains a deprecated display-only alias for
   `probe_bin_occupancy`.
+- **Fully observed policies report the direct oracle mean, and complete oracle
+  coverage fits no calibrator.** A policy whose evaluation rows all carry oracle
+  labels routes to its raw weighted oracle mean (`direct_oracle`) instead of a
+  calibrated-plus-residual estimate — a different (better) estimator whose values
+  will not match 0.5.x, even in mixed-coverage analyses. At complete coverage
+  `result.calibrator` is `None` (`calibrated_mean_ci` and `analyze_dataset`): check
+  for `None` before reusing a calibrator for a transport audit (MIGRATING-0.6.md §6
+  shows the reuse pattern). Calibration-only boundary and residual diagnostics remain
+  descriptive but cannot gate an estimate that does not use the calibrator.
 - **Calibrator objects exposed by public APIs operate in caller units.** Public judge
   scores go into `predict`; predictions and residual margins use the caller's oracle
   scale. Internal normalization remains an implementation detail. Mixed source scales
   must be declared or rejected rather than silently pooled.
-- **Diagnostic evidence no longer selects a different policy estimand.** The highest
-  point estimate remains visible with its limitations. Scalar `REFUSE-LEVEL` metadata
-  restricts absolute level claims from that fit; it does not assert that rankings remain
-  valid.
+- **Diagnostic evidence never silently replaces the requested estimand.** Display
+  surfaces (the CLI and `summary()`) keep the highest point estimate visible with its
+  limitations adjacent. Scalar `REFUSE-LEVEL` metadata restricts absolute level claims
+  from that fit; it does not assert that rankings remain valid.
 
 ### Added
 
@@ -51,20 +78,71 @@ testing with a predeclared practical-equivalence contract.
   covariates, family adjustment, public-unit residuals, exact two-sided power, score
   balance terminology, and simulation provenance.
 
+### Changed
+
+- **Bootstrap scheme replaced** (methodology change, not a bug fix): multinomial
+  cluster resampling with resample-until-valid retries → positive exponential
+  mean-one cluster weights (Bayesian cluster bootstrap) with no retries — retrying
+  conditioned inference on "easy" bootstrap worlds and biased SEs down. Requesting
+  calibration mode `"auto"` now re-runs mode selection in every weighted replicate,
+  so model-selection uncertainty enters the interval. Same-seed CIs differ from
+  0.5.x; the scheme is validated against analytic cluster-robust SEs and a
+  Monte-Carlo coverage cell in the test suite, and results record
+  `bootstrap_scheme: "positive_exponential_cluster_weights"`.
+- **`best_policy()` keeps the 0.5.0 safety default** (`reliable_only=True`: a
+  gate-flagged raw argmax is demoted and the best gate-passing policy is returned),
+  and the demotion is now loud instead of quiet: the demoted argmax travels as
+  `runner_up` with its gate reasons in the new `runner_up_reasons`, a warning is
+  logged, and `summary()` prints both the raw point-estimate winner (with
+  limitations) and the returned reliable winner. `reliable_only=False` returns the
+  raw argmax with `flagged=True`.
+- **Ingestion is loud by default.** Invalid records raise with file/line context on
+  every path (`analyze_dataset`, directory/single-file/in-memory fresh draws, and the
+  calibration-data loaders); pass `on_invalid="drop"` to filter instead — drops are
+  counted and logged, never silent (`strict` is retained as a compatibility no-op).
+  Duplicate `(prompt_id, draw_idx)` rows and top-level/metadata field conflicts are
+  now invalid records. `prompt_id` auto-generation is retained from 0.5.x: records
+  without one get a stable hash of the `prompt` field, identically across the
+  directory, single-file, and in-memory paths.
+- **Calibration fold assignment is balanced cluster round-robin, not
+  `hash(prompt_id) % k`.** `fit_cv` assigns whole oracle prompt clusters to folds by
+  a seeded-blake2b sort with round-robin assignment (fold sizes differ by at most one
+  cluster, so small oracle slices cannot yield empty folds) and resolves the fold
+  count from unique labeled clusters; `calibration_info["n_folds"]` records the count
+  actually used. Cross-fitted quantities therefore differ numerically from 0.5.x at
+  identical seeds, and fold membership now depends on the whole oracle cluster set —
+  the docs' former "canonical hash-fold" stability claim (`same prompt_id → same fold
+  regardless of filtering`) no longer applies to calibration folds.
+  `get_fold`/`get_folds_for_prompts` remain exported but no longer predict
+  calibration fold assignment; module docs were reconciled accordingly.
+
 ### Fixed
 
 - Exact calibration provenance now retains base sample weights, row identities,
   prompt clusters, and covariates. Bootstrap refits multiply rather than replace base
   weights, representative-label augmentation uses the weighted ratio functional, and
   weighted ECDF ties and integer-score OOF buffers are order- and dtype-safe.
-- Direct estimates are assembled in declared policy order. Fully observed policies use
-  their oracle mean even in mixed-coverage analyses; calibration-only boundary and
-  residual diagnostics remain descriptive but cannot gate an estimate that does not use
-  the calibrator.
+- Direct estimates are assembled in declared policy order (the full-coverage
+  `direct_oracle` routing itself is listed under Breaking).
 - Bootstrap and analytic inference now share the augmented point functional. Per-policy
   cluster sufficiency, oracle-jackknife availability, degrees of freedom, full-oracle
   bootstrap, and paired-versus-unpaired policy comparisons are recorded and enforced
   route by route.
+- Analytic pairwise inference refuses pairs where either policy has fewer than two
+  unique prompt clusters (the centered influence contributions of a one-cluster
+  policy are identically zero, so the stored pair SE silently reflected only the
+  other policy's variance). The analytic path now records
+  `metadata["inference_unavailable_policies"]` so `compare_policies` raises
+  `InferenceUnavailableError`, matching the bootstrap path's contract.
+- `ResultUnits.estimand` and `normalization.results_scale` derive from the
+  calibration/claim-tier state alone. A user-declared `output_scale` changes the
+  display axis only — it no longer relabels a raw-judge or mixed run as
+  `oracle_mean`, and mixed direct-oracle/raw-judge runs stay on the internal unit
+  scale (declared output scales are ignored there with a warning).
+- `fit_cv` with an unsorted integer-index `oracle_mask` reordered compact oracle
+  labels to ascending-index order but left a compact `sample_weight` in caller
+  order, silently misaligning every (label, weight) pair; compact weights now
+  follow their labels under boolean masks and sorted or unsorted index masks.
 - Result serialization preserves percentile-CI alpha, JSON-encodes standard timestamp
   values, retains recomputable independent comparisons, and rejects invalid policy
   indices. CLI validation now shares scale, strict-loading, alias-conflict, and graded
@@ -82,13 +160,19 @@ testing with a predeclared practical-equivalence contract.
 - The README quickstart uses the same 20 prompt IDs for both policies, states the
   calibration-transfer assumption, and documents the separate held-out audit. The
   operational playbook now uses explicit margins, independent clusters, sampling
-  probabilities, simultaneous inference, and all four residual-audit states.
+  probabilities, simultaneous inference, and all five residual-audit states.
 
 ### Release qualification
 
 - CI installs from the committed Poetry lock, enforces formatting, typing, the fast test
-  suite, and a project coverage floor. A scheduled workflow runs the slow/statistical
-  tests.
+  suite, and a project coverage floor on every declared interpreter (3.10–3.13;
+  `POETRY_VIRTUALENVS_PREFER_ACTIVE_PYTHON` makes the matrix real). A scheduled
+  workflow runs the slow/statistical tests.
+- The replaced bootstrap scheme is pinned statistically: bootstrap SEs must land
+  within [0.7, 1.3]× of the analytic cluster-robust SE on seeded clustered data
+  (raw-oracle, calibrator-refit, and paired-difference routes), plus a slow
+  Monte-Carlo cell asserting ≥ 88% empirical coverage of the default bootstrap
+  path against a known truth.
 - Publishing is tag-driven. The workflow verifies tag, package version, and changelog
   agreement; runs the full qualification suite; builds once; installs and smoke-tests the
   wheel; then publishes those exact artifacts via PyPI trusted publishing.

@@ -10,7 +10,7 @@
 [![Dataset](https://img.shields.io/badge/HF-Dataset-yellow)](https://huggingface.co/datasets/elandy/cje-chatbot-arena)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb)
 [![Docs](https://img.shields.io/badge/docs-cimolabs.com-blue)](https://cimolabs.com/cje)
-[![Python](https://img.shields.io/badge/python-3.9%E2%80%933.13-blue)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue)](https://www.python.org/downloads/)
 [![Tests](https://github.com/cimo-labs/cje/actions/workflows/ci.yml/badge.svg)](https://github.com/cimo-labs/cje/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/cimo-labs/cje/blob/main/LICENSE)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/cje-eval?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/cje-eval)
@@ -62,7 +62,7 @@ from cje import TransportAuditConfig
 
 transport = TransportAuditConfig(
     probes_by_policy={"fable-5": held_out_probe_rows},
-    delta_max_by_policy={"fable-5": 0.03},  # public oracle/output units
+    delta_max_by_policy={"fable-5": 0.03},  # OUTPUT units (units of results.estimates)
 )
 results = analyze_dataset(fresh_draws_data=draws, transport=transport)
 print(results.metadata["transport_audits"]["fable-5"]["status"])
@@ -77,14 +77,14 @@ audit = transport_audit(
     probe_scores,
     probe_labels,
     results.calibrator,
-    delta_max=0.03,          # predeclared practical bias margin, in oracle units
+    delta_max=0.03,          # predeclared practical bias margin, probe oracle-label units
     cluster_ids=prompt_ids,  # independent sampling clusters
     family_size=2,           # policies/groups audited for this decision
 )
 print(audit.summary())
 ```
 
-`PASS` requires the simultaneous residual CI to lie wholly inside `[-delta_max, +delta_max]`; `FAIL` requires it to be wholly outside. An overlapping interval is `INCONCLUSIVE`, fewer than 20 effective clusters is `INCONCLUSIVE`, and omitting the margin is `NOT_GRADED`. Only an observed `FAIL` adds a hard reliability gate; every other unresolved state remains visible as a limitation without suppressing the estimate.
+`PASS` requires the simultaneous residual CI to lie wholly inside `[-delta_max, +delta_max]`; `FAIL` requires it to be wholly outside. An overlapping interval is `INCONCLUSIVE`, and omitting the margin is `NOT_GRADED`. Fewer than 20 effective clusters withholds `PASS` (`INCONCLUSIVE`) — but a CI wholly outside the margin still grades `FAIL`, so an under-sized probe cannot defeat the hard gate. Only an observed `FAIL` adds a hard reliability gate; every other unresolved state remains visible as a limitation without suppressing the estimate.
 
 When a policy's judge scores land mostly outside the labeled scalar range, CJE attaches `REFUSE-LEVEL` to the estimate:
 
@@ -95,11 +95,14 @@ outside the oracle calibration range [0.161, 0.595]. Do not ship level
 the missing score range.
 ```
 
-The CLI still surfaces the highest point estimate and places its limitations next to it; diagnostics do not silently replace the requested estimand with a different policy:
+Diagnostics never act silently: `results.best_policy()` demotes a gate-flagged argmax to the best gate-passing policy (the 0.5.0 default, `reliable_only=True`), and the demotion is loud — the flagged raw winner stays visible with its limitations, and the divergence is spelled out (`reliable_only=False` returns the raw argmax, marked `flagged`):
 
 ```text
 Best by point estimate: candidate
-Limitations: REFUSE-LEVEL scalar support; residual transport NOT_CHECKED
+Limitations: flagged by the reliability gates; residual transport NOT_CHECKED
+Best reliable policy: baseline — raw argmax candidate was flagged (boundary:
+88.3% of judge scores outside the oracle calibration range); pass
+reliable_only=False for the raw argmax
 ```
 
 → [Runnable Colab with real data](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb) · [Full docs](https://cimolabs.com/cje)
@@ -164,6 +167,7 @@ When partial oracle coverage requires calibration, `result.calibrator` predicts 
 | **[CJE in 3 Minutes](https://youtu.be/VbSYrby8iaQ)** | Video: why raw judge scores mislead and how CJE fixes it |
 | **[Technical Walkthrough](https://youtu.be/r0dinGsPuqY)** | Video: calibration, evaluation, and transport auditing pipeline |
 | **[Operational Playbook](https://github.com/cimo-labs/cje/blob/main/PLAYBOOK.md)** | End-to-end runbook: audits, drift correction, label budgeting |
+| **[Migrating to 0.6.0](https://github.com/cimo-labs/cje/blob/main/MIGRATING-0.6.md)** | Upgrading from 0.5.x: breaking changes, transport regrade table, expected numeric drift |
 | **[Planning Notebook](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_planning.ipynb)** | Optimize your evaluation budget with pilot data |
 | **[Full Docs](https://cimolabs.com/cje)** | Installation, assumptions, API reference, research notes |
 
@@ -178,6 +182,10 @@ When partial oracle coverage requires calibration, `result.calibrator` predicts 
 - **Claude Code (all projects):** `mkdir -p ~/.claude/skills/cje && curl -fsSL https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/SKILL.md -o ~/.claude/skills/cje/SKILL.md && curl -fsSL https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/reference.md -o ~/.claude/skills/cje/reference.md`
 - **Project-level:** `cp -r skills/cje .claude/skills/` from a checkout of this repo.
 - **Other agents:** point your agent at [`skills/cje/SKILL.md`](https://github.com/cimo-labs/cje/blob/main/skills/cje/SKILL.md) — plain Markdown; `reference.md` loads on demand.
+
+## Upgrading from 0.5.x
+
+0.6.0 is a breaking release: Python 3.10+, a keyword-only `analyze_dataset`, regraded transport audits (a predeclared `delta_max` margin replaces the zero-null `PASS`/`WARN`/`FAIL` test), direct-oracle routing at full coverage (`result.calibrator` can be `None`), and loud-by-default ingestion. See [MIGRATING-0.6.md](https://github.com/cimo-labs/cje/blob/main/MIGRATING-0.6.md) for the full guide with before/after snippets.
 
 ## Notes on 0.4.0
 
