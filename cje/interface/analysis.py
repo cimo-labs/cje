@@ -137,9 +137,12 @@ def analyze_dataset(
             the unit interval and does not infer its scale from observations.
         calibration_oracle_scale: Optional declared scale for oracle labels in
             ``calibration_data_path``.
-        output_scale: Optional result ``(minimum, maximum)`` scale. By default,
-            calibrated results use their oracle source scale and uncalibrated
-            results use the evaluation judge scale.
+        output_scale: Optional result ``(minimum, maximum)`` display scale. By
+            default, calibrated results use their oracle source scale and
+            uncalibrated results use the evaluation judge scale. Declaring a
+            scale changes the display axis only — never the estimand label —
+            and is ignored (with a warning) for mixed direct-oracle/raw-judge
+            runs, which stay on the internal unit scale.
         strict: When True, invalid records raise instead of being dropped.
             ``on_invalid`` takes precedence when explicitly supplied.
         on_invalid: Explicit invalid-record policy, ``"error"`` or ``"drop"``.
@@ -595,7 +598,23 @@ def analyze_dataset(
 
     results = estimator_obj.fit_and_estimate()
     declared_output_scale = coerce_scale(output_scale, field_name="output_scale")
-    if declared_output_scale is not None:
+    if mixed_direct_without_calibration:
+        # Oracle and judge values can have different public scales. A single
+        # result vector cannot honestly claim either one — a declared
+        # output_scale must not project the heterogeneous internals onto one
+        # axis either — so retain unit-scale values and expose the per-policy
+        # estimands below.
+        if declared_output_scale is not None:
+            logger.warning(
+                "Ignoring output_scale=(%s, %s): mixed direct-oracle/raw-judge "
+                "results stay on the internal unit scale because a single "
+                "axis cannot honestly represent both estimands.",
+                declared_output_scale.min_val,
+                declared_output_scale.max_val,
+            )
+        result_output_scale = unit_scale()
+        result_scale_source = "mixed_direct_oracle_raw_judge"
+    elif declared_output_scale is not None:
         result_output_scale = declared_output_scale
         result_scale_source = "declared"
     elif (
@@ -612,15 +631,18 @@ def analyze_dataset(
     elif direct_oracle_without_calibration:
         result_output_scale = fresh_oracle_public_scale
         result_scale_source = "fresh_oracle_direct"
-    elif mixed_direct_without_calibration:
-        # Oracle and judge values can have different public scales. A single
-        # result vector cannot honestly claim either one, so retain unit-scale
-        # values and expose the heterogeneous per-policy estimands below.
-        result_output_scale = unit_scale()
-        result_scale_source = "mixed_direct_oracle_raw_judge"
     else:
         result_output_scale = fresh_judge_public_scale
         result_scale_source = "fresh_judge_uncalibrated"
+
+    # The estimand label derives from the calibration/claim-tier state alone;
+    # a declared output_scale changes the display axis, never the estimand.
+    if calibration_result is not None or direct_oracle_without_calibration:
+        result_estimand = "oracle_mean"
+    elif mixed_direct_without_calibration:
+        result_estimand = "mixed"
+    else:
+        result_estimand = "judge_mean"
 
     # --- 7. Transform every public result artifact exactly once from the
     # internal unit scale into one declared output scale.
@@ -630,6 +652,7 @@ def analyze_dataset(
         judge_input_scale=fresh_judge_public_scale,
         fresh_norm_info=norm_info,
         result_scale_source=result_scale_source,
+        result_estimand=result_estimand,
         verbose=verbose,
     )
 
@@ -1335,6 +1358,7 @@ def _denormalize_results(
     judge_input_scale: Any,
     fresh_norm_info: Optional[Any],
     result_scale_source: str,
+    result_estimand: str,
     verbose: bool,
 ) -> None:
     """Transform every public statistical artifact from internal units."""
@@ -1469,13 +1493,20 @@ def _denormalize_results(
     )
     normalization["output_scale"] = output_scale.to_dict()
     normalization["results_scale_source"] = result_scale_source
+    # results_scale names the display axis; the estimand (what the numbers
+    # mean) is labeled separately so a declared axis never relabels a raw
+    # judge mean as an oracle quantity.
     normalization["results_scale"] = (
-        "judge_original"
-        if result_scale_source == "fresh_judge_uncalibrated"
+        "mixed_internal"
+        if result_estimand == "mixed"
         else (
-            "mixed_internal"
-            if result_scale_source == "mixed_direct_oracle_raw_judge"
-            else "oracle_original"
+            "declared"
+            if result_scale_source == "declared"
+            else (
+                "judge_original"
+                if result_estimand == "judge_mean"
+                else "oracle_original"
+            )
         )
     )
     results.metadata["normalization"] = normalization
@@ -1483,15 +1514,7 @@ def _denormalize_results(
         from ..data.models import ResultUnits
 
         results.units = ResultUnits(
-            estimand=(
-                "judge_mean"
-                if result_scale_source == "fresh_judge_uncalibrated"
-                else (
-                    "mixed"
-                    if result_scale_source == "mixed_direct_oracle_raw_judge"
-                    else "oracle_mean"
-                )
-            ),
+            estimand=result_estimand,
             output_scale=output_scale.to_dict(),
             judge_input_scale=judge_input_scale.to_dict(),
             internal_scale={"min": 0.0, "max": 1.0, "is_identity": True},
