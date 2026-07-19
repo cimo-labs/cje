@@ -10,6 +10,9 @@ permissions:
 
 env:
   POETRY_VERSION: 1.8.5
+  # pipx runs Poetry under the runner's system Python; without this Poetry
+  # builds the venv from its own interpreter and ignores actions/setup-python.
+  POETRY_VIRTUALENVS_PREFER_ACTIVE_PYTHON: "true"
 
 jobs:
   qualify-and-publish:
