@@ -9,7 +9,7 @@ risk never silently "low") and pins the 0.4.0 wiring:
   S-range the calibrator stored at fit time, sets CRITICAL statuses, and
   writes metadata["boundary_cards"] + metadata["reliability_gates"];
 - DirectDiagnostics surfaces the badge (validate/summary/overall_status);
-- the CLI qualifies a boundary-violating point-estimate argmax;
+- best_policy() demotes a boundary-violating point-estimate argmax loudly;
 - the removed IPSDiagnostics alias raises actionable migration guidance.
 """
 
@@ -234,10 +234,11 @@ class TestBoundaryCardWiredIntoDirect:
         assert "boundary_cards" not in result.metadata
         assert "reliability_gates" not in result.metadata
 
-    def test_cli_qualifies_boundary_violating_argmax(self) -> None:
+    def test_boundary_violating_argmax_is_demoted(self) -> None:
         # End-to-end: the violating policy wins the raw argmax (isotonic
-        # clipping maps its out-of-range scores to the top reward) but the
-        # CLI keeps it visible and attaches the limitation.
+        # clipping maps its out-of-range scores to the top reward) but
+        # best_policy() demotes it to runner_up and summary() keeps it
+        # visible while stating the reliable winner.
         rng = np.random.default_rng(9)
         dataset = _calibration_dataset(rng, s_max=0.6)
         _, cal_result = calibrate_dataset(
@@ -266,10 +267,16 @@ class TestBoundaryCardWiredIntoDirect:
         assert gates["violator"]["flagged"] is True
         assert gates["safe"]["flagged"] is False
 
-        lines = best_policy_lines(result)
-        assert lines[0] == "Best by point estimate: violator"
-        assert any("reliability gates flagged" in line for line in lines)
-        assert not any("Best reliable policy" in line for line in lines)
+        verdict = result.best_policy()
+        assert verdict.name == "safe"
+        assert verdict.runner_up == "violator"
+        assert verdict.runner_up_reasons
+
+        text = result.summary()
+        assert "Best by point estimate: violator" in text
+        assert "flagged by the reliability gates" in text
+        assert "Best reliable policy: safe" in text
+        assert "reliable_only=False" in text
 
 
 # ---------------------------------------------------------------------------

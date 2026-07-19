@@ -320,3 +320,37 @@ def test_underclustered_bootstrap_policy_blocks_pairwise_fallback() -> None:
     assert result.metadata["inference_unavailable_policies"] == ["A"]
     with pytest.raises(InferenceUnavailableError, match="fewer than two"):
         result.compare_policies(0, 1)
+
+
+def test_underclustered_analytic_policy_blocks_pairwise_inference() -> None:
+    # Analytic sibling of the bootstrap test above: a one-cluster policy's
+    # centered influence contributions are identically zero, so any stored
+    # pair SE would reflect only the other policy (anti-conservative). The
+    # pair entry must be absent and compare_policies must refuse.
+    one_cluster = FreshDrawDataset(
+        target_policy="A",
+        samples=[
+            FreshDrawSample(
+                prompt_id="shared",
+                target_policy="A",
+                judge_score=value,
+                oracle_label=value,
+                response=None,
+                draw_idx=index,
+            )
+            for index, value in enumerate((0.2, 0.4, 0.6, 0.8))
+        ],
+    )
+    estimator = CalibratedDirectEstimator(
+        target_policies=["A", "B"],
+        inference_method="cluster_robust",
+    )
+    estimator.add_fresh_draws("A", one_cluster)
+    estimator.add_fresh_draws("B", _fresh("B", np.asarray([0.3, 0.5, 0.7, 0.9])))
+    result = estimator.fit_and_estimate()
+
+    assert np.isnan(result.standard_errors[0])
+    assert result.metadata["inference_unavailable_policies"] == ["A"]
+    assert "0-1" not in result.metadata.get("pairwise_inference", {})
+    with pytest.raises(InferenceUnavailableError, match="fewer than two"):
+        result.compare_policies(0, 1)

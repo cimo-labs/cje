@@ -89,18 +89,21 @@ class PolicyVerdict:
     """Result of ``EstimationResult.best_policy()``.
 
     Attributes:
-        name: The selected policy. By default this is always the raw
-            point-estimate argmax, with limitations reported through
-            ``flagged`` and ``all_flagged``. Callers may explicitly request
-            the best gate-passing policy with ``reliable_only=True``.
+        name: The selected policy. With ``reliable_only=True`` (default)
+            this is the best policy that PASSED the reliability gates; a
+            flagged raw argmax is demoted to ``runner_up``. Callers may
+            explicitly request the raw point-estimate argmax with
+            ``reliable_only=False``, qualified through ``flagged``.
         index: Index of ``name`` in the estimates array.
         estimate: Point estimate of ``name``.
         flagged: Whether the returned policy failed the reliability gates.
         all_flagged: True when no policy with a usable estimate passed the
             gates (the returned argmax should not be crowned).
-        runner_up: With reliable_only=True, the raw point-estimate argmax
-            when it was flagged and demoted in favor of ``name`` (it beat
-            ``name`` on point estimate but failed the gates). None otherwise.
+        runner_up: The raw point-estimate argmax when it was flagged and
+            demoted in favor of ``name`` (it beat ``name`` on point
+            estimate but failed the gates). None otherwise.
+        runner_up_reasons: Why ``runner_up`` was flagged (gate reasons and/or
+            CRITICAL diagnostics status). None unless ``runner_up`` is set.
     """
 
     name: str
@@ -109,6 +112,7 @@ class PolicyVerdict:
     flagged: bool
     all_flagged: bool = False
     runner_up: Optional[str] = None
+    runner_up_reasons: Optional[List[str]] = None
 
 
 class Sample(BaseModel):
@@ -475,28 +479,44 @@ class EstimationResult(BaseModel):
                     flagged.add(policy)
         return flagged
 
-    def best_policy(self, reliable_only: bool = False) -> PolicyVerdict:
-        """Return the highest point estimate, with reliability limitations.
+    def _flagged_reasons(self, policy: str) -> List[str]:
+        """Why ``policy`` failed the reliability gates (for loud demotions)."""
+        reasons: List[str] = []
+        gate = self.gates.get(policy)
+        if gate is not None and gate.flagged:
+            reasons.extend(gate.reasons)
+        status_per_policy = getattr(self.diagnostics, "status_per_policy", None)
+        if status_per_policy:
+            status = status_per_policy.get(policy)
+            if getattr(status, "value", status) == "critical":
+                reasons.append("diagnostics status CRITICAL")
+        return reasons or ["flagged by the reliability gates"]
 
-        The default never changes the estimand or silently substitutes a
-        lower-scoring policy. Reliability gates are attached to the numerical
-        winner through ``flagged`` and ``all_flagged``. Applications that need
-        a gate-passing operational fallback can explicitly set
-        ``reliable_only=True``; when that changes the selection, the raw
-        point-estimate winner is recorded in ``runner_up``.
+    def best_policy(self, reliable_only: bool = True) -> PolicyVerdict:
+        """Best policy, demoting winners that failed the reliability gates.
+
+        The raw point-estimate argmax can be an adversarial policy the gates
+        flagged as unreliable (verified on the bundled arena sample, where
+        the 'unhelpful' policy won the raw argmax). With reliable_only=True
+        (default) the verdict names the best policy that PASSED the gates.
+        The demotion is never silent: the flagged raw argmax is recorded in
+        ``runner_up`` with its gate reasons in ``runner_up_reasons``, and
+        ``summary()`` reports the divergence. If every policy is flagged,
+        the argmax is returned with ``all_flagged=True`` — do not crown it.
+        Pass ``reliable_only=False`` for the raw argmax with its gate flag.
 
         Note: This replaced the 0.4.x ``best_policy() -> int`` (naive
         argmax index) in 0.5.0. Use ``verdict.index`` for the old value.
 
         Args:
-            reliable_only: When True, select only among policies that passed the
-                reliability gates (and are not CRITICAL). When
-                False (default), return the raw point-estimate argmax with its
+            reliable_only: When True (default), select only among policies
+                that passed the reliability gates (and are not CRITICAL).
+                When False, return the raw point-estimate argmax with its
                 limitations.
 
         Returns:
             PolicyVerdict (name, index, estimate, flagged, all_flagged,
-            runner_up).
+            runner_up, runner_up_reasons).
 
         Raises:
             ValueError: If there are no estimates, no target_policies
@@ -547,10 +567,19 @@ class EstimationResult(BaseModel):
                 runner_up=None,
             )
 
-        # Explicit operational fallback among gate-passing policies. Ties are
-        # broken by policy name for deterministic behavior.
+        # Demote the flagged argmax: the trophy goes to the best gate-passing
+        # policy (ties broken by policy name for deterministic behavior). The
+        # divergence is loud — the raw argmax and why it was flagged travel
+        # with the verdict.
         _, rel_name = max((float(estimates[i]), policy) for i, policy in reliable)
         rel_idx = policies.index(rel_name)
+        runner_up_reasons = self._flagged_reasons(best_name)
+        logger.warning(
+            f"best_policy(): raw argmax '{best_name}' was flagged "
+            f"({'; '.join(runner_up_reasons)}); returning best reliable "
+            f"policy '{rel_name}'. Pass reliable_only=False for the raw "
+            f"argmax."
+        )
         return PolicyVerdict(
             name=rel_name,
             index=rel_idx,
@@ -558,6 +587,7 @@ class EstimationResult(BaseModel):
             flagged=False,
             all_flagged=False,
             runner_up=best_name,
+            runner_up_reasons=runner_up_reasons,
         )
 
     def summary(self) -> str:
@@ -593,8 +623,12 @@ class EstimationResult(BaseModel):
         except ValueError:
             lines.append("Best policy: none (no usable estimates)")
         else:
+            # Show the raw point-estimate winner (the demoted runner_up when
+            # the gates flagged it) with its limitations, then state the
+            # returned reliable winner when the two diverge.
+            display = verdict.runner_up if verdict.runner_up else verdict.name
             limitations = []
-            if verdict.flagged:
+            if verdict.flagged or verdict.runner_up is not None:
                 limitations.append(
                     "no policy passed the reliability gates"
                     if verdict.all_flagged
@@ -602,14 +636,21 @@ class EstimationResult(BaseModel):
                 )
             if self.metadata.get("calibration_status") == "UNCALIBRATED":
                 limitations.append("UNCALIBRATED raw judge-score mean")
-            audit = (self.metadata.get("transport_audits") or {}).get(verdict.name, {})
+            audit = (self.metadata.get("transport_audits") or {}).get(display, {})
             if audit and audit.get("status") != "PASS":
                 limitations.append(
                     f"residual transport {audit.get('status', 'NOT_CHECKED')}"
                 )
-            lines.append(f"Best by point estimate: {verdict.name}")
+            lines.append(f"Best by point estimate: {display}")
             if limitations:
                 lines.append("Limitations: " + "; ".join(limitations))
+            if verdict.runner_up is not None:
+                reasons = "; ".join(verdict.runner_up_reasons or [])
+                lines.append(
+                    f"Best reliable policy: {verdict.name} — raw argmax "
+                    f"{verdict.runner_up} was flagged ({reasons}); pass "
+                    f"reliable_only=False for the raw argmax"
+                )
 
         if self.diagnostics is not None:
             lines.append(f"Status: {self.diagnostics.overall_status.value}")

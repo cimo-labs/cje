@@ -152,7 +152,7 @@ class TestBestPolicyVerdict:
         assert verdict.all_flagged is False
         assert verdict.runner_up is None
 
-    def test_flagged_argmax_remains_visible_by_default(self) -> None:
+    def test_flagged_argmax_is_demoted_by_default(self) -> None:
         result = _make_result(
             [0.771, 0.756, 0.763],
             ["unhelpful", "base", "clone"],
@@ -163,23 +163,28 @@ class TestBestPolicyVerdict:
             },
         )
         verdict = result.best_policy()
-        assert verdict.name == "unhelpful"
-        assert verdict.index == 0
-        assert verdict.estimate == pytest.approx(0.771)
-        assert verdict.flagged is True
+        assert verdict.name == "clone"
+        assert verdict.index == 2
+        assert verdict.estimate == pytest.approx(0.763)
+        assert verdict.flagged is False
         assert verdict.all_flagged is False
-        assert verdict.runner_up is None
+        # Loud divergence: the demoted raw argmax and why it was flagged
+        # travel with the verdict.
+        assert verdict.runner_up == "unhelpful"
+        assert verdict.runner_up_reasons == ["boundary: 12.0%"]
 
-    def test_reliable_only_true_returns_operational_fallback(self) -> None:
+    def test_reliable_only_false_returns_raw_argmax(self) -> None:
         result = _make_result(
             [0.771, 0.756],
             ["unhelpful", "base"],
             gates={"unhelpful": _gate(True), "base": _gate(False)},
         )
-        verdict = result.best_policy(reliable_only=True)
-        assert verdict.name == "base"
-        assert verdict.flagged is False
-        assert verdict.runner_up == "unhelpful"
+        verdict = result.best_policy(reliable_only=False)
+        assert verdict.name == "unhelpful"
+        assert verdict.flagged is True
+        assert verdict.all_flagged is False
+        assert verdict.runner_up is None
+        assert verdict.runner_up_reasons is None
 
     def test_all_flagged_returns_argmax_marked(self) -> None:
         result = _make_result(
@@ -191,7 +196,7 @@ class TestBestPolicyVerdict:
         assert verdict.all_flagged is True
         assert verdict.runner_up is None
 
-    def test_critical_status_flags_point_winner(self) -> None:
+    def test_critical_status_demotes_point_winner(self) -> None:
         from cje.diagnostics import DirectDiagnostics, Status
 
         diag = DirectDiagnostics(
@@ -208,9 +213,10 @@ class TestBestPolicyVerdict:
         result = _make_result([0.9, 0.6], ["bad", "ok"])
         result.diagnostics = diag
         verdict = result.best_policy()
-        assert verdict.name == "bad"
-        assert verdict.flagged is True
-        assert verdict.runner_up is None
+        assert verdict.name == "ok"
+        assert verdict.flagged is False
+        assert verdict.runner_up == "bad"
+        assert verdict.runner_up_reasons == ["diagnostics status CRITICAL"]
 
     def test_all_nan_raises(self) -> None:
         result = _make_result([float("nan"), float("nan")], ["a", "b"])
@@ -243,16 +249,21 @@ class TestSummary:
         assert "95% CI [" in text
         assert "Best by point estimate: good" in text
 
-    def test_summary_marks_flagged_without_substituting(self) -> None:
+    def test_summary_shows_flagged_winner_and_reliable_fallback(self) -> None:
         result = _make_result(
             [0.771, 0.756],
             ["unhelpful", "base"],
             gates={"unhelpful": _gate(True), "base": _gate(False)},
         )
         text = result.summary()
+        # The flagged raw winner stays visible with its limitations...
         assert "[gate: FLAGGED]" in text
         assert "Best by point estimate: unhelpful" in text
         assert "flagged by the reliability gates" in text
+        # ...and the divergence from the returned reliable winner is loud.
+        assert "Best reliable policy: base" in text
+        assert "raw argmax unhelpful was flagged (boundary: 12.0%)" in text
+        assert "reliable_only=False" in text
 
     def test_docstring_example_works_end_to_end(self) -> None:
         """The cje/__init__.py docstring example: print(results.summary())."""

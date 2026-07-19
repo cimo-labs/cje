@@ -836,6 +836,16 @@ class CalibratedDirectEstimator:
                 else None
             ),
             "calibration_provenance_explicit": self._provenance_explicit,
+            # Mirror the bootstrap contract: policies whose SE is unavailable
+            # (fewer than two independent evaluation clusters) are listed so
+            # compare_policies refuses pairs involving them instead of
+            # returning an anti-conservative difference SE.
+            "inference_unavailable_policies": [
+                policy
+                for policy in self.target_policies
+                if getattr(self, "_se_methods", {}).get(policy)
+                == "unavailable_one_cluster"
+            ],
         }
 
         # Record a bootstrap-to-cluster-robust downgrade so the SE basis
@@ -1364,6 +1374,15 @@ class CalibratedDirectEstimator:
         pd1 = self._policy_data.get(p1)
         pd2 = self._policy_data.get(p2)
         if pd1 is None or pd2 is None:
+            return None
+
+        # A policy with a single evaluation cluster has no estimable sampling
+        # variance: its centered cluster contributions are identically zero,
+        # so a stored pair SE would silently reflect only the other policy
+        # (anti-conservative). Mirror the bootstrap path and leave the pair
+        # unavailable — the inference_unavailable_policies guard in
+        # compare_policies then refuses the comparison.
+        if len(set(pd1.prompt_ids)) < 2 or len(set(pd2.prompt_ids)) < 2:
             return None
 
         if not self.paired_comparison:
