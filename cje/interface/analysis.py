@@ -143,9 +143,12 @@ def analyze_dataset(
             scale changes the display axis only — never the estimand label —
             and is ignored (with a warning) for mixed direct-oracle/raw-judge
             runs, which stay on the internal unit scale.
-        strict: When True, invalid records raise instead of being dropped.
-            ``on_invalid`` takes precedence when explicitly supplied.
-        on_invalid: Explicit invalid-record policy, ``"error"`` or ``"drop"``.
+        strict: Retained for compatibility; invalid records already raise by
+            default. Pass ``on_invalid="drop"`` to drop them instead.
+        on_invalid: Invalid-record policy, ``"error"`` (default) or
+            ``"drop"``. Dropping records per-policy counts in
+            ``metadata["n_invalid_dropped_per_policy"]`` (plus the
+            ``n_invalid_dropped`` total) and warns once with the counts.
         label_design: Oracle-label sampling design: ``"representative"``,
             ``"known_propensity"``, or ``"targeted_unknown"``.
         label_propensities: Per-policy inclusion-probability vectors required
@@ -204,9 +207,15 @@ def analyze_dataset(
             "Provide exactly one evaluation source: fresh_draws_dir or "
             "fresh_draws_data, not both."
         )
-    invalid_mode = on_invalid or ("error" if strict else "drop")
+    # Loud by default: invalid records raise unless the caller explicitly
+    # opts into dropping (strict is a compatibility no-op — the default
+    # already errors).
+    invalid_mode = on_invalid or "error"
     if invalid_mode not in {"error", "drop"}:
         raise ValueError("on_invalid must be 'error' or 'drop'")
+    # Per-policy counts of dropped fresh-draw records, accumulated across
+    # the file/directory readers and fresh_draws_from_dict when dropping.
+    fresh_drop_stats: Dict[str, int] = {}
 
     # --- 2. Estimator-name validation ("auto" resolves to "direct"; removed
     # 0.3.x OPE names raise the migration error)
@@ -235,7 +244,7 @@ def analyze_dataset(
             if verbose:
                 logger.info(f"Loading fresh draws from file {draws_path}")
             raw_fresh_draws = fresh_draws_data_from_file(
-                draws_path, on_invalid=invalid_mode
+                draws_path, on_invalid=invalid_mode, drop_stats=fresh_drop_stats
             )
         else:
             raw_fresh_draws = fresh_draws_data_from_dir(
@@ -247,6 +256,7 @@ def analyze_dataset(
                 exclude_paths=(
                     [Path(calibration_data_path)] if calibration_data_path else None
                 ),
+                drop_stats=fresh_drop_stats,
             )
 
     fresh_draws_dict, norm_info = fresh_draws_from_dict(
@@ -258,6 +268,7 @@ def analyze_dataset(
         judge_scale=fresh_judge_scale,
         oracle_scale=fresh_oracle_scale,
         on_invalid=invalid_mode,
+        drop_stats=fresh_drop_stats,
     )
     fresh_judge_public_scale = (
         norm_info.judge_score_scale
@@ -664,6 +675,27 @@ def analyze_dataset(
         results.metadata["fresh_draws_dir"] = fresh_draws_dir
     if fresh_draws_data is not None:
         results.metadata["fresh_draws_source"] = "in_memory"
+
+    # Dropping is an explicit opt-in: record what was dropped per policy and
+    # warn once with the counts so a partially corrupt evaluation file can
+    # never silently shift estimates.
+    if invalid_mode == "drop":
+        n_invalid_dropped = int(sum(fresh_drop_stats.values()))
+        results.metadata["n_invalid_dropped"] = n_invalid_dropped
+        results.metadata["n_invalid_dropped_per_policy"] = {
+            policy: int(count) for policy, count in sorted(fresh_drop_stats.items())
+        }
+        if n_invalid_dropped:
+            logger.warning(
+                "on_invalid='drop': dropped %d invalid fresh-draw record(s) "
+                "(%s). Estimates use the remaining rows only; pass "
+                "on_invalid='error' to fail on invalid records instead.",
+                n_invalid_dropped,
+                ", ".join(
+                    f"{policy}: {count}"
+                    for policy, count in sorted(fresh_drop_stats.items())
+                ),
+            )
 
     # Calibration source metadata
     if calibration_data_path:

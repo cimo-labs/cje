@@ -47,11 +47,11 @@ The minimal record is two fields:
 ```
 
 **Fields:**
-- `prompt_id`: Identifies the prompt (optional — auto-generated from a `prompt` field's hash if missing; integer ids are coerced to strings)
+- `prompt_id`: Identifies the prompt (optional — auto-generated from a `prompt` field's hash if missing; integer ids are coerced to strings). Records with neither `prompt_id` nor `prompt` are rejected — ids are never fabricated.
 - `judge_score`: **Required** — judge evaluation on any bounded scale
 - `oracle_label`: Optional — ground truth for reward calibration (label 5–25% of rows; CJE needs ≥ 10 labeled rows pooled across policies)
 - `response`: Optional — the generated text (required only when `include_response_length=True`)
-- `draw_idx`: Optional — defaults to 0 (for multiple draws per prompt)
+- `draw_idx`: Optional — missing values auto-assign sequentially per prompt (0, 1, 2, ...); explicit duplicate values for the same prompt are an error naming both rows
 - `fold_id`: Optional — CV fold override
 - `target_policy`: Optional in per-policy files (inferred from the filename); **required** per record in a single combined JSONL file
 - `metadata`: Optional dict for per-response covariates
@@ -69,7 +69,7 @@ responses/
 └── model_c_responses.jsonl
 ```
 
-File patterns searched per policy (in order): `{policy}_responses.jsonl`, `{policy}.jsonl`, `responses/{policy}.jsonl`, `fresh_draws/{policy}.jsonl`. Discovery, loading, and the CLI all resolve through this one list (`cje.data.ingest.POLICY_FILE_PATTERNS`), so any layout that is discovered is guaranteed to load.
+File patterns searched per policy (in order): `{policy}_responses.jsonl`, `{policy}.jsonl`, `responses/{policy}.jsonl`, `fresh_draws/{policy}.jsonl`. Discovery, loading, and the CLI all resolve through this one list (`cje.data.ingest.POLICY_FILE_PATTERNS`), so any layout that is discovered is guaranteed to load. Discovery is a union over all patterns: the discovered policy → file mapping is logged as a warning (verify it — a stray `.jsonl` becomes a policy), and files skipped for reserved auxiliary stems (`dataset`, `data`, `logs`, `calibration`, ...) are warned about individually.
 
 ### Calibration files (`calibration_data_path`)
 
@@ -92,8 +92,8 @@ No `prompt`, `response`, or logprob fields are required (they're accepted and ig
 
 ### 2. Loud Loading
 Loaders fail with context rather than fabricate or silently skip:
-- `FreshDrawLoader.load_from_jsonl` and `load_fresh_draws_auto` raise `ValueError` with `file:line` context on invalid records (blank lines are skipped, not errors).
-- `DatasetLoader` filters invalid records with a counted warning and raises if **every** record was invalid.
+- Every loader (including `DatasetLoader` / `load_dataset_from_jsonl` and `analyze_dataset`) raises `ValueError` with `file:line` context on invalid records — corrupt JSON lines included — by default (blank lines are skipped, not errors).
+- Dropping is an explicit opt-in: pass `on_invalid="drop"` to filter invalid records with a counted warning. Drops are recorded (`Dataset.metadata["n_invalid_dropped"]`; `analyze_dataset` records `n_invalid_dropped` and `n_invalid_dropped_per_policy` in result metadata), and a policy losing **all** its records still raises.
 
 ### 3. Validation on Raw Records
 `validate_direct_data` checks records exactly as `json.loads` produced them — no Dataset round-trip — so what it blesses is what the loaders accept.

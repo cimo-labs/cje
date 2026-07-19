@@ -40,6 +40,11 @@ POLICY_FILE_PATTERNS: Tuple[str, ...] = (
     "fresh_draws/{policy}.jsonl",
 )
 
+#: Pseudo-policy key used in ``drop_stats`` for dropped rows that cannot be
+#: attributed to a policy (malformed JSON lines, records missing
+#: ``target_policy``).
+UNATTRIBUTED_POLICY_KEY = "(unattributed)"
+
 
 def resolve_policy_file(
     dir_path: Path,
@@ -95,6 +100,27 @@ def read_aliased_field(record: Dict[str, Any], field: str) -> Any:
             f"metadata: {value!r} != {metadata_value!r}."
         )
     return value if value is not None else metadata_value
+
+
+def require_prompt_identity(
+    record: Dict[str, Any], prompt_field: str = "prompt"
+) -> None:
+    """Ensure a fresh-draw record carries a usable prompt identity.
+
+    prompt_id is optional — it is auto-generated from the ``prompt`` text's
+    hash when absent (the documented fallback, shared by every fresh-draw
+    loader). A record with NEITHER prompt_id NOR prompt text cannot be
+    aligned across policies, so it fails loudly instead of receiving a
+    fabricated index-based id.
+    """
+    if read_aliased_field(record, "prompt_id") is not None:
+        return
+    if read_aliased_field(record, prompt_field):
+        return
+    raise ValueError(
+        "missing required field 'prompt_id' (and no 'prompt' text to "
+        "derive it from)."
+    )
 
 
 def canonicalize_record(
@@ -234,6 +260,22 @@ def canonicalize_record(
     if response_raw is None:
         metadata["_cje_response_missing"] = True
 
+    # Metadata must survive the JSON-safe identity signature built by
+    # deduplicate_canonical_records. Checking here keeps the failure inside
+    # the per-record on_invalid contract with the offending key named,
+    # instead of a bare serialization TypeError after loading.
+    from .models import _json_safe
+
+    for key, value in metadata.items():
+        try:
+            _json_safe(value)
+        except TypeError as exc:
+            raise ValueError(
+                f"Metadata field {key!r} has a non-JSON-encodable value of "
+                f"type {type(value).__name__}; metadata values must be "
+                f"JSON-encodable."
+            ) from exc
+
     explicit_source = read_aliased_field(record, "source_id")
     annotated_source = record.get("_cje_source_id")
     canonical_source_id = str(
@@ -294,13 +336,22 @@ def deduplicate_canonical_records(
         source_id = str(record["source_id"])
         row_id = str(record["row_id"])
         identity = (source_id, row_id)
-        signature = _json_safe(
-            {
-                key: value
-                for key, value in record.items()
-                if key not in {"source_id", "row_id"}
-            }
-        )
+        try:
+            signature = _json_safe(
+                {
+                    key: value
+                    for key, value in record.items()
+                    if key not in {"source_id", "row_id"}
+                }
+            )
+        except TypeError as exc:
+            # Backstop: canonicalize_record already rejects non-encodable
+            # metadata per record; anything that slips through still gets
+            # row context instead of a bare serialization TypeError.
+            raise ValueError(
+                f"Cannot build an identity signature for {context} record "
+                f"row_id={row_id!r} in source {source_id!r}: {exc}"
+            ) from exc
         previous = seen.get(identity)
         if previous is None:
             seen[identity] = signature
@@ -378,11 +429,25 @@ def resolve_prompt_id(
 
 
 def read_jsonl_records(
-    path: Path, *, on_invalid: str = "error"
+    path: Path,
+    *,
+    on_invalid: str = "error",
+    drop_stats: Optional[Dict[str, int]] = None,
 ) -> List[Dict[str, Any]]:
-    """Read JSONL objects, either raising or dropping malformed records."""
+    """Read JSONL objects, either raising or dropping malformed records.
+
+    When ``drop_stats`` is supplied, dropped lines are counted under
+    ``UNATTRIBUTED_POLICY_KEY`` (a malformed line has no policy to charge).
+    """
     if on_invalid not in {"error", "drop"}:
         raise ValueError("on_invalid must be 'error' or 'drop'")
+
+    def _count_drop() -> None:
+        if drop_stats is not None:
+            drop_stats[UNATTRIBUTED_POLICY_KEY] = (
+                drop_stats.get(UNATTRIBUTED_POLICY_KEY, 0) + 1
+            )
+
     records = []
     with open(path) as f:
         for line_num, line in enumerate(f, 1):
@@ -396,6 +461,7 @@ def read_jsonl_records(
                 logger.warning(
                     "Dropping invalid JSON record at %s:%d: %s", path, line_num, e
                 )
+                _count_drop()
                 continue
             if not isinstance(record, dict):
                 message = (
@@ -405,6 +471,7 @@ def read_jsonl_records(
                 if on_invalid == "error":
                     raise ValueError(message)
                 logger.warning("Dropping invalid record: %s", message)
+                _count_drop()
                 continue
             record["_cje_line_num"] = line_num
             records.append(record)
@@ -432,16 +499,21 @@ _LOGPROB_SCAN_LIMIT = 100
 
 
 def fresh_draws_data_from_file(
-    path: Path, *, on_invalid: str = "error"
+    path: Path,
+    *,
+    on_invalid: str = "error",
+    drop_stats: Optional[Dict[str, int]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Group a single fresh-draws JSONL file by target_policy.
 
     A file whose records have logged-data logprob fields but no
     target_policy is an 0.3.x logged dataset: raise the migration error.
+    When ``drop_stats`` is supplied, dropped rows are counted per policy
+    (``UNATTRIBUTED_POLICY_KEY`` when the row's policy is unknowable).
     """
     from ..interface.analysis import LOGGED_DATA_PATH_REMOVED_MESSAGE
 
-    records = read_jsonl_records(path, on_invalid=on_invalid)
+    records = read_jsonl_records(path, on_invalid=on_invalid, drop_stats=drop_stats)
 
     if not any("target_policy" in record for record in records):
         if any(
@@ -471,6 +543,10 @@ def fresh_draws_data_from_file(
             if on_invalid == "error":
                 raise ValueError(message)
             logger.warning("Dropping invalid fresh-draw record: %s", message)
+            if drop_stats is not None:
+                drop_stats[UNATTRIBUTED_POLICY_KEY] = (
+                    drop_stats.get(UNATTRIBUTED_POLICY_KEY, 0) + 1
+                )
             continue
         annotated = dict(record)
         annotated["_cje_source_id"] = source_id

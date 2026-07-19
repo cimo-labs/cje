@@ -1,4 +1,6 @@
+import hashlib
 import json
+import logging
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Dict
@@ -9,6 +11,7 @@ import pytest
 from cje import analyze_dataset
 from cje.data.fresh_draws import (
     discover_policies_from_fresh_draws,
+    fresh_draws_data_from_dir,
     fresh_draws_from_dict,
     load_fresh_draws_auto,
 )
@@ -204,6 +207,69 @@ def test_empty_external_labels_use_contributing_fresh_oracle_scale(
     assert result.units is not None
     assert result.units.output_scale["min"] == 1.0
     assert result.units.output_scale["max"] == 5.0
+
+
+def test_prompt_hash_ids_are_identical_across_all_fresh_draw_paths(
+    tmp_path: Path,
+) -> None:
+    """prompt_id is optional: it is auto-generated from the prompt text's
+    hash with IDENTICAL semantics on the in-memory, per-policy directory,
+    load_fresh_draws_auto, and combined-file loader paths (the documented
+    0.5.x behavior), so draws still align with calibration data."""
+    prompt = "what is the capital of france?"
+    expected = "prompt_" + hashlib.sha256(prompt.encode()).hexdigest()[:12]
+    record = {"prompt": prompt, "judge_score": 0.5}
+
+    datasets, _ = fresh_draws_from_dict({"a": [dict(record)]})
+    assert datasets["a"].samples[0].prompt_id == expected
+
+    (tmp_path / "a_responses.jsonl").write_text(json.dumps(record) + "\n")
+    assert load_fresh_draws_auto(tmp_path, "a").samples[0].prompt_id == expected
+
+    raw = fresh_draws_data_from_dir(tmp_path)
+    assert raw["a"][0]["prompt_id"] == expected
+
+    combined_dir = tmp_path / "combined"
+    combined_dir.mkdir()
+    combined = combined_dir / "draws.jsonl"
+    combined.write_text(json.dumps({**record, "target_policy": "a"}) + "\n")
+    loaded = FreshDrawLoader.load_from_jsonl(str(combined))
+    assert loaded["a"].samples[0].prompt_id == expected
+
+
+def test_fresh_records_without_prompt_identity_fail_loudly(tmp_path: Path) -> None:
+    """No prompt_id AND no prompt text: nothing to align on — fail, never
+    fabricate an index-based id (identical on every fresh-draw path)."""
+    with pytest.raises(ValueError, match="missing required field 'prompt_id'"):
+        fresh_draws_from_dict({"a": [{"judge_score": 0.5}]})
+
+    combined = tmp_path / "draws.jsonl"
+    combined.write_text(json.dumps({"target_policy": "a", "judge_score": 0.5}) + "\n")
+    with pytest.raises(ValueError, match="missing required field 'prompt_id'"):
+        FreshDrawLoader.load_from_jsonl(str(combined))
+
+    (tmp_path / "a_responses.jsonl").write_text(json.dumps({"judge_score": 0.5}) + "\n")
+    with pytest.raises(ValueError, match="missing required field 'prompt_id'"):
+        load_fresh_draws_auto(tmp_path, "a")
+
+
+def test_discovery_warns_on_reserved_stem_skips_and_lists_sources(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Union discovery must never hide a policy: the discovered
+    policy -> file mapping is warned, and a file skipped for a reserved
+    auxiliary stem (e.g. calibration_responses.jsonl) is warned by name."""
+    record = json.dumps({"prompt_id": "p", "judge_score": 0.5}) + "\n"
+    (tmp_path / "gpt5_responses.jsonl").write_text(record)
+    (tmp_path / "calibration_responses.jsonl").write_text(record)
+
+    with caplog.at_level(logging.WARNING):
+        policies = discover_policies_from_fresh_draws(tmp_path)
+
+    assert policies == ["gpt5"]
+    messages = [r.message for r in caplog.records]
+    assert any("calibration_responses.jsonl" in m and "reserved" in m for m in messages)
+    assert any("gpt5" in m and "gpt5_responses.jsonl" in m for m in messages)
 
 
 def test_falsy_explicit_row_and_source_ids_are_preserved() -> None:

@@ -388,7 +388,11 @@ class TestAnalyzeSurface:
             exit_code = _run_cli(monkeypatch, "analyze", str(draws))
 
         assert exit_code == 0
-        assert not any("logprob" in r.message for r in caplog.records)
+        # Match the exact note: log messages can echo file paths (e.g. this
+        # test's own tmp dir name contains "logprob").
+        assert not any(
+            "logprob fields present and ignored" in r.message for r in caplog.records
+        )
 
     def test_missing_path_argument_errors(
         self,

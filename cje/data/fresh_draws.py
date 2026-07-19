@@ -12,7 +12,7 @@ from .ingest import (
     POLICY_FILE_PATTERNS,
     canonicalize_record,
     deduplicate_canonical_records,
-    read_aliased_field,
+    require_prompt_identity,
     resolve_policy_file,
 )
 from .normalization import (
@@ -144,16 +144,16 @@ def _parse_fresh_draw_record(
     Preserves the review-hardened per-record semantics of the original
     load_fresh_draws_auto loop:
 
-    - prompt_id: top level -> metadata -> prompt-hash -> index fallback,
-      with explicit None checks so falsy-but-valid ids (0, "") survive;
+    - prompt_id: top level -> metadata -> prompt-hash, with explicit None
+      checks so falsy-but-valid ids (0, "") survive; records with neither
+      prompt_id nor prompt text fail loudly (no fabricated index ids);
     - judge_score / oracle_label: top level first, then metadata; missing
       judge_score is never fabricated - fail clearly;
     - float coercion here so type errors surface with file/line context.
     """
     if not isinstance(data, dict):
         raise ValueError(f"expected a mapping, got {type(data).__name__}")
-    if read_aliased_field(data, "prompt_id") is None:
-        raise ValueError("missing required field 'prompt_id'.")
+    require_prompt_identity(data)
     annotated = dict(data)
     annotated.setdefault("_cje_source_id", source_id)
     annotated.setdefault("_cje_row_id", f"{source_id}:line:{idx + 1}")
@@ -172,13 +172,15 @@ def _load_policy_file_records(
     policy: str,
     parse: Callable[[Dict[str, Any], int], _T],
     on_invalid: str = "error",
+    drop_stats: Optional[Dict[str, int]] = None,
 ) -> List[_T]:
     """Read a per-policy fresh-draws file, applying ``parse`` per record.
 
     Parse errors propagate loudly (with file/line context) instead of being
     swallowed; blank/whitespace-only lines (e.g. a trailing newline) are
     skipped, matching the logged-data loader — only real records should hit
-    the loud parse-error path.
+    the loud parse-error path. When ``drop_stats`` is supplied, dropped
+    records are counted under the policy name.
     """
     results: List[_T] = []
     with open(file_path, "r") as f:
@@ -203,6 +205,8 @@ def _load_policy_file_records(
                     policy,
                     e,
                 )
+                if drop_stats is not None:
+                    drop_stats[policy] = drop_stats.get(policy, 0) + 1
                 continue
             results.append(item)
 
@@ -313,6 +317,7 @@ def fresh_draws_data_from_dir(
     oracle_field: str = "oracle_label",
     on_invalid: str = "error",
     exclude_paths: Optional[List[Path]] = None,
+    drop_stats: Optional[Dict[str, int]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Read a fresh-draws directory into raw records grouped by policy.
 
@@ -367,7 +372,11 @@ def fresh_draws_data_from_dir(
             )
 
         data[policy] = _load_policy_file_records(
-            file_path, policy, _parse_record, on_invalid=on_invalid
+            file_path,
+            policy,
+            _parse_record,
+            on_invalid=on_invalid,
+            drop_stats=drop_stats,
         )
 
     return data
@@ -420,6 +429,7 @@ def fresh_draws_from_dict(
     judge_scale: ScaleDeclaration = None,
     oracle_scale: ScaleDeclaration = None,
     on_invalid: str = "error",
+    drop_stats: Optional[Dict[str, int]] = None,
 ) -> Tuple[Dict[str, FreshDrawDataset], Optional[NormalizationInfo]]:
     """Convert in-memory dict to FreshDrawDataset objects with auto-normalization.
 
@@ -445,6 +455,10 @@ def fresh_draws_from_dict(
         verbose: Whether to log progress
         auto_normalize: Whether to auto-detect scale and normalize to [0,1].
             If False, values must already be in [0,1].
+        on_invalid: "error" (default) raises on invalid records; "drop"
+            removes them with a counted warning.
+        drop_stats: Optional dict that accumulates per-policy counts of
+            dropped records when ``on_invalid="drop"``.
 
     Returns:
         Tuple of (datasets_dict, normalization_info).
@@ -473,6 +487,11 @@ def fresh_draws_from_dict(
 
     canonical_data: Dict[str, List[Dict[str, Any]]] = {}
     n_dropped = 0
+
+    def _count_drop(policy_name: str) -> None:
+        if drop_stats is not None:
+            drop_stats[policy_name] = drop_stats.get(policy_name, 0) + 1
+
     for policy, records in data.items():
         canonical_records: List[Dict[str, Any]] = []
         for idx, raw_record in enumerate(records):
@@ -481,8 +500,7 @@ def fresh_draws_from_dict(
                     raise ValueError(
                         f"expected a mapping, got {type(raw_record).__name__}"
                     )
-                if read_aliased_field(raw_record, "prompt_id") is None:
-                    raise ValueError("missing required field 'prompt_id'.")
+                require_prompt_identity(raw_record)
                 canonical_records.append(
                     canonicalize_record(
                         raw_record,
@@ -500,6 +518,7 @@ def fresh_draws_from_dict(
                         f"'{policy}': {exc}"
                     ) from exc
                 n_dropped += 1
+                _count_drop(str(policy))
                 logger.warning(
                     "Dropping invalid fresh draw record %s for policy %r: %s",
                     idx,
@@ -647,7 +666,9 @@ def fresh_draws_from_dict(
 
         samples: List[FreshDrawSample] = []
         prompt_draw_counts: Dict[str, int] = {}
-        used_draw_indices: Dict[str, set] = {}
+        # prompt_id -> draw_idx -> description of the row that claimed it,
+        # so duplicate explicit draw indices can name BOTH conflicting rows.
+        used_draw_indices: Dict[str, Dict[int, str]] = {}
 
         for idx, record in enumerate(records):
             # Validate required fields
@@ -680,10 +701,11 @@ def fresh_draws_from_dict(
             elif record.get("oracle_label") is not None:
                 normalized_oracle = float(record["oracle_label"])
 
-            # Track draw_idx per prompt
+            # Track draw_idx per prompt: missing draw_idx auto-assigns the
+            # first free sequential index (the documented 0.5.x behavior).
             if prompt_id not in prompt_draw_counts:
                 prompt_draw_counts[prompt_id] = 0
-                used_draw_indices[prompt_id] = set()
+                used_draw_indices[prompt_id] = {}
             draw_idx = record.get("draw_idx")
             if draw_idx is None:
                 draw_idx = 0
@@ -702,11 +724,6 @@ def fresh_draws_from_dict(
                     observation_id=record.get("observation_id"),
                     source_id=record.get("source_id"),
                 )
-                if sample.draw_idx in used_draw_indices[prompt_id]:
-                    raise ValueError(
-                        f"duplicate draw_idx={sample.draw_idx} for "
-                        f"prompt_id={prompt_id!r}"
-                    )
             except ValueError as exc:
                 if on_invalid == "error":
                     raise ValueError(
@@ -714,6 +731,7 @@ def fresh_draws_from_dict(
                         f"'{policy}': {exc}"
                     ) from exc
                 n_dropped += 1
+                _count_drop(policy)
                 logger.warning(
                     "Dropping invalid fresh draw record %s for policy %r: %s",
                     idx,
@@ -721,7 +739,21 @@ def fresh_draws_from_dict(
                     exc,
                 )
                 continue
-            used_draw_indices[prompt_id].add(sample.draw_idx)
+            # An explicit duplicate draw_idx is a conflicting row identity:
+            # it always fails loudly (never dropped, regardless of
+            # on_invalid) with both conflicting rows identified.
+            if sample.draw_idx in used_draw_indices[prompt_id]:
+                raise ValueError(
+                    f"Duplicate draw_idx={sample.draw_idx} for "
+                    f"prompt_id={prompt_id!r} in policy '{policy}': record "
+                    f"{idx} (row_id={record.get('row_id')!r}) conflicts with "
+                    f"{used_draw_indices[prompt_id][sample.draw_idx]}. Give "
+                    "each draw for a prompt a distinct draw_idx, or omit "
+                    "draw_idx to auto-assign sequential indices."
+                )
+            used_draw_indices[prompt_id][
+                sample.draw_idx
+            ] = f"record {idx} (row_id={record.get('row_id')!r})"
             prompt_draw_counts[prompt_id] += 1
             samples.append(sample)
 
@@ -783,7 +815,11 @@ def discover_policies_from_fresh_draws(
 
     Every discovered policy is guaranteed to load, because loading resolves
     through the same pattern list. Multiple files resolving to one policy are
-    rejected instead of selected by precedence.
+    rejected instead of selected by precedence. The discovered policy -> file
+    mapping is logged as a warning (union discovery can turn stray auxiliary
+    .jsonl files into phantom policies), and files skipped for having a
+    reserved auxiliary stem are warned about individually — a policy is never
+    dropped silently.
 
     Args:
         fresh_draws_dir: Directory containing fresh draw files
@@ -800,12 +836,20 @@ def discover_policies_from_fresh_draws(
     excluded = {Path(path).resolve() for path in (exclude_paths or [])}
 
     files_by_policy: Dict[str, List[Path]] = {}
+    reserved_stem_skips: List[Tuple[str, Path]] = []
 
     def _record(policy: str, path: Path) -> None:
-        if not policy or policy in _NON_POLICY_STEMS:
+        if not policy:
             return
         resolved = path.resolve()
         if resolved in excluded:
+            return
+        if policy in _NON_POLICY_STEMS:
+            # Never drop a would-be policy silently: name the skipped file
+            # and the reserved stem so a real policy with a reserved name
+            # is discoverable by renaming, not by debugging.
+            if (policy, resolved) not in reserved_stem_skips:
+                reserved_stem_skips.append((policy, resolved))
             return
         matches = files_by_policy.setdefault(policy, [])
         if resolved not in matches:
@@ -835,6 +879,16 @@ def discover_policies_from_fresh_draws(
             f"Keep exactly one file per policy. {details}"
         )
 
+    for stem, path in reserved_stem_skips:
+        logger.warning(
+            "Skipping %s during policy discovery: stem %r is reserved for "
+            "auxiliary files (%s) and is never treated as a policy. Rename "
+            "the file if it holds a real evaluation policy.",
+            path,
+            stem,
+            ", ".join(sorted(_NON_POLICY_STEMS)),
+        )
+
     policies = sorted(files_by_policy)
 
     if not policies:
@@ -845,7 +899,15 @@ def discover_policies_from_fresh_draws(
             f"(e.g. 'policy_a_responses.jsonl' or 'policy_a.jsonl')"
         )
 
-    logger.info(f"Discovered {len(policies)} policies from fresh draws: {policies}")
+    # Discovery is a union over every filename pattern, so any stray .jsonl
+    # becomes a policy: list each policy WITH its source file loudly enough
+    # that a phantom policy (or a missing one) is visible before estimation.
+    logger.warning(
+        "Discovered %d policies from fresh draws (every matching .jsonl "
+        "becomes a policy — verify this list): %s",
+        len(policies),
+        "; ".join(f"{policy} <- {files_by_policy[policy][0]}" for policy in policies),
+    )
     return policies
 
 

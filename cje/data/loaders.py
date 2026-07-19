@@ -10,7 +10,11 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 import numpy as np
 
-from .ingest import canonicalize_record, deduplicate_canonical_records
+from .ingest import (
+    canonicalize_record,
+    deduplicate_canonical_records,
+    require_prompt_identity,
+)
 from .models import Dataset, Sample
 from .fresh_draws import FreshDrawDataset, fresh_draws_from_dict
 from .normalization import (
@@ -28,6 +32,12 @@ class DatasetLoader:
     """Loads and converts raw data into typed Dataset objects.
 
     Follows Single Responsibility Principle - only handles data loading and conversion.
+
+    Invalid records (corrupt JSON lines included) raise by default with
+    file/line context. Pass ``on_invalid="drop"`` explicitly to filter them
+    instead; drops are warned about with counts and recorded in the
+    resulting Dataset's ``metadata["n_invalid_dropped"]``. ``strict`` is
+    retained for API compatibility but no longer relaxes the default.
     """
 
     def __init__(
@@ -55,7 +65,10 @@ class DatasetLoader:
             coerce_scale(oracle_scale, field_name="calibration_oracle_scale")
             or unit_scale()
         )
-        self.on_invalid = on_invalid or ("error" if strict else "drop")
+        # Loud by default: only an explicit on_invalid="drop" filters
+        # invalid records (strict is a compatibility no-op — the default
+        # already errors).
+        self.on_invalid = on_invalid or "error"
         if self.on_invalid not in {"error", "drop"}:
             raise ValueError("on_invalid must be 'error' or 'drop'")
         self.normalization_info: Dict[str, Any] = {
@@ -65,6 +78,9 @@ class DatasetLoader:
             "oracle_field": oracle_field,
         }
         self._source_id = "in_memory:dataset"
+        # Corrupt/non-object JSONL lines dropped before record conversion
+        # (explicit on_invalid="drop" only); counted into n_invalid_dropped.
+        self._n_source_dropped = 0
 
     def load_from_jsonl(
         self, file_path: str, target_policies: Optional[List[str]] = None
@@ -80,6 +96,7 @@ class DatasetLoader:
         """
         data = []
         self._source_id = str(Path(file_path).resolve())
+        self._n_source_dropped = 0
         with open(file_path, "r") as f:
             for line_num, line in enumerate(f, 1):
                 if line.strip():
@@ -96,6 +113,7 @@ class DatasetLoader:
                             line_num,
                             exc,
                         )
+                        self._n_source_dropped += 1
                         continue
                     if not isinstance(record, dict):
                         if self.on_invalid == "error":
@@ -103,6 +121,7 @@ class DatasetLoader:
                                 f"Expected JSON object at {file_path}:{line_num}, "
                                 f"got {type(record).__name__}"
                             )
+                        self._n_source_dropped += 1
                         continue
                     record["_cje_source_id"] = self._source_id
                     record["_cje_row_id"] = f"{self._source_id}:line:{line_num}"
@@ -224,9 +243,11 @@ class DatasetLoader:
                 f"See the warnings above for per-record reasons."
             )
 
-        if n_skipped:
+        n_dropped_total = n_skipped + self._n_source_dropped
+        if n_dropped_total:
             logger.warning(
-                f"Skipped {n_skipped}/{len(data)} invalid records while loading dataset"
+                f"Skipped {n_dropped_total}/{len(data) + self._n_source_dropped} "
+                f"invalid records while loading dataset"
             )
 
         return Dataset(
@@ -236,7 +257,7 @@ class DatasetLoader:
                 "source": "loader",
                 "source_id": self._source_id,
                 "normalization": self.normalization_info,
-                "n_invalid_dropped": n_skipped,
+                "n_invalid_dropped": n_dropped_total,
                 "n_duplicate_rows": n_duplicates,
             },
         )
@@ -346,6 +367,9 @@ class FreshDrawLoader:
                         raise ValueError("missing required field 'target_policy'")
                     policy_name = str(raw_policy)
                     records_by_policy.setdefault(policy_name, [])
+                    # Same prompt-identity contract as every other fresh-draw
+                    # path: prompt_id, or prompt text to hash it from.
+                    require_prompt_identity(data)
                     data["_cje_source_id"] = str(path_obj.resolve())
                     data["_cje_row_id"] = f"{path_obj.resolve()}:line:{line_num}"
                     canonical = canonicalize_record(
