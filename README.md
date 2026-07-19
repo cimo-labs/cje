@@ -90,7 +90,7 @@ When a policy's judge scores land mostly outside the labeled scalar range, CJE a
 
 ```text
 REFUSE-LEVEL for policy 'candidate': 88.3% of fresh-draw judge scores fall
-outside the oracle calibration range [0.161, 0.595]. Do not ship level
+outside the oracle calibration range [0.161, 0.595]. Do not report level
 (absolute) claims for this policy from this fit. Collect oracle labels covering
 the missing score range.
 ```
@@ -154,7 +154,7 @@ print(result.summary())
 ```
 
 ```text
-Calibrated mean: 0.5316 (SE 0.0175, CI [0.4965, 0.5649], n=400, n_oracle=100, bootstrap)
+Calibrated mean: 0.5316 (SE 0.0183, CI [0.4951, 0.5678], n=400, n_oracle=100, bootstrap)
 ```
 
 When partial oracle coverage requires calibration, `result.calibrator` predicts in the same public judge and oracle units supplied by the caller. Complete oracle coverage returns the direct oracle mean with `result.calibrator is None`. Grade any fitted calibrator's reuse on an independent probe with `transport_audit(..., delta_max=<practical margin>)`; without a margin the result is `NOT_GRADED`. `result.diagnostics["boundary_card"]` carries the separate scalar score-support badge when calibration is fitted.

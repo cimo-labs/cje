@@ -111,13 +111,13 @@ Running CJE analysis on examples/arena_sample/fresh_draws
 
 Results:
 ----------------------------------------
-  base: 0.756 ± 0.010 (1 SE; 95% CI ≈ ±1.96·SE)
+  base: 0.755 ± 0.010 (1 SE; 95% CI ≈ ±1.96·SE)
     residual transport: NOT_CHECKED
-  clone: 0.763 ± 0.010 (1 SE; 95% CI ≈ ±1.96·SE)
+  clone: 0.764 ± 0.010 (1 SE; 95% CI ≈ ±1.96·SE)
     residual transport: NOT_CHECKED
-  parallel_universe_prompt: 0.764 ± 0.010 (1 SE; 95% CI ≈ ±1.96·SE)
+  parallel_universe_prompt: 0.765 ± 0.010 (1 SE; 95% CI ≈ ±1.96·SE)
     residual transport: NOT_CHECKED
-  unhelpful: 0.415 ± 0.095 (1 SE; 95% CI ≈ ±1.96·SE)
+  unhelpful: 0.512 ± 0.107 (1 SE; 95% CI ≈ ±1.96·SE)
     residual transport: NOT_CHECKED
 
 Best by point estimate: parallel_universe_prompt
