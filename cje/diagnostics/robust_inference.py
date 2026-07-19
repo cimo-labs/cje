@@ -1116,7 +1116,9 @@ def cluster_bootstrap_direct_with_refit(
     mean-one weights keep all clusters present, so fold sufficiency is stable
     and there is no retry-conditioned bootstrap distribution.  Calibration
     rows linked to evaluation observations reuse that observation's prompt
-    weight; external calibration clusters receive independent weights.
+    weight; external calibration rows on prompts shared with the evaluation
+    frame reuse that prompt cluster's weight, and only prompt-disjoint
+    external clusters receive independent weights.
 
     ``min_oracle_per_replicate`` remains an accepted compatibility argument but
     is not used: positive weights preserve the original calibration support.
@@ -1240,9 +1242,21 @@ def cluster_bootstrap_direct_with_refit(
                 raise ValueError(f"Duplicate evaluation key {key!r}")
             key_to_eval_row[key] = row
 
+    # Map evaluation prompts to their bootstrap cluster so external-role
+    # calibration rows sharing a prompt with the evaluation frame reuse that
+    # cluster's weight draw — resampling the shared prompt as one unit
+    # preserves the calibration-evaluation covariance. With decoupled
+    # policy-prompt clusters a prompt can map to several clusters; the
+    # first-seen cluster is used. Truly disjoint external prompts keep
+    # independent weights.
+    prompt_to_eval_cluster: Dict[str, int] = {}
+    for cluster, prompt in zip(eval_table.prompt_ids, eval_table.prompt_id_strings):
+        prompt_to_eval_cluster.setdefault(str(prompt), int(cluster))
+
     external_clusters: List[str] = []
+    shared_external_clusters: List[str] = []
     if calibration_provenance is not None:
-        external_clusters = sorted(
+        all_external_clusters = sorted(
             {
                 prompt_id
                 for prompt_id, role in zip(
@@ -1252,6 +1266,11 @@ def cluster_bootstrap_direct_with_refit(
                 if role == "external"
             }
         )
+        for prompt_id in all_external_clusters:
+            if str(prompt_id) in prompt_to_eval_cluster:
+                shared_external_clusters.append(prompt_id)
+            else:
+                external_clusters.append(prompt_id)
 
     bootstrap_matrix = np.empty((n_bootstrap, eval_table.n_policies), dtype=float)
     for replicate in range(n_bootstrap):
@@ -1273,6 +1292,10 @@ def cluster_bootstrap_direct_with_refit(
             assert calibration_provenance is not None
             external_draw = rng.exponential(scale=1.0, size=len(external_clusters))
             external_weights = dict(zip(external_clusters, external_draw))
+            for shared_prompt in shared_external_clusters:
+                external_weights[shared_prompt] = eval_cluster_weights[
+                    prompt_to_eval_cluster[str(shared_prompt)]
+                ]
             calibration_weights = np.empty(
                 len(calibration_provenance.judge_scores), dtype=float
             )

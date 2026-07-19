@@ -1,5 +1,7 @@
 """Focused regressions for the statistical-core remediation."""
 
+import logging
+
 import numpy as np
 import pytest
 from types import SimpleNamespace
@@ -473,6 +475,175 @@ def test_implicit_provenance_keeps_augmentation_on_raw_judge_scale() -> None:
     assert result["use_augmented_estimator"] is True
     assert result["augmentation_diagnostics"]["augmentation_effective"] is True
     assert result["augmentation_diagnostics"]["routes"] == ["augmented"]
+
+
+def test_shared_prompt_external_rows_reuse_eval_cluster_weights() -> None:
+    # An external calibration row on an evaluation prompt must reuse that
+    # prompt cluster's bootstrap weight (the evaluation-linked row on the same
+    # prompt is the observable probe for it); a prompt-disjoint external row
+    # keeps its own independent exponential draw.
+    eval_table = _table(
+        scores=np.asarray([0.3, 0.5, 0.6, 0.7]),
+        labels=np.asarray([0.5, np.nan, np.nan, np.nan]),
+        prompts=["p0", "p1", "p2", "p3"],
+    )
+    provenance = CalibrationProvenance(
+        np.asarray([0.3, 0.4, 0.7]),
+        np.asarray([0.5, 0.45, 0.8]),
+        ["p0", "p0", "z-disjoint"],
+        row_roles=["evaluation", "external", "external"],
+        evaluation_keys=[("policy", "p0", 0), None, None],
+    )
+
+    recorded_weights: list[Optional[np.ndarray]] = []
+
+    class RecordingCalibrator:
+        def fit_cv(self, fit_scores, fit_labels, **kwargs):  # type: ignore[no-untyped-def]
+            weight = kwargs.get("sample_weight")
+            recorded_weights.append(
+                None if weight is None else np.asarray(weight, dtype=float).copy()
+            )
+            self.mean = float(np.mean(fit_labels))
+            return SimpleNamespace(fold_ids=np.zeros(len(fit_scores), dtype=int))
+
+        def predict(self, predict_scores, covariates=None):  # type: ignore[no-untyped-def]
+            return np.full(len(predict_scores), self.mean)
+
+        def predict_oof(self, predict_scores, folds, covariates=None):  # type: ignore[no-untyped-def]
+            return np.full(len(predict_scores), self.mean)
+
+    result = cluster_bootstrap_direct_with_refit(
+        eval_table,
+        RecordingCalibrator,
+        n_bootstrap=5,
+        calibration_provenance=provenance,
+        use_augmented_estimator=False,
+        n_folds=2,
+    )
+
+    assert result["n_valid_replicates"] == 5
+    assert len(recorded_weights) == 6  # 1 point fit + 5 replicates
+    assert recorded_weights[0] is None  # point fit uses base sample weights
+    replicate_weights = [w for w in recorded_weights[1:] if w is not None]
+    assert len(replicate_weights) == 5
+    for weights in replicate_weights:
+        # Shared-prompt external row == evaluation-linked row's cluster weight.
+        assert weights[1] == weights[0]
+        # Disjoint external row stays an independent draw.
+        assert weights[2] != weights[0]
+    assert len({float(weights[2]) for weights in replicate_weights}) > 1
+
+
+def test_shared_prompt_external_provenance_couples_auto_routing() -> None:
+    scores = np.linspace(0.05, 0.95, 24)
+    labels = np.where(scores > 0.5, 0.8, 0.2)
+    prompts = [f"p{i}" for i in range(len(scores))]
+    calibrator = JudgeCalibrator(calibration_mode="monotone")
+    calibrator.fit_cv(scores, labels, prompt_ids=prompts)
+    draws = _draws("policy", np.linspace(0.2, 0.8, 24))
+
+    coupled_estimator = CalibratedDirectEstimator(
+        ["policy"],
+        calibrator,
+        inference_method="auto",
+        n_bootstrap=10,
+        calibration_provenance=CalibrationProvenance(scores, labels, prompts),
+    )
+    coupled_estimator.add_fresh_draws("policy", draws)
+    coupled_estimator.fit()
+    use_bootstrap, reason = coupled_estimator._should_use_bootstrap()
+    assert use_bootstrap is True
+    assert "coupled" in reason
+
+    result = coupled_estimator.estimate()
+    assert result.metadata["inference"]["coupled"] is True
+    assert result.metadata["inference"]["coupling_overlap"] == 24
+    assert "coupled" in result.metadata["inference"]["bootstrap_reason"]
+
+    disjoint_prompts = [f"cal-{i}" for i in range(len(scores))]
+    disjoint_calibrator = JudgeCalibrator(calibration_mode="monotone")
+    disjoint_calibrator.fit_cv(scores, labels, prompt_ids=disjoint_prompts)
+    disjoint_estimator = CalibratedDirectEstimator(
+        ["policy"],
+        disjoint_calibrator,
+        inference_method="auto",
+        calibration_provenance=CalibrationProvenance(scores, labels, disjoint_prompts),
+    )
+    disjoint_estimator.add_fresh_draws("policy", draws)
+    disjoint_estimator.fit()
+    assert disjoint_estimator._should_use_bootstrap() == (
+        False,
+        "sufficient clusters and no coupling detected",
+    )
+
+
+def test_forced_cluster_robust_warns_when_frames_are_coupled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scores = np.linspace(0.05, 0.95, 24)
+    labels = np.where(scores > 0.5, 0.8, 0.2)
+    prompts = [f"p{i}" for i in range(len(scores))]
+    calibrator = JudgeCalibrator(calibration_mode="monotone")
+    calibrator.fit_cv(scores, labels, prompt_ids=prompts)
+    estimator = CalibratedDirectEstimator(
+        ["policy"],
+        calibrator,
+        inference_method="cluster_robust",
+        calibration_provenance=CalibrationProvenance(scores, labels, prompts),
+    )
+    estimator.add_fresh_draws("policy", _draws("policy", np.linspace(0.2, 0.8, 24)))
+
+    with caplog.at_level(logging.WARNING):
+        estimator.fit_and_estimate()
+
+    assert any(
+        "calibration-evaluation covariance" in record.message
+        for record in caplog.records
+    )
+
+
+def test_legacy_linkage_outcome_is_recorded_and_warns_on_ambiguity(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scores = np.linspace(0.05, 0.95, 10)
+    labels = np.where(scores > 0.5, 0.8, 0.2)
+    prompts = [f"p{i}" for i in range(len(scores))]
+    calibrator = JudgeCalibrator(calibration_mode="monotone")
+    calibrator.fit_cv(scores, labels, prompt_ids=prompts)
+
+    # Unique (prompt, score, label) matches: linkage succeeds and is recorded.
+    linked = CalibratedDirectEstimator(
+        ["policy"], calibrator, inference_method="cluster_robust"
+    )
+    linked.add_fresh_draws("policy", _draws("policy", scores, labels))
+    linked_result = linked.fit_and_estimate()
+    assert linked_result.metadata["legacy_calibration_linkage"] == {
+        "attempted": True,
+        "succeeded": True,
+        "n_calibration_rows": 10,
+        "n_matched": 10,
+        "failure_reason": None,
+    }
+
+    # Two identical draws per prompt make every match ambiguous: the failure
+    # (and its estimand consequence) must be recorded and warned, not silent.
+    ambiguous = CalibratedDirectEstimator(
+        ["policy"], calibrator, inference_method="cluster_robust"
+    )
+    ambiguous.add_fresh_draws("policy", _draws("policy", scores, labels, repeats=2))
+    with caplog.at_level(logging.WARNING):
+        ambiguous_result = ambiguous.fit_and_estimate()
+
+    linkage = ambiguous_result.metadata["legacy_calibration_linkage"]
+    assert linkage["attempted"] is True
+    assert linkage["succeeded"] is False
+    assert linkage["failure_reason"] == "ambiguous_match_multiple_evaluation_rows"
+    assert linkage["n_calibration_rows"] == 10
+    assert linkage["unmatched_prompt_id"] == "p0"
+    assert any(
+        "Legacy calibration linkage failed" in record.message
+        for record in caplog.records
+    )
 
 
 def test_array_api_raw_scale_and_full_coverage_capability_contract() -> None:

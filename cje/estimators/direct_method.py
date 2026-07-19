@@ -163,6 +163,7 @@ class CalibratedDirectEstimator:
         self._fresh_draws: Dict[str, Any] = {}  # Storage for fresh draws
         self._eval_table: Optional[Any] = None
         self._last_point: Optional[DirectPointEstimate] = None
+        self._legacy_linkage: Optional[Dict[str, Any]] = None
 
     @property
     def is_fitted(self) -> bool:
@@ -312,12 +313,14 @@ class CalibratedDirectEstimator:
                     cal_clusters.add(sample.prompt_id)
 
         if self._provenance_explicit and self.calibration_provenance is not None:
-            for role, prompt_id in zip(
-                self.calibration_provenance.row_roles or [],
-                self.calibration_provenance.prompt_ids,
-            ):
-                if role == "evaluation":
-                    cal_clusters.add(prompt_id)
+            # Every calibration fit row can couple through its prompt:
+            # evaluation-linked rows trivially, and external-role rows whenever
+            # the same prompt also appears in the evaluation frame (the common
+            # workflow of an oracle slice drawn on the fresh-draw prompts).
+            # Role does not matter for overlap — a shared prompt induces
+            # calibration/evaluation covariance either way.
+            for prompt_id in self.calibration_provenance.prompt_ids:
+                cal_clusters.add(prompt_id)
 
         # Compute intersection
         overlap = cal_clusters & eval_clusters
@@ -341,6 +344,16 @@ class CalibratedDirectEstimator:
             return True, "explicitly requested"
 
         if self.inference_method == "cluster_robust":
+            coupled, overlap = self._calibration_overlaps_evaluation()
+            if coupled and self.reward_calibrator is not None:
+                logger.warning(
+                    "inference_method='cluster_robust' was explicitly requested "
+                    f"but the calibration and evaluation frames share {overlap} "
+                    "prompt cluster(s). Cluster-robust SEs treat the frames as "
+                    "independent and drop the calibration-evaluation covariance "
+                    "term; use inference_method='bootstrap' (or 'auto') to "
+                    "capture it."
+                )
             return False, "cluster_robust explicitly requested"
 
         # Auto mode: check conditions
@@ -534,7 +547,9 @@ class CalibratedDirectEstimator:
         High-level analysis always passes explicit provenance. This narrow
         compatibility bridge handles older direct constructors that fitted a
         calibrator from the same labeled fresh draws but could not declare row
-        roles. Ambiguous or partial matches remain external.
+        roles. Ambiguous or partial matches remain external; the attempt and
+        its outcome are recorded in result metadata under
+        'legacy_calibration_linkage'.
         """
         if (
             self._provenance_explicit
@@ -544,6 +559,15 @@ class CalibratedDirectEstimator:
         ):
             return
         table = self._eval_table
+        n_provenance_rows = len(self.calibration_provenance.judge_scores)
+        outcome: Dict[str, Any] = {
+            "attempted": True,
+            "succeeded": False,
+            "n_calibration_rows": n_provenance_rows,
+            "n_matched": 0,
+            "failure_reason": None,
+        }
+        self._legacy_linkage = outcome
         matched_keys: List[Optional[Tuple[str, str, int]]] = []
         used_rows: set = set()
         for score, label, prompt_id in zip(
@@ -561,11 +585,35 @@ class CalibratedDirectEstimator:
                 and np.isclose(table.oracle_labels[row], label)
             ]
             if len(candidates) != 1:
+                reason = (
+                    "no_matching_evaluation_row"
+                    if not candidates
+                    else "ambiguous_match_multiple_evaluation_rows"
+                )
+                outcome["n_matched"] = len(matched_keys)
+                outcome["failure_reason"] = reason
+                outcome["unmatched_prompt_id"] = str(prompt_id)
+                logger.warning(
+                    "Legacy calibration linkage failed (%s) for prompt_id %r "
+                    "after matching %d of %d calibrator fit rows. All fit rows "
+                    "remain 'external': residual augmentation is disabled and "
+                    "the bootstrap treats the calibration frame as independent "
+                    "of the evaluation frame, so the reported estimate and SE "
+                    "can differ from an otherwise identical run where linkage "
+                    "succeeds. Pass explicit CalibrationProvenance to pin the "
+                    "estimand.",
+                    reason,
+                    prompt_id,
+                    len(matched_keys),
+                    n_provenance_rows,
+                )
                 return
             row = candidates[0]
             used_rows.add(row)
             matched_keys.append(table.row_keys[row])
 
+        outcome["succeeded"] = True
+        outcome["n_matched"] = len(matched_keys)
         self.calibration_provenance = CalibrationProvenance(
             judge_scores=self.calibration_provenance.judge_scores,
             oracle_labels=self.calibration_provenance.oracle_labels,
@@ -671,6 +719,8 @@ class CalibratedDirectEstimator:
             "label_design": self.label_design.kind,
         }
         metadata.update(extra_metadata)
+        if self._legacy_linkage is not None:
+            metadata["legacy_calibration_linkage"] = dict(self._legacy_linkage)
         if self.label_design.kind == "targeted_unknown":
             metadata.setdefault("limitations", []).append(
                 "Oracle labels were targeted with unknown inclusion "

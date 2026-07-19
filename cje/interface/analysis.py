@@ -164,6 +164,9 @@ def analyze_dataset(
         New metadata fields when using calibration_data_path:
         - results.metadata["oracle_sources"]: Breakdown of oracle labels by source
         - results.metadata["oracle_sources"]["conflicts"]: Cross-source oracle disagreements
+          on rows sharing an explicit observation_id
+        - results.metadata["oracle_sources"]["value_conflicts"]: Cross-source oracle
+          disagreements on id-less rows sharing (prompt_id, judge_score)
 
     Raises:
         ValueError: If required data is missing or declarations are invalid.
@@ -1264,8 +1267,10 @@ def _mark_uncalibrated_result(
 
 def _scale_oracle_source_metadata(metadata: Dict[str, Any], output_scale: Any) -> None:
     """Put cross-source oracle disagreements in the result's public units."""
-    conflicts = metadata.get("conflicts")
-    if isinstance(conflicts, list):
+    for conflict_key in ("conflicts", "value_conflicts"):
+        conflicts = metadata.get(conflict_key)
+        if not isinstance(conflicts, list):
+            continue
         for conflict in conflicts:
             if not isinstance(conflict, dict):
                 continue
@@ -1576,7 +1581,11 @@ def _combine_oracle_sources(
     combined_samples: List[Sample] = []
     seen_rows: Dict[Tuple[str, str], Dict[str, Any]] = {}
     oracle_by_observation: Dict[str, List[Tuple[str, float]]] = {}
+    rows_by_prompt_score: Dict[
+        Tuple[str, float], List[Tuple[str, str, Optional[str], float]]
+    ] = {}
     conflicts: List[Dict[str, Any]] = []
+    value_conflicts: List[Dict[str, Any]] = []
     n_duplicates = 0
 
     def _add_sample(
@@ -1645,6 +1654,41 @@ def _combine_oracle_sources(
                 (source_family, float(sample.oracle_label))
             )
 
+        # Value-based cross-source conflict CHECK (never a merge): rows on the
+        # same prompt with the same judge score but materially different
+        # oracle labels usually describe the same response labeled twice.
+        # Pairs where both rows carry explicit observation_ids are governed by
+        # the identity check above (distinct ids assert distinct observations).
+        value_key = (str(sample.prompt_id), float(sample.judge_score))
+        for (
+            prev_source,
+            prev_row_id,
+            prev_obs_id,
+            prev_oracle,
+        ) in rows_by_prompt_score.get(value_key, []):
+            if (
+                prev_source != source_family
+                and (prev_obs_id is None or observation_id is None)
+                and abs(prev_oracle - float(sample.oracle_label)) > 0.05
+            ):
+                value_conflicts.append(
+                    {
+                        "prompt_id": value_key[0],
+                        "judge_score": value_key[1],
+                        "existing_source": prev_source,
+                        "existing_row_id": prev_row_id,
+                        "existing_value": float(prev_oracle),
+                        "new_source": source_family,
+                        "new_row_id": row_id,
+                        "new_value": float(sample.oracle_label),
+                        "difference": abs(prev_oracle - float(sample.oracle_label)),
+                    }
+                )
+                break
+        rows_by_prompt_score.setdefault(value_key, []).append(
+            (source_family, row_id, observation_id, float(sample.oracle_label))
+        )
+
         metadata = dict(sample.metadata or {})
         metadata.update(
             {
@@ -1710,6 +1754,26 @@ def _combine_oracle_sources(
             len(conflicts),
         )
 
+    if value_conflicts:
+        preview = "; ".join(
+            f"prompt_id={conflict['prompt_id']!r} "
+            f"judge_score={conflict['judge_score']:g}: "
+            f"{conflict['existing_source']}:{conflict['existing_row_id']}"
+            f"={conflict['existing_value']:.3f} vs "
+            f"{conflict['new_source']}:{conflict['new_row_id']}"
+            f"={conflict['new_value']:.3f}"
+            for conflict in value_conflicts[:5]
+        )
+        logger.warning(
+            "Found %d prompt/judge-score pairs with materially different "
+            "oracle labels across sources and no shared observation_id. All "
+            "rows are retained, NOT merged; set observation_id to assert "
+            "shared response identity. Inspect oracle_sources.value_conflicts. "
+            "Pairs: %s",
+            len(value_conflicts),
+            preview,
+        )
+
     if verbose:
         logger.info(
             "Combined oracle sources: %d total rows "
@@ -1739,11 +1803,14 @@ def _combine_oracle_sources(
         "fresh_draws": {"n_oracle": n_from_fresh, "coverage": None},
         "total_oracle": len(combined_samples),
         "n_conflicts": len(conflicts),
+        "n_value_conflicts": len(value_conflicts),
         "n_duplicates": n_duplicates,
         "deduplication_key": "(source_id, row_id)",
     }
     if conflicts:
         oracle_sources_metadata["conflicts"] = conflicts[:10]
+    if value_conflicts:
+        oracle_sources_metadata["value_conflicts"] = value_conflicts[:10]
 
     if combined_samples:
         combined_dataset = Dataset(

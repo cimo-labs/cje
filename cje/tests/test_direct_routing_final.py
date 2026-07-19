@@ -1,5 +1,7 @@
 """Focused regressions for route-aware Direct estimation and inference."""
 
+import logging
+
 import numpy as np
 import pytest
 
@@ -17,7 +19,6 @@ from cje.diagnostics.robust_inference import (
 )
 from cje.estimators.direct_method import CalibratedDirectEstimator
 from cje.interface.analysis import analyze_dataset
-
 
 pytestmark = pytest.mark.unit
 
@@ -320,6 +321,102 @@ def test_underclustered_bootstrap_policy_blocks_pairwise_fallback() -> None:
     assert result.metadata["inference_unavailable_policies"] == ["A"]
     with pytest.raises(InferenceUnavailableError, match="fewer than two"):
         result.compare_policies(0, 1)
+
+
+def test_idless_cross_source_oracle_value_conflicts_warn_without_merging(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Without observation_ids the identity-based conflict check is inert; the
+    # value-based CHECK must still flag the same (prompt_id, judge_score) row
+    # labeled materially differently across sources — loudly, naming the rows,
+    # while keeping every row (never a merge, never an error).
+    from cje.interface.analysis import _combine_oracle_sources
+
+    calibration = Dataset(
+        target_policies=["A"],
+        samples=[
+            Sample(
+                prompt_id="p1",
+                prompt="prompt",
+                response="response",
+                reward=None,
+                judge_score=0.7,
+                oracle_label=0.9,
+            )
+        ],
+    )
+    draws = FreshDrawDataset(
+        target_policy="A",
+        samples=[
+            FreshDrawSample(
+                prompt_id="p1",
+                target_policy="A",
+                judge_score=0.7,
+                oracle_label=0.2,
+                response=None,
+                draw_idx=0,
+            )
+        ],
+    )
+
+    with caplog.at_level(logging.WARNING):
+        combined, metadata = _combine_oracle_sources(
+            calibration, None, {"A": draws}, ["A"], "judge_score", "oracle_label"
+        )
+
+    assert combined.n_samples == 2  # both rows kept
+    assert metadata["n_conflicts"] == 0  # identity check needs observation_id
+    assert metadata["n_value_conflicts"] == 1
+    conflict = metadata["value_conflicts"][0]
+    assert conflict["prompt_id"] == "p1"
+    assert {conflict["existing_source"], conflict["new_source"]} == {
+        "fresh_draws",
+        "calibration_data",
+    }
+    assert conflict["difference"] == pytest.approx(0.7)
+    warning = next(
+        record.getMessage()
+        for record in caplog.records
+        if "materially different" in record.message
+    )
+    assert "NOT merged" in warning
+    assert "p1" in warning
+
+
+def test_distinct_observation_ids_suppress_value_conflict_check() -> None:
+    # Rows that both declare (different) explicit observation_ids assert
+    # distinct responses, so a label difference on the same prompt/judge-score
+    # pair is legitimate and must not be flagged.
+    from cje.interface.analysis import _combine_oracle_sources
+
+    def _dataset(oracle: float, observation_id: str) -> Dataset:
+        return Dataset(
+            target_policies=["A"],
+            samples=[
+                Sample(
+                    prompt_id="p1",
+                    prompt="prompt",
+                    response="response",
+                    reward=None,
+                    judge_score=0.7,
+                    oracle_label=oracle,
+                    observation_id=observation_id,
+                )
+            ],
+        )
+
+    combined, metadata = _combine_oracle_sources(
+        _dataset(0.9, "response-a"),
+        _dataset(0.2, "response-b"),
+        None,
+        ["A"],
+        "judge_score",
+        "oracle_label",
+    )
+
+    assert combined.n_samples == 2
+    assert metadata["n_conflicts"] == 0
+    assert metadata["n_value_conflicts"] == 0
 
 
 def test_underclustered_analytic_policy_blocks_pairwise_inference() -> None:
