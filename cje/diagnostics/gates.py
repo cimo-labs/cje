@@ -52,7 +52,10 @@ TRANSPORT_STATUS_TO_STATUS: Dict[str, Status] = {
     "FAIL": Status.CRITICAL,
     "INCONCLUSIVE": Status.WARNING,
     "NOT_GRADED": Status.WARNING,
-    "NOT_CHECKED": Status.WARNING,
+    # NOT_CHECKED means no probe was supplied at all — informational, not a
+    # defect: it maps to GOOD so probe-less runs do not warn in worst-status
+    # rollups. The per-policy audit record still says NOT_CHECKED explicitly.
+    "NOT_CHECKED": Status.GOOD,
     # Compatibility for previously serialized diagnostics only.
     "WARN": Status.WARNING,
 }

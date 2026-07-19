@@ -8,6 +8,7 @@ predeclared practical-bias margin?
 
 from dataclasses import dataclass, field
 import logging
+import warnings
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -27,6 +28,14 @@ class TransportAuditConfig:
     judge/oracle field names and public scales. ``delta_max_by_policy`` is
     deliberately per policy: omitting a margin keeps that audit descriptive
     and returns ``NOT_GRADED`` rather than borrowing an arbitrary threshold.
+
+    Unit contract: ``analyze_dataset`` converts probe oracle labels from the
+    call's public oracle scale into the result OUTPUT scale before auditing,
+    so every margin in ``delta_max_by_policy`` is in OUTPUT units — the units
+    of ``result.estimates`` (``output_scale`` when declared) — NOT the units
+    the probe ``oracle_label`` values were supplied in. When the output scale
+    differs from the oracle scale, a margin stated in probe-label units will
+    be silently wrong; restate it on the output scale.
     """
 
     probes_by_policy: Mapping[str, Sequence[Any]]
@@ -121,12 +130,27 @@ class TransportAuditConfig:
 class TransportDiagnostics:
     """Result of a held-out residual transport audit.
 
-    ``PASS`` means the simultaneous confidence interval is wholly inside the
-    declared ``delta_max`` margin. ``FAIL`` means it is wholly outside that
-    margin. An overlapping interval is ``INCONCLUSIVE``; no declared margin is
-    ``NOT_GRADED``. ``NOT_CHECKED`` is reserved for high-level result records
-    when no independent probe was supplied; it is not fabricated by this
-    low-level audit. None of these states is a scalar-support diagnostic.
+    ``PASS`` means the Bonferroni-adjusted confidence interval is wholly
+    inside the declared ``delta_max`` margin. ``FAIL`` means it is wholly
+    outside that margin. An overlapping interval is ``INCONCLUSIVE``; no
+    declared margin is ``NOT_GRADED``. ``NOT_CHECKED`` is reserved for
+    high-level result records when no independent probe was supplied; it is
+    not fabricated by this low-level audit. None of these states is a
+    scalar-support diagnostic.
+
+    Below the effective-cluster floor a decisive out-of-margin interval
+    still grades ``FAIL``; only ``PASS`` requires the floor, so an
+    under-sized probe cannot defeat the hard gate.
+
+    Units: ``delta_hat``, ``delta_ci``, ``delta_se``, ``delta_max``,
+    ``ci_half_width``, ``min_margin_for_pass``, and ``detectable_bias_80``
+    are all in the units of the probe ``oracle_label`` values that were
+    audited (for ``analyze_dataset`` audits, the result OUTPUT scale).
+
+    ``simultaneous_confidence_level`` is the family-wise coverage of the
+    Bonferroni intervals (``1 - alpha``); ``per_audit_confidence_level`` is
+    the nominal level of each individual interval (``1 - alpha /
+    family_size``).
 
     ``coverage`` is retained as a deprecated alias for
     ``probe_bin_occupancy`` so older serialized consumers keep working. The
@@ -150,6 +174,7 @@ class TransportDiagnostics:
     alpha: float = 0.05
     family_size: int = 1
     simultaneous_confidence_level: float = 0.95
+    per_audit_confidence_level: float = 0.95
     ci_half_width: float = float("nan")
     min_margin_for_pass: float = float("nan")
     detectable_bias_80: float = float("nan")
@@ -207,6 +232,7 @@ class TransportDiagnostics:
             "alpha": float(self.alpha),
             "family_size": int(self.family_size),
             "simultaneous_confidence_level": float(self.simultaneous_confidence_level),
+            "per_audit_confidence_level": float(self.per_audit_confidence_level),
             "ci_half_width": float(self.ci_half_width),
             "min_margin_for_pass": float(self.min_margin_for_pass),
             "detectable_bias_80": float(self.detectable_bias_80),
@@ -250,8 +276,11 @@ def audit_transportability(
         bins: Score-quantile bins for display only.
         group_label: Optional policy/group label.
         alpha: Family-wise error rate.
-        delta_max: Maximum practically acceptable absolute mean residual, in
-            oracle-output units. With ``None``, diagnostics are ``NOT_GRADED``.
+        delta_max: Maximum practically acceptable absolute mean residual.
+            Stated in the same units as the probe ``oracle_label`` values:
+            this audit grades ``oracle_label - calibrator.predict(...)``
+            directly, with no rescaling. With ``None``, diagnostics are
+            ``NOT_GRADED`` and can never ``PASS`` or ``FAIL``.
         cluster_ids: Independent cluster IDs. Defaults to record ``prompt_id``.
         sample_weights: Positive analysis weights, such as inverse inclusion
             probabilities for a disproportionate probe design.
@@ -264,6 +293,15 @@ def audit_transportability(
         Structured residual-audit diagnostics.
     """
     _validate_options(alpha, bins, family_size, delta_max, min_effective_clusters)
+    if delta_max is None:
+        warnings.warn(
+            "Since 0.6.0, audits without delta_max are NOT_GRADED and can "
+            "never PASS or FAIL; 0.5.x returned PASS/WARN/FAIL under a "
+            "zero-null test. Pass delta_max (practical-equivalence margin) "
+            "to grade.",
+            FutureWarning,
+            stacklevel=2,
+        )
     if len(probe_samples) == 0:
         raise ValueError("probe_samples must contain at least one labeled row")
 
@@ -298,7 +336,10 @@ def audit_transportability(
     t_crit = float(stats.t.ppf(1 - per_audit_alpha / 2, df))
     ci_half_width = t_crit * delta_se
     delta_ci = (delta_hat - ci_half_width, delta_hat + ci_half_width)
-    confidence_level = 1.0 - per_audit_alpha
+    # Bonferroni: each interval is at level 1 - alpha/K; the family-wise
+    # (simultaneous) coverage of all K intervals together is 1 - alpha.
+    per_audit_confidence_level = 1.0 - per_audit_alpha
+    simultaneous_confidence_level = 1.0 - alpha
 
     decile_residuals, decile_counts, bin_occupancy = _binned_residuals(
         scores, residuals, bins
@@ -340,7 +381,8 @@ def audit_transportability(
         effective_clusters=effective_clusters,
         alpha=alpha,
         family_size=family_size,
-        simultaneous_confidence_level=confidence_level,
+        simultaneous_confidence_level=simultaneous_confidence_level,
+        per_audit_confidence_level=per_audit_confidence_level,
         ci_half_width=ci_half_width,
         min_margin_for_pass=min_margin,
         detectable_bias_80=detectable_bias_80,
@@ -544,24 +586,28 @@ def _classify_status(
             "declare a practical residual margin before using this audit as a gate",
             "margin_not_declared",
         )
+    lower, upper = delta_ci
+    # A CI wholly outside the margin FAILs even below the effective-cluster
+    # floor: the floor exists because cluster-robust intervals under-cover on
+    # few clusters, which withholds PASS, but an entire interval beyond the
+    # margin is decisive evidence of unacceptable bias, not low power.
+    if lower > delta_max or upper < -delta_max:
+        return (
+            "FAIL",
+            "do not reuse this calibration; collect target labels and refit",
+            "unacceptable_mean_residual",
+        )
     if effective_clusters < min_effective_clusters:
         return (
             "INCONCLUSIVE",
             "collect more independent oracle-probe clusters",
             "insufficient_effective_clusters",
         )
-    lower, upper = delta_ci
     if lower >= -delta_max and upper <= delta_max:
         return (
             "PASS",
             "the mean residual is established within the declared margin",
             "",
-        )
-    if lower > delta_max or upper < -delta_max:
-        return (
-            "FAIL",
-            "do not reuse this calibration; collect target labels and refit",
-            "unacceptable_mean_residual",
         )
     return (
         "INCONCLUSIVE",

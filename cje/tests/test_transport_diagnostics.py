@@ -341,6 +341,9 @@ def test_transport_diagnostics_to_dict() -> None:
     assert d["group_label"] == "policy:test"
     assert len(d["decile_residuals"]) == 10
     assert len(d["decile_counts"]) == 10
+    # Both confidence levels serialize (defaults: alpha=0.05, family_size=1).
+    assert d["simultaneous_confidence_level"] == 0.95
+    assert d["per_audit_confidence_level"] == 0.95
 
 
 @pytest.mark.unit

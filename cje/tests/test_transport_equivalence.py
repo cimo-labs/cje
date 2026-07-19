@@ -1,10 +1,13 @@
 """Regression tests for residual-transport equivalence grading."""
 
+import warnings
+
 import numpy as np
 import pytest
 from typing import Any, Dict, List, Optional
 
 from cje import TransportAuditConfig, analyze_dataset
+from cje.diagnostics import TRANSPORT_STATUS_TO_STATUS, Status
 from cje.diagnostics.transport import audit_transportability
 
 
@@ -29,10 +32,20 @@ def _probe(residuals: Any) -> List[Dict[str, Any]]:
     ]
 
 
-def test_no_margin_is_not_graded() -> None:
-    diag = audit_transportability(_IdentityCalibrator(), _probe(np.zeros(30)))
+def test_no_margin_is_not_graded_and_warns_about_vocabulary_change() -> None:
+    with pytest.warns(FutureWarning, match="NOT_GRADED and can never PASS or FAIL"):
+        diag = audit_transportability(_IdentityCalibrator(), _probe(np.zeros(30)))
     assert diag.status == "NOT_GRADED"
     assert diag.reason_code == "margin_not_declared"
+
+
+def test_declared_margin_does_not_warn() -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        diag = audit_transportability(
+            _IdentityCalibrator(), _probe(np.zeros(30)), delta_max=0.05
+        )
+    assert diag.status == "PASS"
 
 
 def test_narrow_ci_inside_margin_passes() -> None:
@@ -71,6 +84,20 @@ def test_fewer_than_twenty_effective_clusters_is_inconclusive() -> None:
     assert diag.reason_code == "insufficient_effective_clusters"
 
 
+def test_ci_wholly_outside_margin_fails_below_cluster_floor() -> None:
+    # 15 clusters with a mean residual of 0.40 against a 0.05 margin: the
+    # whole CI sits far outside the margin, so the effective-cluster floor
+    # must not launder decisive bias into a non-blocking INCONCLUSIVE.
+    residuals = np.linspace(0.35, 0.45, 15)
+    diag = audit_transportability(
+        _IdentityCalibrator(), _probe(residuals), delta_max=0.05
+    )
+    assert diag.effective_clusters < 20
+    assert diag.delta_ci[0] > 0.05
+    assert diag.status == "FAIL"
+    assert diag.reason_code == "unacceptable_mean_residual"
+
+
 def test_repeated_rows_do_not_create_independent_clusters() -> None:
     residuals = np.tile([-0.01, 0.01], 20)
     records = _probe(residuals)
@@ -98,7 +125,12 @@ def test_family_adjustment_widens_interval() -> None:
         family_size=5,
     )
     assert family.ci_half_width > single.ci_half_width
-    assert family.simultaneous_confidence_level == pytest.approx(0.99)
+    # Bonferroni: family-wise coverage stays 1 - alpha; each of the K
+    # intervals is at the wider per-audit level 1 - alpha/K.
+    assert family.simultaneous_confidence_level == pytest.approx(0.95)
+    assert family.per_audit_confidence_level == pytest.approx(0.99)
+    assert single.simultaneous_confidence_level == pytest.approx(0.95)
+    assert single.per_audit_confidence_level == pytest.approx(0.95)
 
 
 def test_weights_and_covariates_are_used() -> None:
@@ -125,6 +157,16 @@ def test_margin_must_be_finite_and_positive(bad_margin: float) -> None:
         audit_transportability(
             _IdentityCalibrator(), _probe(np.zeros(30)), delta_max=bad_margin
         )
+
+
+def test_status_ladder_not_checked_is_informational() -> None:
+    # Absence of a probe is not a defect: NOT_CHECKED must not drag
+    # worst-status rollups to WARNING on every probe-less analysis.
+    assert TRANSPORT_STATUS_TO_STATUS["NOT_CHECKED"] is Status.GOOD
+    assert TRANSPORT_STATUS_TO_STATUS["NOT_GRADED"] is Status.WARNING
+    assert TRANSPORT_STATUS_TO_STATUS["INCONCLUSIVE"] is Status.WARNING
+    assert TRANSPORT_STATUS_TO_STATUS["PASS"] is Status.GOOD
+    assert TRANSPORT_STATUS_TO_STATUS["FAIL"] is Status.CRITICAL
 
 
 def test_residuals_and_margin_remain_in_public_oracle_units() -> None:
