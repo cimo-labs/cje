@@ -258,9 +258,13 @@ def test_integer_judge_scores_keep_fractional_oof_predictions() -> None:
 
 
 def test_representative_augmentation_is_a_weighted_ratio_estimator() -> None:
+    # Heterogeneous residuals (1.0 and 0.5 on the observed rows) make the
+    # estimate itself discriminate: the weighted ratio functional gives
+    # sum(w_o * r_o) / sum(w_o) = (10*1.0 + 1*0.5) / 11, while an unweighted
+    # residual correction would give mean([1.0, 0.5]) = 0.75.
     table = _table(
         scores=np.zeros(4),
-        labels=np.asarray([1.0, np.nan, 1.0, np.nan]),
+        labels=np.asarray([1.0, np.nan, 0.5, np.nan]),
         prompts=["p0", "p1", "p2", "p3"],
     )
     weights = np.asarray([10.0, 1.0, 1.0, 1.0])
@@ -272,9 +276,27 @@ def test_representative_augmentation_is_a_weighted_ratio_estimator() -> None:
         observation_weights=weights,
     )
 
-    assert point.estimates[0] == pytest.approx(1.0)
-    assert point.diagnostics["oracle_fractions"][0] == pytest.approx(11.0 / 13.0)
-    np.testing.assert_allclose(point.pseudo_outcomes[0], np.ones(4))
+    correction = 10.5 / 11.0  # weighted residual mean, not the unweighted 0.75
+    propensity = 11.0 / 13.0  # weighted oracle mass fraction, not the count 2/4
+    assert point.estimates[0] == pytest.approx(correction)
+    assert point.diagnostics["oracle_fractions"][0] == pytest.approx(propensity)
+    # Pseudo-outcomes pin the Horvitz-Thompson construction row by row: every
+    # row carries the correction, and observed rows add
+    # (residual - correction) / propensity with the WEIGHTED propensity — a
+    # count-based propensity would shift the observed rows.
+    np.testing.assert_allclose(
+        point.pseudo_outcomes[0],
+        [
+            correction + (1.0 - correction) / propensity,
+            correction,
+            correction + (0.5 - correction) / propensity,
+            correction,
+        ],
+    )
+    # The weighted mean of the pseudo-outcomes reproduces the estimate.
+    assert float(
+        np.average(point.pseudo_outcomes[0], weights=weights)
+    ) == pytest.approx(point.estimates[0])
 
 
 def test_calibration_base_weights_are_copied_validated_and_refit() -> None:
