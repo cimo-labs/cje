@@ -516,9 +516,11 @@ class TestCLIBestPolicy:
             "Limitations: residual transport NOT_CHECKED",
         ]
 
-    def test_flagged_argmax_is_qualified_not_demoted(self) -> None:
+    def test_flagged_argmax_shown_with_reliable_fallback(self) -> None:
         # The verified 0.3.0 repro: adversarial 'unhelpful' wins the raw
-        # argmax while flagged UNRELIABLE by the refusal gates
+        # argmax while flagged UNRELIABLE by the refusal gates. The CLI
+        # shows the raw winner qualified, and announces the reliable
+        # winner best_policy() returned (reliable_only=True default).
         results = self._make_results(
             [0.771, 0.756, 0.763],
             ["unhelpful", "base", "clone"],
@@ -534,10 +536,14 @@ class TestCLIBestPolicy:
         )
         lines = best_policy_lines(results)
         assert lines[0] == "Best by point estimate: unhelpful"
-        assert not any("Best reliable policy" in line for line in lines)
         assert any("reliability gates flagged" in line for line in lines)
+        assert any(
+            "Best reliable policy: clone" in line and "reliable_only=False" in line
+            for line in lines
+        )
+        assert any("raw_near_zero=90.2%" in line for line in lines)
 
-    def test_critical_status_qualifies_point_winner(self) -> None:
+    def test_critical_status_demotes_point_winner(self) -> None:
         diag = _make_direct_diagnostics(
             policies=["bad", "ok"],
             estimates={"bad": 0.9, "ok": 0.6},
@@ -548,6 +554,7 @@ class TestCLIBestPolicy:
         lines = best_policy_lines(results)
         assert lines[0] == "Best by point estimate: bad"
         assert any("reliability gates flagged" in line for line in lines)
+        assert any("Best reliable policy: ok" in line for line in lines)
 
     def test_all_flagged_no_winner(self) -> None:
         results = self._make_results(

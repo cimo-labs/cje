@@ -264,8 +264,11 @@ def best_policy_lines(results: "EstimationResult") -> list:
     """Build a point-estimate winner announcement with limitations.
 
     Thin renderer over EstimationResult.best_policy() (which owns the
-    gate/CRITICAL derivation). Diagnostics qualify the numerical winner but
-    never silently replace it with a different policy.
+    gate/CRITICAL derivation and demotes a flagged raw argmax to
+    ``runner_up``). Mirrors ``EstimationResult.summary()``: the raw
+    point-estimate winner stays visible with its limitations, and when the
+    gates demoted it the returned reliable winner is announced loudly —
+    never a silent substitution.
     """
     import numpy as np
 
@@ -279,8 +282,11 @@ def best_policy_lines(results: "EstimationResult") -> list:
         return ["No usable estimates: every point estimate is NaN (see diagnostics)."]
 
     verdict = results.best_policy()
+    # The raw point-estimate winner: the demoted runner_up when the gates
+    # flagged it, otherwise the returned verdict itself.
+    display = verdict.runner_up if verdict.runner_up is not None else verdict.name
     limitations = []
-    if verdict.flagged:
+    if verdict.flagged or verdict.runner_up is not None:
         limitations.append(
             "no policy passed the reliability gates"
             if verdict.all_flagged
@@ -289,14 +295,21 @@ def best_policy_lines(results: "EstimationResult") -> list:
     if metadata and metadata.get("calibration_status") == "UNCALIBRATED":
         limitations.append("UNCALIBRATED raw judge-score mean")
     transport_audits = metadata.get("transport_audits", {}) if metadata else {}
-    winner_audit = transport_audits.get(verdict.name, {})
+    winner_audit = transport_audits.get(display, {})
     transport_status = winner_audit.get("status", "NOT_CHECKED")
     if transport_status != "PASS":
         limitations.append(f"residual transport {transport_status}")
 
-    lines = [f"Best by point estimate: {verdict.name}"]
+    lines = [f"Best by point estimate: {display}"]
     if limitations:
         lines.append("Limitations: " + "; ".join(limitations))
+    if verdict.runner_up is not None:
+        reasons = "; ".join(verdict.runner_up_reasons or [])
+        lines.append(
+            f"Best reliable policy: {verdict.name} — raw argmax "
+            f"{verdict.runner_up} was flagged ({reasons}); pass "
+            f"reliable_only=False for the raw argmax"
+        )
     return lines
 
 
