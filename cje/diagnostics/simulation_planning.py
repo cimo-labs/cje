@@ -24,8 +24,8 @@ Usage:
     r2 = correlation_to_r2(0.8)  # Pearson r → isotonic R²
 """
 
-from dataclasses import dataclass
-from typing import List, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Tuple
 import logging
 import numpy as np
 
@@ -53,8 +53,9 @@ class SimulationPlanningResult:
         plan: The actual evaluation plan with allocation and MDE.
         variance_model: Fitted variance model used for planning.
         r2: Isotonic R² (judge quality) used for simulation.
-        eval_variance_fraction: Fraction of total variance from evaluation (σ²_eval share).
-        cal_variance_fraction: Fraction of total variance from calibration (σ²_cal share).
+        eval_variance_fraction: Fraction of planned variance from σ²_eval/n.
+        cal_variance_fraction: Fraction of planned variance from σ²_cal/m.
+        scenario_fingerprint: Inputs that define the simulated planning scenario.
     """
 
     plan: EvaluationPlan
@@ -62,6 +63,7 @@ class SimulationPlanningResult:
     r2: float
     eval_variance_fraction: float
     cal_variance_fraction: float
+    scenario_fingerprint: Dict[str, Any] = field(default_factory=dict)
 
     def summary(self) -> str:
         """Human-readable summary of planning result.
@@ -71,7 +73,7 @@ class SimulationPlanningResult:
         """
         return (
             f"Simulation Planning Result (R² = {self.r2:.2f})\n"
-            f"  Variance decomposition: {self.eval_variance_fraction:.0%} eval, "
+            f"  Planned variance decomposition: {self.eval_variance_fraction:.0%} eval, "
             f"{self.cal_variance_fraction:.0%} calibration\n"
             f"{self.plan.summary()}"
         )
@@ -133,7 +135,8 @@ class SimulationPlanningResult:
         return (
             f"With R² = {self.r2:.2f}, your judge quality is {quality_tier}.\n"
             f"{quality_desc}\n\n"
-            f"Variance share: {self.eval_variance_fraction:.0%} eval, "
+            f"Variance share at the planned allocation: "
+            f"{self.eval_variance_fraction:.0%} eval, "
             f"{self.cal_variance_fraction:.0%} calibration\n"
             f"→ {variance_insight}\n\n"
             f"Optimal allocation: m/n = {self.plan.oracle_fraction:.0%} oracle fraction\n"
@@ -155,8 +158,8 @@ def correlation_to_r2(correlation: float, relationship: str = "linear") -> float
             - "monotone": Returns a midpoint-to-1 heuristic that assumes real
               monotone nonlinearity. WARNING: this heuristic INFLATES R² if the
               relationship is actually linear — only use "monotone" when you
-              have evidence of nonlinearity; when unsure, "linear" is the safer
-              (lower) estimate.
+              have evidence of nonlinearity; otherwise use the lower "linear"
+              estimate.
 
     Returns:
         Approximate isotonic R² (0 to 1).
@@ -411,7 +414,8 @@ def simulate_variance_model(
             # The remaining pool supplies the n - m judge-only records; any
             # oracle labels are stripped so analyze_dataset sees exactly
             # (n, m). Labeling is random by construction, so stripping
-            # preserves ignorability. (Previously the unlabeled pool alone
+            # preserves the randomized labeling mechanism. (Previously the
+            # unlabeled pool alone
             # supplied these records, so e.g. at oracle_fraction=1.0 the
             # recorded (n, m) was never actually delivered.)
             remaining = [
@@ -549,14 +553,29 @@ def simulate_planning(
         alpha=alpha,
     )
 
-    # Compute variance fractions
-    total_var = variance_model.sigma2_eval + variance_model.sigma2_cal
-    if total_var > 0:
-        eval_fraction = variance_model.sigma2_eval / total_var
-        cal_fraction = variance_model.sigma2_cal / total_var
-    else:
-        eval_fraction = 0.5
-        cal_fraction = 0.5
+    # Attribute variance at the selected allocation. Raw fitted coefficients
+    # have different denominators and are not themselves variance shares.
+    eval_fraction = plan.eval_variance_fraction
+    cal_fraction = plan.cal_variance_fraction
+
+    scenario_fingerprint: Dict[str, Any] = {
+        "schema_version": 1,
+        "dgp": "binary_oracle_monotone_judge_v1",
+        "r2": float(r2),
+        "n_total": int(n_total),
+        "oracle_fraction": float(oracle_fraction),
+        "n_replicates": int(n_replicates),
+        "seed": int(seed),
+        "budget": float(budget),
+        "m_min": int(m_min),
+        "power": float(power),
+        "alpha": float(alpha),
+        "cost_model": {
+            "surrogate_cost": float(cost_model.surrogate_cost),
+            "oracle_cost": float(cost_model.oracle_cost),
+        },
+        "variance_measurement": dict(_PLANNING_MEASUREMENT_CONFIG),
+    }
 
     return SimulationPlanningResult(
         plan=plan,
@@ -564,4 +583,5 @@ def simulate_planning(
         r2=r2,
         eval_variance_fraction=eval_fraction,
         cal_variance_fraction=cal_fraction,
+        scenario_fingerprint=scenario_fingerprint,
     )

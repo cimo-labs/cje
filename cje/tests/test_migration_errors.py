@@ -5,7 +5,7 @@ points must get the exact migration copy from the design doc — these tests
 compare full message strings, not substrings, so any drift in the copy fails
 loudly. Covered surfaces:
 
-- analyze_dataset(logged_data_path=...)   (API kwarg kept solely to raise)
+- analyze_dataset no longer exposes logged_data_path
 - estimator='<removed name>'              (_removed.py, shared by CLI and API)
 - cje.advanced.<RemovedClass>             (module __getattr__ ImportError)
 - the CLI's old logged-dataset positional (`cje analyze logged_data.jsonl`)
@@ -84,28 +84,18 @@ _TINY_FRESH_DRAWS = {"policy_a": [{"prompt_id": "p0", "judge_score": 0.7}]}
 # ---------------------------------------------------------------------------
 
 
-class TestLoggedDataPathMigrationError:
-    def test_api_kwarg_raises_exact_message(self) -> None:
-        with pytest.raises(ValueError) as excinfo:
-            analyze_dataset(logged_data_path="logged_data.jsonl")
-        assert str(excinfo.value) == EXPECTED_LOGGED_DATA_PATH_MESSAGE
-
-    def test_raises_even_when_fresh_draws_also_provided(self) -> None:
-        """The kwarg must never be silently ignored in favor of fresh draws."""
-        with pytest.raises(ValueError) as excinfo:
-            analyze_dataset(
-                logged_data_path="logged_data.jsonl",
-                fresh_draws_data=_TINY_FRESH_DRAWS,
-            )
-        assert str(excinfo.value) == EXPECTED_LOGGED_DATA_PATH_MESSAGE
-
-    def test_kwarg_exists_solely_to_raise(self) -> None:
-        """logged_data_path stays in analyze_dataset's signature (so passing
-        it raises the migration error, not a TypeError) with a None default —
-        the flattened pipeline itself has no such concept."""
+class TestLoggedDataPathRemoval:
+    def test_kwarg_is_not_in_public_signature(self) -> None:
         params = inspect.signature(analyze_dataset).parameters
-        assert "logged_data_path" in params
-        assert params["logged_data_path"].default is None
+        assert "logged_data_path" not in params
+
+    def test_removed_kwarg_is_rejected(self) -> None:
+        with pytest.raises(TypeError, match="logged_data_path"):
+            analyze_dataset(logged_data_path="logged_data.jsonl")  # type: ignore[call-arg]
+
+    def test_analysis_arguments_are_keyword_only(self) -> None:
+        with pytest.raises(TypeError, match="positional"):
+            analyze_dataset("responses/")  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------

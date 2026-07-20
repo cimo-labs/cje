@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "cje-eval"
-version = "0.5.1"
-description = "Causal Judge Evaluation - Calibrated LLM-judge evaluation with honest confidence intervals"
+version = "0.6.0rc1"
+description = "Causal Judge Evaluation - Calibrated LLM-judge evaluation with calibration-aware confidence intervals"
 authors = ["Eddie Landesberg <eddie@cimolabs.com>"]
 license = "MIT"
 packages = [{ include = "cje" }]
@@ -17,9 +17,9 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.9,<3.14"
+python = ">=3.10,<3.14"
 # Core dependencies
-numpy = ">=1.26,<3.0"  # numpy 2.x validated on py3.13 (fast suite green)
+numpy = ">=1.26,<3.0"  # numpy 2.x; full 3.10-3.13 matrix exercised in CI
 scipy = "^1.11.0"
 scikit-learn = "^1.4"
 pydantic = ">=2.6,<3.0"
@@ -68,6 +68,12 @@ addopts = [
 ]
 testpaths = ["cje/tests"]
 
+[tool.coverage.run]
+omit = ["cje/tests/*"]
+
+[tool.coverage.report]
+omit = ["cje/tests/*"]
+
 [build-system]
-requires = ["poetry-core>=1.0.0"]
+requires = ["poetry-core==1.9.1"]
 build-backend = "poetry.core.masonry.api"

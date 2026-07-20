@@ -75,7 +75,7 @@ def test_direct_method_skips_oua_at_full_coverage() -> None:
     assert "se_components" in result.metadata
     assert (
         result.metadata["se_components"].get("oracle_uncertainty_skipped")
-        == "100% oracle coverage"
+        == "100% evaluation oracle coverage"
     ), "Direct method should skip oracle-jackknife inference at 100% oracle coverage"
 
 

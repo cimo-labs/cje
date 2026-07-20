@@ -5,10 +5,6 @@ This module contains the diagnostics for the Direct-mode estimator:
 - DirectDiagnostics: estimates, per-policy statuses, coverage badges
   (boundary cards), and calibration quality.
 
-``IPSDiagnostics`` is a DEPRECATED alias of DirectDiagnostics kept for
-0.3.x consumers that read shared attributes; it will be removed in a
-future release.
-
 Computation logic is in the sibling modules (reward_boundary.py,
 transport.py, robust_inference.py, etc.).
 """
@@ -34,13 +30,14 @@ class DirectDiagnostics:
     metrics here. The identification risk that matters is coverage: the
     per-policy boundary cards (the paper's coverage badge) record how much
     of each policy's fresh-draw judge-score mass falls outside the oracle
-    calibration range. A "REFUSE-LEVEL" card means level (absolute) claims
-    must not ship for that policy, while rankings may stand.
+    calibration range. A "REFUSE-LEVEL" card means the scalar-support check
+    does not support absolute claims for that policy. It does not certify
+    rankings or residual transport.
     """
 
     # ========== Core Info (always present) ==========
     estimator_type: str  # "Direct"
-    method: str  # "calibrated_direct" | "naive_direct" (+ "_bootstrap")
+    method: str  # "calibrated_direct" | "direct_oracle" | "naive_direct"
     n_samples_total: int
     n_samples_valid: int
     policies: List[str]
@@ -62,7 +59,14 @@ class DirectDiagnostics:
     # ========== Calibration Diagnostics (None for naive mode) ==========
     calibration_rmse: Optional[float] = None
     calibration_coverage: Optional[float] = None  # P(|pred - oracle| < 0.1)
+    calibration_tolerance: Optional[float] = None
     n_oracle_labels: Optional[int] = None
+
+    # ========== Held-out residual transport (high-level API) ==========
+    # Per-policy serialized TransportDiagnostics, or an explicit NOT_CHECKED
+    # record when no independent probe was supplied.
+    transport_audits: Optional[Dict[str, Dict[str, Any]]] = None
+    transport_status_per_policy: Optional[Dict[str, str]] = None
 
     # ========== Computed Properties ==========
 
@@ -134,7 +138,8 @@ class DirectDiagnostics:
                         f"REFUSE-LEVEL for {policy}: "
                         f"{card.get('out_of_range', 0.0):.1%} of judge scores "
                         f"outside the oracle calibration range; do not ship "
-                        f"level claims (ranking may stand)"
+                        f"level claims; this check does not certify rankings "
+                        f"or residual transport"
                     )
 
         # Check estimates match policies
@@ -158,12 +163,24 @@ class DirectDiagnostics:
         refuse_level = self.refuse_level_policies
         if refuse_level:
             lines.append(f"REFUSE-LEVEL: {', '.join(refuse_level)}")
+        if self.transport_audits:
+            statuses = ", ".join(
+                f"{policy}={audit.get('status', 'NOT_CHECKED')}"
+                for policy, audit in sorted(self.transport_audits.items())
+            )
+            lines.append(f"Residual transport: {statuses}")
 
         if self.is_calibrated:
             lines.append(f"Calibration RMSE: {self.calibration_rmse:.3f}")
             if self.calibration_coverage is not None:
+                tolerance = (
+                    f" (±{self.calibration_tolerance:g})"
+                    if self.calibration_tolerance is not None
+                    else ""
+                )
                 lines.append(
-                    f"Calibration coverage (±0.1): {self.calibration_coverage:.1%}"
+                    f"Calibration coverage{tolerance}: "
+                    f"{self.calibration_coverage:.1%}"
                 )
             if self.n_oracle_labels is not None:
                 lines.append(f"Oracle labels: {self.n_oracle_labels}")
@@ -196,10 +213,3 @@ class DirectDiagnostics:
         import json
 
         return json.dumps(self.to_dict(), indent=indent, default=str)
-
-
-# DEPRECATED: 0.3.x name for the estimator diagnostics. Direct mode never
-# had real weight metrics behind it; the shared fields (estimates,
-# standard_errors, status_per_policy, boundary_cards, ...) live on
-# DirectDiagnostics. Slated for removal in a future release.
-IPSDiagnostics = DirectDiagnostics

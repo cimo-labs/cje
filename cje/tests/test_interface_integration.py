@@ -10,7 +10,6 @@ import pytest
 
 from cje.interface.analysis import analyze_dataset
 
-
 pytestmark = [pytest.mark.integration, pytest.mark.uses_arena_sample]
 
 
@@ -27,12 +26,10 @@ def _arena_paths() -> tuple[Path, Path]:
     return dataset_path, fresh_draws_dir
 
 
-def test_analyze_dataset_eight_labels_reduces_folds() -> None:
-    """4-9 oracle labels: calibration folds auto-reduce with a warning and the
-    analysis succeeds (the reduction rule moved from the service layer into the
-    calibrator in 0.5.0 — analyze_dataset behavior is unchanged)."""
-    import logging
-
+def test_analyze_dataset_eight_labels_reduces_folds(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Eight independent labels calibrate after reducing the fold count."""
     import numpy as np
 
     rng = np.random.default_rng(11)
@@ -44,26 +41,20 @@ def test_analyze_dataset_eight_labels_reduces_folds() -> None:
             rec["oracle_label"] = float(np.clip(s + rng.normal(0, 0.05), 0, 1))
         records.append(rec)
 
-    logger = logging.getLogger("cje.calibration.judge")
-    records_seen = []
-
-    class _Capture(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            records_seen.append(record.getMessage())
-
-    handler = _Capture(level=logging.WARNING)
-    logger.addHandler(handler)
-    try:
+    with caplog.at_level("WARNING", logger="cje.calibration.judge"):
         results = analyze_dataset(
             fresh_draws_data={"policy_a": records},
             estimator_config={"n_bootstrap": 50},
         )
-    finally:
-        logger.removeHandler(handler)
 
     assert np.all(np.isfinite(results.estimates))
     assert np.all(np.isfinite(results.standard_errors))
-    assert any("reducing" in msg and "calibration folds" in msg for msg in records_seen)
+    assert results.method == "calibrated_direct_bootstrap"
+    assert results.metadata["calibration_status"] == "CALIBRATED"
+    assert results.metadata["claim_tier"] == "CALIBRATED_ORACLE_MEAN"
+    assert any(
+        "reducing calibration folds" in record.message for record in caplog.records
+    )
 
 
 @pytest.mark.slow
@@ -146,7 +137,7 @@ def test_mode_selection_metadata_populated() -> None:
     assert mode_sel["estimator"] == "direct"
     assert mode_sel["has_fresh_draws"] is True
     assert mode_sel["has_logged_data"] is False
-    assert mode_sel["reason"] == "Direct mode is the only mode in 0.4.x"
+    assert mode_sel["reason"] == "Direct mode is the only supported estimator family"
 
 
 def test_direct_estimates_clone_accurately() -> None:
@@ -224,3 +215,87 @@ def test_direct_ranks_unhelpful_as_worst() -> None:
         f"Direct mode: unhelpful ({unhelpful_direct:.3f}) should be lowest, "
         f"but estimates are {[f'{e:.3f}' for e in results_direct.estimates]}"
     )
+
+
+def test_declared_output_scale_keeps_raw_judge_estimand() -> None:
+    """A declared output_scale rescales the display axis of a raw-judge run
+    without relabeling the estimand as an oracle quantity."""
+    records = [
+        {"prompt_id": f"p{i:02d}", "judge_score": 0.2 + 0.6 * i / 19} for i in range(20)
+    ]
+
+    results = analyze_dataset(
+        fresh_draws_data={"policy_a": records},
+        output_scale=(0, 100),
+        estimator_config={"inference_method": "cluster_robust"},
+    )
+
+    assert results.metadata["claim_tier"] == "RAW_JUDGE_MEAN"
+    assert results.units is not None
+    assert results.units.estimand == "judge_mean"
+    norm_meta = results.metadata["normalization"]
+    assert norm_meta["results_scale_source"] == "declared"
+    assert norm_meta["results_scale"] == "declared"
+    # The display axis is still the declared one.
+    assert results.units.output_scale["min"] == 0.0
+    assert results.units.output_scale["max"] == 100.0
+    assert results.estimates[0] == pytest.approx(50.0)
+
+
+def test_declared_output_scale_does_not_bypass_mixed_refusal(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """MIXED runs keep unit-scale results even when output_scale is declared:
+    heterogeneous per-policy estimands must not share one projected axis."""
+    with caplog.at_level("WARNING", logger="cje.interface.analysis"):
+        results = analyze_dataset(
+            fresh_draws_data={
+                "A": [
+                    {"prompt_id": f"p{i}", "judge_score": 0.0, "oracle_label": 1.0}
+                    for i in range(3)
+                ],
+                "B": [{"prompt_id": f"p{i}", "judge_score": 0.25} for i in range(3)],
+            },
+            output_scale=(0, 100),
+            estimator_config={"inference_method": "cluster_robust"},
+        )
+
+    assert results.metadata["claim_tier"] == "MIXED"
+    assert results.units is not None
+    assert results.units.estimand == "mixed"
+    norm_meta = results.metadata["normalization"]
+    assert norm_meta["results_scale"] == "mixed_internal"
+    assert norm_meta["results_scale_source"] == "mixed_direct_oracle_raw_judge"
+    # Values stay on the internal unit scale — not projected onto (0, 100).
+    assert results.estimates.tolist() == pytest.approx([1.0, 0.25])
+    assert results.units.output_scale["max"] == 1.0
+    assert any("Ignoring output_scale" in record.message for record in caplog.records)
+
+
+def test_declared_output_scale_keeps_calibrated_oracle_estimand() -> None:
+    """Calibrated runs keep the oracle_mean estimand under a declared scale."""
+    import numpy as np
+
+    rng = np.random.default_rng(7)
+    records = []
+    for i in range(40):
+        s = float(rng.uniform(0.1, 0.9))
+        rec = {"prompt_id": f"p{i:02d}", "judge_score": s}
+        if i < 12:
+            rec["oracle_label"] = float(np.clip(s + rng.normal(0, 0.05), 0, 1))
+        records.append(rec)
+
+    results = analyze_dataset(
+        fresh_draws_data={"policy_a": records},
+        output_scale=(0, 100),
+        estimator_config={"inference_method": "cluster_robust"},
+    )
+
+    assert results.metadata["claim_tier"] == "CALIBRATED_ORACLE_MEAN"
+    assert results.units is not None
+    assert results.units.estimand == "oracle_mean"
+    norm_meta = results.metadata["normalization"]
+    assert norm_meta["results_scale_source"] == "declared"
+    assert norm_meta["results_scale"] == "declared"
+    # Estimates land on the declared 0-100 display axis.
+    assert 1.0 < float(results.estimates[0]) <= 100.0

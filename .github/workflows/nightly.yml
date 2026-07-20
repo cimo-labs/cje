@@ -1,0 +1,36 @@
+name: Nightly statistical suite
+
+on:
+  schedule:
+    - cron: '23 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  POETRY_VERSION: 1.8.5
+  # pipx runs Poetry under the runner's system Python; without this Poetry
+  # builds the venv from its own interpreter and ignores actions/setup-python.
+  POETRY_VIRTUALENVS_PREFER_ACTIVE_PYTHON: "true"
+
+jobs:
+  slow-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      # Poetry must exist before setup-python so cache: poetry can locate
+      # its virtualenvs directory (keyed on poetry.lock + python version).
+      - name: Install pinned Poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: poetry
+      - name: Verify and install lockfile
+        run: |
+          poetry check --lock
+          poetry install --sync --no-interaction
+      - name: Run slow and statistical tests
+        run: poetry run python -m pytest cje/tests -m slow --durations=25

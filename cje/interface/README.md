@@ -111,15 +111,20 @@ Running CJE analysis on examples/arena_sample/fresh_draws
 
 Results:
 ----------------------------------------
-  base: 0.756 ± 0.010 (1 SE; 95% CI ≈ ±1.96·SE)
-  clone: 0.763 ± 0.010 (1 SE; 95% CI ≈ ±1.96·SE)
-  parallel_universe_prompt: 0.764 ± 0.010 (1 SE; 95% CI ≈ ±1.96·SE)
-  unhelpful: 0.415 ± 0.095 (1 SE; 95% CI ≈ ±1.96·SE)
+  base: 0.755 ± 0.010 (1 SE; 95% CI ≈ ±1.96·SE)
+    residual transport: NOT_CHECKED
+  clone: 0.764 ± 0.010 (1 SE; 95% CI ≈ ±1.96·SE)
+    residual transport: NOT_CHECKED
+  parallel_universe_prompt: 0.765 ± 0.010 (1 SE; 95% CI ≈ ±1.96·SE)
+    residual transport: NOT_CHECKED
+  unhelpful: 0.512 ± 0.107 (1 SE; 95% CI ≈ ±1.96·SE)
+    residual transport: NOT_CHECKED
 
-🏆 Best policy: parallel_universe_prompt
+Best by point estimate: parallel_universe_prompt
+Limitations: residual transport NOT_CHECKED
 ```
 
-The trophy is **reliability-aware**: if the argmax policy was flagged by the refusal gates (e.g. a REFUSE-LEVEL coverage badge), it is demoted to "⚠️ Best by point estimate: X (UNRELIABLE — see diagnostics)" and the best *reliable* policy is announced instead.
+The announcement is **reliability-aware**: the highest point estimate remains visible, and unresolved or failed checks are listed as limitations. `results.best_policy()` defaults to `reliable_only=True` (the 0.5.0 safety default): a gate-flagged argmax is demoted to the best gate-passing policy, loudly — the flagged raw winner travels as `runner_up` with `runner_up_reasons`, a warning is logged, and `summary()` prints both. Pass `reliable_only=False` for the raw argmax with its `flagged` marker.
 
 ### `cje analyze PATH`
 
@@ -128,6 +133,9 @@ The trophy is **reliability-aware**: if the argmax policy was flagged by the ref
 - `--calibration-data FILE`: JSONL with judge + oracle pairs for learning the calibration
 - `--estimator-config JSON`: e.g. `'{"n_bootstrap": 4000}'`
 - `--judge-field` / `--oracle-field`: field names (defaults `judge_score` / `oracle_label`)
+- `--transport-probe POLICY=PATH`: held-out probe JSONL; repeat per policy
+- `--transport-margin POLICY=DELTA`: practical mean-residual margin in output units; repeat per policy
+- `--transport-family-size`, `--transport-alpha`, `--transport-min-clusters`, `--transport-bins`: simultaneous-audit controls
 - `-o/--output FILE`: save results JSON
 - `--fresh-draws-dir DIR`: alias for `PATH` (kept for 0.3.x compatibility)
 - `-v/--verbose`, `-q/--quiet`
@@ -144,7 +152,7 @@ Checks that data is ready for `cje analyze` — validates the **raw parsed JSONL
 
 ```python
 def analyze_dataset(
-    logged_data_path=None,        # REMOVED in 0.4.0 — passing it raises the migration error
+    *,                            # all arguments are keyword-only
     fresh_draws_dir=None,         # directory of per-policy response files
     fresh_draws_data=None,        # in-memory alternative: {policy: [records]}
     calibration_data_path=None,   # JSONL with judge + oracle pairs
@@ -156,6 +164,16 @@ def analyze_dataset(
     include_response_length=False,  # auto word-count covariate (needs "response")
     estimator_config=None,        # kwargs forwarded to CalibratedDirectEstimator
     verbose=False,
+    fresh_judge_scale=None,
+    fresh_oracle_scale=None,
+    calibration_judge_scale=None,
+    calibration_oracle_scale=None,
+    output_scale=None,
+    strict=False,                 # retained for compatibility; invalid records raise by default
+    on_invalid=None,              # default "error" (loud); pass "drop" to filter with counted logging
+    label_design="representative",
+    label_propensities=None,
+    transport=None,               # TransportAuditConfig with held-out probes
 ) -> EstimationResult: ...
 ```
 
@@ -166,18 +184,19 @@ Provide `fresh_draws_dir` **or** `fresh_draws_data`.
 - `.ci()` / `.confidence_interval()`: percentile bootstrap CIs by default; t-based with finite-sample df under `cluster_robust` (`.ci_info` records which; df metadata only exists there)
 - `.compare_policies(i, j)`: paired policy comparison
 - `.summary()`: compact text report (per-policy estimate + 95% CI + gate flags, best-policy line)
-- `.best_policy()`: gate-aware `PolicyVerdict` (name, index, estimate, flagged, all_flagged, runner_up) — a flagged argmax is demoted to `runner_up` and the best reliable policy wins
+- `.best_policy()`: `PolicyVerdict`; with the default `reliable_only=True` a gate-flagged argmax is demoted to the best gate-passing policy (the demoted argmax travels as `runner_up` with `runner_up_reasons`, plus a logged warning); `reliable_only=False` returns the raw argmax with `flagged` attached
 - `.gates`: `Dict[str, GateResult]` — typed view of `metadata["reliability_gates"]`
-- `.diagnostics`: `DirectDiagnostics` (statuses, boundary cards, calibration quality)
-- `.calibrator`: fitted calibrator, reusable for transport audits
-- `.metadata`: `target_policies`, `boundary_cards`, `reliability_gates`, `oracle_sources` (with `calibration_data_path`), `normalization`, `inference`, ...
+- `.diagnostics`: `DirectDiagnostics` (statuses, boundary cards, calibration quality, per-policy transport states)
+- `.calibrator`: fitted calibrator when calibration is required; complete oracle coverage may return `None`
+- `.metadata`: `target_policies`, `boundary_cards`, `transport_audits`, `reliability_gates`, `oracle_sources` (with `calibration_data_path`), `normalization`, `inference`, ...
 
 The `estimator` names `"auto"`, `"direct"`, and `"calibrated-direct"` are aliases of the one calibrated estimator — whether calibration runs is driven solely by oracle-label availability (0 labels → the loud `naive_direct` fallback), and the parameter's only observable effect is which name is recorded in `metadata["estimator"]` (`"auto"` records `"direct"`).
 
-### Removed in 0.4.0 (migration errors)
+### Removed entry points (migration guidance)
 
-- `analyze_dataset(logged_data_path=...)` raises a `ValueError` explaining that OPE was removed and how to migrate — logged data with `judge_score` + `oracle_label` still works via `calibration_data_path`; IPS/DR users pin `pip install "cje-eval==0.3.*"`.
-- `estimator="calibrated-ips"` / `"raw-ips"` / `"dr-cpo"` / `"mrdr"` / `"tmle"` / `"stacked-dr"` raise the same guidance (CLI and API share one validator in `interface/_removed.py`).
+- `logged_data_path` is fully gone from `analyze_dataset` in 0.6.0: passing it now raises a plain `TypeError` (0.4–0.5 kept a dead parameter to raise a curated message). The CLI and the logged-data file detection still print the full migration guidance. Logged data with `judge_score` + `oracle_label` works via `calibration_data_path`; IPS/DR users pin `pip install "cje-eval==0.3.*"`.
+- `estimator="calibrated-ips"` / `"raw-ips"` / `"dr-cpo"` / `"mrdr"` / `"tmle"` / `"stacked-dr"` raise curated migration errors (CLI and API share one validator in `interface/_removed.py`).
+- Upgrading from 0.5.x? See [MIGRATING-0.6.md](../../MIGRATING-0.6.md).
 
 ## Advanced Usage
 
@@ -225,17 +244,25 @@ Covariates trigger two-stage calibration (see [`cje/calibration/README.md`](../c
 
 ### Transport audits
 
-`analyze_dataset` exposes the fitted calibrator; audit it on a small oracle-labeled probe slice per deployment-relevant policy:
+When calibration is required, `analyze_dataset` exposes the fitted calibrator. Audit reuse on an independent oracle-labeled probe slice per deployment-relevant policy, with a predeclared practical margin (probe oracle-label units here; margins passed via `TransportAuditConfig` are in OUTPUT units):
 
 ```python
 import json
 from cje.diagnostics import audit_transportability
 
 probe = [json.loads(line) for line in open("probes/new_policy.jsonl")]
-diag = audit_transportability(results.calibrator, probe, group_label="policy:new")
+assert results.calibrator is not None
+diag = audit_transportability(
+    results.calibrator,
+    probe,
+    group_label="policy:new",
+    delta_max=0.03,
+)
 print(diag.summary())
-# Transport: PASS/WARN/FAIL | Group: ... | N=... | δ̂: ... | Action: ...
+# Residual transport: PASS | Group: ... | N=... | delta: ... | margin: ...
 ```
+
+The other states are `FAIL`, `INCONCLUSIVE`, and `NOT_GRADED`; a policy without a supplied probe is recorded as `NOT_CHECKED` by the high-level `TransportAuditConfig` path rather than silently treated as a pass. Complete oracle coverage may return `results.calibrator is None` because its direct oracle mean does not depend on calibration (see [MIGRATING-0.6.md](../../MIGRATING-0.6.md) §6 for the reuse pattern).
 
 See [`cje/diagnostics/README.md`](../diagnostics/README.md) and the [PLAYBOOK](../../PLAYBOOK.md) for the decision protocol.
 

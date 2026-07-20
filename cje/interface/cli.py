@@ -9,8 +9,9 @@ import sys
 import argparse
 import json
 import logging
+import math
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Sequence
 
 if TYPE_CHECKING:
     from ..data.models import EstimationResult
@@ -110,6 +111,99 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     analyze_parser.add_argument(
+        "--fresh-judge-scale",
+        nargs=2,
+        type=float,
+        metavar=("MIN", "MAX"),
+        help="Declared judge-score scale for fresh draws",
+    )
+    analyze_parser.add_argument(
+        "--fresh-oracle-scale",
+        nargs=2,
+        type=float,
+        metavar=("MIN", "MAX"),
+        help="Declared oracle-label scale for fresh draws",
+    )
+    analyze_parser.add_argument(
+        "--calibration-judge-scale",
+        nargs=2,
+        type=float,
+        metavar=("MIN", "MAX"),
+        help="Declared judge-score scale for --calibration-data",
+    )
+    analyze_parser.add_argument(
+        "--calibration-oracle-scale",
+        nargs=2,
+        type=float,
+        metavar=("MIN", "MAX"),
+        help="Declared oracle-label scale for --calibration-data",
+    )
+    analyze_parser.add_argument(
+        "--output-scale",
+        nargs=2,
+        type=float,
+        metavar=("MIN", "MAX"),
+        help="Scale for reported estimates and uncertainty",
+    )
+    analyze_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Fail on an invalid record (the default; kept for 0.5.x " "compatibility)"
+        ),
+    )
+
+    analyze_parser.add_argument(
+        "--on-invalid",
+        choices=["error", "drop"],
+        default="error",
+        help=(
+            "Invalid-record policy: 'error' (default) fails with file/line "
+            "context; 'drop' skips invalid records and reports the count"
+        ),
+    )
+
+    analyze_parser.add_argument(
+        "--transport-probe",
+        action="append",
+        default=[],
+        metavar="POLICY=PATH",
+        help=(
+            "Held-out oracle-probe JSONL for a policy; repeat for multiple " "policies"
+        ),
+    )
+    analyze_parser.add_argument(
+        "--transport-margin",
+        action="append",
+        default=[],
+        metavar="POLICY=DELTA",
+        help=(
+            "Practical absolute residual margin in output units (the units "
+            "of result.estimates); repeat per audited policy"
+        ),
+    )
+    analyze_parser.add_argument(
+        "--transport-family-size",
+        type=int,
+        help="Predeclared number of simultaneous policy/group audits",
+    )
+    analyze_parser.add_argument(
+        "--transport-alpha",
+        type=float,
+        help="Family-wise error rate for transport audits (default: 0.05)",
+    )
+    analyze_parser.add_argument(
+        "--transport-min-clusters",
+        type=float,
+        help="Minimum effective probe clusters for grading (default: 20)",
+    )
+    analyze_parser.add_argument(
+        "--transport-bins",
+        type=int,
+        help="Score-quantile bins for display diagnostics (default: 10)",
+    )
+
+    analyze_parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -153,6 +247,22 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     validate_parser.add_argument(
+        "--judge-scale",
+        nargs=2,
+        type=float,
+        metavar=("MIN", "MAX"),
+        help="Declared minimum and maximum judge-score values",
+    )
+
+    validate_parser.add_argument(
+        "--oracle-scale",
+        nargs=2,
+        type=float,
+        metavar=("MIN", "MAX"),
+        help="Declared minimum and maximum oracle-label values",
+    )
+
+    validate_parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -163,12 +273,14 @@ def create_parser() -> argparse.ArgumentParser:
 
 
 def best_policy_lines(results: "EstimationResult") -> list:
-    """Build the best-policy announcement, demoting unreliable argmaxes.
+    """Build a point-estimate winner announcement with limitations.
 
     Thin renderer over EstimationResult.best_policy() (which owns the
-    gate/CRITICAL derivation): the trophy goes only to a policy that
-    passed the reliability gates; a flagged argmax is demoted to a
-    warning line.
+    gate/CRITICAL derivation and demotes a flagged raw argmax to
+    ``runner_up``). Mirrors ``EstimationResult.summary()``: the raw
+    point-estimate winner stays visible with its limitations, and when the
+    gates demoted it the returned reliable winner is announced loudly —
+    never a silent substitution.
     """
     import numpy as np
 
@@ -179,27 +291,38 @@ def best_policy_lines(results: "EstimationResult") -> list:
         return []
 
     if np.all(np.isnan(np.asarray(estimates, dtype=float))):
-        return [
-            "⚠️ No usable estimates: every policy was refused as unreliable "
-            "(see diagnostics)."
-        ]
+        return ["No usable estimates: every point estimate is NaN (see diagnostics)."]
 
-    verdict = results.best_policy(reliable_only=True)
+    verdict = results.best_policy()
+    # The raw point-estimate winner: the demoted runner_up when the gates
+    # flagged it, otherwise the returned verdict itself.
+    display = verdict.runner_up if verdict.runner_up is not None else verdict.name
+    limitations = []
+    if verdict.flagged or verdict.runner_up is not None:
+        limitations.append(
+            "no policy passed the reliability gates"
+            if verdict.all_flagged
+            else "reliability gates flagged this policy"
+        )
+    if metadata and metadata.get("calibration_status") == "UNCALIBRATED":
+        limitations.append("UNCALIBRATED raw judge-score mean")
+    transport_audits = metadata.get("transport_audits", {}) if metadata else {}
+    winner_audit = transport_audits.get(display, {})
+    transport_status = winner_audit.get("status", "NOT_CHECKED")
+    if transport_status != "PASS":
+        limitations.append(f"residual transport {transport_status}")
 
-    if verdict.all_flagged:
-        return [
-            f"⚠️ Best by point estimate: {verdict.name} "
-            f"(UNRELIABLE — see diagnostics)",
-            "No policy passed the reliability gates; do not pick a winner "
-            "from this run.",
-        ]
+    lines = [f"Best by point estimate: {display}"]
+    if limitations:
+        lines.append("Limitations: " + "; ".join(limitations))
     if verdict.runner_up is not None:
-        return [
-            f"⚠️ Best by point estimate: {verdict.runner_up} "
-            f"(UNRELIABLE — see diagnostics)",
-            f"🏆 Best reliable policy: {verdict.name}",
-        ]
-    return [f"🏆 Best policy: {verdict.name}"]
+        reasons = "; ".join(verdict.runner_up_reasons or [])
+        lines.append(
+            f"Best reliable policy: {verdict.name} — raw argmax "
+            f"{verdict.runner_up} was flagged ({reasons}); pass "
+            f"reliable_only=False for the raw argmax"
+        )
+    return lines
 
 
 # Logged-data logprob fields. In fresh draws they are ignored (Direct mode
@@ -219,32 +342,31 @@ _LOGPROB_FIELDS = (
 _LOGPROB_SCAN_LIMIT = 100
 
 
-def _records_have_logprob_fields(records: list) -> bool:
-    return any(
-        field in record
-        for record in records[:_LOGPROB_SCAN_LIMIT]
-        for field in _LOGPROB_FIELDS
-    )
+def _file_has_logprob_fields(file_path: Path) -> bool:
+    """Scan the leading records of a JSONL file for logprob fields."""
+    with open(file_path) as f:
+        for i, line in enumerate(f):
+            if i >= _LOGPROB_SCAN_LIMIT:
+                break
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                return False  # Leave loud parsing errors to the real loader
+            if isinstance(record, dict) and any(
+                field in record for field in _LOGPROB_FIELDS
+            ):
+                return True
+    return False
 
 
 def _dir_has_logprob_fields(directory: Path) -> bool:
     """Scan the leading records of each JSONL file in a fresh-draws dir."""
-    for file_path in sorted(directory.rglob("*.jsonl")):
-        with open(file_path) as f:
-            for i, line in enumerate(f):
-                if i >= _LOGPROB_SCAN_LIMIT:
-                    break
-                if not line.strip():
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    break  # Leave loud parsing errors to the real loader
-                if isinstance(record, dict) and any(
-                    field in record for field in _LOGPROB_FIELDS
-                ):
-                    return True
-    return False
+    return any(
+        _file_has_logprob_fields(file_path)
+        for file_path in sorted(directory.rglob("*.jsonl"))
+    )
 
 
 def run_analysis(args: argparse.Namespace) -> int:
@@ -270,6 +392,15 @@ def run_analysis(args: argparse.Namespace) -> int:
                 "JSONL file) or --fresh-draws-dir PATH."
             )
 
+        # Loud by default, matching analyze_dataset: invalid records error
+        # with file/line context unless --on-invalid drop opts into dropping
+        # (--strict is the compatible spelling of the default).
+        if args.strict and args.on_invalid == "drop":
+            raise ValueError(
+                "--strict conflicts with --on-invalid drop: --strict means "
+                "fail on invalid records. Pass one or the other."
+            )
+
         # Prepare kwargs. The estimator name is passed through unmapped so
         # the CLI and the API record the same resolved name in
         # metadata["estimator"] for the same run.
@@ -277,7 +408,19 @@ def run_analysis(args: argparse.Namespace) -> int:
             "estimator": args.estimator,
             "judge_field": args.judge_field,
             "oracle_field": args.oracle_field,
+            "strict": args.strict,
+            "on_invalid": args.on_invalid,
         }
+
+        for argument, keyword in (
+            (args.fresh_judge_scale, "fresh_judge_scale"),
+            (args.fresh_oracle_scale, "fresh_oracle_scale"),
+            (args.calibration_judge_scale, "calibration_judge_scale"),
+            (args.calibration_oracle_scale, "calibration_oracle_scale"),
+            (args.output_scale, "output_scale"),
+        ):
+            if argument is not None:
+                kwargs[keyword] = tuple(argument)
 
         if args.estimator_config:
             kwargs["estimator_config"] = args.estimator_config
@@ -285,19 +428,81 @@ def run_analysis(args: argparse.Namespace) -> int:
         if args.calibration_data:
             kwargs["calibration_data_path"] = args.calibration_data
 
+        transport_requested = bool(
+            args.transport_probe
+            or args.transport_margin
+            or args.transport_family_size is not None
+            or args.transport_alpha is not None
+            or args.transport_min_clusters is not None
+            or args.transport_bins is not None
+        )
+        if transport_requested:
+            from ..data.ingest import read_jsonl_records
+            from ..diagnostics.transport import TransportAuditConfig
+
+            probes = {}
+            for assignment in args.transport_probe:
+                policy, separator, raw_path = assignment.partition("=")
+                if not separator or not policy or not raw_path:
+                    raise ValueError("--transport-probe must use POLICY=PATH syntax")
+                if policy in probes:
+                    raise ValueError(
+                        f"Duplicate --transport-probe for policy {policy!r}"
+                    )
+                probe_path = Path(raw_path)
+                if not probe_path.is_file():
+                    raise FileNotFoundError(probe_path)
+                records = read_jsonl_records(probe_path, on_invalid="error")
+                source_id = str(probe_path.resolve())
+                for record in records:
+                    line_num = record.get("_cje_line_num")
+                    record["_cje_source_id"] = source_id
+                    record["_cje_row_id"] = f"{source_id}:line:{line_num}"
+                probes[policy] = records
+
+            margins = {}
+            for assignment in args.transport_margin:
+                policy, separator, raw_margin = assignment.partition("=")
+                if not separator or not policy or not raw_margin:
+                    raise ValueError("--transport-margin must use POLICY=DELTA syntax")
+                if policy in margins:
+                    raise ValueError(
+                        f"Duplicate --transport-margin for policy {policy!r}"
+                    )
+                try:
+                    margins[policy] = float(raw_margin)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Transport margin for policy {policy!r} must be numeric"
+                    ) from exc
+
+            kwargs["transport"] = TransportAuditConfig(
+                probes_by_policy=probes,
+                delta_max_by_policy=margins,
+                bins=(args.transport_bins if args.transport_bins is not None else 10),
+                alpha=(
+                    args.transport_alpha if args.transport_alpha is not None else 0.05
+                ),
+                family_size=args.transport_family_size,
+                min_effective_clusters=(
+                    args.transport_min_clusters
+                    if args.transport_min_clusters is not None
+                    else 20.0
+                ),
+            )
+
         path_obj = Path(path)
         if path_obj.is_dir():
             if _dir_has_logprob_fields(path_obj):
                 logger.info("logprob fields present and ignored (Direct mode)")
             kwargs["fresh_draws_dir"] = str(path_obj)
         elif path_obj.is_file():
-            from ..data.ingest import fresh_draws_data_from_file
-
-            fresh_draws_data = fresh_draws_data_from_file(path_obj)
-            all_records = [r for recs in fresh_draws_data.values() for r in recs]
-            if _records_have_logprob_fields(all_records):
+            # analyze_dataset loads single files itself, so ingestion follows
+            # the same on_invalid contract (error with file/line context by
+            # default; per-policy drop counts in metadata when dropping).
+            if _file_has_logprob_fields(path_obj):
                 logger.info("logprob fields present and ignored (Direct mode)")
-            kwargs["fresh_draws_data"] = fresh_draws_data
+            kwargs["fresh_draws_dir"] = str(path_obj)
         else:
             raise FileNotFoundError(path)
 
@@ -310,6 +515,13 @@ def run_analysis(args: argparse.Namespace) -> int:
 
         # Display results
         if not args.quiet:
+            n_invalid_dropped = int(results.metadata.get("n_invalid_dropped", 0) or 0)
+            if n_invalid_dropped:
+                print(
+                    f"\n⚠ Dropped {n_invalid_dropped} invalid record(s) "
+                    "(--on-invalid drop); estimates use the remaining rows only."
+                )
+
             print("\nResults:")
             print("-" * 40)
 
@@ -321,9 +533,13 @@ def run_analysis(args: argparse.Namespace) -> int:
                 print(
                     f"  {policy}: {estimate:.3f} ± {se:.3f} (1 SE; 95% CI ≈ ±1.96·SE)"
                 )
+                audit = results.metadata.get("transport_audits", {}).get(policy, {})
+                print(
+                    "    residual transport: " f"{audit.get('status', 'NOT_CHECKED')}"
+                )
 
             # Best policy (reliability-aware: an argmax that failed the
-            # refusal gates is demoted instead of crowned)
+            # refusal-gate limitations are printed beside the point winner)
             lines = best_policy_lines(results)
             if lines:
                 print()
@@ -419,16 +635,37 @@ def validate_data(args: argparse.Namespace) -> int:
             records,
             judge_field=args.judge_field,
             oracle_field=args.oracle_field,
+            judge_scale=args.judge_scale,
+            oracle_scale=args.oracle_scale,
         )
         issues = [f for f in findings if not f.startswith(NOTE_PREFIX)]
         notes = [f for f in findings if f.startswith(NOTE_PREFIX)]
 
+        def _numeric_values(recs: list, field: str) -> list:
+            values = []
+            for record in recs:
+                try:
+                    value = read_record_field(record, field)
+                except ValueError:
+                    # validate_direct_data already reports alias conflicts as
+                    # findings; summary statistics must not mask that report.
+                    continue
+                if (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(float(value))
+                ):
+                    values.append(float(value))
+            return values
+
         def _oracle_count(recs: list) -> int:
-            return sum(
-                1
-                for r in recs
-                if isinstance(read_record_field(r, args.oracle_field), (int, float))
-            )
+            return len(_numeric_values(recs, args.oracle_field))
+
+        def _scale_cli_args(flag: str, values: Optional[Sequence[float]]) -> str:
+            if values is None:
+                return ""
+            minimum, maximum = values
+            return f" {flag} {minimum:g} {maximum:g}"
 
         print(f"✓ Loaded {len(records)} records")
 
@@ -454,6 +691,15 @@ def validate_data(args: argparse.Namespace) -> int:
         n_oracle_total = _oracle_count(records)
         print(f"✓ Oracle labels: {n_oracle_total}/{len(records)} records")
 
+        if not by_policy and n_oracle_total == 0:
+            issues.append(
+                "This file has neither target_policy values nor oracle labels. "
+                "As written it is neither single-file fresh draws nor a useful "
+                "calibration source: add target_policy to evaluate raw judge-score "
+                "means, or add oracle labels for --calibration-data."
+            )
+            is_valid = False
+
         if issues:
             print("\n⚠️  Issues found:")
             for issue in issues:
@@ -464,7 +710,10 @@ def validate_data(args: argparse.Namespace) -> int:
         if is_valid:
             if by_policy:
                 print("\n✓ Data is valid and ready for analysis")
-                print(f"  Next: cje analyze {path}")
+                scale_args = _scale_cli_args(
+                    "--fresh-judge-scale", args.judge_scale
+                ) + _scale_cli_args("--fresh-oracle-scale", args.oracle_scale)
+                print(f"  Next: cje analyze {path}{scale_args}")
             else:
                 # Logged-style / calibration file: judge + oracle pairs
                 # without target_policy — valid as a calibration source
@@ -473,7 +722,13 @@ def validate_data(args: argparse.Namespace) -> int:
                     "(judge + oracle pairs; no target_policy field) and "
                     "ready for use with --calibration-data"
                 )
-                print(f"  Next: cje analyze FRESH_DRAWS --calibration-data {path}")
+                scale_args = _scale_cli_args(
+                    "--calibration-judge-scale", args.judge_scale
+                ) + _scale_cli_args("--calibration-oracle-scale", args.oracle_scale)
+                print(
+                    f"  Next: cje analyze FRESH_DRAWS --calibration-data "
+                    f"{path}{scale_args}"
+                )
 
         if args.verbose:
             import numpy as np
@@ -481,20 +736,8 @@ def validate_data(args: argparse.Namespace) -> int:
             print("\nDetailed Statistics:")
             print("-" * 40)
 
-            judge_scores = [
-                float(v)
-                for r in records
-                if isinstance(
-                    (v := read_record_field(r, args.judge_field)), (int, float)
-                )
-            ]
-            oracle_labels = [
-                float(v)
-                for r in records
-                if isinstance(
-                    (v := read_record_field(r, args.oracle_field)), (int, float)
-                )
-            ]
+            judge_scores = _numeric_values(records, args.judge_field)
+            oracle_labels = _numeric_values(records, args.oracle_field)
 
             if judge_scores:
                 print(f"Judge scores: {len(judge_scores)} samples")

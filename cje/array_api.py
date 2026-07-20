@@ -2,7 +2,7 @@
 
 This is CJE's documented bottom layer, in the spirit of ppi_py: plain numpy
 arrays in (judge scores plus a partially-labeled oracle slice), a calibrated
-mean with an honest confidence interval out. It wraps the exact internals
+mean and confidence interval out. It wraps the exact internals
 `CalibratedDirectEstimator` uses — `JudgeCalibrator.fit_cv` for judge→oracle
 calibration, the cluster bootstrap with calibrator refit, and cluster-robust
 SEs augmented by the oracle jackknife — and introduces no new statistics.
@@ -22,11 +22,14 @@ from .calibration.judge import JudgeCalibrator
 from .diagnostics.reward_boundary import boundary_card_dict
 from .diagnostics.robust_inference import (
     DirectEvalTable,
+    LabelDesign,
     cluster_bootstrap_direct_with_refit,
     cluster_robust_se,
     combine_cluster_and_oracle,
+    compute_direct_point_estimate,
+    direct_oracle_jackknife_estimates,
+    get_oof_predictions,
     make_calibrator_factory,
-    oracle_jackknife_estimates,
     oracle_jackknife_variance,
 )
 from .diagnostics.transport import TransportDiagnostics, audit_transportability
@@ -41,16 +44,19 @@ class CalibratedMeanResult:
     """Result of `calibrated_mean_ci`.
 
     Attributes:
-        estimate: Calibrated mean reward for the sample.
+        estimate: Direct oracle mean at complete label coverage, otherwise the
+            calibrated mean reward for the sample.
         se: Standard error (bootstrap SD, or cluster-robust SE augmented
             with the oracle-jackknife calibration variance).
         ci: (lower, upper) confidence interval at the requested alpha —
             percentile bootstrap, or t-based for cluster-robust inference.
         n: Number of evaluation samples.
-        n_oracle: Number of oracle-labeled samples used for calibration.
+        n_oracle: Number of oracle-labeled samples available.
         method: Inference method actually used ("bootstrap" or "cluster_robust").
         calibrator: The fitted `JudgeCalibrator` (reusable, e.g. for
-            `transport_audit` on a new sample).
+            `transport_audit` on a new sample). This is explicitly None when
+            complete oracle coverage makes calibration unnecessary; check it
+            before requesting calibrator-dependent capabilities.
         diagnostics: Dict with calibration quality, the coverage badge
             (`boundary_card`), and inference details.
     """
@@ -61,13 +67,18 @@ class CalibratedMeanResult:
     n: int
     n_oracle: int
     method: str
-    calibrator: Any
+    calibrator: Optional[Any]
     diagnostics: Dict[str, Any]
 
     def summary(self) -> str:
         """One-line human-readable summary."""
+        label = (
+            "Oracle mean"
+            if self.diagnostics.get("estimator_route") == "direct_oracle"
+            else "Calibrated mean"
+        )
         return (
-            f"Calibrated mean: {self.estimate:.4f} (SE {self.se:.4f}, "
+            f"{label}: {self.estimate:.4f} (SE {self.se:.4f}, "
             f"CI [{self.ci[0]:.4f}, {self.ci[1]:.4f}], n={self.n}, "
             f"n_oracle={self.n_oracle}, {self.method})"
         )
@@ -171,6 +182,134 @@ def _validate_inputs(
     return judge, labels, mask, cov
 
 
+def _direct_oracle_mean_ci(
+    judge: np.ndarray,
+    labels: np.ndarray,
+    cluster_codes: np.ndarray,
+    cluster_strings: List[str],
+    *,
+    alpha: float,
+    inference: str,
+    n_bootstrap: int,
+    seed: int,
+) -> CalibratedMeanResult:
+    """Estimate a fully observed oracle mean without fitting a calibrator."""
+    n = len(labels)
+    n_clusters = int(len(np.unique(cluster_codes)))
+    if inference == "auto":
+        resolved = "bootstrap" if n_clusters < 20 else "cluster_robust"
+        reason = (
+            "auto: direct oracle mean with few clusters"
+            if resolved == "bootstrap"
+            else "auto: direct oracle mean with sufficient clusters"
+        )
+    else:
+        resolved = inference
+        reason = "explicitly requested"
+
+    diagnostics: Dict[str, Any] = {
+        "alpha": alpha,
+        "inference_reason": reason,
+        "n_clusters": n_clusters,
+        "estimator_route": "direct_oracle",
+        "calibration": {
+            "mode": "not_required",
+            "selected_mode": None,
+            "n_oracle": n,
+            "oracle_coverage": 1.0,
+            "calibrator_available": False,
+        },
+    }
+
+    if n_clusters < 2:
+        estimate = float(np.mean(labels))
+        se = float("nan")
+        ci = (float("nan"), float("nan"))
+        method = resolved
+        diagnostics["inference_available"] = False
+        if resolved == "bootstrap":
+            diagnostics["bootstrap"] = {
+                "n_bootstrap_requested": n_bootstrap,
+                "n_valid_replicates": 0,
+                "unavailable_reason": "fewer_than_two_independent_clusters",
+                "seed": seed,
+            }
+        else:
+            diagnostics["cluster_robust"] = {
+                "se_cluster": float("nan"),
+                "df": 0,
+                "unavailable_reason": "fewer_than_two_independent_clusters",
+                "oracle_jackknife_folds": 0,
+                "var_oracle": 0.0,
+                "oua_skipped_at_full_coverage": True,
+            }
+    elif resolved == "bootstrap":
+        table = DirectEvalTable(
+            prompt_ids=cluster_codes,
+            prompt_id_strings=cluster_strings,
+            policy_indices=np.zeros(n, dtype=np.int32),
+            judge_scores=judge,
+            oracle_labels=labels,
+            oracle_mask=np.ones(n, dtype=bool),
+            covariates=None,
+            covariate_names=None,
+            policy_names=["policy"],
+        )
+        boot = cluster_bootstrap_direct_with_refit(
+            eval_table=table,
+            calibrator_factory=make_calibrator_factory(mode="monotone", seed=seed),
+            n_bootstrap=n_bootstrap,
+            alpha=alpha,
+            seed=seed,
+            use_augmented_estimator=False,
+        )
+        estimate = float(boot["estimates"][0])
+        se = float(boot["standard_errors"][0])
+        ci = (float(boot["ci_lower"][0]), float(boot["ci_upper"][0]))
+        method = "bootstrap"
+        diagnostics["bootstrap"] = {
+            "refit_mode": None,
+            "n_bootstrap_requested": n_bootstrap,
+            "n_valid_replicates": int(boot["n_valid_replicates"]),
+            "n_attempts": int(boot["n_attempts"]),
+            "skip_rate": float(boot["skip_rate"]),
+            "oracle_count_summary": boot["oracle_count_summary"],
+            "seed": seed,
+        }
+    else:
+        res = cluster_robust_se(
+            data=labels,
+            cluster_ids=cluster_codes,
+            statistic_fn=lambda x: float(np.mean(x)),
+            influence_fn=lambda x: x - float(np.mean(x)),
+            alpha=alpha,
+        )
+        estimate = float(res["estimate"])
+        se = float(res["se"])
+        df = int(res["df"])
+        t_crit = float(stats.t.ppf(1 - alpha / 2, df))
+        ci = (estimate - t_crit * se, estimate + t_crit * se)
+        method = "cluster_robust"
+        diagnostics["cluster_robust"] = {
+            "se_cluster": se,
+            "df": df,
+            "oracle_jackknife_folds": 0,
+            "var_oracle": 0.0,
+            "oua_skipped_at_full_coverage": True,
+        }
+
+    return CalibratedMeanResult(
+        estimate=estimate,
+        se=se,
+        ci=ci,
+        n=n,
+        n_oracle=n,
+        method=method,
+        calibrator=None,
+        diagnostics=diagnostics,
+    )
+
+
 def calibrated_mean_ci(
     judge_scores: Any,
     oracle_labels: Any,
@@ -186,20 +325,24 @@ def calibrated_mean_ci(
 ) -> CalibratedMeanResult:
     """Calibrated mean of judge scores against a partial oracle slice, with CI.
 
-    Fits a judge→oracle calibrator on the labeled subset (cross-fitted
-    `JudgeCalibrator.fit_cv`; two-stage when covariates are given, otherwise
-    auto-selected between monotone and two-stage) and estimates the mean
-    calibrated reward over ALL samples. Inference matches
+    With complete oracle coverage, estimates the oracle mean directly without
+    fitting a calibrator. Otherwise fits a judge→oracle calibrator on the
+    labeled subset (cross-fitted `JudgeCalibrator.fit_cv`; two-stage when
+    covariates are given, otherwise auto-selected between monotone and
+    two-stage) and estimates the mean calibrated reward over ALL samples.
+    Inference matches
     `CalibratedDirectEstimator`:
 
     - "bootstrap": cluster bootstrap with per-replicate calibrator refit
       (AIPW-style augmented estimate; percentile CI). Captures calibrator
       uncertainty and the calibration/evaluation covariance.
-    - "cluster_robust": CRV1 cluster-robust SE of the plug-in mean, augmented
-      with the delete-one-oracle-fold jackknife variance (t-based CI).
+    - "cluster_robust": CRV1 cluster-robust SE of the augmented
+      pseudo-outcome mean, combined with the delete-one-oracle-fold jackknife
+      variance (t-based CI).
     - "auto": the estimator's rule — bootstrap when there are < 20 clusters or
-      when calibration is coupled with evaluation. The oracle slice here always
-      lives inside the evaluation sample, so "auto" resolves to bootstrap.
+      when calibration is coupled with evaluation. Partial oracle coverage here
+      is coupled and resolves to bootstrap; complete coverage needs no
+      calibrator and uses cluster-robust inference once there are >=20 clusters.
 
     Args:
         judge_scores: (n,) raw judge scores for every evaluation sample.
@@ -212,15 +355,18 @@ def calibrated_mean_ci(
         covariates: Optional (n, d) covariate matrix; triggers two-stage
             calibration (passed through to the calibrator and the bootstrap).
         alpha: Significance level for the CI (default 0.05).
-        n_folds: CV folds for the full-data calibrator and oracle jackknife.
-            (The bootstrap's internal refits use the estimator's adaptive rule.)
+        n_folds: CV folds for the full-data calibrator, bootstrap refits, and
+            oracle jackknife. Fold count is reduced when cluster support is
+            insufficient.
         inference: "auto" | "bootstrap" | "cluster_robust".
         n_bootstrap: Bootstrap replicates (bootstrap path only).
         seed: Seed for fold assignment and the bootstrap.
 
     Returns:
-        CalibratedMeanResult with estimate, se, ci, and diagnostics (including
-        the coverage badge against the calibrator's oracle S-range).
+        CalibratedMeanResult with estimate, se, ci, and diagnostics. Partial
+        coverage also includes a reusable calibrator and its score-support
+        badge; complete coverage returns ``calibrator=None`` because the
+        direct oracle mean does not require a calibration model.
 
     Example (matches the README's array-API section):
         >>> import numpy as np
@@ -250,6 +396,18 @@ def calibrated_mean_ci(
     n_oracle = int(np.sum(mask))
     cluster_codes, cluster_strings = _factorize_clusters(cluster_ids, n)
     n_clusters = int(len(np.unique(cluster_codes)))
+
+    if n_oracle == n:
+        return _direct_oracle_mean_ci(
+            judge,
+            labels,
+            cluster_codes,
+            cluster_strings,
+            alpha=alpha,
+            inference=inference,
+            n_bootstrap=n_bootstrap,
+            seed=seed,
+        )
 
     # Fit the full-data calibrator (mask semantics: full-length scores/mask,
     # compact labels — fit_cv's boolean-mask contract).
@@ -298,25 +456,27 @@ def calibrated_mean_ci(
             "coverage_at_01": float(cal_result.coverage_at_01),
             "n_oracle": n_oracle,
             "oracle_coverage": calibrator.oracle_coverage,
+            "calibrator_available": True,
         },
     }
     boundary = boundary_card_dict(calibrator, judge, rewards)
     if boundary is not None:
         diagnostics["boundary_card"] = boundary
 
+    labels_nan = np.where(mask, labels, np.nan)
+    table = DirectEvalTable(
+        prompt_ids=cluster_codes,
+        prompt_id_strings=cluster_strings,
+        policy_indices=np.zeros(n, dtype=np.int32),
+        judge_scores=judge,
+        oracle_labels=labels_nan,
+        oracle_mask=mask,
+        covariates=cov,
+        covariate_names=cov_names,
+        policy_names=["policy"],
+    )
+
     if resolved == "bootstrap":
-        labels_nan = np.where(mask, labels, np.nan)
-        table = DirectEvalTable(
-            prompt_ids=cluster_codes,
-            prompt_id_strings=cluster_strings,
-            policy_indices=np.zeros(n, dtype=np.int32),
-            judge_scores=judge,
-            oracle_labels=labels_nan,
-            oracle_mask=mask,
-            covariates=cov,
-            covariate_names=cov_names,
-            policy_names=["policy"],
-        )
         # Fix the bootstrap refit mode to the full-data selection (never "auto").
         boot_mode = calibrator.selected_mode or "monotone"
         if boot_mode not in ("monotone", "two_stage"):
@@ -326,15 +486,14 @@ def calibrated_mean_ci(
             covariate_names=cov_names,
             seed=seed,
         )
-        # Adaptive floor, same rule as CalibratedDirectEstimator.
-        min_oracle_per_replicate = max(10, min(30, n_oracle // 3))
         boot = cluster_bootstrap_direct_with_refit(
             eval_table=table,
             calibrator_factory=factory,
             n_bootstrap=n_bootstrap,
-            min_oracle_per_replicate=min_oracle_per_replicate,
             alpha=alpha,
             seed=seed,
+            point_calibrator=calibrator,
+            n_folds=n_folds,
         )
         estimate = float(boot["estimates"][0])
         se = float(boot["standard_errors"][0])
@@ -345,35 +504,50 @@ def calibrated_mean_ci(
             "n_valid_replicates": int(boot["n_valid_replicates"]),
             "n_attempts": int(boot["n_attempts"]),
             "skip_rate": float(boot["skip_rate"]),
-            "min_oracle_per_replicate": min_oracle_per_replicate,
             "oracle_count_summary": boot["oracle_count_summary"],
             "seed": seed,
         }
         method = "bootstrap"
     else:
+        residual_predictions = get_oof_predictions(
+            calibrator,
+            judge,
+            mask,
+            covariates=cov,
+            oracle_fold_ids=cal_result.fold_ids,
+        )
+        residual_predictions[~mask] = rewards[~mask]
+        point = compute_direct_point_estimate(
+            rewards,
+            table,
+            residual_predictions,
+            LabelDesign("representative"),
+        )
+        estimate = float(point.estimates[0])
+        pseudo_outcomes = point.pseudo_outcomes[0]
+        influence_values = pseudo_outcomes - estimate
         res = cluster_robust_se(
-            data=rewards,
+            data=influence_values,
             cluster_ids=cluster_codes,
             statistic_fn=lambda x: float(np.mean(x)),
-            influence_fn=lambda x: x - float(np.mean(x)),
+            influence_fn=lambda x: x,
             alpha=alpha,
         )
-        estimate = float(res["estimate"])
         se_base = float(res["se"])
         df = int(res["df"])
 
-        # Oracle-jackknife augmentation (skipped at 100% oracle coverage,
-        # mirroring CalibratedDirectEstimator._apply_oua_jackknife).
         var_oracle = 0.0
         n_jack = 0
-        coverage = getattr(calibrator, "oracle_coverage", None)
-        if coverage is None or coverage < 1.0:
-            jack = oracle_jackknife_estimates(calibrator, judge, cov)
-            if jack is not None:
-                n_jack = len(jack)
-                var_oracle = oracle_jackknife_variance(jack)
-        fold_models = calibrator.get_fold_models_for_oua()
-        se, df = combine_cluster_and_oracle(se_base, df, var_oracle, len(fold_models))
+        jackknife = direct_oracle_jackknife_estimates(
+            calibrator,
+            table,
+            LabelDesign("representative"),
+        )
+        if jackknife is not None:
+            jack = jackknife[:, 0]
+            n_jack = len(jack)
+            var_oracle = oracle_jackknife_variance(jack)
+        se, df = combine_cluster_and_oracle(se_base, df, var_oracle, n_jack)
         t_crit = float(stats.t.ppf(1 - alpha / 2, df))
         ci = (estimate - t_crit * se, estimate + t_crit * se)
         diagnostics["cluster_robust"] = {
@@ -381,9 +555,8 @@ def calibrated_mean_ci(
             "df": df,
             "oracle_jackknife_folds": n_jack,
             "var_oracle": float(var_oracle),
-            "oua_skipped_at_full_coverage": bool(
-                coverage is not None and coverage >= 1.0
-            ),
+            "oua_skipped_at_full_coverage": False,
+            "point_estimator": point.diagnostics,
         }
         method = "cluster_robust"
 
@@ -411,14 +584,21 @@ def transport_audit(
     bins: int = 10,
     group_label: Optional[str] = None,
     alpha: float = 0.05,
+    delta_max: Optional[float] = None,
+    cluster_ids: Optional[Any] = None,
+    sample_weights: Optional[Any] = None,
+    covariates: Optional[Any] = None,
+    family_size: int = 1,
+    min_effective_clusters: float = 20.0,
 ) -> TransportDiagnostics:
-    """Test whether a fitted calibrator transports to a new probe sample.
+    """Audit mean residual transport on a held-out oracle probe sample.
 
     Array-first wrapper around `cje.diagnostics.transport.audit_transportability`:
-    checks the unbiasedness condition E[Y - f̂(S)] = 0 on the probe and returns
-    PASS/WARN/FAIL with decile residuals. Rows with NaN oracle labels are
-    excluded (the audit needs labeled probes only). The decile residuals are
-    display-only — gate on the pooled CI, never on per-decile values.
+    estimates E[Y - f_hat(S, X)] with prompt-clustered uncertainty. Rows with
+    NaN oracle labels are excluded. With an explicit ``delta_max``, PASS means
+    the entire simultaneous CI is inside ``[-delta_max, +delta_max]``; FAIL
+    means the CI is disjoint; overlap is INCONCLUSIVE. Without a margin the
+    result is NOT_GRADED. Score-bin residuals are display-only.
 
     Args:
         judge_scores: (m,) judge scores for the probe sample.
@@ -428,10 +608,17 @@ def transport_audit(
         bins: Number of score-quantile bins for the residual breakdown.
         group_label: Optional label (e.g. "policy:gpt-5.6-mini").
         alpha: Significance level for the audit CI (default 0.05 → 95% CI,
-            t critical values with df = n_probe - 1).
+            Bonferroni-adjusted across ``family_size`` audits).
+        delta_max: Practical absolute mean-residual margin in oracle units.
+        cluster_ids: Prompt/independence-cluster ID per row. Defaults to one
+            independent cluster per row.
+        sample_weights: Optional positive analysis weights.
+        covariates: Optional probe covariate matrix passed to the calibrator.
+        family_size: Number of policy/group audits in the decision family.
+        min_effective_clusters: Minimum effective clusters needed for grading.
 
     Returns:
-        TransportDiagnostics (status, delta_hat, delta_ci, decile residuals).
+        Structured residual-audit diagnostics.
 
     Example:
         >>> import numpy as np
@@ -446,8 +633,14 @@ def transport_audit(
         >>> result = calibrated_mean_ci(scores, labels, inference="cluster_robust")
         >>> probe_scores = rng.uniform(size=200)
         >>> probe_labels = np.clip(probe_scores + rng.normal(0, 0.1, 200), 0, 1)
-        >>> audit = transport_audit(probe_scores, probe_labels, result.calibrator)
-        >>> audit.status in ("PASS", "WARN", "FAIL")
+        >>> audit = transport_audit(
+        ...     probe_scores,
+        ...     probe_labels,
+        ...     result.calibrator,
+        ...     delta_max=0.05,
+        ...     cluster_ids=np.arange(200),
+        ... )
+        >>> audit.status in ("PASS", "FAIL", "INCONCLUSIVE")
         True
     """
     judge = np.asarray(judge_scores, dtype=float)
@@ -462,18 +655,49 @@ def transport_audit(
     if not np.all(np.isfinite(judge)):
         raise ValueError("judge_scores contains non-finite values (NaN/inf).")
 
+    if np.any(np.isinf(labels)):
+        raise ValueError("oracle_labels contains infinity.")
     mask = ~np.isnan(labels)
     n_probe = int(np.sum(mask))
-    if n_probe < 2:
+    if n_probe < 1:
         raise ValueError(
-            f"transport_audit needs at least 2 labeled probe samples, "
+            f"transport_audit needs at least 1 labeled probe sample, "
             f"got {n_probe}. Provide oracle labels for the probe."
         )
 
+    def _masked_optional(values: Optional[Any], name: str) -> Optional[np.ndarray]:
+        if values is None:
+            return None
+        array = np.asarray(values)
+        if array.shape[0] != len(judge):
+            raise ValueError(
+                f"{name} length ({array.shape[0]}) must match judge_scores "
+                f"length ({len(judge)})."
+            )
+        return cast(np.ndarray, array[mask])
+
+    masked_clusters = _masked_optional(cluster_ids, "cluster_ids")
+    masked_weights = _masked_optional(sample_weights, "sample_weights")
+    masked_covariates = _masked_optional(covariates, "covariates")
+
     probe_records = [
-        {"judge_score": float(s), "oracle_label": float(y)}
-        for s, y in zip(judge[mask], labels[mask])
+        {
+            "prompt_id": str(i),
+            "judge_score": float(s),
+            "oracle_label": float(y),
+        }
+        for i, (s, y) in enumerate(zip(judge[mask], labels[mask]))
     ]
     return audit_transportability(
-        calibrator, probe_records, bins=bins, group_label=group_label, alpha=alpha
+        calibrator,
+        probe_records,
+        bins=bins,
+        group_label=group_label,
+        alpha=alpha,
+        delta_max=delta_max,
+        cluster_ids=masked_clusters,
+        sample_weights=masked_weights,
+        covariates=masked_covariates,
+        family_size=family_size,
+        min_effective_clusters=min_effective_clusters,
     )

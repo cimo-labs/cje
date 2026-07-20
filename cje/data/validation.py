@@ -8,15 +8,24 @@ Operating on raw records is deliberate: the historical ``cje validate``
 bug (0.2.x through 0.3.0) came from round-tripping records through the
 Dataset model before validating. That round-trip replaces missing
 top-level ``prompt_id`` with generated hashes, relocates judge/oracle
-fields between metadata and the top level, and requires OPE logprob
-fields — so validation reported "Missing required field: prompt_id" and
-"No evaluation field found" on perfectly valid data.
+fields between metadata and the top level, and historically required
+now-removed OPE logprob fields — so validation reported "Missing required
+field: prompt_id" and "No evaluation field found" on perfectly valid data.
 """
 
-from typing import Any, Dict, List, Tuple
 import logging
+import math
+from typing import Any, Dict, List, Tuple
+
+import numpy as np
 
 from .ingest import read_aliased_field
+from .normalization import (
+    ScaleDeclaration,
+    coerce_scale,
+    unit_scale,
+    validate_values_on_scale,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,30 +60,35 @@ def read_record_field(record: Dict[str, Any], field: str) -> Any:
     return read_aliased_field(record, field)
 
 
-def _window_size(n: int) -> int:
-    """Window-scan size: min(100, max(10, n // 10))."""
-    return min(100, max(10, n // 10))
-
-
 def _is_numeric(value: Any) -> bool:
-    return isinstance(value, (int, float))
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
 
 
 def validate_direct_data(
     records: List[Dict[str, Any]],
     judge_field: str = "judge_score",
     oracle_field: str = "oracle_label",
+    judge_scale: ScaleDeclaration = None,
+    oracle_scale: ScaleDeclaration = None,
 ) -> Tuple[bool, List[str]]:
     """Validate raw Direct-mode records (fresh draws or calibration data).
 
     Checks, on the raw parsed JSONL dicts:
 
-    - ``prompt_id`` present (top level or metadata) over a leading window
-      of min(100, max(10, n // 10)) records;
-    - a numeric judge score (top level or metadata) over the same window;
-    - oracle-label counts over ALL records: 0 or fewer than 10 valid
-      labels is an issue, 10-49 earns an informational note (50-100+
-      recommended);
+    - ``prompt_id`` present (top level or metadata) on every record;
+    - a finite numeric judge score (top level or metadata) on every record;
+    - declared judge/oracle scales contain every finite observed value;
+      calibration-source files without declarations use the analysis
+      pipeline's [0, 1] defaults, while fresh draws retain observed-range
+      compatibility;
+    - oracle-label support over ALL records: fewer than 4 independent
+      prompt clusters earns an informational note because analysis can still
+      return the explicit UNCALIBRATED/raw-judge tier; otherwise fewer than
+      50 labels earns a small-sample note (50-100+ recommended);
     - if ``target_policy`` is present, every record must have it, and the
       window/oracle checks run per policy;
     - NO logprob checks: logprob fields are ignored by Direct mode, and
@@ -84,6 +98,8 @@ def validate_direct_data(
         records: Raw parsed JSONL records (list of dicts).
         judge_field: Field containing judge scores.
         oracle_field: Field containing oracle labels.
+        judge_scale: Optional declared minimum/maximum judge-score scale.
+        oracle_scale: Optional declared minimum/maximum oracle-label scale.
 
     Returns:
         Tuple of (is_valid, issues). Entries starting with ``"Note:"``
@@ -98,9 +114,40 @@ def validate_direct_data(
     """
     issues: List[str] = []
     notes: List[str] = []
+    field_conflict = object()
+    reported_conflicts = set()
+
+    def _safe_field(
+        record: Dict[str, Any], field: str, index: int, label: str = ""
+    ) -> Any:
+        try:
+            return read_record_field(record, field)
+        except ValueError as exc:
+            key = (id(record), field)
+            if key not in reported_conflicts:
+                reported_conflicts.add(key)
+                issues.append(
+                    f"Conflicting field '{field}' at record {index}{label}: {exc}"
+                )
+            return field_conflict
 
     if not records:
         return False, ["Data is empty"]
+
+    try:
+        declared_judge_scale = coerce_scale(judge_scale, field_name="judge_scale")
+        judge_scale_valid = True
+    except ValueError as exc:
+        issues.append(str(exc))
+        declared_judge_scale = None
+        judge_scale_valid = False
+    try:
+        declared_oracle_scale = coerce_scale(oracle_scale, field_name="oracle_scale")
+        oracle_scale_valid = True
+    except ValueError as exc:
+        issues.append(str(exc))
+        declared_oracle_scale = None
+        oracle_scale_valid = False
 
     n = len(records)
 
@@ -126,19 +173,23 @@ def validate_direct_data(
     else:
         groups[""] = list(records)
 
-    # --- window scan per group: prompt_id + numeric judge scores
+    judge_values: List[float] = []
+
+    # --- full scan per group: prompt_id + numeric judge scores
     for policy, group in sorted(groups.items()):
         label = f" for policy '{policy}'" if policy else ""
-        window = group[: _window_size(len(group))]
+        window = group
 
-        n_missing_prompt_id = sum(
-            1 for record in window if read_record_field(record, "prompt_id") is None
-        )
+        n_missing_prompt_id = 0
+        for i, record in enumerate(window):
+            prompt_value = _safe_field(record, "prompt_id", i, label)
+            if prompt_value is None:
+                n_missing_prompt_id += 1
         if n_missing_prompt_id:
             issues.append(
                 f"Missing required field 'prompt_id' in "
-                f"{n_missing_prompt_id}/{len(window)} of the first "
-                f"{len(window)} records{label} (checked top level and "
+                f"{n_missing_prompt_id}/{len(window)} records{label} "
+                f"(checked top level and "
                 f"metadata). Direct mode aligns draws across policies by "
                 f"prompt_id."
             )
@@ -146,16 +197,20 @@ def validate_direct_data(
         n_missing_judge = 0
         invalid_judge: List[Tuple[int, str]] = []
         for i, record in enumerate(window):
-            value = read_record_field(record, judge_field)
+            value = _safe_field(record, judge_field, i, label)
+            if value is field_conflict:
+                continue
             if value is None:
                 n_missing_judge += 1
             elif not _is_numeric(value):
                 invalid_judge.append((i, type(value).__name__))
+            else:
+                judge_values.append(float(value))
         if n_missing_judge:
             issues.append(
                 f"Judge field '{judge_field}' is missing in "
-                f"{n_missing_judge}/{len(window)} of the first "
-                f"{len(window)} records{label} (checked top level and "
+                f"{n_missing_judge}/{len(window)} records{label} "
+                f"(checked top level and "
                 f"metadata). Every record needs a numeric judge score."
             )
         if invalid_judge:
@@ -168,14 +223,23 @@ def validate_direct_data(
     # --- oracle labels: full scan; count ladders on the pooled total
     # (calibration pools oracle labels across all policies' draws)
     oracle_counts: Dict[str, int] = {policy: 0 for policy in groups}
+    oracle_prompt_clusters = set()
+    oracle_values: List[float] = []
     invalid_oracle: List[Tuple[int, str]] = []
     for policy, group in groups.items():
         for i, record in enumerate(group):
-            value = read_record_field(record, oracle_field)
+            label = f" for policy '{policy}'" if policy else ""
+            value = _safe_field(record, oracle_field, i, label)
+            if value is field_conflict:
+                continue
             if value is None:
                 continue
             if _is_numeric(value):
                 oracle_counts[policy] += 1
+                oracle_values.append(float(value))
+                prompt_id = _safe_field(record, "prompt_id", i, label)
+                if prompt_id is not None and prompt_id is not field_conflict:
+                    oracle_prompt_clusters.add(str(prompt_id))
             else:
                 invalid_oracle.append((i, type(value).__name__))
 
@@ -186,25 +250,86 @@ def validate_direct_data(
             f"Values must be numeric (int or float)."
         )
 
+    # A calibration file (no target_policy) follows DatasetLoader's explicit
+    # unit-scale default. Fresh draws preserve the high-level API's legacy
+    # observed-range inference unless the caller declares a scale.
+    is_calibration_source = n_with_policy == 0
+    resolved_judge_scale = declared_judge_scale or (
+        unit_scale() if is_calibration_source else None
+    )
+    resolved_oracle_scale = declared_oracle_scale or (
+        unit_scale() if is_calibration_source else None
+    )
+    for (
+        field,
+        values,
+        scale,
+        declaration,
+        declaration_name,
+        validation_flag,
+        analysis_argument,
+        declaration_valid,
+    ) in (
+        (
+            judge_field,
+            judge_values,
+            resolved_judge_scale,
+            declared_judge_scale,
+            "judge_scale",
+            "--judge-scale",
+            "calibration_judge_scale",
+            judge_scale_valid,
+        ),
+        (
+            oracle_field,
+            oracle_values,
+            resolved_oracle_scale,
+            declared_oracle_scale,
+            "oracle_scale",
+            "--oracle-scale",
+            "calibration_oracle_scale",
+            oracle_scale_valid,
+        ),
+    ):
+        if scale is None or not declaration_valid:
+            continue
+        try:
+            validate_values_on_scale(
+                np.asarray(values, dtype=float), scale, field_name=field
+            )
+        except ValueError as exc:
+            if declaration is None and is_calibration_source:
+                issues.append(
+                    f"{exc} Calibration sources default to [0, 1]. "
+                    f"Declare {declaration_name}=(minimum, maximum) when "
+                    f"validating (CLI: {validation_flag} MIN MAX), and pass "
+                    f"{analysis_argument}=(minimum, maximum) to analysis."
+                )
+            else:
+                issues.append(str(exc))
+
     total_oracle = sum(oracle_counts.values())
     if total_oracle == 0:
-        issues.append(
-            f"No oracle labels found in field '{oracle_field}'. "
-            f"Calibration needs at least 10 labeled samples (50-100 "
-            f"recommended): add oracle labels to a slice of these records, "
-            f"or calibrate from a separate file via calibration_data_path "
-            f"(--calibration-data)."
+        notes.append(
+            f"{NOTE_PREFIX} No oracle labels found in field '{oracle_field}'. "
+            f"Analysis can still return explicitly UNCALIBRATED raw judge-score "
+            f"means; add labels from at least 4 independent prompt clusters or "
+            f"use --calibration-data for calibrated oracle-scale claims."
         )
-    elif total_oracle < 10:
-        issues.append(
-            f"Too few oracle samples ({total_oracle}). "
-            f"Absolute minimum is 10 samples. "
-            f"Strongly recommend 50-100+ for robust calibration."
+    elif len(oracle_prompt_clusters) < 4:
+        notes.append(
+            f"{NOTE_PREFIX} Too few independent oracle prompt clusters "
+            f"({len(oracle_prompt_clusters)} from {total_oracle} labeled rows). "
+            f"Analysis will use the explicitly UNCALIBRATED raw-judge tier "
+            f"unless every evaluation row has an oracle label; cross-fitted "
+            f"calibration needs at least 4 independent clusters."
         )
     elif total_oracle < 50:
         notes.append(
-            f"{NOTE_PREFIX} Found {total_oracle} oracle samples. Consider "
-            f"adding more (50-100 recommended) for better calibration."
+            f"{NOTE_PREFIX} Found {total_oracle} oracle samples across "
+            f"{len(oracle_prompt_clusters)} independent prompt clusters. "
+            f"Consider adding more (50-100 labels recommended) for better "
+            f"calibration."
         )
 
     # --- logprob fields: informational only, never an issue

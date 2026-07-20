@@ -2,53 +2,70 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  POETRY_VERSION: 1.8.5
+  # pipx runs Poetry under the runner's system Python; without this Poetry
+  # builds the venv from its own interpreter and ignores actions/setup-python.
+  POETRY_VIRTUALENVS_PREFER_ACTIVE_PYTHON: "true"
 
 jobs:
   test:
+    name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install Poetry
-      run: pipx install poetry==1.8.5
-    - name: Cache Poetry dependencies
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/pypoetry
-        key: ${{ runner.os }}-py${{ matrix.python-version }}-poetry-${{ hashFiles('**/poetry.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-py${{ matrix.python-version }}-poetry-
-    - run: poetry config virtualenvs.create true
-    - run: poetry install --no-interaction
-    # Run fast tests only (skip slow tests marked with @pytest.mark.slow)
-    - run: poetry run pytest cje/tests/ -m "not slow" --cov=cje --cov-report=term
+      - uses: actions/checkout@v4
+      # Poetry must exist before setup-python so cache: poetry can locate
+      # its virtualenvs directory (keyed on poetry.lock + python version).
+      - name: Install pinned Poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: poetry
+      - name: Verify lockfile
+        run: poetry check --lock
+      - name: Install locked dependencies
+        run: poetry install --sync --no-interaction
+      - name: Run fast suite
+        run: >-
+          poetry run python -m pytest cje/tests
+          -m "not slow"
+          --cov=cje
+          --cov-report=term-missing
+          --cov-report=xml
+          --cov-fail-under=85
 
-  lint:
+  quality:
+    name: Format and types
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-    - name: Install Poetry
-      run: pipx install poetry==1.8.5
-    - name: Cache Poetry dependencies
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/pypoetry
-        key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-poetry-
-    - run: poetry config virtualenvs.create true
-    - run: poetry install --no-interaction
-    - run: poetry run black --check cje
-    - run: poetry run mypy cje
+      - uses: actions/checkout@v4
+      # Poetry must exist before setup-python so cache: poetry can locate
+      # its virtualenvs directory (keyed on poetry.lock + python version).
+      - name: Install pinned Poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: poetry
+      - name: Verify lockfile
+        run: poetry check --lock
+      - name: Install locked dependencies
+        run: poetry install --sync --no-interaction
+      - name: Check formatting
+        run: poetry run black --check cje
+      - name: Check types
+        run: poetry run mypy cje

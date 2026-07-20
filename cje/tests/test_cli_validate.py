@@ -229,6 +229,78 @@ class TestValidateCLI:
         assert exit_code == 1
         assert "not found" in capsys.readouterr().err
 
+    def test_calibration_scale_declarations_match_analyze_flags(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        records = [
+            {
+                "prompt_id": f"p{i}",
+                "judge_score": 100 * i / 59,
+                "oracle_label": 100 * i / 59,
+            }
+            for i in range(60)
+        ]
+        calibration = tmp_path / "calibration.jsonl"
+        _write_jsonl(calibration, records)
+
+        assert _run_cli(monkeypatch, "validate", str(calibration)) == 1
+        assert "Calibration sources default to [0, 1]" in capsys.readouterr().out
+
+        exit_code = _run_cli(
+            monkeypatch,
+            "validate",
+            str(calibration),
+            "--judge-scale",
+            "0",
+            "100",
+            "--oracle-scale",
+            "0",
+            "100",
+        )
+
+        assert exit_code == 0
+        out = capsys.readouterr().out
+        assert "--calibration-judge-scale 0 100" in out
+        assert "--calibration-oracle-scale 0 100" in out
+
+    def test_alias_conflict_is_reported_as_a_finding(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        records = _fresh_records("calib", n=10)
+        records[0]["metadata"] = {"judge_score": 0.9}
+        path = tmp_path / "conflict.jsonl"
+        _write_jsonl(path, records)
+
+        exit_code = _run_cli(monkeypatch, "validate", str(path), "--verbose")
+
+        captured = capsys.readouterr()
+        assert exit_code == 1
+        assert "Conflicting field 'judge_score'" in captured.out
+        assert "Error validating dataset" not in captured.err
+
+    def test_judge_only_file_without_policy_is_not_claimed_ready(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        records = _fresh_records("policy_a", n=10, with_oracle=False)
+        path = tmp_path / "ambiguous.jsonl"
+        _write_jsonl(path, records)
+
+        exit_code = _run_cli(monkeypatch, "validate", str(path))
+
+        out = capsys.readouterr().out
+        assert exit_code == 1
+        assert "neither target_policy values nor oracle labels" in out
+        assert "valid as a calibration source" not in out
+
 
 # ---------------------------------------------------------------------------
 # validate_direct_data (the library function)
@@ -255,23 +327,41 @@ class TestValidateDirectData:
         assert not is_valid
         assert any("target_policy" in issue for issue in issues)
 
-    def test_zero_oracle_labels_is_an_issue_pointing_at_calibration_data(
+    def test_zero_oracle_labels_is_an_uncalibrated_note(
         self,
     ) -> None:
         records = _fresh_records("policy_a", n=30, with_oracle=False)
         is_valid, issues = validate_direct_data(records)
-        assert not is_valid
+        assert is_valid
         assert any(
-            "No oracle labels" in issue and "calibration" in issue for issue in issues
+            issue.startswith(NOTE_PREFIX)
+            and "No oracle labels" in issue
+            and "UNCALIBRATED" in issue
+            for issue in issues
         )
 
-    def test_under_ten_oracle_labels_is_an_issue(self) -> None:
+    def test_under_four_oracle_clusters_is_an_uncalibrated_note(self) -> None:
         records = _fresh_records("policy_a", n=30, with_oracle=False)
-        for record in records[:5]:
+        for record in records[:3]:
             record["oracle_label"] = 0.5
         is_valid, issues = validate_direct_data(records)
-        assert not is_valid
-        assert any("Too few oracle samples (5)" in issue for issue in issues)
+        assert is_valid
+        assert any(
+            issue.startswith(NOTE_PREFIX)
+            and "Too few independent oracle prompt clusters (3" in issue
+            for issue in issues
+        )
+
+    def test_eight_oracle_clusters_is_valid_with_a_small_sample_note(self) -> None:
+        records = _fresh_records("policy_a", n=30, with_oracle=False)
+        for record in records[:8]:
+            record["oracle_label"] = 0.5
+        is_valid, issues = validate_direct_data(records)
+        assert is_valid, issues
+        assert any(
+            issue.startswith(NOTE_PREFIX) and "8 oracle samples" in issue
+            for issue in issues
+        )
 
     def test_ten_to_fifty_oracle_labels_is_a_note_not_an_issue(self) -> None:
         records = _fresh_records("policy_a", n=100, with_oracle=False)
@@ -328,3 +418,27 @@ class TestValidateDirectData:
         assert any(
             "oracle_label" in issue and "non-numeric" in issue for issue in issues
         )
+
+    def test_calibration_scale_must_be_declared_but_fresh_scale_can_be_observed(
+        self,
+    ) -> None:
+        calibration = [
+            {
+                "prompt_id": f"p{i}",
+                "judge_score": 100 * i / 59,
+                "oracle_label": 100 * i / 59,
+            }
+            for i in range(60)
+        ]
+        is_valid, issues = validate_direct_data(calibration)
+        assert not is_valid
+        assert any("Calibration sources default to [0, 1]" in issue for issue in issues)
+
+        is_valid, issues = validate_direct_data(
+            calibration, judge_scale=(0, 100), oracle_scale=(0, 100)
+        )
+        assert is_valid, issues
+
+        fresh = [dict(record, target_policy="policy_a") for record in calibration]
+        is_valid, issues = validate_direct_data(fresh)
+        assert is_valid, issues

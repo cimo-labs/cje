@@ -8,7 +8,7 @@ It supports monotone and flexible two-stage calibration.
 from typing import Dict, List, Any, Optional, Tuple, Literal, cast, Callable
 import numpy as np
 from ..data.models import Dataset, Sample
-from .judge import JudgeCalibrator, CalibrationResult, resolve_n_folds
+from .judge import JudgeCalibrator, CalibrationResult
 
 
 # Auto-computable covariates registry
@@ -44,7 +44,8 @@ def calibrate_dataset(
         oracle_field: Field name in metadata containing oracle labels
         enable_cross_fit: Must be True (the default). Cross-fitted calibration
                          is the only mode since 0.5.0; passing False raises.
-        n_folds: Number of CV folds (auto-reduced when labels are scarce)
+        n_folds: Number of CV folds (auto-reduced when labeled prompt
+                 clusters are scarce; metadata records the count actually used)
         calibration_mode: Calibration mode ('auto', 'monotone', 'two_stage').
                          If None, defaults to 'two_stage' when covariates present,
                          'auto' otherwise.
@@ -227,11 +228,6 @@ def calibrate_dataset(
     oracle_coverage = len(oracle_labels_array) / len(dataset.samples)
     has_full_coverage = oracle_coverage >= 1.0
 
-    # Auto-reduce the fold count when labels are scarce, so the reduced
-    # value is what lands in the calibration metadata below (fit_cv applies
-    # the same rule and would be a no-op after this).
-    n_folds = resolve_n_folds(len(oracle_labels_array), n_folds)
-
     # Determine calibration mode
     if calibration_mode is None:
         # Default based on whether we have covariates
@@ -259,6 +255,11 @@ def calibrate_dataset(
         prompt_ids=prompt_ids,
         covariates=covariates_array,
     )
+
+    # fit_cv auto-reduces the fold count when unique oracle prompt clusters
+    # (not just labels) are scarce; record the fold count actually used so
+    # the metadata below matches the cross-fit that ran.
+    n_folds = calibrator.n_folds
 
     # Create new samples with calibrated rewards
     calibrated_samples = []

@@ -22,9 +22,10 @@ The recommended loop is:
    - Yes -> deploy
 5. Deploy
 6. Monitor with new oracle labels and residuals
-7. Drift gate: CI on mean residual excludes 0?
-   - No -> keep monitoring (Step 6)
-   - Yes -> inspect failure patterns, improve judge/oracle, then return to Step 1
+7. Residual-equivalence gate: is the simultaneous CI wholly inside a predeclared practical bias margin?
+   - Yes (`PASS`) -> keep monitoring (Step 6)
+   - No (`FAIL`) -> inspect failure patterns, collect target labels, then return to Step 1
+   - Unresolved (`INCONCLUSIVE`) -> collect more independent probes or narrow the claim
 
 Two-loop framing:
 - **Inner calibration loop:** Steps 1-4
@@ -72,7 +73,22 @@ p-values).
 
 ## 2) Run a Transport Audit (Probe Protocol)
 
-Use a small oracle-labeled probe slice (typically 40-60 rows) on the target policy/group. `results.calibrator` is the fitted calibration model returned by `analyze_dataset` in Section 1.
+Use oracle-labeled probes that were not used to fit the calibrator. Sample them according to a documented probability design on each deployment-relevant policy/group. At least 20 effective independent clusters are required to grade the audit; the needed sample size is otherwise determined by the desired CI width and practical margin. Pass `TransportAuditConfig` to `analyze_dataset` to store every policy's state and merge an observed `FAIL` into the result gate:
+
+```python
+import json
+from cje import TransportAuditConfig, analyze_dataset
+
+probe = [json.loads(line) for line in open("probes/policy_gpt56mini.jsonl")]
+transport = TransportAuditConfig(
+    probes_by_policy={"gpt-5.6-mini": probe},
+    delta_max_by_policy={"gpt-5.6-mini": 0.03},  # OUTPUT units (units of results.estimates)
+    family_size=4,
+)
+results = analyze_dataset(fresh_draws_data=draws, transport=transport)
+```
+
+`results.calibrator` is the fitted public-unit calibration facade returned by `analyze_dataset`. The lower-level form is useful when the result already exists:
 
 ```python
 import json
@@ -83,18 +99,27 @@ diag = audit_transportability(
     calibrator=results.calibrator,
     probe_samples=probe,
     group_label="policy:gpt-5.6-mini",
+    delta_max=0.03,  # practical mean-bias margin, probe oracle-label units
+    family_size=4,   # all policy/group audits used in this decision
 )
 
 print(diag.summary())
-# Transport: PASS/WARN/FAIL | Group: ... | N=... | δ̂: ... | Action: ...
+# Residual transport: PASS/FAIL/INCONCLUSIVE/NOT_GRADED | Group: ...
 ```
 
 ### Audit Thresholds
 
-The classifier uses:
-- `PASS`: `0` is inside the 95% CI for `δ̂ = E[Y - f(S)]`
-- `WARN`: CI excludes 0, and `abs(δ̂) < 0.05`
-- `FAIL`: CI excludes 0, and `abs(δ̂) >= 0.05`
+Predeclare `delta_max` from the smallest mean bias that would change the operational decision. The classifier uses a prompt-clustered CI for `delta = E[Y - f(S, X)]`, Bonferroni-adjusted by `family_size`:
+
+- `PASS`: the entire simultaneous CI lies inside `[-delta_max, +delta_max]` — requires at least 20 effective clusters.
+- `FAIL`: the entire simultaneous CI lies outside that interval on either side. FAIL is graded even below the effective-cluster floor: a decisive out-of-margin interval is evidence of unacceptable bias, not low power, so an under-sized probe cannot defeat the hard gate.
+- `INCONCLUSIVE`: the CI overlaps a margin boundary, or there are fewer than 20 effective clusters without the CI being decisively outside.
+- `NOT_GRADED`: probes were evaluated but no practical margin was declared (the audit emits a `FutureWarning` for one release cycle — 0.5.x graded the same call under a zero-null test).
+- `NOT_CHECKED`: no independent probe was supplied for that policy.
+
+Pass `cluster_ids` when rows share an independence unit, `sample_weights` for unequal-probability probes, and the same fitted covariates used by the calibrator. Score-bin occupancy and decile residual plots are descriptive only; they never determine the verdict.
+
+The automatic boundary card is not this audit. It checks scalar judge-score range extrapolation only and cannot establish residual transport, covariate support, or ranking validity.
 
 ---
 
@@ -103,27 +128,35 @@ The classifier uses:
 ### PASS
 
 Interpretation:
-- No statistically detectable mean bias on the probe group (`0` inside CI).
+- The simultaneous CI establishes mean residual bias within the declared practical margin for this probe population and audit family.
 
 Action:
-- Reuse calibrator for current cycle (equivalent to Step 7 "No drift").
+- Proceed only with the claim and population covered by the declared audit.
 - Keep normal monitoring cadence.
 - Optionally merge probe labels into calibration history for the next cycle.
 
-### WARN
+### INCONCLUSIVE
 
 Interpretation:
-- Detectable but small bias.
+- The evidence does not resolve the declared margin, or the effective cluster count is below 20.
 
 Action:
-- Increase probe size next cycle.
+- Collect more independent probability-sampled probes.
 - Inspect residual structure by decile.
-- Consider anchoring updates through pooled recalibration if WARN persists.
+- Narrow the target population or relax the claim only with substantive justification.
+
+### NOT_GRADED
+
+Interpretation:
+- No practical margin was supplied, so the residual estimate and CI are descriptive.
+
+Action:
+- Declare the decision-relevant margin before treating the audit as a gate.
 
 ### FAIL
 
 Interpretation:
-- Clear bias; do not rely on unchanged calibrator for high-stakes decisions.
+- Mean residual bias is established outside the declared margin for the audited population.
 
 Action:
 - Follow the correction protocol in Section 5 (collect labels → EIF correction → escalate to refit if needed).
@@ -131,9 +164,9 @@ Action:
 
 ---
 
-## 4) Incorporate New Audit Data When Audits PASS
+## 4) Incorporate New Audit Data After an Audit Cycle
 
-When probe results pass, treat probe labels as additional calibration signal for future runs.
+After recording the held-out audit result, probe labels may become calibration data for a later cycle. Do not use the same rows both to fit a calibrator and to claim an independent audit of that fit.
 
 Recommended pattern:
 1. Append validated probe labels to a maintained calibration dataset.
@@ -146,11 +179,11 @@ Recommended pattern:
 ### Step A: Collect more target-policy oracle labels
 
 - Sample 100-200 labels across score deciles (not only difficult prompts).
-- Keep labeling random within strata to preserve ignorability.
+- Keep labeling random within predeclared strata, retain inclusion probabilities, and use analysis weights when probabilities differ. The sampling design supports the argument; a KS score-balance check cannot prove ignorability.
 
 ### Step B: Apply policy-specific EIF correction (default)
 
-Re-run `analyze_dataset` with the expanded oracle labels pooled in (same pattern as Section 4). The augmented estimator (`use_augmented_estimator=True`) automatically applies per-policy residual correction using the new labels — this fixes mean drift without refitting the calibrator.
+Re-run `analyze_dataset` with the expanded oracle labels pooled in (same pattern as Section 4). The augmented estimator (`use_augmented_estimator=True`) estimates a policy-specific mean residual correction under the stated sampling assumptions. It does not by itself establish transport to a different policy or future cycle.
 
 ### Step C: Escalate to refit if residuals show structural drift
 
@@ -181,7 +214,7 @@ variance_model = fit_variance_model(
     verbose=True,
 )
 
-# No pilot yet? Use simulation instead:
+# No pilot yet? Use a scenario-specific simulation instead:
 # from cje.diagnostics import simulate_variance_model
 # variance_model = simulate_variance_model(r2=0.7, verbose=True)
 
@@ -203,14 +236,16 @@ print(plan_target.total_cost)
 
 ### Label budgeting rules
 
-- Always sample oracle labels randomly (or randomly within strata).
+- Sample oracle labels randomly (or randomly within predeclared strata), record inclusion probabilities, and weight unequal-probability samples.
 - Use real dollar costs in `CostModel`.
 - Refit the variance model periodically with new pilot/production evidence.
-- If audit FAIL frequency rises, increase planned `m_oracle` and rerun planning.
+- If audit `FAIL` frequency rises, revisit the target population and calibration design before increasing `m_oracle` and rerunning planning.
 
-### Planning caveats (read before trusting the numbers)
+### Planning caveats
 
 - MDE assumes independent policies; paired evals on a shared prompt set typically detect smaller differences (plans are conservative).
+- Reported variance shares are specific to the returned allocation: `(sigma2_eval/n) / V` and `(sigma2_cal/m) / V`. Raw fitted coefficients are not variance shares.
+- Simulation planning is specific to its synthetic data-generating process. Keep the returned `scenario_fingerprint`, vary plausible inputs, and do not present a single simulated budget as an empirical guarantee.
 - Variance components are measured with the analytic cluster-robust + OUA instrument, which tracked the realized SE of the production estimator within ~5% at every allocation in a pilot-scale validation grid (instrument experiment 2026-07-07, R=400 replicates/cell). Budgets planned with pre-0.5.1 versions used a bootstrap instrument that ran 15-29% hot at pilot-sized label counts — those older budgets were inflated upper bounds; re-running planning on the same pilot will typically return ~15-20% smaller budgets.
 
 ---
@@ -220,7 +255,7 @@ print(plan_target.total_cost)
 Per evaluation cycle:
 1. Run `analyze_dataset(...)` with bootstrap inference.
 2. Run transport audit on each deployment-relevant target policy.
-3. Route by PASS/WARN/FAIL using Section 3.
+3. Route by `PASS` / `FAIL` / `INCONCLUSIVE` / `NOT_GRADED` using Section 3.
 4. Merge accepted audit labels into calibration history.
 5. Re-run planning quarterly (or after judge/oracle regime changes).
 
@@ -230,6 +265,7 @@ Per evaluation cycle:
 
 - Inference: `inference_method="bootstrap"`, `n_bootstrap=2000`
 - Debiasing: `use_augmented_estimator=True`
-- Probe size: 40-60 oracle labels per target group
-- FAIL response: collect 100-200 target labels, re-run with pooled labels (EIF correction is automatic); escalate to refit if residuals are score-conditional
+- Audit margin: predeclare `delta_max` — probe oracle-label units for the low-level audit, OUTPUT units (the units of `results.estimates`) for `TransportAuditConfig` margins
+- Probe design: held out, probability sampled, at least 20 effective independent clusters; size for the desired CI width
+- FAIL response: collect target labels under a documented sampling design, re-run with pooled labels, and escalate to refit if residuals are score- or covariate-conditional
 - Planning: `fit_variance_model` + `plan_evaluation` / `plan_for_mde`
