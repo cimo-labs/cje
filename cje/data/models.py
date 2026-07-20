@@ -8,7 +8,7 @@ from enum import Enum
 from html import escape
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Set, Tuple, cast
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -222,6 +222,10 @@ class EstimationResult(BaseModel):
         default=None,
         description="Estimand and scale contract shared by every result artifact",
     )
+
+    # best_policy() logs its demotion warning once per result instance;
+    # summary()/renderers re-deriving the verdict must not repeat it.
+    _demotion_warned: bool = PrivateAttr(default=False)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -574,12 +578,14 @@ class EstimationResult(BaseModel):
         _, rel_name = max((float(estimates[i]), policy) for i, policy in reliable)
         rel_idx = policies.index(rel_name)
         runner_up_reasons = self._flagged_reasons(best_name)
-        logger.warning(
-            f"best_policy(): raw argmax '{best_name}' was flagged "
-            f"({'; '.join(runner_up_reasons)}); returning best reliable "
-            f"policy '{rel_name}'. Pass reliable_only=False for the raw "
-            f"argmax."
-        )
+        if not self._demotion_warned:
+            self._demotion_warned = True
+            logger.warning(
+                f"best_policy(): raw argmax '{best_name}' was flagged "
+                f"({'; '.join(runner_up_reasons)}); returning best reliable "
+                f"policy '{rel_name}'. Pass reliable_only=False for the raw "
+                f"argmax."
+            )
         return PolicyVerdict(
             name=rel_name,
             index=rel_idx,

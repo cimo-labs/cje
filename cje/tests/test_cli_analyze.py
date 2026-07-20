@@ -139,6 +139,11 @@ class TestAnalyzeSurface:
         assert args.calibration_oracle_scale == [1.0, 5.0]
         assert args.output_scale == [0.0, 10.0]
         assert args.strict is True
+        assert args.on_invalid == "error"  # loud by default
+
+    def test_on_invalid_option_parses(self) -> None:
+        args = create_parser().parse_args(["analyze", "draws/", "--on-invalid", "drop"])
+        assert args.on_invalid == "drop"
 
     def test_directory_positional_runs(
         self,
@@ -263,7 +268,51 @@ class TestAnalyzeSurface:
         assert exit_code == 0
         assert "policy_a" in capsys.readouterr().out
 
-    def test_single_file_default_drops_invalid_rows_but_strict_fails(
+    def test_single_file_invalid_rows_error_by_default_with_line_context(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Loud by default (matching analyze_dataset): an invalid record
+        fails the run and names the file and line; --strict is the
+        compatible spelling of the same default."""
+        records = _fresh_records("policy_a", n=30, with_oracle=True)
+        records.append(
+            {
+                "prompt_id": "missing-policy",
+                "judge_score": 0.5,
+                "oracle_label": 0.5,
+            }
+        )
+        path = tmp_path / "fresh_draws.jsonl"
+        path.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+
+        assert _run_cli(monkeypatch, "analyze", str(path)) == 1
+        err = capsys.readouterr().err
+        assert "missing 'target_policy'" in err
+        assert f"{path}:31" in err
+
+        assert _run_cli(monkeypatch, "analyze", str(path), "--strict") == 1
+        assert "missing 'target_policy'" in capsys.readouterr().err
+
+    def test_single_file_corrupt_json_line_errors_by_default(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        records = _fresh_records("policy_a", n=30, with_oracle=True)
+        path = tmp_path / "fresh_draws.jsonl"
+        path.write_text(
+            "\n".join(json.dumps(record) for record in records) + "\n{not json\n"
+        )
+
+        assert _run_cli(monkeypatch, "analyze", str(path)) == 1
+        err = capsys.readouterr().err
+        assert f"Invalid JSON at {path}:31" in err
+
+    def test_single_file_on_invalid_drop_opts_in_and_reports_count(
         self,
         tmp_path: Path,
         capsys: pytest.CaptureFixture,
@@ -280,11 +329,26 @@ class TestAnalyzeSurface:
         path = tmp_path / "fresh_draws.jsonl"
         path.write_text("\n".join(json.dumps(record) for record in records) + "\n")
 
-        assert _run_cli(monkeypatch, "analyze", str(path)) == 0
-        capsys.readouterr()
+        exit_code = _run_cli(monkeypatch, "analyze", str(path), "--on-invalid", "drop")
 
-        assert _run_cli(monkeypatch, "analyze", str(path), "--strict") == 1
-        assert "missing 'target_policy'" in capsys.readouterr().err
+        assert exit_code == 0
+        assert "Dropped 1 invalid record(s)" in capsys.readouterr().out
+
+    def test_strict_conflicts_with_on_invalid_drop(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        path = tmp_path / "fresh_draws.jsonl"
+        _write_fresh_draws_file(path, ("policy_a",), with_oracle=True)
+
+        exit_code = _run_cli(
+            monkeypatch, "analyze", str(path), "--strict", "--on-invalid", "drop"
+        )
+
+        assert exit_code == 1
+        assert "--strict conflicts with --on-invalid drop" in capsys.readouterr().err
 
     def test_transport_probe_and_margin_options(
         self,

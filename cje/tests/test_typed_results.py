@@ -218,6 +218,30 @@ class TestBestPolicyVerdict:
         assert verdict.runner_up == "bad"
         assert verdict.runner_up_reasons == ["diagnostics status CRITICAL"]
 
+    def test_demotion_warning_logged_once_per_result(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The demotion warning fires on the first best_policy() call only:
+        summary() and renderers re-derive the verdict without re-warning."""
+        result = _make_result(
+            [0.771, 0.756],
+            ["unhelpful", "base"],
+            gates={"unhelpful": _gate(True), "base": _gate(False)},
+        )
+        with caplog.at_level(logging.WARNING, logger="cje.data.models"):
+            first = result.best_policy()
+            result.summary()  # re-derives the verdict internally
+            second = result.best_policy()
+        warnings_logged = [
+            record
+            for record in caplog.records
+            if "raw argmax 'unhelpful' was flagged" in record.message
+        ]
+        assert len(warnings_logged) == 1
+        # The verdict itself stays loud and identical on repeat calls.
+        assert first == second
+        assert second.runner_up == "unhelpful"
+
     def test_all_nan_raises(self) -> None:
         result = _make_result([float("nan"), float("nan")], ["a", "b"])
         with pytest.raises(ValueError, match="No usable estimates"):

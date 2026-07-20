@@ -261,6 +261,72 @@ def test_oua_recomputes_augmented_functional_not_only_plugin() -> None:
     ] == pytest.approx(oracle_jackknife_variance(actual))
 
 
+def test_refit_with_new_fresh_draws_recomputes_oua_variance() -> None:
+    """Regression: the OUA jackknife matrix cache must be invalidated by
+    add_fresh_draws/fit, so refitting on different evaluation draws cannot
+    reuse the first run's OUA variances."""
+    scores = np.linspace(0.05, 0.95, 20)
+    outcomes = np.clip(
+        0.15 + 0.7 * scores + 0.15 * np.sin(np.arange(len(scores))), 0.0, 1.0
+    )
+    labels = [
+        float(outcome) if index % 2 == 0 else None
+        for index, outcome in enumerate(outcomes)
+    ]
+    calibration = Dataset(
+        target_policies=["A"],
+        samples=[
+            Sample(
+                prompt_id=f"p{index}",
+                prompt="",
+                response="",
+                reward=None,
+                judge_score=float(score),
+                oracle_label=labels[index],
+            )
+            for index, score in enumerate(scores)
+        ],
+    )
+    _, fitted = calibrate_dataset(calibration)
+
+    def _unlabeled_draws(prefix: str, values: np.ndarray) -> FreshDrawDataset:
+        return FreshDrawDataset(
+            target_policy="A",
+            samples=[
+                FreshDrawSample(
+                    prompt_id=f"{prefix}{index}",
+                    target_policy="A",
+                    judge_score=float(value),
+                    oracle_label=None,
+                    response=None,
+                    draw_idx=0,
+                )
+                for index, value in enumerate(values)
+            ],
+        )
+
+    estimator = CalibratedDirectEstimator(
+        target_policies=["A"],
+        reward_calibrator=fitted.calibrator,
+        inference_method="cluster_robust",
+    )
+    estimator.add_fresh_draws("A", _unlabeled_draws("e", scores))
+    first = estimator.fit_and_estimate()
+    first_jackknife = estimator.get_oracle_jackknife("A")
+
+    estimator.add_fresh_draws(
+        "A", _unlabeled_draws("f", np.clip(scores + 0.25, 0.0, 1.0))
+    )
+    second = estimator.fit_and_estimate()
+    second_jackknife = estimator.get_oracle_jackknife("A")
+
+    assert first_jackknife is not None and second_jackknife is not None
+    assert not np.allclose(first_jackknife, second_jackknife)
+    first_var = first.metadata["se_components"]["oracle_variance_per_policy"]["A"]
+    second_var = second.metadata["se_components"]["oracle_variance_per_policy"]["A"]
+    assert first_var != pytest.approx(second_var)
+
+
 def test_unavailable_oua_does_not_claim_variance_or_cap_df() -> None:
     class NoFoldCalibrator:
         covariate_names = None
@@ -291,6 +357,72 @@ def test_unavailable_oua_does_not_claim_variance_or_cap_df() -> None:
         result.metadata["degrees_of_freedom"]["A"]["oracle_jackknife_status"]
         == "unavailable"
     )
+
+
+def test_explicit_cluster_robust_coupled_warning_requires_calibrator_use(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The dropped-covariance warning is only meaningful when some policy
+    actually depends on the calibrator: with complete oracle coverage every
+    policy routes direct_oracle, so the warning must stay silent."""
+    scores = np.linspace(0.2, 0.7, 20)
+    calibration = Dataset(
+        target_policies=[],
+        samples=[
+            Sample(
+                prompt_id=f"c{i}",
+                prompt="",
+                response="",
+                reward=None,
+                judge_score=float(score),
+                oracle_label=float(score),
+            )
+            for i, score in enumerate(scores)
+        ],
+    )
+    _, fitted = calibrate_dataset(calibration)
+    coupled_message = "drop the calibration-evaluation covariance"
+
+    def _estimator() -> CalibratedDirectEstimator:
+        return CalibratedDirectEstimator(
+            target_policies=["A"],
+            reward_calibrator=fitted.calibrator,
+            inference_method="cluster_robust",
+        )
+
+    # Fully labeled draws: coupled frames, but the direct_oracle route uses
+    # no calibrator predictions — no covariance term is being dropped.
+    fully_labeled = _estimator()
+    fully_labeled.add_fresh_draws("A", _fresh("A", scores, labeled=True))
+    with caplog.at_level(logging.WARNING, logger="cje.estimators.direct_method"):
+        result = fully_labeled.fit_and_estimate()
+    assert result.metadata["point_estimator"]["routes"] == ["direct_oracle"]
+    assert not any(coupled_message in record.message for record in caplog.records)
+
+    caplog.clear()
+
+    # Partially labeled draws depend on the calibrator: the warning stays.
+    partially_labeled = _estimator()
+    partially_labeled.add_fresh_draws(
+        "A",
+        FreshDrawDataset(
+            target_policy="A",
+            samples=[
+                FreshDrawSample(
+                    prompt_id=f"p{index}",
+                    target_policy="A",
+                    judge_score=float(value),
+                    oracle_label=float(value) if index % 2 == 0 else None,
+                    response=None,
+                    draw_idx=0,
+                )
+                for index, value in enumerate(scores)
+            ],
+        ),
+    )
+    with caplog.at_level(logging.WARNING, logger="cje.estimators.direct_method"):
+        partially_labeled.fit_and_estimate()
+    assert any(coupled_message in record.message for record in caplog.records)
 
 
 def test_underclustered_bootstrap_policy_blocks_pairwise_fallback() -> None:

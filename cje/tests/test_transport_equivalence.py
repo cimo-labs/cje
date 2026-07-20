@@ -1,5 +1,6 @@
 """Regression tests for residual-transport equivalence grading."""
 
+import logging
 import warnings
 
 import numpy as np
@@ -263,6 +264,91 @@ def test_high_level_transport_records_all_graded_states() -> None:
     assert restored.diagnostics.transport_status_per_policy == (
         result.diagnostics.transport_status_per_policy
     )
+
+
+def test_high_level_unmargined_probe_gets_info_not_future_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Explicit TransportAuditConfig callers are new-API users, not 0.5.x
+    migration cases: an unmargined probe records NOT_GRADED with a concise
+    info note, without the module-level FutureWarning. Direct
+    audit_transportability calls keep the FutureWarning (pinned above)."""
+    config = TransportAuditConfig(
+        probes_by_policy={"policy": _policy_probe("policy", 30)}
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with caplog.at_level(logging.INFO, logger="cje.interface.analysis"):
+            result = analyze_dataset(
+                fresh_draws_data={"policy": _labeled_policy("policy")},
+                estimator_config={"inference_method": "cluster_robust"},
+                transport=config,
+            )
+
+    assert result.metadata["transport_audits"]["policy"]["status"] == "NOT_GRADED"
+    assert not any(
+        issubclass(warning.category, FutureWarning)
+        and "NOT_GRADED and can never PASS or FAIL" in str(warning.message)
+        for warning in caught
+    )
+    assert any(
+        "descriptive-only (NOT_GRADED)" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_transport_fail_marks_only_failing_policy_when_statuses_absent() -> None:
+    """A transport FAIL must not fabricate GOOD statuses for policies that
+    were never assessed: only the failing policy gets a (CRITICAL) entry."""
+    from cje.data.models import EstimationResult
+    from cje.data.normalization import unit_scale
+    from cje.diagnostics import DirectDiagnostics
+    from cje.interface.analysis import _attach_transport_audits
+
+    policies = ["fail", "other"]
+    diagnostics = DirectDiagnostics(
+        estimator_type="Direct",
+        method="calibrated_direct",
+        n_samples_total=60,
+        n_samples_valid=60,
+        policies=policies,
+        estimates={"fail": 0.4, "other": 0.4},
+        standard_errors={"fail": 0.01, "other": 0.01},
+        n_samples_used={policy: 30 for policy in policies},
+    )
+    assert diagnostics.status_per_policy is None  # never assessed
+    result = EstimationResult(
+        estimates=np.array([0.4, 0.4]),
+        standard_errors=np.array([0.01, 0.01]),
+        n_samples_used={policy: 30 for policy in policies},
+        method="calibrated_direct",
+        influence_functions=None,
+        diagnostics=diagnostics,
+        calibrator=_IdentityCalibrator(),
+        metadata={"target_policies": policies},
+    )
+    config = TransportAuditConfig(
+        probes_by_policy={"fail": _policy_probe("fail", 30, shift=0.2)},
+        delta_max_by_policy={"fail": 0.05},
+    )
+
+    _attach_transport_audits(
+        result,
+        config=config,
+        target_policies=policies,
+        calibration_dataset=None,
+        judge_field="judge_score",
+        oracle_field="oracle_label",
+        oracle_input_scale=unit_scale(),
+        output_scale=unit_scale(),
+    )
+
+    assert result.metadata["transport_audits"]["fail"]["status"] == "FAIL"
+    assert result.diagnostics is not None
+    # Only the audited-and-failed policy carries a status; "other" stays
+    # absent instead of being recorded as GOOD.
+    assert result.diagnostics.status_per_policy == {"fail": Status.CRITICAL}
 
 
 def test_high_level_transport_transforms_probe_labels_to_output_scale() -> None:

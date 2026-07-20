@@ -9,6 +9,7 @@ metadata.
 """
 
 import logging
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
@@ -1012,16 +1013,31 @@ def _attach_transport_audits(
             probes.append(canonical)
 
         assert config is not None
-        diagnostic = audit_transportability(
-            results.calibrator,
-            probes,
-            bins=config.bins,
-            group_label=f"policy:{policy}",
-            alpha=config.alpha,
-            delta_max=config.delta_max_by_policy.get(policy),
-            family_size=config.resolved_family_size,
-            min_effective_clusters=config.min_effective_clusters,
-        )
+        delta_max = config.delta_max_by_policy.get(policy)
+        if delta_max is None:
+            # An explicit TransportAuditConfig is the new 0.6.0 API — not a
+            # 0.5.x migration case — so the module-level FutureWarning about
+            # the vocabulary change does not apply. Note the consequence
+            # concisely instead; direct audit_transportability calls keep
+            # the FutureWarning.
+            logger.info(
+                "Transport probe for policy %r has no delta_max margin: the "
+                "audit is descriptive-only (NOT_GRADED).",
+                policy,
+            )
+        with warnings.catch_warnings():
+            if delta_max is None:
+                warnings.simplefilter("ignore", FutureWarning)
+            diagnostic = audit_transportability(
+                results.calibrator,
+                probes,
+                bins=config.bins,
+                group_label=f"policy:{policy}",
+                alpha=config.alpha,
+                delta_max=delta_max,
+                family_size=config.resolved_family_size,
+                min_effective_clusters=config.min_effective_clusters,
+            )
         audits[policy] = {
             **diagnostic.to_dict(),
             "performed": True,
@@ -1053,9 +1069,11 @@ def _attach_transport_audits(
                 reasons.append(reason)
             gate["reasons"] = reasons
             if results.diagnostics is not None:
-                statuses = results.diagnostics.status_per_policy or {
-                    name: Status.GOOD for name in target_policies
-                }
+                # Only the audited-and-failed policy gets a status here;
+                # never-assessed policies stay absent rather than being
+                # recorded as GOOD. Consumers read status_per_policy with
+                # .get()/items(), so missing keys are fine.
+                statuses = dict(results.diagnostics.status_per_policy or {})
                 statuses[policy] = Status.CRITICAL
                 results.diagnostics.status_per_policy = statuses
 

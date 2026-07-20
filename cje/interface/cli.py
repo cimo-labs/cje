@@ -148,7 +148,19 @@ def create_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument(
         "--strict",
         action="store_true",
-        help="Fail on an invalid record instead of dropping it",
+        help=(
+            "Fail on an invalid record (the default; kept for 0.5.x " "compatibility)"
+        ),
+    )
+
+    analyze_parser.add_argument(
+        "--on-invalid",
+        choices=["error", "drop"],
+        default="error",
+        help=(
+            "Invalid-record policy: 'error' (default) fails with file/line "
+            "context; 'drop' skips invalid records and reports the count"
+        ),
     )
 
     analyze_parser.add_argument(
@@ -166,8 +178,8 @@ def create_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="POLICY=DELTA",
         help=(
-            "Practical absolute residual margin in oracle/output units; "
-            "repeat per audited policy"
+            "Practical absolute residual margin in output units (the units "
+            "of result.estimates); repeat per audited policy"
         ),
     )
     analyze_parser.add_argument(
@@ -330,32 +342,31 @@ _LOGPROB_FIELDS = (
 _LOGPROB_SCAN_LIMIT = 100
 
 
-def _records_have_logprob_fields(records: list) -> bool:
-    return any(
-        field in record
-        for record in records[:_LOGPROB_SCAN_LIMIT]
-        for field in _LOGPROB_FIELDS
-    )
+def _file_has_logprob_fields(file_path: Path) -> bool:
+    """Scan the leading records of a JSONL file for logprob fields."""
+    with open(file_path) as f:
+        for i, line in enumerate(f):
+            if i >= _LOGPROB_SCAN_LIMIT:
+                break
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                return False  # Leave loud parsing errors to the real loader
+            if isinstance(record, dict) and any(
+                field in record for field in _LOGPROB_FIELDS
+            ):
+                return True
+    return False
 
 
 def _dir_has_logprob_fields(directory: Path) -> bool:
     """Scan the leading records of each JSONL file in a fresh-draws dir."""
-    for file_path in sorted(directory.rglob("*.jsonl")):
-        with open(file_path) as f:
-            for i, line in enumerate(f):
-                if i >= _LOGPROB_SCAN_LIMIT:
-                    break
-                if not line.strip():
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    break  # Leave loud parsing errors to the real loader
-                if isinstance(record, dict) and any(
-                    field in record for field in _LOGPROB_FIELDS
-                ):
-                    return True
-    return False
+    return any(
+        _file_has_logprob_fields(file_path)
+        for file_path in sorted(directory.rglob("*.jsonl"))
+    )
 
 
 def run_analysis(args: argparse.Namespace) -> int:
@@ -381,6 +392,15 @@ def run_analysis(args: argparse.Namespace) -> int:
                 "JSONL file) or --fresh-draws-dir PATH."
             )
 
+        # Loud by default, matching analyze_dataset: invalid records error
+        # with file/line context unless --on-invalid drop opts into dropping
+        # (--strict is the compatible spelling of the default).
+        if args.strict and args.on_invalid == "drop":
+            raise ValueError(
+                "--strict conflicts with --on-invalid drop: --strict means "
+                "fail on invalid records. Pass one or the other."
+            )
+
         # Prepare kwargs. The estimator name is passed through unmapped so
         # the CLI and the API record the same resolved name in
         # metadata["estimator"] for the same run.
@@ -389,6 +409,7 @@ def run_analysis(args: argparse.Namespace) -> int:
             "judge_field": args.judge_field,
             "oracle_field": args.oracle_field,
             "strict": args.strict,
+            "on_invalid": args.on_invalid,
         }
 
         for argument, keyword in (
@@ -476,15 +497,12 @@ def run_analysis(args: argparse.Namespace) -> int:
                 logger.info("logprob fields present and ignored (Direct mode)")
             kwargs["fresh_draws_dir"] = str(path_obj)
         elif path_obj.is_file():
-            from ..data.ingest import fresh_draws_data_from_file
-
-            fresh_draws_data = fresh_draws_data_from_file(
-                path_obj, on_invalid="error" if args.strict else "drop"
-            )
-            all_records = [r for recs in fresh_draws_data.values() for r in recs]
-            if _records_have_logprob_fields(all_records):
+            # analyze_dataset loads single files itself, so ingestion follows
+            # the same on_invalid contract (error with file/line context by
+            # default; per-policy drop counts in metadata when dropping).
+            if _file_has_logprob_fields(path_obj):
                 logger.info("logprob fields present and ignored (Direct mode)")
-            kwargs["fresh_draws_data"] = fresh_draws_data
+            kwargs["fresh_draws_dir"] = str(path_obj)
         else:
             raise FileNotFoundError(path)
 
@@ -497,6 +515,13 @@ def run_analysis(args: argparse.Namespace) -> int:
 
         # Display results
         if not args.quiet:
+            n_invalid_dropped = int(results.metadata.get("n_invalid_dropped", 0) or 0)
+            if n_invalid_dropped:
+                print(
+                    f"\n⚠ Dropped {n_invalid_dropped} invalid record(s) "
+                    "(--on-invalid drop); estimates use the remaining rows only."
+                )
+
             print("\nResults:")
             print("-" * 40)
 

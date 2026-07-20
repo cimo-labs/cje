@@ -1245,10 +1245,12 @@ def cluster_bootstrap_direct_with_refit(
     # Map evaluation prompts to their bootstrap cluster so external-role
     # calibration rows sharing a prompt with the evaluation frame reuse that
     # cluster's weight draw — resampling the shared prompt as one unit
-    # preserves the calibration-evaluation covariance. With decoupled
-    # policy-prompt clusters a prompt can map to several clusters; the
-    # first-seen cluster is used. Truly disjoint external prompts keep
-    # independent weights.
+    # preserves the calibration-evaluation covariance. Tables from
+    # build_direct_eval_table factorize prompts globally, so each prompt maps
+    # to exactly one cluster and this lookup is exact; only the decoupled
+    # policy-prompt tables built for unpaired multi-policy runs give a prompt
+    # several clusters, and there setdefault keeps the first-seen one. Truly
+    # disjoint external prompts keep independent weights.
     prompt_to_eval_cluster: Dict[str, int] = {}
     for cluster, prompt in zip(eval_table.prompt_ids, eval_table.prompt_id_strings):
         prompt_to_eval_cluster.setdefault(str(prompt), int(cluster))

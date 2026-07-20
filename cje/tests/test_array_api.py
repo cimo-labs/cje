@@ -164,8 +164,8 @@ class TestEstimatorEquivalence:
             n_folds=5,
         )
 
-        # Same seed, same eval-table layout, same refit mode and adaptive
-        # min-oracle rule -> the bootstrap draws are identical.
+        # Same seed, same eval-table layout, same refit mode -> the
+        # bootstrap draws are identical.
         assert res.estimate == pytest.approx(float(ref.estimates[0]), abs=1e-12)
         assert res.se == pytest.approx(float(ref.standard_errors[0]), rel=1e-9)
         # Percentile CI on the identical bootstrap matrix.

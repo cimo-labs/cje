@@ -486,13 +486,10 @@ def calibrated_mean_ci(
             covariate_names=cov_names,
             seed=seed,
         )
-        # Adaptive floor, same rule as CalibratedDirectEstimator.
-        min_oracle_per_replicate = max(10, min(30, n_oracle // 3))
         boot = cluster_bootstrap_direct_with_refit(
             eval_table=table,
             calibrator_factory=factory,
             n_bootstrap=n_bootstrap,
-            min_oracle_per_replicate=min_oracle_per_replicate,
             alpha=alpha,
             seed=seed,
             point_calibrator=calibrator,
@@ -507,7 +504,6 @@ def calibrated_mean_ci(
             "n_valid_replicates": int(boot["n_valid_replicates"]),
             "n_attempts": int(boot["n_attempts"]),
             "skip_rate": float(boot["skip_rate"]),
-            "min_oracle_per_replicate": min_oracle_per_replicate,
             "oracle_count_summary": boot["oracle_count_summary"],
             "seed": seed,
         }

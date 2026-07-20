@@ -164,6 +164,9 @@ class CalibratedDirectEstimator:
         self._eval_table: Optional[Any] = None
         self._last_point: Optional[DirectPointEstimate] = None
         self._legacy_linkage: Optional[Dict[str, Any]] = None
+        # Cache of the OUA leave-fold estimate matrix; invalidated whenever
+        # the inputs it was computed from change (fit / add_fresh_draws).
+        self._oracle_jackknife_matrix_cache: Optional[np.ndarray] = None
 
     @property
     def is_fitted(self) -> bool:
@@ -214,6 +217,8 @@ class CalibratedDirectEstimator:
             fresh_draws: FreshDrawDataset with responses from the policy
         """
         self._fresh_draws[policy] = fresh_draws
+        # New evaluation data invalidates any cached OUA jackknife matrix.
+        self._oracle_jackknife_matrix_cache = None
         logger.info(
             f"Added fresh draws for policy '{policy}': "
             f"{len(fresh_draws.samples)} samples"
@@ -345,7 +350,14 @@ class CalibratedDirectEstimator:
 
         if self.inference_method == "cluster_robust":
             coupled, overlap = self._calibration_overlaps_evaluation()
-            if coupled and self.reward_calibrator is not None:
+            # With complete oracle coverage every policy routes direct_oracle
+            # (no calibrator dependence), so there is no dropped
+            # calibration-evaluation covariance term to warn about.
+            if (
+                coupled
+                and self.reward_calibrator is not None
+                and not self._all_policies_have_complete_oracle_coverage()
+            ):
                 logger.warning(
                     "inference_method='cluster_robust' was explicitly requested "
                     f"but the calibration and evaluation frames share {overlap} "
@@ -492,6 +504,10 @@ class CalibratedDirectEstimator:
 
         Direct mode requires fresh draws for each target policy.
         """
+        # Refitting recomputes the evaluation table, so any OUA jackknife
+        # matrix cached from a previous fit is stale.
+        self._oracle_jackknife_matrix_cache = None
+
         # Verify we have fresh draws for all policies
         missing_policies = set(self.target_policies) - set(self._fresh_draws.keys())
         if missing_policies:
