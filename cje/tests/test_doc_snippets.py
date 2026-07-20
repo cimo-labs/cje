@@ -1,7 +1,8 @@
 """Keep documentation code snippets honest.
 
-Extracts every ```python block from the repo READMEs and the agent-skill
-files (skills/cje/) and checks it at two levels:
+Extracts every ```python block from the repo READMEs, the top-level guides
+(MIGRATING-0.6.md, PLAYBOOK.md), and the agent-skill files (skills/cje/) and
+checks it at two levels:
 
 1. SYNTAX: every snippet must compile() — catches broken example code.
 2. IMPORTS: every `import`/`from` line in every snippet is executed — catches
@@ -16,7 +17,7 @@ is where docs historically drifted.
 import ast
 import re
 from pathlib import Path
-from typing import Iterator, List, Tuple
+from typing import Dict, Iterator, List, Tuple
 
 import pytest
 
@@ -26,6 +27,8 @@ README_PATHS = sorted(
     p
     for p in [
         REPO_ROOT / "README.md",
+        REPO_ROOT / "MIGRATING-0.6.md",
+        REPO_ROOT / "PLAYBOOK.md",
         *(REPO_ROOT / "cje").glob("*/README.md"),
         *(REPO_ROOT / "skills").glob("*/*.md"),
     ]
@@ -81,7 +84,14 @@ def test_skill_quickstart_matches_readme() -> None:
 
 @pytest.mark.parametrize("path,line,code", SNIPPETS, ids=IDS)
 def test_snippet_imports_resolve(path: str, line: int, code: str) -> None:
-    """Execute only the import statements of each snippet."""
+    """Execute the import statements of each snippet, one at a time.
+
+    MIGRATING-0.6.md shows removed 0.5.x imports next to their replacements.
+    An import statement that any line of the snippet annotates with an
+    ``ImportError`` comment is documented-to-fail: the test asserts it
+    actually raises ImportError (pinning the removal) instead of failing on
+    it, and still verifies the remaining imports.
+    """
     tree = ast.parse(code)
     import_nodes: List[ast.stmt] = [
         node
@@ -90,18 +100,35 @@ def test_snippet_imports_resolve(path: str, line: int, code: str) -> None:
     ]
     if not import_nodes:
         pytest.skip("snippet has no imports")
-    module = ast.Module(body=import_nodes, type_ignores=[])
-    try:
-        exec(compile(module, f"<doc-snippet {path}:{line}>", "exec"), {})
-    except ImportError as e:  # pragma: no cover - failure path
-        # Optional-extra dependencies are allowed to be absent in the dev env;
-        # docs for those modules state the required extra explicitly.
-        msg = str(e)
-        optional_markers = (
-            "matplotlib",
-            "seaborn",
-            "cje-eval[viz]",  # the lazy plot_* hint on no-viz installs
+    lines = code.splitlines()
+    documented_import_errors = {
+        stmt.strip()
+        for stmt, _, comment in (raw.partition("#") for raw in lines)
+        if "ImportError" in comment
+    }
+    namespace: Dict[str, object] = {}
+    for node in import_nodes:
+        compiled = compile(
+            ast.Module(body=[node], type_ignores=[]),
+            f"<doc-snippet {path}:{line}>",
+            "exec",
         )
-        if any(marker in msg for marker in optional_markers):
-            pytest.skip(f"optional extra not installed: {msg}")
-        pytest.fail(f"{path}:{line} snippet import fails: {e}")
+        statement = lines[node.lineno - 1].partition("#")[0].strip()
+        if statement in documented_import_errors:
+            with pytest.raises(ImportError):
+                exec(compiled, namespace)
+            continue
+        try:
+            exec(compiled, namespace)
+        except ImportError as e:  # pragma: no cover - failure path
+            # Optional-extra dependencies are allowed to be absent in the dev
+            # env; docs for those modules state the required extra explicitly.
+            msg = str(e)
+            optional_markers = (
+                "matplotlib",
+                "seaborn",
+                "cje-eval[viz]",  # the lazy plot_* hint on no-viz installs
+            )
+            if any(marker in msg for marker in optional_markers):
+                pytest.skip(f"optional extra not installed: {msg}")
+            pytest.fail(f"{path}:{line} snippet import fails: {e}")

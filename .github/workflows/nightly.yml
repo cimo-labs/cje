@@ -20,12 +20,14 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+      # Poetry must exist before setup-python so cache: poetry can locate
+      # its virtualenvs directory (keyed on poetry.lock + python version).
+      - name: Install pinned Poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: pip
-      - name: Install pinned Poetry
-        run: pipx install "poetry==${POETRY_VERSION}"
+          cache: poetry
       - name: Verify and install lockfile
         run: |
           poetry check --lock

@@ -100,8 +100,12 @@ expected numeric drift.
   every path (`analyze_dataset`, directory/single-file/in-memory fresh draws, and the
   calibration-data loaders); pass `on_invalid="drop"` to filter instead — drops are
   counted and logged, never silent (`strict` is retained as a compatibility no-op).
-  Duplicate `(prompt_id, draw_idx)` rows and top-level/metadata field conflicts are
-  now invalid records. `prompt_id` auto-generation is retained from 0.5.x: records
+  Top-level/metadata field conflicts are now invalid records under that contract;
+  explicit duplicate `(prompt_id, draw_idx)` rows are conflicting row identities and
+  **always raise** with both conflicting rows identified, regardless of `on_invalid`
+  (omit `draw_idx` to auto-assign sequential indices — `on_invalid` governs only
+  per-record validity errors such as malformed fields and corrupt JSON lines).
+  `prompt_id` auto-generation is retained from 0.5.x: records
   without one get a stable hash of the `prompt` field, identically across the
   directory, single-file, and in-memory paths.
 - **Calibration fold assignment is balanced cluster round-robin, not

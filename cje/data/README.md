@@ -30,7 +30,7 @@ data/
 ├── loaders.py            # DatasetLoader, FreshDrawLoader
 ├── ingest.py             # POLICY_FILE_PATTERNS, record/field readers shared by API + CLI
 ├── fresh_draws.py        # FreshDrawSample/FreshDrawDataset + loading utilities
-├── folds.py              # Unified hash-based cross-validation folds
+├── folds.py              # Stable hash-based fold utilities (not calibration folds)
 ├── normalization.py      # Auto-normalization of bounded label scales
 └── validation.py         # validate_direct_data on raw records
 ```
@@ -253,7 +253,7 @@ If all values are already in [0, 1], nothing is transformed. Otherwise the range
 
 ## Fold Management
 
-`folds.py` provides one deterministic fold system used everywhere:
+`folds.py` provides stable hash-based fold utilities:
 
 ```python
 import numpy as np
@@ -265,7 +265,13 @@ folds = get_folds_for_prompts([s.prompt_id for s in dataset.samples], n_folds=5,
 
 - **Deterministic**: `hash(prompt_id) % n_folds` — reproducible across runs
 - **Filtering-proof**: based on stable prompt_ids, not array indices
-- **Consistent**: calibration and estimation always agree on fold assignment
+- **Not the calibration folds**: since 0.6.0, `JudgeCalibrator.fit_cv` assigns
+  whole oracle prompt clusters to folds via a seeded-hash sort with balanced
+  round-robin assignment (auto-reducing the fold count when labeled clusters
+  are scarce) and records the assignments actually used
+  (`CalibrationResult.fold_ids`, `calibration_info["n_folds"]`). Calibration
+  fold membership depends on the whole oracle cluster set — read the recorded
+  assignments rather than recomputing them with `get_fold`.
 
 ## Key Design Decisions
 

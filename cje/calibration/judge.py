@@ -330,7 +330,13 @@ class JudgeCalibrator:
         """Fit both global and cross-fitted calibration models.
 
         This method:
-        1. Assigns fold IDs to all samples (canonical hash-based folds)
+        1. Assigns whole prompt clusters to balanced folds (seeded-hash sort
+           with round-robin assignment, so repeated draws of a prompt never
+           cross-fit against one another and small oracle slices cannot
+           produce empty folds). The assignments actually used are recorded
+           in `CalibrationResult.fold_ids` and this calibrator's state; do
+           not reconstruct them with `cje.data.folds.get_fold`, which no
+           longer predicts calibration folds.
         2. Fits per-fold models f^(-k) for cross-fitted predictions
         3. Fits a global model f_all on all oracle data (for stable rewards)
 
@@ -340,9 +346,9 @@ class JudgeCalibrator:
             oracle_mask: Boolean mask indicating which samples have oracle labels
             n_folds: Number of CV folds (auto-reduced when labels are scarce;
                 see `resolve_n_folds`)
-            prompt_ids: Optional prompt IDs for fold assignment. When None,
-                stable row-index ids are synthesized so every caller shares
-                the canonical hash-fold path.
+            prompt_ids: Optional prompt IDs defining the fold clusters. When
+                None, stable row-index ids are synthesized so every caller
+                shares the same cluster-fold path.
             covariates: Optional covariate matrix (n_samples, n_covariates)
             quiet: Log fit progress at DEBUG instead of INFO. Used by the
                 per-replicate bootstrap refits, which would otherwise emit

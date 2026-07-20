@@ -177,10 +177,14 @@ explicitly — drops are counted and logged, never silent:
 results = analyze_dataset(fresh_draws_dir="responses/", on_invalid="drop")
 ```
 
-Two 0.6.0 strictness additions to know about: duplicate
-`(prompt_id, draw_idx)` rows and top-level/metadata field conflicts are now
-invalid records (they raise by default; under `on_invalid="drop"` all but the
-first duplicate are dropped, with counts).
+Two 0.6.0 strictness additions to know about. Top-level/metadata field
+conflicts are per-record validity errors like malformed fields or corrupt
+JSON lines: they raise by default and are dropped-with-counts under
+`on_invalid="drop"`. Explicit duplicate `(prompt_id, draw_idx)` rows are
+conflicting row identities, not invalid records — they **always raise**,
+regardless of `on_invalid`, with both conflicting rows identified. Omit
+`draw_idx` to auto-assign sequential indices per prompt; `on_invalid`
+governs only per-record validity errors.
 
 `prompt_id` remains **optional** in fresh-draw records, as in 0.5.x: when
 missing, it is auto-generated from a hash of the `prompt` field consistently
