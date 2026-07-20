@@ -89,6 +89,27 @@ expected numeric drift.
   0.5.x; the scheme is validated against analytic cluster-robust SEs and a
   Monte-Carlo coverage cell in the test suite, and results record
   `bootstrap_scheme: "positive_exponential_cluster_weights"`.
+
+  *Measured upgrade impact* (R=200 paired replicates on the fully-labeled
+  Arena corpus, n=1000 prompts, m=100 oracle labels on the base policy,
+  identical seeds/draws per version; full report:
+  `cje-arena-experiments/UPGRADE-COMPARISON-0.6.0.md`):
+  - Supported policies: point estimates statistically unchanged (mean shift
+    ≤ 0.02 SE), SEs 4–8% tighter (ratio 0.92–0.96), 95% CI widths 7–12%
+    narrower, empirical coverage unchanged within binomial noise (94.5%
+    both versions on the oracle-carrying policy).
+  - Individual replicates can move a point estimate by up to ~4 SE when
+    per-replicate calibration mode selection flips (rare; mean |shift| is
+    ≈ 0.08–0.2 SE) — expect same-data results to differ slightly from 0.5.x.
+  - Gate-flagged far-shift policies (transfer bias): identically flagged in
+    both versions (104/200 replicates), but 0.6.0's SE is ~24% smaller there,
+    so an already-miscovered CI gets worse (13.0% → 7.5% coverage on the
+    Arena `unhelpful` policy). Flagged estimates were never trustworthy;
+    with `reliable_only=True` they are not crowned. Do not interpret a
+    flagged policy's CI.
+  - Runtime: the default `analyze_dataset` bootstrap path is ~3.7× slower
+    (mean 9.7s → 35.6s per call on the Arena workload) because every
+    replicate refits under exponential weights with mode re-selection.
 - **`best_policy()` keeps the 0.5.0 safety default** (`reliable_only=True`: a
   gate-flagged raw argmax is demoted and the best gate-passing policy is returned),
   and the demotion is now loud instead of quiet: the demoted argmax travels as
