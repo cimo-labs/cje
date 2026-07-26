@@ -1015,11 +1015,10 @@ def _attach_transport_audits(
         assert config is not None
         delta_max = config.delta_max_by_policy.get(policy)
         if delta_max is None:
-            # An explicit TransportAuditConfig is the new 0.6.0 API — not a
-            # 0.5.x migration case — so the module-level FutureWarning about
-            # the vocabulary change does not apply. Note the consequence
-            # concisely instead; direct audit_transportability calls keep
-            # the FutureWarning.
+            # TransportAuditConfig callers opted into the audit explicitly,
+            # so note the consequence with a quiet logger.info instead of
+            # the module-level no-margin warning; direct
+            # audit_transportability calls keep the warning.
             logger.info(
                 "Transport probe for policy %r has no delta_max margin: the "
                 "audit is descriptive-only (NOT_GRADED).",
@@ -1027,7 +1026,11 @@ def _attach_transport_audits(
             )
         with warnings.catch_warnings():
             if delta_max is None:
-                warnings.simplefilter("ignore", FutureWarning)
+                warnings.filterwarnings(
+                    "ignore",
+                    message="transport audit called without delta_max",
+                    category=UserWarning,
+                )
             diagnostic = audit_transportability(
                 results.calibrator,
                 probes,

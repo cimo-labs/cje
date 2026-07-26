@@ -117,7 +117,7 @@ for policy, card in (result.metadata.get("boundary_cards") or {}).items():
 
 ### Cross-fitting
 
-Calibration uses k-fold cross-fitting. Since 0.6.0, `fit_cv` assigns whole oracle **prompt clusters** to folds by a seeded-blake2b sort with round-robin assignment — deterministic given (prompt ids, seed, k) and balanced (fold sizes differ by at most one cluster, so small oracle slices cannot produce empty folds) — and resolves the fold count from unique labeled clusters. Fold membership depends on the whole oracle cluster set, so the pre-0.6.0 `hash(prompt_id) % k` stability property ("same prompt_id → same fold regardless of the rest of the data") no longer applies to calibration folds; `get_fold`/`get_folds_for_prompts` in `cje.data.folds` remain exported but do not predict calibration fold assignment.
+Calibration uses k-fold cross-fitting. `fit_cv` assigns whole oracle **prompt clusters** to folds by a seeded-blake2b sort with round-robin assignment — deterministic given (prompt ids, seed, k) and balanced (fold sizes differ by at most one cluster, so small oracle slices cannot produce empty folds) — and resolves the fold count from unique labeled clusters. Fold membership depends on the whole oracle cluster set, so a single prompt's fold can change when the labeled set changes; `get_fold`/`get_folds_for_prompts` in `cje.data.folds` are stable hash utilities that do not predict calibration fold assignment — read the recorded assignments (`CalibrationResult.fold_ids`, `calibration_info["n_folds"]`) instead.
 
 ## Common Issues
 

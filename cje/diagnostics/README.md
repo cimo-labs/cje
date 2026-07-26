@@ -28,7 +28,7 @@ cje/diagnostics/
 
 ## DirectDiagnostics
 
-The single diagnostics class since 0.4.0, attached to results as `results.diagnostics`. The former `IPSDiagnostics` compatibility alias is removed in 0.6.0; use `DirectDiagnostics`. `DRDiagnostics` and `CJEDiagnostics` were removed with the OPE estimators.
+The single diagnostics class, attached to results as `results.diagnostics`.
 
 Field groups:
 
@@ -106,9 +106,9 @@ The returned `BoundaryCard` dataclass carries `status`, `out_of_range`, `saturat
    - **PASS**: the CI lies wholly inside `[-delta_max, +delta_max]` (action: none). PASS additionally requires at least `min_effective_clusters` (default 20) Kish-effective clusters — cluster-robust intervals under-cover below that.
    - **FAIL**: the CI lies wholly outside the margin (action: do not reuse; collect target labels and refit). FAIL is graded even below the effective-cluster floor — an interval entirely beyond the margin is decisive evidence of unacceptable bias, not low power, so an under-sized probe cannot defeat the hard gate.
    - **INCONCLUSIVE**: the CI overlaps a margin boundary, or the probe has fewer than `min_effective_clusters` effective clusters without being decisively outside (action: collect more independent probe clusters).
-   - **NOT_GRADED**: no `delta_max` was declared — the residual estimate and CI are descriptive and can never PASS or FAIL. Calling without a margin emits a `FutureWarning` for one release cycle, because 0.5.x graded the same call PASS/WARN/FAIL under a zero-null test.
+   - **NOT_GRADED**: no `delta_max` was declared — the residual estimate and CI are descriptive and can never PASS or FAIL. Calling without a margin emits a `FutureWarning` prompting you to declare one.
 
-`NOT_CHECKED` is the fifth state, reserved for high-level `analyze_dataset` results when no independent probe was supplied for a policy; the low-level audit never fabricates it. The 0.5.x `WARN` status is removed — legacy diagnostics constructed with `WARN` normalize to `INCONCLUSIVE` (`reason_code="legacy_warn"`).
+`NOT_CHECKED` is the fifth state, reserved for high-level `analyze_dataset` results when no independent probe was supplied for a policy; the low-level audit never fabricates it. There is no `WARN` status — diagnostics deserialized with a legacy `WARN` value normalize to `INCONCLUSIVE` (`reason_code="legacy_warn"`).
 
 **Units**: `delta_max` (and `delta_hat`/`delta_ci`) are in the units of the probe `oracle_label` values — this audit grades `oracle_label − calibrator.predict(...)` with no rescaling. For audits wired through `analyze_dataset(transport=TransportAuditConfig(...))`, probe labels are converted to the result OUTPUT scale first, so those margins are in output units (the units of `result.estimates`).
 

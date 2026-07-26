@@ -43,7 +43,7 @@ def calibrate_dataset(
         judge_field: Field name in metadata containing judge scores
         oracle_field: Field name in metadata containing oracle labels
         enable_cross_fit: Must be True (the default). Cross-fitted calibration
-                         is the only mode since 0.5.0; passing False raises.
+                         is the only supported mode; passing False raises.
         n_folds: Number of CV folds (auto-reduced when labeled prompt
                  clusters are scarce; metadata records the count actually used)
         calibration_mode: Calibration mode ('auto', 'monotone', 'two_stage').

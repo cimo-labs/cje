@@ -95,7 +95,7 @@ outside the oracle calibration range [0.161, 0.595]. Do not report level
 the missing score range.
 ```
 
-Diagnostics never act silently: `results.best_policy()` demotes a gate-flagged argmax to the best gate-passing policy (the 0.5.0 default, `reliable_only=True`), and the demotion is loud — the flagged raw winner stays visible with its limitations, and the divergence is spelled out (`reliable_only=False` returns the raw argmax, marked `flagged`):
+Diagnostics never act silently: `results.best_policy()` demotes a gate-flagged argmax to the best gate-passing policy (the default, `reliable_only=True`), and the demotion is loud — the flagged raw winner stays visible with its limitations, and the divergence is spelled out (`reliable_only=False` returns the raw argmax, marked `flagged`):
 
 ```text
 Best by point estimate: candidate
@@ -115,7 +115,7 @@ reliable_only=False for the raw argmax
 | One dataset, labels sampled from it, want a CI on its mean | PPI works; CJE's `calibrated_mean_ci` provides the same core primitive plus scalar-support metadata and an optional held-out residual audit |
 | Evaluate **many** policies without labeling under each | **CJE**, provided the shared calibration and sampling assumptions are justified; use held-out probes and an explicit bias margin to grade residual transport |
 | Predict how a *specific response* will score | Not CJE — per-item prediction (conformal methods) |
-| Off-policy estimates from logs only (importance weighting / doubly robust) | `pip install "cje-eval==0.3.*"` — the frozen OPE line; 0.4.x is Direct-mode only (see [Notes on 0.4.0](#notes-on-040)) |
+| Off-policy estimates from logs only (importance weighting / doubly robust) | `pip install "cje-eval==0.3.*"` — the frozen OPE line; this library is Direct-mode only (see [Why Direct mode only?](#why-direct-mode-only-no-ipsdr)) |
 
 ## How it works
 
@@ -167,7 +167,7 @@ When partial oracle coverage requires calibration, `result.calibrator` predicts 
 | **[CJE in 3 Minutes](https://youtu.be/VbSYrby8iaQ)** | Video: why raw judge scores mislead and how CJE fixes it |
 | **[Technical Walkthrough](https://youtu.be/r0dinGsPuqY)** | Video: calibration, evaluation, and transport auditing pipeline |
 | **[Operational Playbook](https://github.com/cimo-labs/cje/blob/main/PLAYBOOK.md)** | End-to-end runbook: audits, drift correction, label budgeting |
-| **[Migrating to 0.6.0](https://github.com/cimo-labs/cje/blob/main/MIGRATING-0.6.md)** | Upgrading from 0.5.x: breaking changes, transport regrade table, expected numeric drift |
+| **[MIGRATING-0.6.md](https://github.com/cimo-labs/cje/blob/main/MIGRATING-0.6.md)** | Upgrading from an earlier release? See MIGRATING-0.6.md |
 | **[Planning Notebook](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_planning.ipynb)** | Optimize your evaluation budget with pilot data |
 | **[Full Docs](https://cimolabs.com/cje)** | Installation, assumptions, API reference, research notes |
 
@@ -183,19 +183,15 @@ When partial oracle coverage requires calibration, `result.calibrator` predicts 
 - **Project-level:** `cp -r skills/cje .claude/skills/` from a checkout of this repo.
 - **Other agents:** point your agent at [`skills/cje/SKILL.md`](https://github.com/cimo-labs/cje/blob/main/skills/cje/SKILL.md) — plain Markdown; `reference.md` loads on demand.
 
-## Upgrading from 0.5.x
+## Why Direct mode only (no IPS/DR)?
 
-0.6.0 is a breaking release: Python 3.10+, a keyword-only `analyze_dataset`, regraded transport audits (a predeclared `delta_max` margin replaces the zero-null `PASS`/`WARN`/`FAIL` test), direct-oracle routing at full coverage (`result.calibrator` can be `None`), and loud-by-default ingestion. See [MIGRATING-0.6.md](https://github.com/cimo-labs/cje/blob/main/MIGRATING-0.6.md) for the full guide with before/after snippets.
-
-## Notes on 0.4.0
-
-0.4.0 is a **breaking release: CJE is now Direct-mode only.** The off-policy machinery — importance-sampling and doubly-robust estimators (`calibrated-ips`, `dr-cpo`, `mrdr`, `tmle`, `stacked-dr`), teacher forcing, SIMCal weight stabilization, and the overlap diagnostics — has been removed. Our own paper's results drove the cut: for realistic LLM policy pairs, importance weighting failed even when ESS looked healthy (target-typicality coverage 0.19–0.49, far below the 0.70 gate), and the best DR stack merely matched Direct mode's accuracy at ~12× the compute. Direct mode — fresh draws, calibrated judge, audits — is what the evidence supports, so it is now the whole product.
+CJE is **Direct-mode only**: fresh draws, calibrated judge, audits. There is no off-policy machinery — no importance-sampling or doubly-robust estimators (`calibrated-ips`, `dr-cpo`, `mrdr`, `tmle`, `stacked-dr`), teacher forcing, SIMCal weight stabilization, or overlap diagnostics. Our own paper's results drove that design: for realistic LLM policy pairs, importance weighting failed even when ESS looked healthy (target-typicality coverage 0.19–0.49, far below the 0.70 gate), and the best DR stack merely matched Direct mode's accuracy at ~12× the compute. Direct mode is what the evidence supports, so it is the whole product.
 
 - **Need IPS/DR from logged propensities?** Pin the frozen OPE line: `pip install "cje-eval==0.3.*"` (maintained on the `0.3.x` branch; docs at the `v0.3.0` tag; requires Python <=3.12 — on 3.13 use a 3.12 env for OPE).
-- **Have old logged data with `judge_score` + `oracle_label`?** It still works as the calibration source: `analyze_dataset(fresh_draws_dir=..., calibration_data_path="logged.jsonl")`.
-- Removed entry points raise migration errors that say exactly this.
+- **Have old logged data with `judge_score` + `oracle_label`?** It works as the calibration source: `analyze_dataset(fresh_draws_dir=..., calibration_data_path="logged.jsonl")`.
+- OPE entry points raise migration errors that say exactly this.
 
-Full details in the [CHANGELOG](https://github.com/cimo-labs/cje/blob/main/CHANGELOG.md).
+Full version history in the [CHANGELOG](https://github.com/cimo-labs/cje/blob/main/CHANGELOG.md).
 
 ## Development
 

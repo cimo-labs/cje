@@ -90,8 +90,8 @@ fallback), never by this parameter — its only observable effect is which name 
   (bootstrap runs: paired inference over the replicate matrix — the difference SE includes
   calibrator noise, honest on near-tie pairs; sign-test p-value floored at 2/(B+1)),
   `"paired_if_oua"` (cluster-robust runs: t-test from the stored pairwise SE + oracle-jackknife
-  difference variance), `"paired_if_legacy"` (pre-0.5.1 IF z-test, only for deserialized older
-  results), `"independent_conservative"` (no pairing info). `gate_flagged` lists any policy in
+  difference variance), `"paired_if_legacy"` (only for deserialized results from older releases
+  that stored unpaired IF z-tests), `"independent_conservative"` (no pairing info). `gate_flagged` lists any policy in
   the pair with a flagged reliability gate — a difference CI cannot repair a biased input
   (e.g. after a transport-audit FAIL), so treat such comparisons per the gates discipline
 - `.compare_all_policies(alpha=0.05, adjust=None)` → list of comparison dicts for every (i < j)
@@ -161,8 +161,8 @@ print(diag.summary())
   and `.plot()` (viz extra).
 - `delta_max` is predeclared. Units: probe oracle-label units for this low-level audit;
   OUTPUT units (units of `results.estimates`) for `TransportAuditConfig` margins. Omitting it
-  gives NOT_GRADED (never PASS/FAIL) and emits a FutureWarning for one release cycle — 0.5.x
-  graded the same call PASS/WARN/FAIL under a zero-null test. Pass analysis weights for unequal
+  gives NOT_GRADED (never PASS/FAIL) and emits a FutureWarning prompting you to declare a
+  margin. Pass analysis weights for unequal
   sampling probabilities and `family_size` for all groups used in the decision.
 - `decile_residuals` and probe-bin occupancy are display-only; never gate on them.
 
@@ -182,12 +182,12 @@ print(plan.summary())   # n_samples, m_oracle, MDE at 80% power
 `fit_variance_model` needs a real pilot — roughly 200+ prompts with 100+ randomly sampled oracle
 labels (smaller pilots raise a `ValueError` such as "Need at least 2 valid n values" or "Grid has
 insufficient variation", and label-starved pilots may still fit but warn "Low R² - inspect the
-sampling design" — treat those plans as unreliable) — and runs in seconds since 0.5.1
+sampling design" — treat those plans as unreliable) — and runs in seconds
 (the default `n_replicates=50` gives a stable fit in a few seconds; `n_replicates=150` for an extra-stable fit, ~20s).
 Always pass explicit costs: budget and costs must be in the same units (dollars in ⇒ dollars
-out), and plans floor at `m_min=30` oracle labels regardless of budget. Since 0.5.1 the variance
+out), and plans floor at `m_min=30` oracle labels regardless of budget. The variance
 components come from the analytic cluster-robust + OUA instrument (within ~5% of realized SE on
-the validation grid); budgets planned with pre-0.5.1 versions were ~15-20% inflated at pilot scale.
+the validation grid).
 
 No pilot data yet? `from cje import simulate_variance_model, correlation_to_r2` — the `r2`
 parameter is the **isotonic R², not the correlation**: call
@@ -233,55 +233,8 @@ directories.
 | `ImportError: ... pip install "cje-eval[viz]"` | Plotting needs the viz extra; estimates work without it. |
 | Scores on 0–100 / Likert | Pass as-is — auto-normalized, results returned in the original scale. |
 | `... outside [0, 1]` error on a calibration file | `calibration_data_path` defaults to [0, 1]. Declare `calibration_judge_scale`/`calibration_oracle_scale`, rescale the file, or pass the data via `fresh_draws_data` (auto-normalizes). |
-| `TypeError: ... 'logged_data_path'` / `calibrated-ips` errors | OPE removed in 0.4.0; the dead `logged_data_path` kwarg was removed entirely in 0.6.0 (plain TypeError). Logged judge+oracle data still works via `calibration_data_path`. For IPS/DR pin `pip install "cje-eval==0.3.*"` (Python ≤3.12). |
-| `FutureWarning: ... audits without delta_max are NOT_GRADED` | Declare a practical margin (`delta_max=`) — no-margin audits can never PASS or FAIL since 0.6.0. |
-| `results.calibrator is None` | Complete oracle coverage: the estimate is the direct oracle mean; no calibrator was fit. Check for `None` before a transport audit (see MIGRATING-0.6.md §6). |
-| Python version | 0.6.0 requires 3.10–3.13 (3.9 was supported through 0.5.x). |
-
-## Migrating from 0.5.x (0.6.0)
-
-0.6.0 is a breaking correctness release — full guide with before/after snippets in
-[`MIGRATING-0.6.md`](https://github.com/cimo-labs/cje/blob/main/MIGRATING-0.6.md) at the
-repo root. Headlines:
-
-- **Python 3.10+** (3.9 dropped).
-- **`analyze_dataset` is keyword-only**; `logged_data_path` now raises a plain TypeError;
-  provide exactly one of `fresh_draws_data`/`fresh_draws_dir`.
-- **Transport audits regraded**: `delta_max` required to grade; statuses are
-  PASS/FAIL/INCONCLUSIVE/NOT_GRADED/NOT_CHECKED (WARN removed); no-margin calls warn for
-  one release cycle. Update any `status == "PASS"` / `status != "FAIL"` gate code.
-- **Full oracle coverage** routes to the direct oracle mean and `results.calibrator is None`.
-- **`best_policy()` default unchanged** (`reliable_only=True`), demotion is now loud
-  (`runner_up_reasons`, logged warning, both winners in `summary()`).
-- **Ingestion is loud by default** (`on_invalid="error"`); `prompt_id` auto-generation
-  from a `prompt` hash is retained.
-- **Expect numeric drift vs 0.5.x**: new balanced-cluster calibration folds, exponential-
-  weight bootstrap, full-coverage routing. Same data, defensibly different numbers.
-- `IPSDiagnostics` removed — use `DirectDiagnostics`.
-
-## Migrating from 0.4.x
-
-0.5.0 is a consolidation release: same statistics on the default paths, smaller API.
-
-- **`results.best_policy()` returns a `PolicyVerdict`** (was a naive argmax `int`).
-  A gate-flagged argmax is demoted and the best gate-passing policy wins (recorded in
-  `runner_up`). Use `verdict.index` for the old integer and `verdict.name` for the name.
-- **`estimator_config` unknown keys now raise** a ValueError listing the valid keys
-  (`oua_jackknife`, `inference_method`, `n_bootstrap`, `bootstrap_seed`,
-  `use_augmented_estimator`, `paired_comparison`). Typos no longer pass silently.
-- **Calibration files must be in [0, 1]** — out-of-range `calibration_data_path`
-  values raise a hard error instead of being silently filtered. Rescale, or pass the
-  data in-memory via `fresh_draws_data` (auto-normalizes any bounded scale).
-- **New typed accessors** on `EstimationResult`: `.summary()` (text report),
-  `.best_policy()` → PolicyVerdict, `.gates` → `Dict[str, GateResult]`,
-  `.target_policies`; metadata mirrors are unchanged and stay the serialized form.
-- **Removed names** (each raises an ImportError/ValueError pointing at the
-  replacement): `BaseCJEEstimator` (merged into `CalibratedDirectEstimator`);
-  `calibrate_from_raw_data`/`calibrate_judge_scores` (use `calibrate_dataset`,
-  `JudgeCalibrator.fit_cv`, or `calibrated_mean_ci`); `JudgeCalibrator.fit_transform`
-  (use `fit_cv`); `compare_policies_bootstrap` (use `results.compare_policies`);
-  `plot_calibration_comparison`; `EstimationResult.plan_allocation` (use
-  `fit_variance_model` + `plan_evaluation`); `simulate_planning_sweep` (loop
-  `simulate_planning`); `export_results_csv` (JSON export stays);
-  `AnalysisService`/`AnalysisConfig`/`create_estimator` (call `analyze_dataset`);
-  `calibrate_dataset(enable_cross_fit=False)` (cross-fitting is the only mode).
+| `TypeError: ... 'logged_data_path'` / `calibrated-ips` errors | `analyze_dataset` has no `logged_data_path` parameter and no IPS/DR estimators. Logged judge+oracle data works via `calibration_data_path`. For IPS/DR pin `pip install "cje-eval==0.3.*"` (Python ≤3.12). |
+| `FutureWarning: ... audits without delta_max are NOT_GRADED` | Declare a practical margin (`delta_max=`) — no-margin audits can never PASS or FAIL. |
+| `results.calibrator is None` | Complete oracle coverage: the estimate is the direct oracle mean; no calibrator was fit. Check for `None` before a transport audit. |
+| `ImportError`/`ValueError` naming a replacement (e.g. `BaseCJEEstimator`, `calibrate_from_raw_data`) | Consolidated API: the error message names the current entry point — use it. |
+| Python version | CJE requires Python 3.10–3.13. |

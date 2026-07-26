@@ -33,8 +33,8 @@ def _probe(residuals: Any) -> List[Dict[str, Any]]:
     ]
 
 
-def test_no_margin_is_not_graded_and_warns_about_vocabulary_change() -> None:
-    with pytest.warns(FutureWarning, match="NOT_GRADED and can never PASS or FAIL"):
+def test_no_margin_is_not_graded_and_warns() -> None:
+    with pytest.warns(UserWarning, match="can only be NOT_GRADED"):
         diag = audit_transportability(_IdentityCalibrator(), _probe(np.zeros(30)))
     assert diag.status == "NOT_GRADED"
     assert diag.reason_code == "margin_not_declared"
@@ -42,7 +42,7 @@ def test_no_margin_is_not_graded_and_warns_about_vocabulary_change() -> None:
 
 def test_declared_margin_does_not_warn() -> None:
     with warnings.catch_warnings():
-        warnings.simplefilter("error", FutureWarning)
+        warnings.simplefilter("error", UserWarning)
         diag = audit_transportability(
             _IdentityCalibrator(), _probe(np.zeros(30)), delta_max=0.05
         )
@@ -266,13 +266,13 @@ def test_high_level_transport_records_all_graded_states() -> None:
     )
 
 
-def test_high_level_unmargined_probe_gets_info_not_future_warning(
+def test_high_level_unmargined_probe_gets_info_not_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Explicit TransportAuditConfig callers are new-API users, not 0.5.x
-    migration cases: an unmargined probe records NOT_GRADED with a concise
-    info note, without the module-level FutureWarning. Direct
-    audit_transportability calls keep the FutureWarning (pinned above)."""
+    """Explicit TransportAuditConfig callers opted into the audit: an
+    unmargined probe records NOT_GRADED with a concise info note, without
+    the module-level no-margin warning. Direct audit_transportability
+    calls keep the warning (pinned above)."""
     config = TransportAuditConfig(
         probes_by_policy={"policy": _policy_probe("policy", 30)}
     )
@@ -288,8 +288,8 @@ def test_high_level_unmargined_probe_gets_info_not_future_warning(
 
     assert result.metadata["transport_audits"]["policy"]["status"] == "NOT_GRADED"
     assert not any(
-        issubclass(warning.category, FutureWarning)
-        and "NOT_GRADED and can never PASS or FAIL" in str(warning.message)
+        issubclass(warning.category, UserWarning)
+        and "can only be NOT_GRADED" in str(warning.message)
         for warning in caught
     )
     assert any(

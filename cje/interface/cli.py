@@ -149,7 +149,8 @@ def create_parser() -> argparse.ArgumentParser:
         "--strict",
         action="store_true",
         help=(
-            "Fail on an invalid record (the default; kept for 0.5.x " "compatibility)"
+            "Fail on an invalid record (the default; explicit spelling of "
+            "--on-invalid error)"
         ),
     )
 

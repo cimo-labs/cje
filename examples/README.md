@@ -25,9 +25,9 @@ No setup required — runs entirely in Google Colab with real Chatbot Arena data
 3. **MDE-Constrained Planning** — "I need to detect X%, what's the cost?"
 4. **Visualize Tradeoffs** — Interactive dashboard for budget vs precision
 
-### Off-Policy Evaluation (moved to 0.3.x)
+### Off-Policy Evaluation (0.3.x line)
 
-The IPS/DR modes were removed in CJE 0.4.0. [`cje_advanced.ipynb`](cje_advanced.ipynb) is now a stub pointing at the frozen 0.3.x line (`pip install "cje-eval==0.3.*"`; the full OPE notebook lives at the [v0.3.0 tag](https://github.com/cimo-labs/cje/blob/v0.3.0/examples/cje_advanced.ipynb)).
+CJE is Direct-mode only; IPS/DR off-policy evaluation lives on the frozen 0.3.x line (`pip install "cje-eval==0.3.*"`). [`cje_advanced.ipynb`](cje_advanced.ipynb) is a stub pointing there; the full OPE notebook lives at the [v0.3.0 tag](https://github.com/cimo-labs/cje/blob/v0.3.0/examples/cje_advanced.ipynb).
 
 ## Dataset
 

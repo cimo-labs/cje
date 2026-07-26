@@ -43,7 +43,7 @@ tests/
 │   ├── test_planning_viz.py              # Planning visualization
 │   └── test_simulation_planning.py       # Simulation-based planning
 │
-├── Remediation / Contract Tests (0.5.x–0.6.0)
+├── Remediation / Contract Tests
 │   ├── test_bootstrap_statistical_sanity.py  # Bootstrap SEs pinned against analytic cluster-robust SEs
 │   ├── test_data_contract_remediation.py     # Ingestion/data contracts (loud errors, InferenceUnavailableError)
 │   ├── test_direct_routing_final.py          # direct_oracle routing, one-cluster SE refusal, tiers
