@@ -145,9 +145,13 @@ else:
     audit = transport_audit(probe_scores, probe_labels, result.calibrator, delta_max=0.05)
 ```
 
-The same applies to `analyze_dataset`: fully observed policies route to their
-oracle mean (`direct_oracle`), and `results.calibrator` can be `None` when no
-policy needed calibration.
+`analyze_dataset` differs in one respect: fully observed policies still route to
+their oracle mean (`direct_oracle`), but `results.calibrator` is `None` only when
+no calibrator could be fit at all (no oracle labels, or fewer than 4 labeled
+prompt clusters) — at ordinary complete coverage `analyze_dataset` still fits and
+attaches a calibrator for transport audits even though the estimates do not use
+it. Do not use `results.calibrator is None` to detect complete coverage in
+`analyze_dataset` output; check the per-policy routing metadata instead.
 
 ## 7) `best_policy()` — default unchanged, divergence now loud
 

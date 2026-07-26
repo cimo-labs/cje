@@ -85,7 +85,7 @@ No `prompt`, `response`, or logprob fields are required (they're accepted and ig
 ## Core Concepts
 
 ### 1. Type-Safe Data Models
-- **Sample**: single observation (`prompt_id`, optional `prompt`/`response`, `judge_score`, `oracle_label`, metadata). Judge scores and oracle labels are validated to [0, 1] after normalization.
+- **Sample**: single observation (`prompt_id`, `prompt`, `response`, `judge_score`, `oracle_label`, metadata). `prompt`/`response` are required string fields on the model but optional in JSONL records — the loaders default missing values to `""`, so pass `prompt=""`, `response=""` when constructing `Sample` objects by hand. Judge scores and oracle labels are validated to [0, 1] after normalization.
 - **Dataset**: samples + `target_policies` (may be **empty** for calibration-only datasets, which carry no policy information).
 - **FreshDrawSample / FreshDrawDataset**: per-policy fresh draws for estimation.
 - **EstimationResult**: estimates, standard errors, diagnostics, metadata, and the fitted calibrator.

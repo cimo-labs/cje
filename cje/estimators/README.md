@@ -55,6 +55,8 @@ Fresh draws are auto-discovered from a `fresh_draws_dir` under the canonical `PO
 
 `standard_errors` always includes every uncertainty source: sampling noise on the eval set **and** the uncertainty from learning the calibrator on a finite oracle slice. Confidence intervals are percentile bootstrap intervals under the default `bootstrap` inference; under `cluster_robust` they use t-critical values with the limiting degrees of freedom (stored per policy in `result.metadata["degrees_of_freedom"]` with `df`, `t_critical`, `se_method`, `n_clusters` — that metadata only exists there).
 
+One exception: a policy whose fresh draws all share a single prompt cluster has fewer than two independent clusters, so no valid cluster-level inference exists. Such a policy returns its point estimate with **SE = NaN** (`se_method: "unavailable_one_cluster"`, loud warning) rather than falling back to invalid row-level IID inference. It is listed in `result.metadata["inference_unavailable_policies"]`, and `compare_policies` refuses pairs involving it with `InferenceUnavailableError` (from `cje.data`) instead of returning an anti-conservative difference SE.
+
 ### Inference methods (`inference_method` parameter)
 
 - **`"bootstrap"` (default):** cluster bootstrap by prompt — positive exponential mean-one weights per prompt cluster, no replicate discarded or retried — with a **calibrator refit per replicate**, applied to the augmented estimate `θ̂_aug = mean(f̂_full(S)) + mean(Y − f̂_oof(S))` (an AIPW-style per-policy residual correction; `use_augmented_estimator=True` by default). Refitting captures the calibration/evaluation covariance that analytic SEs miss — this is what achieves ~95% CI coverage.
@@ -70,14 +72,19 @@ estimator = CalibratedDirectEstimator(
 )
 ```
 
-### Automatic fallback when the eval draws carry no oracle labels
+### Automatic fallback when the bootstrap cannot refit the calibrator
 
-With a separate calibration source (`calibration_data_path`) and **label-free** fresh draws, the bootstrap's per-replicate refit has nothing to refit on. The estimator detects this before dispatching and falls back to cluster-robust + oracle jackknife — which is exact there, not an approximation: calibration and evaluation are independent, so the covariance the bootstrap exists to capture is zero. The downgrade is loud (warning) and recorded:
+The refit bootstrap needs the exact rows the calibrator was fit on. When those are unavailable, the estimator detects it before dispatching and falls back to cluster-robust + oracle jackknife, in exactly two cases:
+
+- a calibrator exists but its fit rows (calibration provenance) are unavailable — `fallback_reason: "calibration_provenance_unavailable"`;
+- no calibrator exists and at least one policy lacks complete evaluation oracle coverage — `fallback_reason: "calibrator_unavailable_for_non_oracle_routes"`.
+
+A `calibration_data_path` run with **label-free** fresh draws is *not* a fallback case: the refit bootstrap runs normally on the calibration rows (`result.metadata["inference"]["method"] == "cluster_bootstrap_refit"`). When calibration and evaluation data are truly independent the additive variance decomposition is exact. When a fallback does occur, the downgrade is loud (warning) and recorded:
 
 ```python
 result.metadata["inference"]
 # {"method": "cluster_robust", "requested_method": "bootstrap",
-#  "fallback_reason": "no_oracle_labels_in_evaluation_data"}
+#  "fallback_reason": "calibration_provenance_unavailable"}
 ```
 
 ### Oracle uncertainty (calibration-aware inference)

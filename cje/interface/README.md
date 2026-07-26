@@ -224,7 +224,7 @@ results = analyze_dataset(
 ```
 
 - **`bootstrap`** (default): cluster bootstrap with per-replicate calibrator refit and an AIPW-style augmented estimate — captures calibrator uncertainty and calibration/evaluation coupling. Recommended for valid CIs.
-- **`cluster_robust`**: CRV1 cluster-robust SEs augmented with the delete-one-oracle-fold jackknife (`oua_jackknife=True` by default). Faster; the estimator falls back to this automatically (loudly, recorded in `metadata["inference"]`) when the evaluation draws carry no oracle labels — in that case it is exact, not an approximation.
+- **`cluster_robust`**: CRV1 cluster-robust SEs augmented with the delete-one-oracle-fold jackknife (`oua_jackknife=True` by default). Faster; the estimator downgrades to this automatically (loudly, recorded in `metadata["inference"]`) when the calibrator's fit rows are unavailable for per-replicate refitting (`fallback_reason` `"calibration_provenance_unavailable"` or `"calibrator_unavailable_for_non_oracle_routes"`). Label-free fresh draws with `calibration_data_path` are *not* a fallback case — they run the refit bootstrap on the calibration rows.
 - **`auto`**: cluster-robust, switching to bootstrap when calibration/evaluation coupling or few clusters are detected.
 
 ### Covariates

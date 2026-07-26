@@ -17,8 +17,11 @@ and refuses claims the data can't support.
 
 - No judge scores at all → **Step 0** below, then continue.
 - Judge scores but <4 oracle labels total → **Labeling loop**. Do not fabricate labels; do not
-  fall back to raw means (0 labels runs only as a loudly-flagged `naive_direct` fallback;
-  1–3 labels raise a hard error).
+  fall back to raw means (0 labels runs only as a loudly-flagged `naive_direct` fallback, and
+  1–3 labels fall back to the same loudly-flagged UNCALIBRATED `naive_direct` tier in
+  `analyze_dataset` — a calibrator cannot be fit below 4 independent labeled clusters. Treat
+  the run as blocked and never report those numbers. `calibrated_mean_ci` raises a
+  `ValueError` for <4 labels).
 - 4–9 labels → runs, but calibration folds auto-reduce with a warning and CIs are noisier.
   Report results as provisional and run the labeling loop toward ≥10.
 - ≥10 labels, two or more policies → **Canonical flow** (`analyze_dataset`).
@@ -169,10 +172,13 @@ use the planning API in `reference.md`.
 ## Refusal discipline — hard rules
 
 - **Too few pooled labels**: 0 labels fall back to raw judge means marked `naive_direct` with a
-  loud warning — never report those naive numbers as the answer. 1–3 labels raise a hard error.
-  4–9 labels calibrate with reduced folds — report the CIs as noisier and provisional, and
-  recommend ≥10. Never fabricate, impute, or self-generate oracle labels to get past the floor —
-  run the labeling loop.
+  loud warning — never report those naive numbers as the answer. 1–3 labels also fall back to
+  the same loudly-flagged UNCALIBRATED `naive_direct` tier in `analyze_dataset` (a calibrator
+  cannot be fit below 4 independent labeled clusters; all policies gate-FLAGGED) — treat the
+  run as blocked and never report those numbers; `calibrated_mean_ci` raises a `ValueError`
+  for <4 labels. 4–9 labels calibrate with reduced folds — report the CIs as noisier and
+  provisional, and recommend ≥10. Never fabricate, impute, or self-generate oracle labels to
+  get past the floor — run the labeling loop.
 - **REFUSE-LEVEL badge on a policy**: never state an absolute quality number for that policy.
   The scalar badge does not establish ranking validity; use the paired comparison and separate
   residual/covariate evidence for any ranking claim.
@@ -198,7 +204,7 @@ for any limited claim, the one-line reason plus the concrete fix (e.g. "collect 
 | Buying labels under every policy | Labels pool; one calibration can serve every policy — but grade that transfer with held-out probes before relying on it |
 | Reusing last month's calibrator silently | Held-out `transport_audit` with an explicit margin and at least 20 effective clusters |
 | Rescaling Likert/0–100 scores before calling | Pass as-is; bounded scales auto-normalize |
-| Running with <4 labels, or inventing labels | Hard error by design (0 labels only yields a flagged naive fallback); run the labeling loop |
+| Running with <4 labels, or inventing labels | `analyze_dataset` returns only the loudly-flagged UNCALIBRATED `naive_direct` tier (0–3 labels; `calibrated_mean_ci` raises a `ValueError`) — treat as blocked and run the labeling loop |
 
 Full signatures, `fresh_draws_dir`/CLI usage, planning API, diagnostics glossary, and
 troubleshooting: read `reference.md` in this directory.

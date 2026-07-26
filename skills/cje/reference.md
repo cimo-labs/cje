@@ -180,7 +180,9 @@ print(plan.summary())   # n_samples, m_oracle, MDE at 80% power
 ```
 
 `fit_variance_model` needs a real pilot — roughly 200+ prompts with 100+ randomly sampled oracle
-labels (below that it raises "Grid has insufficient variation") — and runs in seconds since 0.5.1
+labels (smaller pilots raise a `ValueError` such as "Need at least 2 valid n values" or "Grid has
+insufficient variation", and label-starved pilots may still fit but warn "Low R² - inspect the
+sampling design" — treat those plans as unreliable) — and runs in seconds since 0.5.1
 (the default `n_replicates=50` gives a stable fit in a few seconds; `n_replicates=150` for an extra-stable fit, ~20s).
 Always pass explicit costs: budget and costs must be in the same units (dollars in ⇒ dollars
 out), and plans floor at `m_min=30` oracle labels regardless of budget. Since 0.5.1 the variance
@@ -224,7 +226,8 @@ directories.
 
 | Symptom | Meaning / fix |
 |---|---|
-| `Too few oracle samples (N) for 5-fold CV. Need at least 10 (2 per fold).` | Hard floor (1–3 labels). Run the labeling loop (SKILL.md §Labeling); never invent labels. |
+| `Only N independent oracle-labeled prompt clusters are available (<4 ...); returning the UNCALIBRATED raw-judge tier` warning (`analyze_dataset`, 1–3 labels) | Below the 4-cluster floor no calibrator can be fit; the run returns the flagged `naive_direct` tier. Treat as blocked — run the labeling loop (SKILL.md §Labeling); never invent labels. |
+| `ValueError: Too few unique oracle prompt clusters (N) for cross-fitted calibration. Need at least 4 independent prompt clusters ...` (`calibrated_mean_ci`) | Same 4-cluster floor on the array API — repeated labels within one prompt do not create independent folds. Run the labeling loop; never invent labels. |
 | `No oracle labels found` → `method="naive_direct"` | 0 labels: raw judge means with a loud warning. Never report these as the answer — treat as blocked and run the labeling loop. |
 | `reducing calibration folds from 5 to K` warning | 4–9 labels: valid but noisier. Recommend ≥10 labels to the user. |
 | `ImportError: ... pip install "cje-eval[viz]"` | Plotting needs the viz extra; estimates work without it. |

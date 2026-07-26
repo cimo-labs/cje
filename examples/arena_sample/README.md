@@ -117,10 +117,13 @@ results = analyze_dataset(fresh_draws_dir="examples/arena_sample/fresh_draws")
 # Load probe as list of dicts (no wrapper needed!)
 probe = [json.loads(line) for line in open("examples/arena_sample/probe_slice/unhelpful_probe.jsonl")]
 
-# Run canonical transportability audit
-diag = audit_transportability(results.calibrator, probe, group_label="policy:unhelpful")
+# Run canonical transportability audit — declare a practical residual margin
+# (since 0.6.0, audits without delta_max are NOT_GRADED and can never PASS or FAIL)
+diag = audit_transportability(
+    results.calibrator, probe, group_label="policy:unhelpful", delta_max=0.05
+)
 print(diag.summary())
-# Transport: FAIL | Group: policy:unhelpful | N=50 | δ̂: -0.275 (CI: [-0.320, -0.231]) | Action: refit_two_stage
+# Residual transport: FAIL | Group: policy:unhelpful | N=50 (50 clusters) | delta: -0.331 (CI: [-0.403, -0.259]) | margin: +/-0.050 | Action: do not reuse this calibration; collect target labels and refit
 
 # Visualize
 diag.plot()  # Decile-level residuals
@@ -129,7 +132,9 @@ diag.plot()  # Decile-level residuals
 audits = {}
 for policy in ["clone", "parallel_universe_prompt", "unhelpful"]:
     probe = [json.loads(line) for line in open(f"examples/arena_sample/probe_slice/{policy}_probe.jsonl")]
-    audits[policy] = audit_transportability(results.calibrator, probe, group_label=f"policy:{policy}")
+    audits[policy] = audit_transportability(
+        results.calibrator, probe, group_label=f"policy:{policy}", delta_max=0.05
+    )
 
 fig = plot_transport_comparison(audits)
 ```

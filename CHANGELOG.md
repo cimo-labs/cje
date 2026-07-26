@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.6.0rc1] - Unreleased
+## [0.6.0rc1] - 2026-07-26
 
 Correctness and claim-calibration release. This version makes scale handling explicit,
 separates scalar score support from residual transport, and replaces zero-null transport
@@ -47,10 +47,14 @@ expected numeric drift.
   labels routes to its raw weighted oracle mean (`direct_oracle`) instead of a
   calibrated-plus-residual estimate — a different (better) estimator whose values
   will not match 0.5.x, even in mixed-coverage analyses. At complete coverage
-  `result.calibrator` is `None` (`calibrated_mean_ci` and `analyze_dataset`): check
-  for `None` before reusing a calibrator for a transport audit (MIGRATING-0.6.md §6
-  shows the reuse pattern). Calibration-only boundary and residual diagnostics remain
-  descriptive but cannot gate an estimate that does not use the calibrator.
+  `calibrated_mean_ci` returns `calibrator=None`; `analyze_dataset` still fits and
+  attaches a calibrator (for transport audits) whenever ≥ 4 labeled prompt clusters
+  exist even if every policy routes `direct_oracle` — its `results.calibrator` is
+  `None` only when no calibrator could be fit (no oracle labels, or fewer than 4
+  labeled clusters). Check for `None` before reusing a calibrator for a transport
+  audit (MIGRATING-0.6.md §6 shows the reuse pattern). Calibration-only boundary and
+  residual diagnostics remain descriptive but cannot gate an estimate that does not
+  use the calibrator.
 - **Calibrator objects exposed by public APIs operate in caller units.** Public judge
   scores go into `predict`; predictions and residual margins use the caller's oracle
   scale. Internal normalization remains an implementation detail. Mixed source scales
@@ -93,7 +97,7 @@ expected numeric drift.
   *Measured upgrade impact* (R=200 paired replicates on the fully-labeled
   Arena corpus, n=1000 prompts, m=100 oracle labels on the base policy,
   identical seeds/draws per version; full report:
-  `cje-arena-experiments/UPGRADE-COMPARISON-0.6.0.md`):
+  <https://github.com/cimo-labs/cje-arena-experiments/blob/main/UPGRADE-COMPARISON-0.6.0.md>):
   - Supported policies: point estimates statistically unchanged (mean shift
     ≤ 0.02 SE), SEs 4–8% tighter (ratio 0.92–0.96), 95% CI widths 7–12%
     narrower, empirical coverage unchanged within binomial noise (94.5%
@@ -202,7 +206,7 @@ expected numeric drift.
   agreement; runs the full qualification suite; builds once; installs and smoke-tests the
   wheel; then publishes those exact artifacts via PyPI trusted publishing.
 
-## [0.5.1] - Unreleased
+## [0.5.1] - 2026-07-07
 
 Pairwise-inference fix and planning-instrument switch. Per-policy estimates, standard
 errors, and CIs are bit-identical to 0.5.0 on every path (verified at full float
@@ -363,7 +367,9 @@ as a deprecated alias of `DirectDiagnostics` and is now slated for a future rele
   teacher-forcing error strings were replaced with Direct-mode wording.
 - **Docs truth pass**: subpackage READMEs, PLAYBOOK.md, and the agent skill scrubbed of
   every removed name; label-tier docs now match measured behavior (0 labels → loud
-  `naive_direct` fallback; 1–3 → hard error; 4–9 → fold auto-reduction with noisier CIs);
+  `naive_direct` fallback; 1–3 → hard error — since 0.6.0, 1–3 labels instead fall
+  back to the same loudly-flagged `naive_direct` tier in `analyze_dataset`; 4–9 →
+  fold auto-reduction with noisier CIs);
   `compare_policies` gained its first tests and a docstring note that its
   influence-function z-test SE basis differs from the headline bootstrap SEs.
 

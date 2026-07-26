@@ -214,9 +214,13 @@ variance_model = fit_variance_model(
     verbose=True,
 )
 
-# No pilot yet? Use a scenario-specific simulation instead:
-# from cje.diagnostics import simulate_variance_model
-# variance_model = simulate_variance_model(r2=0.7, verbose=True)
+# No pilot yet? Use a scenario-specific simulation instead. simulate_planning
+# bundles the fitted variance model, the plan, and a scenario_fingerprint that
+# records the simulated DGP (simulate_variance_model alone returns only a
+# FittedVarianceModel, with no fingerprint):
+# from cje.diagnostics import simulate_planning
+# sim = simulate_planning(r2=0.7, budget=5000, cost_model=cost, verbose=True)
+# plan, fingerprint = sim.plan, sim.scenario_fingerprint
 
 cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
 
@@ -234,6 +238,14 @@ plan_target = plan_for_mde(
 print(plan_target.total_cost)
 ```
 
+> **Note:** `fit_variance_model` deliberately measures variance components with the
+> analytic cluster-robust + OUA instrument (see the caveats below), so while it fits
+> you will see repeated warnings that `inference_method='cluster_robust'` "was
+> explicitly requested" and that bootstrap is recommended. You did not misconfigure
+> anything — those warnings come from the planning instrument's internal calls and
+> are expected during fitting; ignore them. Use `inference_method="bootstrap"` for
+> your actual analyses as usual.
+
 ### Label budgeting rules
 
 - Sample oracle labels randomly (or randomly within predeclared strata), record inclusion probabilities, and weight unequal-probability samples.
@@ -245,7 +257,7 @@ print(plan_target.total_cost)
 
 - MDE assumes independent policies; paired evals on a shared prompt set typically detect smaller differences (plans are conservative).
 - Reported variance shares are specific to the returned allocation: `(sigma2_eval/n) / V` and `(sigma2_cal/m) / V`. Raw fitted coefficients are not variance shares.
-- Simulation planning is specific to its synthetic data-generating process. Keep the returned `scenario_fingerprint`, vary plausible inputs, and do not present a single simulated budget as an empirical guarantee.
+- Simulation planning is specific to its synthetic data-generating process. Keep the `scenario_fingerprint` returned by `simulate_planning(...)` (the simulation-planning entry point, which bundles the plan with its fingerprint — `simulate_variance_model` alone returns only the fitted variance model), vary plausible inputs, and do not present a single simulated budget as an empirical guarantee.
 - Variance components are measured with the analytic cluster-robust + OUA instrument, which tracked the realized SE of the production estimator within ~5% at every allocation in a pilot-scale validation grid (instrument experiment 2026-07-07, R=400 replicates/cell). Budgets planned with pre-0.5.1 versions used a bootstrap instrument that ran 15-29% hot at pilot-sized label counts — those older budgets were inflated upper bounds; re-running planning on the same pilot will typically return ~15-20% smaller budgets.
 
 ---
