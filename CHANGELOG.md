@@ -1,14 +1,27 @@
 # Changelog
 
-## [0.6.0rc1] - 2026-07-26
+## [0.6.0] - 2026-07-26
 
 Correctness and claim-calibration release. This version makes scale handling explicit,
 separates scalar score support from residual transport, and replaces zero-null transport
-testing with a predeclared practical-equivalence contract.
+testing with a predeclared practical-equivalence contract. (First published as
+`0.6.0rc1` earlier the same day; the final release additionally includes the
+"Changed since 0.6.0rc1" items below.)
 
-**Upgrading from 0.5.x? Read [MIGRATING-0.6.md](MIGRATING-0.6.md)** — it covers every
-breaking change with before/after snippets, the transport regrade table, and the
+**Upgrading from an earlier release? Read [MIGRATING-0.6.md](MIGRATING-0.6.md)** — a
+one-screen summary of the breaking changes, the transport regrade table, and the
 expected numeric drift.
+
+### Changed since 0.6.0rc1
+
+- The no-margin transport-audit warning is a forward-looking `UserWarning` stating
+  the consequence (status can only be `NOT_GRADED`; pass `delta_max` to grade)
+  instead of a `FutureWarning` reciting prior-version vocabulary, and the
+  high-level `TransportAuditConfig` path suppresses only that specific message.
+- Documentation presents current behavior throughout: `MIGRATING-0.6.md` is a
+  one-screen delta for pre-0.6 users, and version-contrast narration was removed
+  from the README, PLAYBOOK, module READMEs, examples, and the bundled agent
+  skill. Runtime error tombstones keep their version pointers.
 
 ### Breaking
 
