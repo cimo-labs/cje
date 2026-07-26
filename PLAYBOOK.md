@@ -64,8 +64,9 @@ Notes:
 Use `results.compare_policies(i, j)` for any "is A better than B?" claim — never eyeballed
 CI overlap. On the bootstrap path it performs paired inference over the (B × P) replicate
 matrix (`method: "paired_bootstrap"` in the returned dict), so the difference SE includes
-calibrator-refit noise; pre-0.5.1 influence-function difference SEs were anti-conservative
-on near-tie pairs (~90% false significance in the pre-registered benchmark). For many-pair
+calibrator-refit noise and stays honest on near-tie pairs (unpaired influence-function
+difference SEs were anti-conservative there — ~90% false significance in the
+pre-registered benchmark). For many-pair
 sweeps use `results.compare_all_policies(adjust="bh")` (Benjamini-Hochberg-adjusted
 p-values).
 
@@ -114,7 +115,7 @@ Predeclare `delta_max` from the smallest mean bias that would change the operati
 - `PASS`: the entire simultaneous CI lies inside `[-delta_max, +delta_max]` — requires at least 20 effective clusters.
 - `FAIL`: the entire simultaneous CI lies outside that interval on either side. FAIL is graded even below the effective-cluster floor: a decisive out-of-margin interval is evidence of unacceptable bias, not low power, so an under-sized probe cannot defeat the hard gate.
 - `INCONCLUSIVE`: the CI overlaps a margin boundary, or there are fewer than 20 effective clusters without the CI being decisively outside.
-- `NOT_GRADED`: probes were evaluated but no practical margin was declared (the audit emits a `FutureWarning` for one release cycle — 0.5.x graded the same call under a zero-null test).
+- `NOT_GRADED`: probes were evaluated but no practical margin was declared — the residual estimate and CI are descriptive only, and the audit emits a `FutureWarning` prompting you to declare one.
 - `NOT_CHECKED`: no independent probe was supplied for that policy.
 
 Pass `cluster_ids` when rows share an independence unit, `sample_weights` for unequal-probability probes, and the same fitted covariates used by the calibrator. Score-bin occupancy and decile residual plots are descriptive only; they never determine the verdict.
@@ -210,7 +211,7 @@ from cje.diagnostics import CostModel, fit_variance_model, plan_evaluation, plan
 base_pilot = load_fresh_draws_auto("responses/pilot", "base")
 variance_model = fit_variance_model(
     base_pilot,
-    n_replicates=150,  # extra-stable fit, ~20s since 0.5.1; the default (50) gives R2~0.85 in a few seconds
+    n_replicates=150,  # extra-stable fit, ~20s; the default (50) gives R2~0.85 in a few seconds
     verbose=True,
 )
 
@@ -258,7 +259,7 @@ print(plan_target.total_cost)
 - MDE assumes independent policies; paired evals on a shared prompt set typically detect smaller differences (plans are conservative).
 - Reported variance shares are specific to the returned allocation: `(sigma2_eval/n) / V` and `(sigma2_cal/m) / V`. Raw fitted coefficients are not variance shares.
 - Simulation planning is specific to its synthetic data-generating process. Keep the `scenario_fingerprint` returned by `simulate_planning(...)` (the simulation-planning entry point, which bundles the plan with its fingerprint — `simulate_variance_model` alone returns only the fitted variance model), vary plausible inputs, and do not present a single simulated budget as an empirical guarantee.
-- Variance components are measured with the analytic cluster-robust + OUA instrument, which tracked the realized SE of the production estimator within ~5% at every allocation in a pilot-scale validation grid (instrument experiment 2026-07-07, R=400 replicates/cell). Budgets planned with pre-0.5.1 versions used a bootstrap instrument that ran 15-29% hot at pilot-sized label counts — those older budgets were inflated upper bounds; re-running planning on the same pilot will typically return ~15-20% smaller budgets.
+- Variance components are measured with the analytic cluster-robust + OUA instrument, which tracked the realized SE of the production estimator within ~5% at every allocation in a pilot-scale validation grid (instrument experiment 2026-07-07, R=400 replicates/cell).
 
 ---
 

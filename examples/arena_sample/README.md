@@ -118,7 +118,7 @@ results = analyze_dataset(fresh_draws_dir="examples/arena_sample/fresh_draws")
 probe = [json.loads(line) for line in open("examples/arena_sample/probe_slice/unhelpful_probe.jsonl")]
 
 # Run canonical transportability audit — declare a practical residual margin
-# (since 0.6.0, audits without delta_max are NOT_GRADED and can never PASS or FAIL)
+# (audits without delta_max are NOT_GRADED and can never PASS or FAIL)
 diag = audit_transportability(
     results.calibrator, probe, group_label="policy:unhelpful", delta_max=0.05
 )

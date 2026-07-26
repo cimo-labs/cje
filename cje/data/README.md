@@ -56,7 +56,7 @@ The minimal record is two fields:
 - `target_policy`: Optional in per-policy files (inferred from the filename); **required** per record in a single combined JSONL file
 - `metadata`: Optional dict for per-response covariates
 
-**Logprob fields are ignored.** 0.3.x-era logged data carries `base_policy_logprob` / `target_policy_logprobs`; since 0.4.0 (Direct-mode only) these are present-and-ignored, with an INFO note. Off-policy estimation lives on the frozen 0.3.x line (`pip install "cje-eval==0.3.*"`).
+**Logprob fields are ignored.** 0.3.x-era logged data carries `base_policy_logprob` / `target_policy_logprobs`; CJE is Direct-mode only, so these are present-and-ignored, with an INFO note. Off-policy estimation lives on the frozen 0.3.x line (`pip install "cje-eval==0.3.*"`).
 
 ### Fresh-draws directory layout
 
@@ -161,7 +161,7 @@ cis = result.ci()  # [(lower, upper), ...]
 comparison = result.compare_policies(0, 1)
 print(f"Difference: {comparison['difference']:.3f} (p={comparison['p_value']:.3f})")
 
-# Typed results (0.5.0) — metadata mirrors stay the serialized source of truth
+# Typed results — metadata mirrors stay the serialized source of truth
 print(result.summary())              # per-policy estimates + CIs + gate flags
 verdict = result.best_policy()       # highest point estimate plus limitations
 print(verdict.name, verdict.flagged, verdict.runner_up)
@@ -265,7 +265,7 @@ folds = get_folds_for_prompts([s.prompt_id for s in dataset.samples], n_folds=5,
 
 - **Deterministic**: `hash(prompt_id) % n_folds` — reproducible across runs
 - **Filtering-proof**: based on stable prompt_ids, not array indices
-- **Not the calibration folds**: since 0.6.0, `JudgeCalibrator.fit_cv` assigns
+- **Not the calibration folds**: `JudgeCalibrator.fit_cv` assigns
   whole oracle prompt clusters to folds via a seeded-hash sort with balanced
   round-robin assignment (auto-reducing the fold count when labeled clusters
   are scarce) and records the assignments actually used

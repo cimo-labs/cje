@@ -124,7 +124,7 @@ Best by point estimate: parallel_universe_prompt
 Limitations: residual transport NOT_CHECKED
 ```
 
-The announcement is **reliability-aware**: the highest point estimate remains visible, and unresolved or failed checks are listed as limitations. `results.best_policy()` defaults to `reliable_only=True` (the 0.5.0 safety default): a gate-flagged argmax is demoted to the best gate-passing policy, loudly — the flagged raw winner travels as `runner_up` with `runner_up_reasons`, a warning is logged, and `summary()` prints both. Pass `reliable_only=False` for the raw argmax with its `flagged` marker.
+The announcement is **reliability-aware**: the highest point estimate remains visible, and unresolved or failed checks are listed as limitations. `results.best_policy()` defaults to `reliable_only=True` (the safety default): a gate-flagged argmax is demoted to the best gate-passing policy, loudly — the flagged raw winner travels as `runner_up` with `runner_up_reasons`, a warning is logged, and `summary()` prints both. Pass `reliable_only=False` for the raw argmax with its `flagged` marker.
 
 ### `cje analyze PATH`
 
@@ -192,11 +192,20 @@ Provide `fresh_draws_dir` **or** `fresh_draws_data`.
 
 The `estimator` names `"auto"`, `"direct"`, and `"calibrated-direct"` are aliases of the one calibrated estimator — whether calibration runs is driven solely by oracle-label availability (0 labels → the loud `naive_direct` fallback), and the parameter's only observable effect is which name is recorded in `metadata["estimator"]` (`"auto"` records `"direct"`).
 
+### Units and claim tiers
+
+Results say exactly what estimand they carry and in what units:
+
+- `results.units` (`ResultUnits`): `estimand` is `"oracle_mean"`, `"judge_mean"`, or `"mixed"` — derived from the calibration state alone. A declared `output_scale` changes only the display axis (`normalization.results_scale`), never the estimand label, and is ignored (with a warning) for mixed runs.
+- `metadata["claim_tier_by_policy"]`: per policy, `"DIRECT_ORACLE_MEAN"` (fully labeled, no calibrator), `"CALIBRATED_ORACLE_MEAN"`, or `"RAW_JUDGE_MEAN"`; `metadata["claim_tier"]` is the run-level tier (`"MIXED"` when tiers differ without calibration).
+- `metadata["transport_audits"]`: per-policy `PASS / FAIL / INCONCLUSIVE / NOT_GRADED / NOT_CHECKED` records when `TransportAuditConfig` is supplied; only an observed `FAIL` adds a hard reliability gate.
+
+Report numbers with their tier. A `RAW_JUDGE_MEAN` estimate is a judge-scale quantity — never present it as an oracle-scale level.
+
 ### Removed entry points (migration guidance)
 
-- `logged_data_path` is fully gone from `analyze_dataset` in 0.6.0: passing it now raises a plain `TypeError` (0.4–0.5 kept a dead parameter to raise a curated message). The CLI and the logged-data file detection still print the full migration guidance. Logged data with `judge_score` + `oracle_label` works via `calibration_data_path`; IPS/DR users pin `pip install "cje-eval==0.3.*"`.
+- `analyze_dataset` has no `logged_data_path` parameter: passing it raises a plain `TypeError`. The CLI and the logged-data file detection print full migration guidance for logged-data-shaped files (logprob fields, no `target_policy`). Logged data with `judge_score` + `oracle_label` works via `calibration_data_path`; IPS/DR users pin `pip install "cje-eval==0.3.*"`.
 - `estimator="calibrated-ips"` / `"raw-ips"` / `"dr-cpo"` / `"mrdr"` / `"tmle"` / `"stacked-dr"` raise curated migration errors (CLI and API share one validator in `interface/_removed.py`).
-- Upgrading from 0.5.x? See [MIGRATING-0.6.md](../../MIGRATING-0.6.md).
 
 ## Advanced Usage
 
@@ -262,7 +271,27 @@ print(diag.summary())
 # Residual transport: PASS | Group: ... | N=... | delta: ... | margin: ...
 ```
 
-The other states are `FAIL`, `INCONCLUSIVE`, and `NOT_GRADED`; a policy without a supplied probe is recorded as `NOT_CHECKED` by the high-level `TransportAuditConfig` path rather than silently treated as a pass. Complete oracle coverage may return `results.calibrator is None` because its direct oracle mean does not depend on calibration (see [MIGRATING-0.6.md](../../MIGRATING-0.6.md) §6 for the reuse pattern).
+The other states are `FAIL`, `INCONCLUSIVE`, and `NOT_GRADED`; a policy without a supplied probe is recorded as `NOT_CHECKED` by the high-level `TransportAuditConfig` path rather than silently treated as a pass.
+
+**Reusing a calibrator at complete oracle coverage.** When every row is oracle-labeled, `calibrated_mean_ci` reports the direct oracle mean and fits no calibrator: `result.calibrator is None`, and there is no judge→oracle map to transport-audit. To grade calibrator reuse for a future partially-labeled run, fit on a partial slice explicitly:
+
+```python
+from cje import calibrated_mean_ci, transport_audit
+
+result = calibrated_mean_ci(scores, labels)
+
+if result.calibrator is None:
+    # Complete oracle coverage: the estimate never used a calibrator. Mask a
+    # held-out slice to force calibration, then audit that fit.
+    partial = labels.copy()
+    partial[held_out_idx] = float("nan")
+    fit = calibrated_mean_ci(scores, partial)
+    audit = transport_audit(probe_scores, probe_labels, fit.calibrator, delta_max=0.05)
+else:
+    audit = transport_audit(probe_scores, probe_labels, result.calibrator, delta_max=0.05)
+```
+
+`analyze_dataset` differs in one respect: fully observed policies still route to their oracle mean (`direct_oracle`), but `results.calibrator` is `None` only when no calibrator could be fit at all (no oracle labels, or fewer than 4 labeled prompt clusters) — at ordinary complete coverage `analyze_dataset` still fits and attaches a calibrator for transport audits even though the estimates do not use it. Do not use `results.calibrator is None` to detect complete coverage in `analyze_dataset` output; check the per-policy routing metadata instead.
 
 See [`cje/diagnostics/README.md`](../diagnostics/README.md) and the [PLAYBOOK](../../PLAYBOOK.md) for the decision protocol.
 
