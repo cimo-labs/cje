@@ -43,8 +43,22 @@ tests/
 │   ├── test_planning_viz.py              # Planning visualization
 │   └── test_simulation_planning.py       # Simulation-based planning
 │
+├── Remediation / Contract Tests (0.5.x–0.6.0)
+│   ├── test_bootstrap_statistical_sanity.py  # Bootstrap SEs pinned against analytic cluster-robust SEs
+│   ├── test_data_contract_remediation.py     # Ingestion/data contracts (loud errors, InferenceUnavailableError)
+│   ├── test_direct_routing_final.py          # direct_oracle routing, one-cluster SE refusal, tiers
+│   ├── test_estimator_config.py              # estimator_config validation and plumbing
+│   ├── test_ingestion_unification.py         # Unified ingestion paths (files, dirs, in-memory)
+│   ├── test_planning_polish.py               # Planning API polish (warnings, summaries)
+│   ├── test_planning_semantics.py            # Planning semantics (variance shares, allocation law)
+│   ├── test_statistical_core_remediation.py  # Statistical core contracts (weights, folds, OUA)
+│   ├── test_transport_equivalence.py         # Transport regrade (delta_max, five states, margins)
+│   └── test_typed_results.py                 # Typed results on EstimationResult
+│
 └── data/                                 # Test datasets (in examples/arena_sample/)
 ```
+
+(The listing above is representative; run `ls cje/tests/` for the authoritative set.)
 
 ## Core Concepts
 
@@ -80,7 +94,7 @@ Shared fixtures in `conftest.py` provide consistent test data:
 ## Running Tests
 
 Prereqs:
-- Python `>=3.9,<3.14`
+- Python `>=3.10,<3.14`
 - If using Poetry: `poetry install`
 - If using pip: `pip install -e ".[viz]" && pip install pytest pytest-cov` (and optionally `nbconvert nbformat` for notebook execution tests)
 
@@ -191,8 +205,8 @@ pip install -e .
 
 - **E2E tests**: < 2 seconds each
 - **Infrastructure tests**: < 1 second each
-- **Fast suite** (`-m "not slow"`): ~1 minute for ~450 tests
-- **Full suite**: ~490 collected tests; the 28 slow tests (Monte Carlo coverage, planning, notebook execution, and the slowest arena integration tests) add 20+ minutes
+- **Fast suite** (`-m "not slow"`): a few minutes for ~653 tests
+- **Full suite**: ~682 collected tests; the 29 slow tests (Monte Carlo coverage, planning, notebook execution, and the slowest arena integration tests) add 20+ minutes
 
 Test execution tips:
 - Use `-x` to stop on first failure

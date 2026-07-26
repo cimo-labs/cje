@@ -10,11 +10,8 @@ Consolidated module for all diagnostic functionality:
 
 from typing import Any
 
-# Data models. IPSDiagnostics is a DEPRECATED alias of DirectDiagnostics
-# (0.3.x name); it will be removed in a future release.
 from .models import (
     DirectDiagnostics,
-    IPSDiagnostics,
     Status,
 )
 
@@ -30,6 +27,7 @@ from .gates import (
 
 # Transport diagnostics
 from .transport import (
+    TransportAuditConfig,
     TransportDiagnostics,
     audit_transportability,
     compute_residuals,
@@ -70,9 +68,8 @@ from .simulation_planning import (
 )
 
 __all__ = [
-    # Data models (IPSDiagnostics is a deprecated alias slated for removal)
+    # Data models
     "DirectDiagnostics",
-    "IPSDiagnostics",
     "Status",
     # Canonical gates
     "BOUNDARY_CARD_STATUS_TO_STATUS",
@@ -82,6 +79,7 @@ __all__ = [
     "TRANSPORT_STATUS_TO_STATUS",
     "worst_status",
     # Transport
+    "TransportAuditConfig",
     "TransportDiagnostics",
     "audit_transportability",
     "compute_residuals",
@@ -128,5 +126,11 @@ def __getattr__(name: str) -> Any:
             "0.5.0 — use EstimationResult.compare_policies(i, j) for "
             "pairwise claims, or compute paired contrasts from the "
             "bootstrap_matrix returned by cluster_bootstrap_direct_with_refit."
+        )
+    if name == "IPSDiagnostics":
+        raise ImportError(
+            "cje.diagnostics.IPSDiagnostics was removed in 0.6.0; "
+            "use DirectDiagnostics. OPE estimators remain available only "
+            "on the frozen cje-eval 0.3.x line."
         )
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

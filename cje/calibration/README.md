@@ -33,7 +33,7 @@ The selected mode is recorded (`calibrator.selected_mode`, and in dataset metada
 
 ### 2. Cross-fitting
 
-`fit_cv()` fits a global model f_all (used for stable reward predictions) plus per-fold models f^(−k) for out-of-fold predictions. Fold assignment is deterministic via the unified fold system (`cje.data.folds`, `hash(prompt_id) % k`). Cross-fitting is what keeps downstream inference honest: OOF predictions never score a sample with a model that saw its label.
+`fit_cv()` fits a global model f_all (used for stable reward predictions) plus per-fold models f^(−k) for out-of-fold predictions. Fold assignment gives whole oracle prompt clusters to folds via a seeded-hash (blake2b) sort with balanced round-robin assignment — deterministic given (prompt ids, seed, k), but **not** equal to `hash(prompt_id) % k`, so do not recompute assignments with `cje.data.folds.get_fold`; read the recorded assignments from `CalibrationResult.fold_ids`. Cross-fitting is what keeps downstream inference honest: OOF predictions never score a sample with a model that saw its label.
 
 ### 3. Calibration-aware inference (oracle uncertainty)
 
@@ -134,7 +134,7 @@ info = calibrator.get_calibration_info()                  # fit-time metrics
 
 1. **Mean preservation is structural, not corrective.** The isotonic projection preserves the slice mean by construction; there is no recentering code to drift or fail.
 2. **Auto mode prefers the simpler model.** Two-stage must earn its complexity via the 1-SE rule or regional wins; ties go to monotone.
-3. **Deterministic folds from `prompt_id`.** Calibration folds are reproducible across runs and shared with the estimators' jackknife, so uncertainty accounting composes correctly.
+3. **Deterministic cluster folds from `prompt_id` + seed.** Calibration folds assign whole prompt clusters via a seeded blake2b sort with round-robin balancing, so they are reproducible across runs (given the same prompt ids, seed, and fold count) and fold sizes differ by at most one cluster. The recorded assignments live on `CalibrationResult.fold_ids` — they are not the `hash(prompt_id) % k` values of `cje.data.folds`.
 4. **Fit-time recording over recomputation.** Oracle S-range and quality metrics are captured when the calibrator is fitted — downstream consumers (boundary cards, diagnostics) never have to re-derive them from data they may not have.
 5. **Numerical robustness.** Degenerate fold assignments fall back to fitting on all oracle samples; constant fits with varying labels warn loudly (inverted judge scale); predictions are clipped to [0, 1].
 

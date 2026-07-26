@@ -1,9 +1,18 @@
-"""Unified fold assignment for cross-validation.
+"""Stable hash-based fold assignment utilities.
 
-Core principle: Use prompt_id hashing for stable fold assignment
-that survives filtering and works across all components.
+`get_fold` / `get_folds_for_prompts` compute deterministic
+`hash(prompt_id) % n_folds` assignments: stable under filtering (a
+prompt_id maps to the same fold no matter what else is in the data), useful
+for generic reproducible splits.
 
-All cross-validation in CJE MUST use these functions.
+They do NOT predict calibration folds. Since 0.6.0,
+`JudgeCalibrator.fit_cv` assigns whole oracle prompt clusters to folds via
+a seeded-hash sort with balanced round-robin assignment, auto-reducing the
+fold count when labeled clusters are scarce, and records the assignments
+actually used (`CalibrationResult.fold_ids`,
+`calibration_info["n_folds"]`). Calibration fold membership depends on the
+whole oracle cluster set, so read the recorded assignments instead of
+recomputing them here.
 """
 
 import hashlib
@@ -12,13 +21,14 @@ from typing import List
 
 
 def get_fold(prompt_id: str, n_folds: int = 5, seed: int = 42) -> int:
-    """Get fold assignment for a single prompt_id.
+    """Get a stable hash-based fold assignment for a single prompt_id.
 
-    This is THE authoritative way to assign folds in CJE.
     Uses stable hashing that:
     - Survives sample filtering
     - Works with fresh draws (same prompt_id → same fold)
-    - Ensures consistency across all components
+
+    Note: calibration folds are NOT assigned this way (see the module
+    docstring) — this is for generic reproducible splits.
 
     Args:
         prompt_id: Unique identifier for the prompt

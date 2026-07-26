@@ -9,6 +9,8 @@ from .models import (
     Sample,
     Dataset,
     EstimationResult,
+    InferenceUnavailableError,
+    ResultUnits,
 )
 from .loaders import DatasetLoader
 from .validation import (
@@ -24,20 +26,35 @@ from .fresh_draws import (
     fresh_draws_from_dict,
     NormalizationInfo,
 )
-from .normalization import ScaleInfo, detect_range
+from .normalization import ScaleDeclaration, ScaleInfo, detect_range
 
 from typing import Optional, List
 
 
 # Convenience function
 def load_dataset_from_jsonl(
-    file_path: str, target_policies: Optional[List[str]] = None
+    file_path: str,
+    target_policies: Optional[List[str]] = None,
+    *,
+    judge_field: str = "judge_score",
+    oracle_field: str = "oracle_label",
+    judge_scale: ScaleDeclaration = None,
+    oracle_scale: ScaleDeclaration = None,
+    strict: bool = False,
+    on_invalid: Optional[str] = None,
 ) -> Dataset:
     """Load Dataset from JSONL file.
 
     Convenience function using the default loader.
     """
-    return DatasetLoader().load_from_jsonl(file_path, target_policies)
+    return DatasetLoader(
+        judge_field=judge_field,
+        oracle_field=oracle_field,
+        judge_scale=judge_scale,
+        oracle_scale=oracle_scale,
+        strict=strict,
+        on_invalid=on_invalid,
+    ).load_from_jsonl(file_path, target_policies)
 
 
 __all__ = [
@@ -47,12 +64,15 @@ __all__ = [
     "Sample",
     "Dataset",
     "EstimationResult",
+    "InferenceUnavailableError",
+    "ResultUnits",
     # Fresh draws
     "FreshDrawSample",
     "FreshDrawDataset",
     "fresh_draws_from_dict",
     "NormalizationInfo",
     # Normalization
+    "ScaleDeclaration",
     "ScaleInfo",
     "detect_range",
     # Validation

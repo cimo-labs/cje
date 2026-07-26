@@ -9,6 +9,7 @@ All modes share ONE cross-fitted implementation (`FlexibleCalibrator`):
 then delegates model fitting and prediction.
 """
 
+import hashlib
 import numpy as np
 from typing import Optional, Tuple, Dict, List, Literal, TYPE_CHECKING, Any
 from dataclasses import dataclass
@@ -20,7 +21,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def resolve_n_folds(n_oracle: int, requested_folds: int) -> int:
+def resolve_n_folds(
+    n_oracle: int, requested_folds: int, n_oracle_clusters: Optional[int] = None
+) -> int:
     """Choose the number of calibration CV folds for the available labels.
 
     Cross-fitted calibration needs at least 2 oracle samples per fold. When
@@ -36,13 +39,14 @@ def resolve_n_folds(n_oracle: int, requested_folds: int) -> int:
     Returns:
         Number of folds to use (possibly reduced)
     """
-    if n_oracle >= requested_folds * 2 or n_oracle < 4:
+    effective_n = n_oracle if n_oracle_clusters is None else n_oracle_clusters
+    if effective_n >= requested_folds * 2 or effective_n < 4:
         # Enough labels for the requested folds, or too few to calibrate
         # at all (let the calibrator raise its actionable error).
         return requested_folds
-    reduced_folds = max(2, n_oracle // 2)
+    reduced_folds = max(2, effective_n // 2)
     logger.warning(
-        f"Only {n_oracle} oracle-labeled samples available; reducing "
+        f"Only {effective_n} unique oracle-labeled clusters available; reducing "
         f"calibration folds from {requested_folds} to {reduced_folds}. Results "
         f"will be noisier — provide at least {requested_folds * 2} oracle labels "
         f"for stable calibration."
@@ -50,9 +54,34 @@ def resolve_n_folds(n_oracle: int, requested_folds: int) -> int:
     return reduced_folds
 
 
+def _balanced_cluster_folds(
+    prompt_ids: List[str],
+    n_folds: int,
+    seed: int,
+    balancing_prompt_ids: Optional[List[str]] = None,
+) -> np.ndarray:
+    """Assign whole prompt clusters to deterministic, balanced folds.
+
+    Hashing directly modulo ``n_folds`` can leave folds empty on small oracle
+    slices.  Sorting cluster ids by a stable seeded hash and assigning them
+    round-robin preserves determinism while guaranteeing fold sizes differ by
+    at most one cluster.
+    """
+    unique_prompts = sorted(set(balancing_prompt_ids or prompt_ids))
+
+    def hash_key(prompt_id: str) -> bytes:
+        return hashlib.blake2b(f"{prompt_id}-{seed}".encode(), digest_size=16).digest()
+
+    ordered = sorted(unique_prompts, key=lambda pid: (hash_key(pid), pid))
+    prompt_to_fold = {pid: rank % n_folds for rank, pid in enumerate(ordered)}
+    for prompt_id in set(prompt_ids) - set(prompt_to_fold):
+        prompt_to_fold[prompt_id] = int.from_bytes(hash_key(prompt_id), "big") % n_folds
+    return np.asarray([prompt_to_fold[pid] for pid in prompt_ids], dtype=int)
+
+
 def _index_mask_to_bool(
     indices: np.ndarray, oracle_labels: np.ndarray, n_total: int
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Convert an integer index mask to a boolean mask, keeping labels aligned.
 
     Boolean fancy-indexing (``judge_scores[bool_mask]``) returns scores in
@@ -66,13 +95,34 @@ def _index_mask_to_bool(
         n_total: Total number of samples
 
     Returns:
-        Tuple of (bool_mask, oracle_labels reordered to ascending-index order)
+        Tuple of (bool_mask, oracle_labels reordered to ascending-index order,
+        argsort permutation applied to the labels — any other compact array
+        given in caller order, e.g. sample_weight, must be reordered with it)
 
     Raises:
         ValueError: If indices contain duplicates or lengths mismatch
     """
     indices = np.asarray(indices)
     oracle_labels = np.asarray(oracle_labels)
+
+    if indices.ndim != 1:
+        raise ValueError("oracle_mask index array must be one-dimensional")
+    if not np.issubdtype(indices.dtype, np.integer) or np.issubdtype(
+        indices.dtype, np.bool_
+    ):
+        raise ValueError("oracle_mask indices must have an integer dtype")
+    if np.any(indices < 0):
+        bad = indices[indices < 0]
+        raise ValueError(
+            f"oracle_mask contains negative indices {bad[:5].tolist()}; "
+            "indices must be in [0, n_samples)."
+        )
+    if np.any(indices >= n_total):
+        bad = indices[indices >= n_total]
+        raise ValueError(
+            f"oracle_mask contains out-of-range indices {bad[:5].tolist()} "
+            f"for n_samples={n_total}."
+        )
 
     unique_indices, counts = np.unique(indices, return_counts=True)
     if np.any(counts > 1):
@@ -92,7 +142,7 @@ def _index_mask_to_bool(
     bool_mask[indices] = True
 
     order = np.argsort(indices)
-    return bool_mask, oracle_labels[order]
+    return bool_mask, oracle_labels[order], order
 
 
 @dataclass
@@ -176,6 +226,20 @@ class JudgeCalibrator:
         # Fit-time quality metrics, exposed via get_calibration_info() for
         # estimator diagnostics (empty until fit_cv runs).
         self._calibration_info: Dict[str, Any] = {}
+        # Exact compact fit inputs are retained so lower-level callers can
+        # construct an explicit calibration-provenance contract.  These are
+        # statistical state, not serialized result payloads.
+        self._fit_judge_scores: Optional[np.ndarray] = None
+        self._fit_oracle_labels: Optional[np.ndarray] = None
+        self._fit_prompt_ids: Optional[List[str]] = None
+        self._fit_covariates: Optional[np.ndarray] = None
+        self._fit_sample_weight: Optional[np.ndarray] = None
+        self._oracle_fold_ids: Optional[np.ndarray] = None
+
+    @property
+    def n_folds(self) -> int:
+        """CV fold count actually used by the last `fit_cv` (after auto-reduction)."""
+        return self._n_folds
 
     def _store_oracle_ranges(
         self, oracle_scores: np.ndarray, oracle_calibrated: np.ndarray
@@ -261,11 +325,18 @@ class JudgeCalibrator:
         prompt_ids: Optional[List[str]] = None,
         covariates: Optional[np.ndarray] = None,
         quiet: bool = False,
+        sample_weight: Optional[np.ndarray] = None,
     ) -> CalibrationResult:
         """Fit both global and cross-fitted calibration models.
 
         This method:
-        1. Assigns fold IDs to all samples (canonical hash-based folds)
+        1. Assigns whole prompt clusters to balanced folds (seeded-hash sort
+           with round-robin assignment, so repeated draws of a prompt never
+           cross-fit against one another and small oracle slices cannot
+           produce empty folds). The assignments actually used are recorded
+           in `CalibrationResult.fold_ids` and this calibrator's state; do
+           not reconstruct them with `cje.data.folds.get_fold`, which no
+           longer predicts calibration folds.
         2. Fits per-fold models f^(-k) for cross-fitted predictions
         3. Fits a global model f_all on all oracle data (for stable rewards)
 
@@ -275,13 +346,18 @@ class JudgeCalibrator:
             oracle_mask: Boolean mask indicating which samples have oracle labels
             n_folds: Number of CV folds (auto-reduced when labels are scarce;
                 see `resolve_n_folds`)
-            prompt_ids: Optional prompt IDs for fold assignment. When None,
-                stable row-index ids are synthesized so every caller shares
-                the canonical hash-fold path.
+            prompt_ids: Optional prompt IDs defining the fold clusters. When
+                None, stable row-index ids are synthesized so every caller
+                shares the same cluster-fold path.
             covariates: Optional covariate matrix (n_samples, n_covariates)
             quiet: Log fit progress at DEBUG instead of INFO. Used by the
                 per-replicate bootstrap refits, which would otherwise emit
                 thousands of identical "CV Calibration complete" lines.
+            sample_weight: Optional positive per-label fit weights. Length
+                must match either judge_scores (aligned with all rows) or
+                oracle_labels (compact, in the caller's label order — kept
+                aligned with the labels even when oracle_mask is an unsorted
+                index array).
 
         Returns:
             CalibrationResult with both global and CV calibration
@@ -290,7 +366,10 @@ class JudgeCalibrator:
         judge_scores = np.asarray(judge_scores)
         n_total = len(judge_scores)
 
-        # Handle different input formats
+        # Handle different input formats.  When an index-array oracle_mask
+        # reorders the compact labels, the same permutation must be applied
+        # to any compact sample_weight below.
+        oracle_label_order: Optional[np.ndarray] = None
         if oracle_mask is not None:
             # Explicit mask provided (can be boolean array or indices)
             oracle_mask_array = np.asarray(oracle_mask)
@@ -298,16 +377,34 @@ class JudgeCalibrator:
                 raise ValueError("oracle_labels required when oracle_mask provided")
             oracle_labels = np.asarray(oracle_labels)
 
-            # Check if mask is indices (integers) or boolean
-            if oracle_mask_array.dtype in [np.int32, np.int64, int]:
+            # Check if mask is indices (all signed/unsigned integer widths)
+            # or boolean.  Floats are not accepted as either representation.
+            if np.issubdtype(oracle_mask_array.dtype, np.integer) and not np.issubdtype(
+                oracle_mask_array.dtype, np.bool_
+            ):
                 # Convert indices to a boolean mask, reordering labels to the
                 # ascending-index order produced by boolean fancy-indexing.
-                oracle_mask, oracle_labels = _index_mask_to_bool(
+                oracle_mask, oracle_labels, oracle_label_order = _index_mask_to_bool(
                     oracle_mask_array, oracle_labels, n_total
                 )
-            else:
+            elif np.issubdtype(oracle_mask_array.dtype, np.bool_):
                 # Already boolean
                 oracle_mask = oracle_mask_array.astype(bool)
+                if oracle_mask.ndim != 1 or len(oracle_mask) != n_total:
+                    raise ValueError(
+                        f"Boolean oracle_mask must have shape ({n_total},), got "
+                        f"{oracle_mask.shape}."
+                    )
+                if len(oracle_labels) != int(np.sum(oracle_mask)):
+                    raise ValueError(
+                        f"oracle_labels length ({len(oracle_labels)}) must match "
+                        f"the number of True values in oracle_mask "
+                        f"({int(np.sum(oracle_mask))})."
+                    )
+            else:
+                raise ValueError(
+                    "oracle_mask must be a boolean mask or an integer index array"
+                )
 
             oracle_scores = judge_scores[oracle_mask]
             oracle_y = oracle_labels  # oracle_labels is already compact
@@ -338,31 +435,49 @@ class JudgeCalibrator:
             n_oracle / n_total
         )  # Store for calibration-uncertainty checks
 
-        # Auto-reduce the fold count when labels are scarce (4-9 labels);
-        # below 4 the check right after fires with the actionable error.
-        n_folds = resolve_n_folds(n_oracle, n_folds)
-        self._n_folds = n_folds
-
-        if n_oracle < n_folds * 2:
-            raise ValueError(
-                f"Too few oracle samples ({n_oracle}) for {n_folds}-fold CV. "
-                f"Need at least {n_folds * 2} (2 per fold). To fix: add "
-                f"oracle_label values to more samples (>=10 pooled across "
-                f"policies)."
-            )
-
-        # Step 1: Assign fold IDs to all samples via the canonical hash-based
-        # fold system. When no prompt_ids are given, synthesize stable
-        # row-index ids so every caller shares the same path.
-        from ..data.folds import get_folds_for_prompts
-
+        # Resolve prompt clusters before choosing K. Cross-fitting requires
+        # independent held-out clusters, not merely a sufficient row count.
         if prompt_ids is None:
             prompt_ids = [f"row_{i}" for i in range(n_total)]
+        if len(prompt_ids) != n_total:
+            raise ValueError(
+                f"prompt_ids length ({len(prompt_ids)}) must match "
+                f"judge_scores length ({n_total})"
+            )
         self._prompt_ids = prompt_ids
-        self._fold_ids = get_folds_for_prompts(prompt_ids, n_folds, self.random_seed)
+
+        oracle_prompt_ids = [prompt_ids[i] for i in np.where(oracle_mask)[0]]
+        n_oracle_clusters = len(set(oracle_prompt_ids))
+        n_folds = resolve_n_folds(n_oracle, n_folds, n_oracle_clusters)
+        self._n_folds = n_folds
+
+        if n_oracle_clusters < 4:
+            raise ValueError(
+                f"Too few unique oracle prompt clusters ({n_oracle_clusters}) for "
+                "cross-fitted calibration. Need at least 4 independent prompt "
+                "clusters; repeated labels within one prompt do not create "
+                "independent folds."
+            )
+        if n_oracle_clusters < n_folds * 2:
+            raise ValueError(
+                f"Too few unique oracle prompt clusters ({n_oracle_clusters}) for "
+                f"{n_folds}-fold CV. Need at least {n_folds * 2} (2 clusters "
+                "per fold)."
+            )
+
+        # Balanced assignment guarantees every requested fold exists.  Assign
+        # all rows by prompt so repeated draws never cross fit against one
+        # another.
+        self._fold_ids = _balanced_cluster_folds(
+            prompt_ids,
+            n_folds,
+            self.random_seed,
+            balancing_prompt_ids=oracle_prompt_ids,
+        )
 
         # Extract oracle fold IDs / covariates for the cross-fitted models
         oracle_fold_ids = self._fold_ids[oracle_mask]
+        self._oracle_fold_ids = np.asarray(oracle_fold_ids, dtype=int)
 
         oracle_covariates = None
         if covariates is not None:
@@ -371,6 +486,45 @@ class JudgeCalibrator:
                     f"Covariates length ({len(covariates)}) must match judge_scores length ({n_total})"
                 )
             oracle_covariates = covariates[oracle_mask]
+
+        oracle_sample_weight: Optional[np.ndarray] = None
+        if sample_weight is not None:
+            weights = np.asarray(sample_weight, dtype=float)
+            if weights.ndim != 1:
+                raise ValueError("sample_weight must be one-dimensional")
+            if len(weights) == n_total:
+                oracle_sample_weight = weights[oracle_mask]
+            elif len(weights) == n_oracle:
+                # Compact weights arrive in the caller's label order. If an
+                # index-array oracle_mask reordered the labels, reorder the
+                # weights identically so every (label, weight) pair stays
+                # intact.
+                if oracle_label_order is not None:
+                    weights = weights[oracle_label_order]
+                oracle_sample_weight = weights
+            else:
+                raise ValueError(
+                    f"sample_weight length ({len(weights)}) must match either "
+                    f"judge_scores ({n_total}) or oracle labels ({n_oracle})."
+                )
+            if not np.all(np.isfinite(oracle_sample_weight)) or np.any(
+                oracle_sample_weight <= 0
+            ):
+                raise ValueError("sample_weight values must be finite and positive")
+
+        self._fit_judge_scores = np.asarray(oracle_scores, dtype=float).copy()
+        self._fit_oracle_labels = np.asarray(oracle_y, dtype=float).copy()
+        self._fit_prompt_ids = list(oracle_prompt_ids)
+        self._fit_covariates = (
+            None
+            if oracle_covariates is None
+            else np.asarray(oracle_covariates, dtype=float).copy()
+        )
+        self._fit_sample_weight = (
+            None
+            if oracle_sample_weight is None
+            else np.asarray(oracle_sample_weight, dtype=float).copy()
+        )
 
         # Step 2: Fit the single cross-fitted implementation (per-fold models
         # plus the full model for inference) for whatever mode was requested.
@@ -387,7 +541,11 @@ class JudgeCalibrator:
             covariate_names=self.covariate_names,
         )
         self._flexible_calibrator.fit(
-            oracle_scores, oracle_y, oracle_fold_ids, oracle_covariates
+            oracle_scores,
+            oracle_y,
+            oracle_fold_ids,
+            oracle_covariates,
+            sample_weight=oracle_sample_weight,
         )
         self.selected_mode = self._flexible_calibrator.selected_mode
 
@@ -422,8 +580,16 @@ class JudgeCalibrator:
 
         # Compute diagnostics with both global and OOF predictions
         oracle_calibrated = calibrated_scores[oracle_mask]
-        rmse = np.sqrt(np.mean((oracle_calibrated - oracle_y) ** 2))
-        coverage_01 = np.mean(np.abs(oracle_calibrated - oracle_y) <= 0.1)
+        rmse = np.sqrt(
+            np.average(
+                (oracle_calibrated - oracle_y) ** 2,
+                weights=oracle_sample_weight,
+            )
+        )
+        coverage_01 = np.average(
+            np.abs(oracle_calibrated - oracle_y) <= 0.1,
+            weights=oracle_sample_weight,
+        )
 
         # Record the training support for coverage badges (boundary cards)
         self._store_oracle_ranges(oracle_scores, oracle_calibrated)
@@ -437,8 +603,17 @@ class JudgeCalibrator:
             1.0,
         )
 
-        rmse_oof = float(np.sqrt(np.mean((oracle_oof - oracle_y) ** 2)))
-        coverage_01_oof = float(np.mean(np.abs(oracle_oof - oracle_y) <= 0.1))
+        rmse_oof = float(
+            np.sqrt(
+                np.average((oracle_oof - oracle_y) ** 2, weights=oracle_sample_weight)
+            )
+        )
+        coverage_01_oof = float(
+            np.average(
+                np.abs(oracle_oof - oracle_y) <= 0.1,
+                weights=oracle_sample_weight,
+            )
+        )
 
         # Add information about calibration mode to log message
         if self.calibration_mode == "auto":

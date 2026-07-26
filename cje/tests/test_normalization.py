@@ -288,8 +288,15 @@ class TestAnalyzeDatasetNormalization:
         for estimate in results.estimates:
             assert 0 <= estimate <= 1, f"Expected estimate in [0,1], got {estimate}"
 
-        # Normalization metadata should not be present (identity transform)
-        assert "normalization" not in results.metadata
+        # The unit contract is explicit even when the transform is identity.
+        norm_meta = results.metadata["normalization"]
+        assert norm_meta["judge_score"]["is_identity"] is True
+        assert norm_meta["output_scale"] == {
+            "min": 0.0,
+            "max": 1.0,
+            "is_identity": True,
+        }
+        assert norm_meta["results_scale"] == "oracle_original"
 
     def test_likert_arena_data(self) -> None:
         """Test that arena data scaled to Likert 1-5 produces results in 1-5 scale."""

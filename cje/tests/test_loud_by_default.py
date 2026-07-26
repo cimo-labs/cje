@@ -24,12 +24,9 @@ class TestFreshDrawsDataWithLoggedData:
         fresh_draws_data = {
             "pi_target": [{"prompt_id": "p0", "judge_score": 0.7}],
         }
-        with pytest.raises(
-            ValueError,
-            match="'logged_data_path' is no longer accepted",
-        ):
+        with pytest.raises(TypeError, match="logged_data_path"):
             analyze_dataset(
-                logged_data_path="logged.jsonl",
+                logged_data_path="logged.jsonl",  # type: ignore[call-arg]
                 fresh_draws_data=fresh_draws_data,
             )
 
@@ -79,7 +76,7 @@ class TestZeroOracleDirectMode:
         assert "UNCALIBRATED judge-score means" in warning_text
         assert "CIs do not account for judge bias" in warning_text
 
-    def test_with_oracle_labels_still_calibrated_direct(self) -> None:
+    def test_complete_oracle_labels_use_direct_oracle_route(self) -> None:
         rng = np.random.default_rng(11)
         data = {}
         for policy in ["policy_a", "policy_b"]:
@@ -98,8 +95,11 @@ class TestZeroOracleDirectMode:
             data[policy] = records
 
         results = analyze_dataset(fresh_draws_data=data)
-        # Bootstrap inference may be auto-selected, so match the prefix.
-        assert results.method.startswith("calibrated_direct")
+        assert results.method == "direct_oracle_bootstrap"
+        assert results.metadata["point_estimator"]["routes"] == [
+            "direct_oracle",
+            "direct_oracle",
+        ]
 
 
 class TestFreshDrawLoadErrors:
@@ -210,7 +210,19 @@ class TestPromptIdHandling:
         ]
         with caplog.at_level(logging.WARNING):
             with pytest.raises(ValueError, match="all 3 records were skipped"):
-                DatasetLoader()._convert_raw_data(records)
+                DatasetLoader(on_invalid="drop")._convert_raw_data(records)
+
+    def test_invalid_record_errors_by_default(self) -> None:
+        """Dropping is an explicit opt-in: the default loader must raise on
+        the first invalid record instead of silently shrinking the data."""
+        from cje.data.loaders import DatasetLoader
+
+        records = [
+            self._record("p0"),
+            {"prompt_id": "p1", "judge_score": "not_a_number"},
+        ]
+        with pytest.raises(ValueError, match="Invalid calibration record 1"):
+            DatasetLoader()._convert_raw_data(records)
 
     def test_skipped_records_are_counted_in_warning(
         self, caplog: pytest.LogCaptureFixture
@@ -222,9 +234,10 @@ class TestPromptIdHandling:
             {"prompt_id": "p1", "judge_score": "not_a_number"},
         ]
         with caplog.at_level(logging.WARNING):
-            dataset = DatasetLoader()._convert_raw_data(records)
+            dataset = DatasetLoader(on_invalid="drop")._convert_raw_data(records)
 
         assert len(dataset.samples) == 1
+        assert dataset.metadata["n_invalid_dropped"] == 1
         assert any("Skipped 1/2" in r.message for r in caplog.records)
 
     def test_minimal_records_load_without_text_fields(self) -> None:
@@ -244,6 +257,174 @@ class TestPromptIdHandling:
         assert len(dataset.samples) == 3
         assert dataset.target_policies == []
         assert all(s.prompt == "" and s.response == "" for s in dataset.samples)
+
+
+class TestErrorByDefaultIngestion:
+    """0.6.0 remediation: invalid records ERROR by default on every ingestion
+    path; dropping is an explicit opt-in that counts and reports what it
+    dropped. These tests fail if any default quietly flips back to 'drop'."""
+
+    @staticmethod
+    def _fresh_records(n: int = 20) -> list:
+        return [
+            {
+                "prompt_id": f"p{i}",
+                "judge_score": i / (n - 1),
+                "oracle_label": i / (n - 1),
+            }
+            for i in range(n)
+        ]
+
+    def test_analyze_dataset_errors_on_invalid_fresh_draw_by_default(self) -> None:
+        records = self._fresh_records()
+        records.append({"prompt_id": "bad", "judge_score": "corrupted"})
+        with pytest.raises(ValueError, match="Invalid fresh draw record"):
+            analyze_dataset(fresh_draws_data={"policy_a": records})
+
+    def test_analyze_dataset_drop_opt_in_counts_per_policy_and_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        records = self._fresh_records(40)
+        records.append({"prompt_id": "bad1", "judge_score": "corrupted"})
+        records.append({"prompt_id": "bad2"})  # missing judge_score
+
+        with caplog.at_level(logging.WARNING):
+            results = analyze_dataset(
+                fresh_draws_data={"policy_a": records},
+                on_invalid="drop",
+                estimator_config={"inference_method": "cluster_robust"},
+            )
+
+        assert results.n_samples_used["policy_a"] == 40
+        assert results.metadata["n_invalid_dropped"] == 2
+        assert results.metadata["n_invalid_dropped_per_policy"] == {"policy_a": 2}
+        assert any(
+            "dropped 2 invalid fresh-draw record" in r.message
+            and "policy_a: 2" in r.message
+            for r in caplog.records
+        )
+
+    def test_load_dataset_from_jsonl_errors_on_corrupt_line_by_default(
+        self, tmp_path: Path
+    ) -> None:
+        from cje import load_dataset_from_jsonl
+
+        path = tmp_path / "calibration.jsonl"
+        path.write_text(
+            '{"prompt_id": "p0", "judge_score": 0.5, "oracle_label": 0.5}\n'
+            "{CORRUPT LINE\n"
+            '{"prompt_id": "p1", "judge_score": 0.7, "oracle_label": 0.7}\n'
+        )
+        with pytest.raises(ValueError, match="Invalid JSON at .*:2"):
+            load_dataset_from_jsonl(str(path))
+
+    def test_load_dataset_from_jsonl_drop_opt_in_counts_corrupt_lines(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from cje import load_dataset_from_jsonl
+
+        path = tmp_path / "calibration.jsonl"
+        path.write_text(
+            '{"prompt_id": "p0", "judge_score": 0.5, "oracle_label": 0.5}\n'
+            "{CORRUPT LINE\n"
+            '{"prompt_id": "p1", "judge_score": 0.7, "oracle_label": 0.7}\n'
+        )
+        with caplog.at_level(logging.WARNING):
+            dataset = load_dataset_from_jsonl(str(path), on_invalid="drop")
+
+        assert dataset.n_samples == 2
+        assert dataset.metadata["n_invalid_dropped"] == 1
+        assert any("Skipped 1/3" in r.message for r in caplog.records)
+
+
+class TestExplicitDuplicateDrawIdx:
+    """Rows sharing an EXPLICIT draw_idx are conflicting identities: they
+    must fail loudly (naming both rows) and never be silently dropped —
+    dropping all-but-one draw per prompt silently changes estimates."""
+
+    _records = [
+        {"prompt_id": "q1", "judge_score": 0.4, "draw_idx": 0},
+        {"prompt_id": "q1", "judge_score": 0.6, "draw_idx": 0},
+    ]
+
+    @pytest.mark.parametrize("mode", ["error", "drop"])
+    def test_duplicate_explicit_draw_idx_always_fails(self, mode: str) -> None:
+        from cje.data.fresh_draws import fresh_draws_from_dict
+
+        with pytest.raises(ValueError, match="Duplicate draw_idx=0"):
+            fresh_draws_from_dict({"policy_a": self._records}, on_invalid=mode)
+
+    def test_error_identifies_both_conflicting_rows(self) -> None:
+        from cje.data.fresh_draws import fresh_draws_from_dict
+
+        with pytest.raises(ValueError) as excinfo:
+            fresh_draws_from_dict({"policy_a": self._records})
+
+        message = str(excinfo.value)
+        assert "record 1" in message
+        assert "record 0" in message
+        assert "prompt_id='q1'" in message
+
+    def test_missing_draw_idx_auto_assigns_sequentially(self) -> None:
+        from cje.data.fresh_draws import fresh_draws_from_dict
+
+        records = [
+            {"prompt_id": "q1", "judge_score": 0.4},
+            {"prompt_id": "q1", "judge_score": 0.6},
+            {"prompt_id": "q1", "judge_score": 0.8},
+        ]
+        datasets, _ = fresh_draws_from_dict({"policy_a": records})
+        assert [s.draw_idx for s in datasets["policy_a"].samples] == [0, 1, 2]
+
+
+class TestNonEncodableMetadata:
+    """A user object in record metadata used to abort loading with a bare
+    'EstimationResult serialization' TypeError that bypassed on_invalid."""
+
+    class _Opaque:
+        pass
+
+    def test_error_names_the_record_and_the_key(self) -> None:
+        from cje.data.fresh_draws import fresh_draws_from_dict
+
+        with pytest.raises(ValueError) as excinfo:
+            fresh_draws_from_dict(
+                {
+                    "policy_a": [
+                        {
+                            "prompt_id": "p1",
+                            "judge_score": 0.5,
+                            "metadata": {"cfg": self._Opaque()},
+                        }
+                    ]
+                }
+            )
+
+        message = str(excinfo.value)
+        assert "record 0" in message and "policy_a" in message
+        assert "'cfg'" in message
+        assert "non-JSON-encodable" in message
+
+    def test_drop_mode_drops_the_record_not_the_run(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from cje.data.fresh_draws import fresh_draws_from_dict
+
+        records = [
+            {"prompt_id": "p1", "judge_score": 0.5},
+            {
+                "prompt_id": "p2",
+                "judge_score": 0.7,
+                "metadata": {"cfg": self._Opaque()},
+            },
+        ]
+        with caplog.at_level(logging.WARNING):
+            datasets, _ = fresh_draws_from_dict(
+                {"policy_a": records}, on_invalid="drop"
+            )
+
+        assert datasets["policy_a"].n_samples == 1
+        assert datasets["policy_a"].samples[0].prompt_id == "p1"
 
 
 class TestValidateDirectDataScan:
@@ -528,6 +709,7 @@ class TestCombineOracleSourcesKeepsAllPairs:
                 judge_score=judge,
                 oracle_label=oracle,
                 reward=None,
+                observation_id="shared-response-1",
             )
             return Dataset(samples=[sample], target_policies=["policy_a"])
 

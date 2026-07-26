@@ -164,8 +164,8 @@ class TestEstimatorEquivalence:
             n_folds=5,
         )
 
-        # Same seed, same eval-table layout, same refit mode and adaptive
-        # min-oracle rule -> the bootstrap draws are identical.
+        # Same seed, same eval-table layout, same refit mode -> the
+        # bootstrap draws are identical.
         assert res.estimate == pytest.approx(float(ref.estimates[0]), abs=1e-12)
         assert res.se == pytest.approx(float(ref.standard_errors[0]), rel=1e-9)
         # Percentile CI on the identical bootstrap matrix.
@@ -195,6 +195,71 @@ def _synthetic(
 
 
 class TestMaskSemantics:
+    def test_complete_small_oracle_sample_uses_direct_mean(self) -> None:
+        scores = np.asarray([0.0, 0.5, 1.0])
+        labels = np.asarray([1.0, 0.0, 1.0])
+
+        result = calibrated_mean_ci(
+            scores,
+            labels,
+            cluster_ids=["p0", "p1", "p2"],
+            inference="cluster_robust",
+        )
+
+        assert result.estimate == pytest.approx(float(np.mean(labels)))
+        assert result.calibrator is None
+        assert result.diagnostics["estimator_route"] == "direct_oracle"
+        assert result.diagnostics["calibration"]["mode"] == "not_required"
+
+    def test_complete_one_cluster_reports_requested_inference_unavailable(
+        self,
+    ) -> None:
+        result = calibrated_mean_ci(
+            np.asarray([0.2, 0.8]),
+            np.asarray([0.0, 1.0]),
+            cluster_ids=["shared", "shared"],
+            inference="bootstrap",
+            n_bootstrap=5,
+        )
+
+        assert result.estimate == pytest.approx(0.5)
+        assert result.method == "bootstrap"
+        assert np.isnan(result.se)
+        assert np.all(np.isnan(result.ci))
+        assert result.diagnostics["inference_available"] is False
+        assert result.diagnostics["bootstrap"]["unavailable_reason"] == (
+            "fewer_than_two_independent_clusters"
+        )
+
+        analytic = calibrated_mean_ci(
+            np.asarray([0.2, 0.8]),
+            np.asarray([0.0, 1.0]),
+            cluster_ids=["shared", "shared"],
+            inference="cluster_robust",
+        )
+        assert analytic.method == "cluster_robust"
+        assert analytic.diagnostics["cluster_robust"]["df"] == 0
+        assert analytic.diagnostics["cluster_robust"]["unavailable_reason"] == (
+            "fewer_than_two_independent_clusters"
+        )
+
+    def test_complete_coverage_explicit_bootstrap_and_summary(self) -> None:
+        result = calibrated_mean_ci(
+            np.asarray([1.0, 3.0, 5.0]),
+            np.asarray([0.0, 0.5, 1.0]),
+            cluster_ids=["p0", "p1", "p2"],
+            inference="bootstrap",
+            n_bootstrap=5,
+            seed=9,
+        )
+
+        assert result.estimate == pytest.approx(0.5)
+        assert result.method == "bootstrap"
+        assert result.calibrator is None
+        assert np.isfinite(result.se)
+        assert result.summary().startswith("Oracle mean: 0.5000")
+        assert result.diagnostics["bootstrap"]["n_valid_replicates"] == 5
+
     def test_mask_vs_nan_default_equivalence(self) -> None:
         """Explicit mask == NaN-derived default mask, and labels outside the
         mask are ignored entirely (no leak)."""
@@ -385,7 +450,7 @@ class TestTransportAudit:
         noise = np.where(np.arange(200) % 2 == 0, 0.01, -0.01)
         y_probe = calibrator.predict(s_probe) + noise
 
-        audit = transport_audit(s_probe, y_probe, calibrator)
+        audit = transport_audit(s_probe, y_probe, calibrator, delta_max=0.05)
         assert audit.status == "PASS"
         assert audit.delta_hat == pytest.approx(0.0, abs=1e-12)
         assert audit.n_probe == 200
@@ -398,7 +463,11 @@ class TestTransportAudit:
         y_probe = calibrator.predict(s_probe) - 0.2 + noise
 
         audit = transport_audit(
-            s_probe, y_probe, calibrator, group_label="policy:shifted"
+            s_probe,
+            y_probe,
+            calibrator,
+            group_label="policy:shifted",
+            delta_max=0.05,
         )
         assert audit.status == "FAIL"
         assert audit.delta_hat == pytest.approx(-0.2, abs=1e-6)
@@ -414,14 +483,16 @@ class TestTransportAudit:
         audit = transport_audit(s_probe, y_probe, calibrator)
         assert audit.n_probe == 50
 
-    def test_too_few_labeled_probes_raise(self) -> None:
+    def test_too_few_labeled_probes_are_inconclusive(self) -> None:
         calibrator = self._fitted_calibrator()
-        with pytest.raises(ValueError, match="at least 2"):
-            transport_audit(
-                np.array([0.1, 0.5, 0.9]),
-                np.array([np.nan, 0.5, np.nan]),
-                calibrator,
-            )
+        audit = transport_audit(
+            np.array([0.1, 0.5, 0.9]),
+            np.array([np.nan, 0.5, np.nan]),
+            calibrator,
+            delta_max=0.05,
+        )
+        assert audit.status == "INCONCLUSIVE"
+        assert audit.reason_code == "insufficient_effective_clusters"
 
     def test_composes_with_calibrated_mean_ci(self) -> None:
         """The calibrator returned by calibrated_mean_ci feeds transport_audit."""
@@ -433,9 +504,31 @@ class TestTransportAudit:
         rng = np.random.default_rng(10)
         s_probe = rng.uniform(size=150)
         y_probe = np.clip(s_probe + rng.normal(0, 0.1, size=150), 0, 1)
-        audit = transport_audit(s_probe, y_probe, res.calibrator, bins=5)
-        assert audit.status in ("PASS", "WARN", "FAIL")
+        audit = transport_audit(
+            s_probe, y_probe, res.calibrator, bins=5, delta_max=0.05
+        )
+        assert audit.status in ("PASS", "FAIL", "INCONCLUSIVE")
         assert len(audit.decile_counts) <= 5
+
+    def test_input_contract_rejects_malformed_probe_arrays(self) -> None:
+        calibrator = object()
+        with pytest.raises(ValueError, match="non-empty 1-D"):
+            transport_audit([], [], calibrator)
+        with pytest.raises(ValueError, match="must match"):
+            transport_audit([0.2, 0.8], [0.5], calibrator)
+        with pytest.raises(ValueError, match="judge_scores contains"):
+            transport_audit([0.2, np.nan], [0.5, 0.5], calibrator)
+        with pytest.raises(ValueError, match="oracle_labels contains infinity"):
+            transport_audit([0.2, 0.8], [0.5, np.inf], calibrator)
+        with pytest.raises(ValueError, match="at least 1 labeled probe"):
+            transport_audit([0.2, 0.8], [np.nan, np.nan], calibrator)
+        with pytest.raises(ValueError, match="cluster_ids length"):
+            transport_audit(
+                [0.2, 0.8],
+                [0.5, 0.5],
+                calibrator,
+                cluster_ids=["only-one"],
+            )
 
 
 if __name__ == "__main__":

@@ -55,9 +55,11 @@ Fresh draws are auto-discovered from a `fresh_draws_dir` under the canonical `PO
 
 `standard_errors` always includes every uncertainty source: sampling noise on the eval set **and** the uncertainty from learning the calibrator on a finite oracle slice. Confidence intervals are percentile bootstrap intervals under the default `bootstrap` inference; under `cluster_robust` they use t-critical values with the limiting degrees of freedom (stored per policy in `result.metadata["degrees_of_freedom"]` with `df`, `t_critical`, `se_method`, `n_clusters` — that metadata only exists there).
 
+One exception: a policy whose fresh draws all share a single prompt cluster has fewer than two independent clusters, so no valid cluster-level inference exists. Such a policy returns its point estimate with **SE = NaN** (`se_method: "unavailable_one_cluster"`, loud warning) rather than falling back to invalid row-level IID inference. It is listed in `result.metadata["inference_unavailable_policies"]`, and `compare_policies` refuses pairs involving it with `InferenceUnavailableError` (from `cje.data`) instead of returning an anti-conservative difference SE.
+
 ### Inference methods (`inference_method` parameter)
 
-- **`"bootstrap"` (default):** cluster bootstrap by prompt with a **calibrator refit per replicate**, applied to the augmented estimate `θ̂_aug = mean(f̂_full(S)) + mean(Y − f̂_oof(S))` (an AIPW-style per-policy residual correction; `use_augmented_estimator=True` by default). Refitting captures the calibration/evaluation covariance that analytic SEs miss — this is what achieves ~95% CI coverage.
+- **`"bootstrap"` (default):** cluster bootstrap by prompt — positive exponential mean-one weights per prompt cluster, no replicate discarded or retried — with a **calibrator refit per replicate**, applied to the augmented estimate `θ̂_aug = mean(f̂_full(S)) + mean(Y − f̂_oof(S))` (an AIPW-style per-policy residual correction; `use_augmented_estimator=True` by default). Refitting captures the calibration/evaluation covariance that analytic SEs miss — this is what achieves ~95% CI coverage.
 - **`"cluster_robust"`:** CRV1 cluster-robust SE of the plug-in mean (clustered by `prompt_id` for paired comparisons), augmented with the oracle-jackknife variance. Fastest; undercovers when calibration and evaluation are coupled.
 - **`"auto"`:** uses cluster_robust, switching to bootstrap when there are fewer than 20 prompt clusters or when the calibration data overlaps the evaluation draws (coupling).
 
@@ -70,30 +72,35 @@ estimator = CalibratedDirectEstimator(
 )
 ```
 
-### Automatic fallback when the eval draws carry no oracle labels
+### Automatic fallback when the bootstrap cannot refit the calibrator
 
-With a separate calibration source (`calibration_data_path`) and **label-free** fresh draws, the bootstrap's per-replicate refit has nothing to refit on. The estimator detects this before dispatching and falls back to cluster-robust + oracle jackknife — which is exact there, not an approximation: calibration and evaluation are independent, so the covariance the bootstrap exists to capture is zero. The downgrade is loud (warning) and recorded:
+The refit bootstrap needs the exact rows the calibrator was fit on. When those are unavailable, the estimator detects it before dispatching and falls back to cluster-robust + oracle jackknife, in exactly two cases:
+
+- a calibrator exists but its fit rows (calibration provenance) are unavailable — `fallback_reason: "calibration_provenance_unavailable"`;
+- no calibrator exists and at least one policy lacks complete evaluation oracle coverage — `fallback_reason: "calibrator_unavailable_for_non_oracle_routes"`.
+
+A `calibration_data_path` run with **label-free** fresh draws is *not* a fallback case: the refit bootstrap runs normally on the calibration rows (`result.metadata["inference"]["method"] == "cluster_bootstrap_refit"`). When calibration and evaluation data are truly independent the additive variance decomposition is exact. When a fallback does occur, the downgrade is loud (warning) and recorded:
 
 ```python
 result.metadata["inference"]
 # {"method": "cluster_robust", "requested_method": "bootstrap",
-#  "fallback_reason": "no_oracle_labels_in_evaluation_data"}
+#  "fallback_reason": "calibration_provenance_unavailable"}
 ```
 
 ### Oracle uncertainty (calibration-aware inference)
 
-`oua_jackknife=True` (default) adds the delete-one-oracle-fold jackknife variance so SEs reflect that the calibrator was *learned*, not given. The bootstrap path captures this by construction; the decomposition is reported in `result.metadata["se_components"]` (`includes_oracle_uncertainty`, `oracle_variance_per_policy`). The jackknife is skipped only when the oracle labels live in the evaluation data itself at 100% coverage (no calibration uncertainty left to account for).
+`oua_jackknife=True` (default) adds the delete-one-oracle-fold jackknife variance so SEs reflect that the calibrator was *learned*, not given. Analytic inference reports `oracle_variance_per_policy`; the joint refit bootstrap captures calibration uncertainty by construction but does not claim a separate variance decomposition. The jackknife is skipped per policy when that policy routes directly to complete evaluation oracle labels.
 
 ### Paired comparisons
 
-When multiple policies are evaluated on the same prompts (`paired_comparison=True`, default), SEs cluster by `prompt_id`: 3 policies × 1000 prompts is 1000 independent clusters, not 3000 samples. Per-policy method bookkeeping lives in `result.metadata["se_methods"]` and `["n_clusters"]`.
+When multiple policies are evaluated on the same prompts (`paired_comparison=True`, default), difference inference preserves shared prompt weights and covariance. With `paired_comparison=False`, policy/prompt clusters receive independent weights and analytic differences combine per-policy SEs without prompt covariance. Per-policy method bookkeeping lives in `result.metadata["se_methods"]` and `["n_clusters"]`.
 
 ## The Coverage Gate (boundary cards)
 
 `estimate()` computes the paper's coverage badge per policy: the fraction of that policy's judge scores falling **outside the calibrator's oracle S-range** (`calibrator.oracle_s_range`, recorded at fit time). Isotonic calibration extrapolates flatly outside its support, so out-of-range mass makes *level* claims untrustworthy even when rankings survive.
 
 - Cards are attached to `result.diagnostics.boundary_cards` and `result.metadata["boundary_cards"]`.
-- At ≥ 5% out-of-range mass (`OUT_OF_RANGE_REFUSE_THRESHOLD` in `cje.diagnostics.gates`), the card's status is **REFUSE-LEVEL**: the estimator warns loudly, sets that policy's status to CRITICAL, and flags it in `result.metadata["reliability_gates"]` (`flagged`, `refuse_level_claims`, `reasons`). The `cje analyze` CLI demotes such policies from the best-policy announcement.
+- At ≥ 5% out-of-range mass (`OUT_OF_RANGE_REFUSE_THRESHOLD` in `cje.diagnostics.gates`), the card's status is **REFUSE-LEVEL**: the estimator warns loudly, sets that policy's status to CRITICAL, and flags it in `result.metadata["reliability_gates"]` (`flagged`, `refuse_level_claims`, `reasons`). The `cje analyze` CLI keeps the point winner visible and attaches the limitation.
 - Fix: collect oracle labels covering the missing score range.
 
 ```python
@@ -110,13 +117,13 @@ for policy, card in (result.metadata.get("boundary_cards") or {}).items():
 
 ### Cross-fitting
 
-Calibration uses k-fold cross-fitting with deterministic fold assignment from the unified fold system in `cje.data.folds` (`hash(prompt_id) % k`), so folds are stable across runs and datasets.
+Calibration uses k-fold cross-fitting. Since 0.6.0, `fit_cv` assigns whole oracle **prompt clusters** to folds by a seeded-blake2b sort with round-robin assignment — deterministic given (prompt ids, seed, k) and balanced (fold sizes differ by at most one cluster, so small oracle slices cannot produce empty folds) — and resolves the fold count from unique labeled clusters. Fold membership depends on the whole oracle cluster set, so the pre-0.6.0 `hash(prompt_id) % k` stability property ("same prompt_id → same fold regardless of the rest of the data") no longer applies to calibration folds; `get_fold`/`get_folds_for_prompts` in `cje.data.folds` remain exported but do not predict calibration fold assignment.
 
 ## Common Issues
 
 - **"No fresh draws added"** — call `add_fresh_draws()` for every policy in `target_policies` before `fit_and_estimate()`.
 - **"Only N oracle-labeled samples"** — cross-fitted calibration needs at least 2 labels per fold (10 for the default 5 folds); with 4–9 labels CJE reduces the fold count with a warning, below 4 it raises.
-- **REFUSE-LEVEL badge** — not an error: rankings may stand, but do not ship absolute numbers for that policy until labels cover its score range.
+- **REFUSE-LEVEL badge** — not an error: do not ship absolute numbers from that calibration fit until labels cover the policy's score range. The scalar-support check alone does not certify rankings or residual transport.
 
 ## Summary
 

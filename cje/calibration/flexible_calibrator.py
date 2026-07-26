@@ -15,7 +15,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def _fit_ecdf(x: np.ndarray) -> Callable[[np.ndarray], np.ndarray]:
+def _fit_ecdf(
+    x: np.ndarray, sample_weight: Optional[np.ndarray] = None
+) -> Callable[[np.ndarray], np.ndarray]:
     """Fit empirical CDF for consistent ranking.
 
     Args:
@@ -24,13 +26,27 @@ def _fit_ecdf(x: np.ndarray) -> Callable[[np.ndarray], np.ndarray]:
     Returns:
         Function that maps values to their empirical CDF ranks in (0,1)
     """
-    xs = np.sort(x)
-    n = xs.size
+    order = np.argsort(x, kind="mergesort")
+    xs = np.asarray(x, dtype=float)[order]
+    weights = (
+        np.ones(xs.size, dtype=float)
+        if sample_weight is None
+        else np.asarray(sample_weight, dtype=float)[order]
+    )
+    unique_xs, tie_starts = np.unique(xs, return_index=True)
+    tie_weights = np.add.reduceat(weights, tie_starts)
+    cumulative = np.cumsum(tie_weights)
+    total_weight = float(cumulative[-1])
+    midranks = (cumulative - 0.5 * tie_weights) / total_weight
 
     def F(z: np.ndarray) -> np.ndarray:
-        # Right-continuous empirical CDF, mapped to mid-ranks in (0,1)
-        idx = np.searchsorted(xs, z, side="right")
-        return (idx - 0.5) / n
+        # Equal values share the midpoint of their combined probability mass.
+        idx = np.searchsorted(unique_xs, z, side="right")
+        out = np.zeros_like(np.asarray(z, dtype=float), dtype=float)
+        positive = idx > 0
+        right = idx[positive] - 1
+        out[positive] = midranks[right]
+        return out
 
     return F
 
@@ -96,6 +112,7 @@ class FlexibleCalibrator:
         Y: np.ndarray,
         folds: np.ndarray,
         covariates: Optional[np.ndarray] = None,
+        sample_weight: Optional[np.ndarray] = None,
     ) -> "FlexibleCalibrator":
         """Fit the calibrator with cross-fitting.
 
@@ -112,6 +129,16 @@ class FlexibleCalibrator:
         """
         unique_folds = np.unique(folds)
         n_samples = len(S)
+        weights: Optional[np.ndarray] = None
+        if sample_weight is not None:
+            weights = np.asarray(sample_weight, dtype=float)
+            if weights.shape != (n_samples,):
+                raise ValueError(
+                    f"sample_weight must have shape ({n_samples},), got "
+                    f"{weights.shape}"
+                )
+            if not np.all(np.isfinite(weights)) or np.any(weights <= 0):
+                raise ValueError("sample_weight values must be finite and positive")
 
         # Validate covariates if provided
         if covariates is not None:
@@ -144,16 +171,16 @@ class FlexibleCalibrator:
                     "Auto mode with covariates: forcing two_stage mode "
                     "(covariates not supported in monotone)"
                 )
-                self._fit_two_stage(S, Y, folds, covariates)
+                self._fit_two_stage(S, Y, folds, covariates, weights)
                 self.selected_mode = "two_stage"
             else:
                 logger.debug("Auto mode: evaluating monotone fit first")
                 # Always fit monotone (it's fast)
-                self._fit_monotone(S, Y, folds)
+                self._fit_monotone(S, Y, folds, weights)
 
                 # Quick check: if monotone fit is very good, skip two-stage
                 pred_mono = self._predict_monotone(S, folds)
-                rmse_mono = np.sqrt(np.mean((Y - pred_mono) ** 2))
+                rmse_mono = np.sqrt(np.average((Y - pred_mono) ** 2, weights=weights))
 
                 # Check for clear non-monotonicity via regional performance
                 sort_idx = np.argsort(S)
@@ -174,8 +201,10 @@ class FlexibleCalibrator:
                 logger.debug(
                     f"Regional RMSE differences: {max_regional_diff:.3f}, fitting two-stage for comparison"
                 )
-                self._fit_two_stage(S, Y, folds, covariates)
-                self.selected_mode = self._select_best_mode(S, Y, folds, covariates)
+                self._fit_two_stage(S, Y, folds, covariates, weights)
+                self.selected_mode = self._select_best_mode(
+                    S, Y, folds, covariates, weights
+                )
         elif self.mode == "monotone":
             if covariates is not None:
                 raise ValueError(
@@ -183,31 +212,44 @@ class FlexibleCalibrator:
                     "Use mode='two_stage' or 'auto' for covariate support."
                 )
             logger.debug("Fitting monotone calibration only")
-            self._fit_monotone(S, Y, folds)
+            self._fit_monotone(S, Y, folds, weights)
             self.selected_mode = "monotone"
         elif self.mode == "two_stage":
             logger.debug("Fitting two-stage calibration only")
-            self._fit_two_stage(S, Y, folds, covariates)
+            self._fit_two_stage(S, Y, folds, covariates, weights)
             self.selected_mode = "two_stage"
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
 
         # Also fit full models for inference (no folds)
         logger.debug("Fitting full models for inference")
-        self._fit_full_models(S, Y, covariates)
+        self._fit_full_models(S, Y, covariates, weights)
 
         return self
 
-    def _fit_monotone(self, S: np.ndarray, Y: np.ndarray, folds: np.ndarray) -> None:
+    def _fit_monotone(
+        self,
+        S: np.ndarray,
+        Y: np.ndarray,
+        folds: np.ndarray,
+        sample_weight: Optional[np.ndarray] = None,
+    ) -> None:
         """Fit standard monotone isotonic regression."""
         for k in np.unique(folds):
             train_mask = folds != k
             if not np.any(train_mask):
-                # All oracle samples landed in fold k (possible with very
-                # small oracle slices); fall back to fitting on all samples.
-                train_mask = np.ones_like(train_mask)
+                raise ValueError(
+                    f"Fold {k} has no held-out complement; cross-fitted "
+                    "calibration requires at least two nonempty folds."
+                )
             iso = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
-            iso.fit(S[train_mask], Y[train_mask])
+            iso.fit(
+                S[train_mask],
+                Y[train_mask],
+                sample_weight=(
+                    sample_weight[train_mask] if sample_weight is not None else None
+                ),
+            )
             self._monotone_models[k] = iso
 
     def _fit_two_stage(
@@ -216,6 +258,7 @@ class FlexibleCalibrator:
         Y: np.ndarray,
         folds: np.ndarray,
         covariates: Optional[np.ndarray] = None,
+        sample_weight: Optional[np.ndarray] = None,
     ) -> None:
         """Fit two-stage calibrator: g(S, X_cov) -> isotonic.
 
@@ -231,22 +274,24 @@ class FlexibleCalibrator:
         for k in unique_folds:
             train_mask = folds != k
             if not np.any(train_mask):
-                # All oracle samples landed in fold k (possible with very
-                # small oracle slices); fall back to fitting on all samples.
-                train_mask = np.ones_like(train_mask)
+                raise ValueError(
+                    f"Fold {k} has no held-out complement; cross-fitted "
+                    "calibration requires at least two nonempty folds."
+                )
             S_train = S[train_mask]
             Y_train = Y[train_mask]
+            weight_train = (
+                sample_weight[train_mask] if sample_weight is not None else None
+            )
 
             # Skip if too few training samples
             if len(S_train) < 20:
                 # Fallback to monotone for small folds
                 iso = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
-                iso.fit(S_train, Y_train)
+                iso.fit(S_train, Y_train, sample_weight=weight_train)
                 self._g_models[k] = None
                 self._iso_models[k] = iso
-                self._ecdf_models[k] = _fit_ecdf(
-                    S_train
-                )  # Still fit ECDF for consistency
+                self._ecdf_models[k] = _fit_ecdf(S_train, weight_train)
                 continue
 
             # Build feature matrix: [S, covariates]
@@ -262,19 +307,26 @@ class FlexibleCalibrator:
             g_model = make_pipeline(spline, ridge)
 
             # Fit g(S, X_cov) to predict Y
-            g_model.fit(X_train, Y_train)
+            fit_kwargs = (
+                {"ridgecv__sample_weight": weight_train}
+                if weight_train is not None
+                else {}
+            )
+            g_model.fit(X_train, Y_train, **fit_kwargs)
             self._g_models[k] = g_model
 
             # Fit ECDF on g(S, X_cov) predictions for this fold's training data
             g_train = g_model.predict(X_train)
-            self._ecdf_models[k] = _fit_ecdf(g_train)
+            self._ecdf_models[k] = _fit_ecdf(g_train, weight_train)
 
         # Step 2: Fit isotonic on rank-transformed space for each fold
         for k in unique_folds:
             train_mask = folds != k
             if not np.any(train_mask):
-                # Same fallback as Step 1 for degenerate fold assignments.
-                train_mask = np.ones_like(train_mask)
+                raise ValueError(
+                    f"Fold {k} has no held-out complement; cross-fitted "
+                    "calibration requires at least two nonempty folds."
+                )
 
             if self._g_models.get(k) is not None:
                 # Build feature matrix for this fold
@@ -292,11 +344,21 @@ class FlexibleCalibrator:
 
             # Fit isotonic on ranked space
             iso = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
-            iso.fit(T_ranked_train, Y[train_mask])
+            iso.fit(
+                T_ranked_train,
+                Y[train_mask],
+                sample_weight=(
+                    sample_weight[train_mask] if sample_weight is not None else None
+                ),
+            )
             self._iso_models[k] = iso
 
     def _fit_full_models(
-        self, S: np.ndarray, Y: np.ndarray, covariates: Optional[np.ndarray] = None
+        self,
+        S: np.ndarray,
+        Y: np.ndarray,
+        covariates: Optional[np.ndarray] = None,
+        sample_weight: Optional[np.ndarray] = None,
     ) -> None:
         """Fit full models on all data for inference.
 
@@ -310,7 +372,7 @@ class FlexibleCalibrator:
             self._full_monotone_model = IsotonicRegression(
                 y_min=0.0, y_max=1.0, out_of_bounds="clip"
             )
-            self._full_monotone_model.fit(S, Y)
+            self._full_monotone_model.fit(S, Y, sample_weight=sample_weight)
 
         if (
             self.selected_mode == "two_stage"
@@ -332,24 +394,29 @@ class FlexibleCalibrator:
                 )
                 ridge = RidgeCV(alphas=np.logspace(-3, 3, 13), store_cv_results=False)
                 self._full_g_model = make_pipeline(spline, ridge)
-                self._full_g_model.fit(X_full, Y)
+                fit_kwargs = (
+                    {"ridgecv__sample_weight": sample_weight}
+                    if sample_weight is not None
+                    else {}
+                )
+                self._full_g_model.fit(X_full, Y, **fit_kwargs)
 
                 # Fit ECDF on g(S, X_cov)
                 g_full = self._full_g_model.predict(X_full)
-                self._full_ecdf = _fit_ecdf(g_full)
+                self._full_ecdf = _fit_ecdf(g_full, sample_weight)
 
                 # Fit isotonic on ranked space
                 T_ranked = self._full_ecdf(g_full)
                 self._full_iso_model = IsotonicRegression(
                     y_min=0.0, y_max=1.0, out_of_bounds="clip"
                 )
-                self._full_iso_model.fit(T_ranked, Y)
+                self._full_iso_model.fit(T_ranked, Y, sample_weight=sample_weight)
             else:
                 # Fallback to monotone
                 self._full_monotone_model = IsotonicRegression(
                     y_min=0.0, y_max=1.0, out_of_bounds="clip"
                 )
-                self._full_monotone_model.fit(S, Y)
+                self._full_monotone_model.fit(S, Y, sample_weight=sample_weight)
 
     def predict(
         self,
@@ -394,7 +461,7 @@ class FlexibleCalibrator:
                 return np.asarray(np.mean(preds, axis=0))
         else:
             # OOF prediction
-            Y_hat = np.zeros_like(S)
+            Y_hat = np.zeros(np.asarray(S).shape, dtype=float)
             for k in np.unique(folds):
                 mask = folds == k
                 if k in self._monotone_models:
@@ -475,7 +542,7 @@ class FlexibleCalibrator:
                     )
         else:
             # OOF prediction
-            Y_hat = np.zeros_like(S)
+            Y_hat = np.zeros(np.asarray(S).shape, dtype=float)
             for k in np.unique(folds):
                 mask = folds == k
                 if (
@@ -529,6 +596,7 @@ class FlexibleCalibrator:
         Y: np.ndarray,
         folds: np.ndarray,
         covariates: Optional[np.ndarray] = None,
+        sample_weight: Optional[np.ndarray] = None,
     ) -> Literal["monotone", "two_stage"]:
         """Select best mode based on OOF RMSE.
 
@@ -545,9 +613,24 @@ class FlexibleCalibrator:
         pred_mono = self._predict_monotone(S, folds)
         pred_two_stage = self._predict_two_stage(S, folds, covariates)
 
-        # Calculate RMSEs
-        rmse_mono = np.sqrt(np.mean((Y - pred_mono) ** 2))
-        rmse_two_stage = np.sqrt(np.mean((Y - pred_two_stage) ** 2))
+        def weighted_rmse(
+            truth: np.ndarray,
+            prediction: np.ndarray,
+            indices: Optional[np.ndarray] = None,
+        ) -> float:
+            if indices is None:
+                residual = truth - prediction
+                weights = sample_weight
+            else:
+                residual = truth[indices] - prediction[indices]
+                weights = sample_weight[indices] if sample_weight is not None else None
+            return float(np.sqrt(np.average(residual**2, weights=weights)))
+
+        # Calculate weighted RMSEs.  In a positive-weight bootstrap these are
+        # the losses in that bootstrap world, so auto mode selection is part
+        # of the replicated estimator.
+        rmse_mono = weighted_rmse(Y, pred_mono)
+        rmse_two_stage = weighted_rmse(Y, pred_two_stage)
 
         # Check for non-monotonicity by comparing performance in different regions
         # Sort by judge scores
@@ -559,16 +642,14 @@ class FlexibleCalibrator:
         mid_mask = sort_idx[n_third : 2 * n_third]
         high_mask = sort_idx[2 * n_third :]
 
-        rmse_mono_low = np.sqrt(np.mean((Y[low_mask] - pred_mono[low_mask]) ** 2))
-        rmse_flex_low = np.sqrt(np.mean((Y[low_mask] - pred_two_stage[low_mask]) ** 2))
+        rmse_mono_low = weighted_rmse(Y, pred_mono, low_mask)
+        rmse_flex_low = weighted_rmse(Y, pred_two_stage, low_mask)
 
-        rmse_mono_mid = np.sqrt(np.mean((Y[mid_mask] - pred_mono[mid_mask]) ** 2))
-        rmse_flex_mid = np.sqrt(np.mean((Y[mid_mask] - pred_two_stage[mid_mask]) ** 2))
+        rmse_mono_mid = weighted_rmse(Y, pred_mono, mid_mask)
+        rmse_flex_mid = weighted_rmse(Y, pred_two_stage, mid_mask)
 
-        rmse_mono_high = np.sqrt(np.mean((Y[high_mask] - pred_mono[high_mask]) ** 2))
-        rmse_flex_high = np.sqrt(
-            np.mean((Y[high_mask] - pred_two_stage[high_mask]) ** 2)
-        )
+        rmse_mono_high = weighted_rmse(Y, pred_mono, high_mask)
+        rmse_flex_high = weighted_rmse(Y, pred_two_stage, high_mask)
 
         # Count regions where two-stage is better
         better_count = 0
@@ -583,7 +664,14 @@ class FlexibleCalibrator:
         # Standard error of RMSE estimate using delta method
         residuals_mono = Y - pred_mono
         n = len(S)
-        se_mse = np.std(residuals_mono**2, ddof=1) / np.sqrt(n) if n > 1 else 0.0
+        if sample_weight is None:
+            se_mse = np.std(residuals_mono**2, ddof=1) / np.sqrt(n) if n > 1 else 0.0
+        else:
+            normalized = sample_weight / np.sum(sample_weight)
+            mse = float(np.sum(normalized * residuals_mono**2))
+            weighted_var = float(np.sum(normalized * (residuals_mono**2 - mse) ** 2))
+            effective_n = 1.0 / float(np.sum(normalized**2))
+            se_mse = np.sqrt(weighted_var / max(effective_n, 1.0))
         se_rmse = se_mse / (2.0 * max(rmse_mono, 1e-12))
 
         logger.info("Calibration mode selection:")

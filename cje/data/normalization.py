@@ -6,7 +6,7 @@ allowing users to work with any bounded scale (0-100, Likert 1-5, etc.).
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional, Sequence, Union
 import numpy as np
 
 
@@ -88,6 +88,154 @@ class ScaleInfo:
         return (
             abs(self.min_val - 0.0) < tolerance and abs(self.max_val - 1.0) < tolerance
         )
+
+    @property
+    def span(self) -> float:
+        """Width of the public scale."""
+        return self.max_val - self.min_val
+
+    def to_dict(self) -> dict:
+        """JSON-friendly scale declaration."""
+        return {
+            "min": float(self.min_val),
+            "max": float(self.max_val),
+            "is_identity": self.is_identity(),
+        }
+
+
+ScaleDeclaration = Optional[Union[ScaleInfo, Sequence[float]]]
+
+
+def coerce_scale(
+    value: ScaleDeclaration,
+    *,
+    field_name: str,
+) -> Optional[ScaleInfo]:
+    """Validate a public ``(minimum, maximum)`` scale declaration.
+
+    ``None`` means that the caller did not declare a scale. A declared scale
+    must be finite and non-degenerate; observed-range inference remains a
+    separate compatibility behavior in the fresh-draw loader.
+    """
+    if value is None:
+        return None
+    if isinstance(value, ScaleInfo):
+        scale = value
+    else:
+        try:
+            valid_pair = not isinstance(value, (str, bytes)) and len(value) == 2
+        except TypeError:
+            valid_pair = False
+        if not valid_pair:
+            raise ValueError(
+                f"{field_name} must be a (minimum, maximum) pair, got {value!r}"
+            )
+        try:
+            scale = ScaleInfo(min_val=float(value[0]), max_val=float(value[1]))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{field_name} bounds must be numeric, got {value!r}"
+            ) from exc
+    if not np.isfinite(scale.min_val) or not np.isfinite(scale.max_val):
+        raise ValueError(f"{field_name} bounds must be finite, got {value!r}")
+    if scale.max_val <= scale.min_val:
+        raise ValueError(
+            f"{field_name} maximum must be greater than its minimum, got {value!r}"
+        )
+    return scale
+
+
+def unit_scale() -> ScaleInfo:
+    """Return the canonical unit-interval scale."""
+    return ScaleInfo(0.0, 1.0)
+
+
+def validate_values_on_scale(
+    values: np.ndarray,
+    scale: ScaleInfo,
+    *,
+    field_name: str,
+    tolerance: float = 1e-9,
+) -> None:
+    """Fail when finite values fall outside their declared public scale."""
+    array = np.asarray(values, dtype=float)
+    finite = array[np.isfinite(array)]
+    if finite.size == 0:
+        return
+    bad = (finite < scale.min_val - tolerance) | (finite > scale.max_val + tolerance)
+    if np.any(bad):
+        observed = (float(np.min(finite)), float(np.max(finite)))
+        raise ValueError(
+            f"{field_name} values fall outside declared scale "
+            f"[{scale.min_val}, {scale.max_val}] (observed range "
+            f"{observed[0]}-{observed[1]}, {int(np.sum(bad))} rows)."
+        )
+
+
+class ScaledCalibrator:
+    """Public-unit facade over an internally unit-scaled calibrator.
+
+    Estimation continues to use the raw calibrator on ``[0, 1]``. Results
+    expose this facade so documented reuse and transport checks accept the
+    same judge units as evaluation input and return the result's oracle units.
+    """
+
+    def __init__(
+        self,
+        calibrator: Any,
+        *,
+        judge_scale: ScaleInfo,
+        output_scale: ScaleInfo,
+    ) -> None:
+        self.raw_calibrator = calibrator
+        self.judge_scale = judge_scale
+        self.output_scale = output_scale
+
+    def predict(
+        self, judge_scores: Any, covariates: Optional[Any] = None
+    ) -> np.ndarray:
+        scores = np.asarray(judge_scores, dtype=float)
+        validate_values_on_scale(scores, self.judge_scale, field_name="judge_scores")
+        internal_scores = self.judge_scale.normalize_array(scores)
+        predictions = np.asarray(
+            self.raw_calibrator.predict(internal_scores, covariates=covariates),
+            dtype=float,
+        )
+        return self.output_scale.inverse_array(predictions)
+
+    @property
+    def oracle_s_range(self) -> Optional[tuple]:
+        internal = getattr(self.raw_calibrator, "oracle_s_range", None)
+        if internal is None:
+            return None
+        converted = self.judge_scale.inverse_array(np.asarray(internal, dtype=float))
+        return (float(converted[0]), float(converted[1]))
+
+    @property
+    def oracle_reward_range(self) -> Optional[tuple]:
+        internal = getattr(self.raw_calibrator, "oracle_reward_range", None)
+        if internal is None:
+            return None
+        converted = self.output_scale.inverse_array(np.asarray(internal, dtype=float))
+        return (float(converted[0]), float(converted[1]))
+
+    @property
+    def covariate_names(self) -> list:
+        return list(getattr(self.raw_calibrator, "covariate_names", None) or [])
+
+    def get_calibration_info(self) -> dict:
+        info = dict(self.raw_calibrator.get_calibration_info())
+        for key in ("rmse", "oof_rmse"):
+            value = info.get(key)
+            if value is not None:
+                info[key] = float(value) * self.output_scale.span
+        info["coverage_tolerance"] = 0.1 * self.output_scale.span
+        info["judge_input_scale"] = self.judge_scale.to_dict()
+        info["oracle_output_scale"] = self.output_scale.to_dict()
+        return info
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.raw_calibrator, name)
 
 
 def detect_range(

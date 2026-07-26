@@ -152,7 +152,7 @@ class TestBestPolicyVerdict:
         assert verdict.all_flagged is False
         assert verdict.runner_up is None
 
-    def test_flagged_argmax_is_demoted(self) -> None:
+    def test_flagged_argmax_is_demoted_by_default(self) -> None:
         result = _make_result(
             [0.771, 0.756, 0.763],
             ["unhelpful", "base", "clone"],
@@ -163,12 +163,15 @@ class TestBestPolicyVerdict:
             },
         )
         verdict = result.best_policy()
-        assert verdict.name == "clone"  # best reliable
+        assert verdict.name == "clone"
         assert verdict.index == 2
         assert verdict.estimate == pytest.approx(0.763)
         assert verdict.flagged is False
         assert verdict.all_flagged is False
-        assert verdict.runner_up == "unhelpful"  # demoted point-estimate winner
+        # Loud divergence: the demoted raw argmax and why it was flagged
+        # travel with the verdict.
+        assert verdict.runner_up == "unhelpful"
+        assert verdict.runner_up_reasons == ["boundary: 12.0%"]
 
     def test_reliable_only_false_returns_raw_argmax(self) -> None:
         result = _make_result(
@@ -179,7 +182,9 @@ class TestBestPolicyVerdict:
         verdict = result.best_policy(reliable_only=False)
         assert verdict.name == "unhelpful"
         assert verdict.flagged is True
+        assert verdict.all_flagged is False
         assert verdict.runner_up is None
+        assert verdict.runner_up_reasons is None
 
     def test_all_flagged_returns_argmax_marked(self) -> None:
         result = _make_result(
@@ -191,7 +196,7 @@ class TestBestPolicyVerdict:
         assert verdict.all_flagged is True
         assert verdict.runner_up is None
 
-    def test_critical_status_also_demotes(self) -> None:
+    def test_critical_status_demotes_point_winner(self) -> None:
         from cje.diagnostics import DirectDiagnostics, Status
 
         diag = DirectDiagnostics(
@@ -209,7 +214,33 @@ class TestBestPolicyVerdict:
         result.diagnostics = diag
         verdict = result.best_policy()
         assert verdict.name == "ok"
+        assert verdict.flagged is False
         assert verdict.runner_up == "bad"
+        assert verdict.runner_up_reasons == ["diagnostics status CRITICAL"]
+
+    def test_demotion_warning_logged_once_per_result(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The demotion warning fires on the first best_policy() call only:
+        summary() and renderers re-derive the verdict without re-warning."""
+        result = _make_result(
+            [0.771, 0.756],
+            ["unhelpful", "base"],
+            gates={"unhelpful": _gate(True), "base": _gate(False)},
+        )
+        with caplog.at_level(logging.WARNING, logger="cje.data.models"):
+            first = result.best_policy()
+            result.summary()  # re-derives the verdict internally
+            second = result.best_policy()
+        warnings_logged = [
+            record
+            for record in caplog.records
+            if "raw argmax 'unhelpful' was flagged" in record.message
+        ]
+        assert len(warnings_logged) == 1
+        # The verdict itself stays loud and identical on repeat calls.
+        assert first == second
+        assert second.runner_up == "unhelpful"
 
     def test_all_nan_raises(self) -> None:
         result = _make_result([float("nan"), float("nan")], ["a", "b"])
@@ -240,18 +271,23 @@ class TestSummary:
         assert "calibrated_direct" in text
         assert "base" in text and "good" in text
         assert "95% CI [" in text
-        assert "Best policy: good" in text
+        assert "Best by point estimate: good" in text
 
-    def test_summary_marks_flagged_and_demotes(self) -> None:
+    def test_summary_shows_flagged_winner_and_reliable_fallback(self) -> None:
         result = _make_result(
             [0.771, 0.756],
             ["unhelpful", "base"],
             gates={"unhelpful": _gate(True), "base": _gate(False)},
         )
         text = result.summary()
+        # The flagged raw winner stays visible with its limitations...
         assert "[gate: FLAGGED]" in text
+        assert "Best by point estimate: unhelpful" in text
+        assert "flagged by the reliability gates" in text
+        # ...and the divergence from the returned reliable winner is loud.
         assert "Best reliable policy: base" in text
-        assert "unhelpful" in text
+        assert "raw argmax unhelpful was flagged (boundary: 12.0%)" in text
+        assert "reliable_only=False" in text
 
     def test_docstring_example_works_end_to_end(self) -> None:
         """The cje/__init__.py docstring example: print(results.summary())."""
@@ -790,7 +826,7 @@ class TestComparePoliciesEndToEnd:
         )
         pairwise = result.metadata["pairwise_inference"]
         entry = pairwise["0-1"]
-        assert entry["basis"] == "index_paired"  # shared ordered prompt ids
+        assert entry["basis"] == "prompt_cluster_paired"
         assert entry["se"] > 0
         # additive decomposition: se^2 = se_sampling^2 + var_oua_diff
         assert entry["se"] ** 2 == pytest.approx(
@@ -799,7 +835,7 @@ class TestComparePoliciesEndToEnd:
 
         comparison = result.compare_policies(0, 1)
         assert comparison["method"] == "paired_if_oua"
-        assert comparison["basis"] == "index_paired"
+        assert comparison["basis"] == "prompt_cluster_paired"
         assert comparison["se_difference"] == pytest.approx(entry["se"])
 
     def test_analytic_prompt_paired_basis_when_order_differs(self) -> None:
@@ -812,11 +848,11 @@ class TestComparePoliciesEndToEnd:
             estimator_config={"inference_method": "cluster_robust"},
         )
         entry = result.metadata["pairwise_inference"]["0-1"]
-        assert entry["basis"] == "prompt_paired"
+        assert entry["basis"] == "prompt_cluster_paired"
         assert entry["n_pairs"] == 50
         comparison = result.compare_policies(0, 1)
         assert comparison["method"] == "paired_if_oua"
-        assert comparison["basis"] == "prompt_paired"
+        assert comparison["basis"] == "prompt_cluster_paired"
         assert comparison["used_influence"] is True
 
     def test_analytic_independent_basis_when_prompts_differ(self) -> None:
@@ -828,10 +864,10 @@ class TestComparePoliciesEndToEnd:
             estimator_config={"inference_method": "cluster_robust"},
         )
         entry = result.metadata["pairwise_inference"]["0-1"]
-        assert entry["basis"] == "independent"
+        assert entry["basis"] == "prompt_cluster_disjoint"
         comparison = result.compare_policies(0, 1)
         assert comparison["method"] == "paired_if_oua"
-        assert comparison["basis"] == "independent"
+        assert comparison["basis"] == "prompt_cluster_disjoint"
         # independent basis does not exploit influence-function pairing
         assert comparison["used_influence"] is False
 

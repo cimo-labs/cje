@@ -1,95 +1,128 @@
-name: Publish to PyPI
+name: Publish tagged release
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch:  # Allow manual trigger
+  push:
+    tags: ['v*']
 
 permissions:
-  contents: write  # Required for creating releases
-  id-token: write  # Required for OIDC
+  contents: write
+  id-token: write
+
+env:
+  POETRY_VERSION: 1.8.5
+  # pipx runs Poetry under the runner's system Python; without this Poetry
+  # builds the venv from its own interpreter and ignores actions/setup-python.
+  POETRY_VIRTUALENVS_PREFER_ACTIVE_PYTHON: "true"
 
 jobs:
-  publish:
-    name: Publish to PyPI
+  qualify-and-publish:
+    name: Qualify and publish exact artifacts
     runs-on: ubuntu-latest
-    environment: pypi  # Optional: use GitHub environment for approval gate
-
+    timeout-minutes: 120
+    environment: pypi
     steps:
-      - name: Validate publish target
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref_name }}
-          TARGET_COMMITISH: ${{ github.event.release.target_commitish }}
-        run: |
-          set -euo pipefail
-
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$REF_NAME" != "main" ]; then
-            echo "::error::Manual PyPI publish is only allowed from the main branch. Re-run this workflow on main."
-            exit 1
-          fi
-
-          if [ "$EVENT_NAME" = "release" ] && [ -n "${TARGET_COMMITISH:-}" ] && [ "$TARGET_COMMITISH" != "main" ]; then
-            echo "::error::This release targets '$TARGET_COMMITISH'. PyPI publish is only allowed for releases cut from main."
-            exit 1
-          fi
-
-      - name: Check out code
+      - name: Check out tagged commit
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Poetry must exist before setup-python so cache: poetry can locate
+      # its virtualenvs directory (keyed on poetry.lock + python version).
+      - name: Install pinned Poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: poetry
 
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
-        with:
-          version: latest
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-
-      - name: Get version
+      - name: Verify tag, version, changelog, and lock
         id: version
+        shell: bash
         run: |
-          VERSION=$(poetry version -s)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::Tagged commit ${GITHUB_SHA} is not on origin/main."
+            exit 1
+          fi
+          VERSION="$(poetry version -s)"
+          EXPECTED_TAG="v${VERSION}"
+          if [[ "${GITHUB_REF_NAME}" != "${EXPECTED_TAG}" ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package version ${VERSION}."
+            exit 1
+          fi
+          if ! grep -Fq "## [${VERSION}] - " CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for ${VERSION}."
+            exit 1
+          fi
+          poetry check --lock
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          if [[ "${VERSION}" == *rc* || "${VERSION}" == *a* || "${VERSION}" == *b* ]]; then
+            echo "prerelease=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "prerelease=false" >> "${GITHUB_OUTPUT}"
+          fi
 
-      - name: Fail fast if version already exists on PyPI
+      - name: Reject an existing PyPI version
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-
-          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/cje-eval/${VERSION}/json")
-          if [ "$STATUS" = "200" ]; then
-            echo "::error::cje-eval ${VERSION} is already published on PyPI. Bump the package version before publishing again."
+          STATUS="$(curl -sS -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/cje-eval/${VERSION}/json")"
+          if [[ "${STATUS}" == "200" ]]; then
+            echo "::error::cje-eval ${VERSION} already exists on PyPI."
+            exit 1
+          fi
+          if [[ "${STATUS}" != "404" ]]; then
+            echo "::error::Could not verify PyPI version availability (HTTP ${STATUS})."
             exit 1
           fi
 
-          if [ "$STATUS" != "404" ]; then
-            echo "::error::Unable to verify whether cje-eval ${VERSION} already exists on PyPI (HTTP ${STATUS})."
-            exit 1
-          fi
+      - name: Install locked dependencies
+        run: poetry install --sync --no-interaction
 
-      - name: Build package
+      - name: Qualify source tree
+        run: |
+          poetry run black --check cje
+          poetry run mypy cje
+          poetry run python -m pytest cje/tests --cov=cje --cov-report=term-missing --cov-fail-under=85
+
+      - name: Build artifacts once
         run: poetry build
 
-      - name: Publish to PyPI
+      - name: Smoke-test built wheel
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          WHEEL="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "${WHEEL}"
+          poetry run pip install --force-reinstall --no-deps "${WHEEL}"
+          VENV="$(poetry env info --path)"
+          cd /tmp
+          "${VENV}/bin/python" -c "import cje; assert cje.__version__ == '${VERSION}', cje.__version__"
+          "${VENV}/bin/cje" --help >/dev/null
+
+      - name: Preserve qualified artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cje-eval-${{ steps.version.outputs.version }}
+          path: dist/
+          if-no-files-found: error
+
+      - name: Publish exact artifacts to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
+          packages-dir: dist/
           print-hash: true
 
-      - name: Create GitHub Release
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
-          body: |
-            ## Installation
-            ```bash
-            pip install cje-eval==${{ steps.version.outputs.version }}
-            ```
-
-            See [CHANGELOG](https://github.com/cimo-labs/cje/blob/main/CHANGELOG.md) for details.
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          prerelease: ${{ steps.version.outputs.prerelease }}
           generate_release_notes: true
+          files: dist/*

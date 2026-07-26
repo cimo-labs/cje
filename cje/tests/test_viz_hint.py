@@ -29,6 +29,14 @@ def test_viz_names_resolve_when_matplotlib_installed() -> None:
         assert name in cje.__all__
 
 
+def test_advanced_viz_name_resolves_lazily() -> None:
+    pytest.importorskip("matplotlib")
+    import cje.advanced as advanced
+    from cje.visualization import plot_policy_estimates
+
+    assert advanced.plot_policy_estimates is plot_policy_estimates
+
+
 def test_transport_comparison_reexport_with_matplotlib() -> None:
     """The plot moved to cje.visualization.transport in 0.5.0, but the
     cje.diagnostics import path the demo notebook uses must keep working."""
