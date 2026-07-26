@@ -295,11 +295,11 @@ def audit_transportability(
     _validate_options(alpha, bins, family_size, delta_max, min_effective_clusters)
     if delta_max is None:
         warnings.warn(
-            "Since 0.6.0, audits without delta_max are NOT_GRADED and can "
-            "never PASS or FAIL; 0.5.x returned PASS/WARN/FAIL under a "
-            "zero-null test. Pass delta_max (practical-equivalence margin) "
-            "to grade.",
-            FutureWarning,
+            "transport audit called without delta_max: the result is "
+            "descriptive only and its status can only be NOT_GRADED "
+            "(never PASS or FAIL). Pass delta_max (a practical-equivalence "
+            "margin in output units) to grade the audit.",
+            UserWarning,
             stacklevel=2,
         )
     if len(probe_samples) == 0:
