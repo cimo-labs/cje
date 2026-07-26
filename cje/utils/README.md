@@ -38,8 +38,8 @@ diagnostics (including boundary cards), and metadata.
 ## Key Design Decisions
 
 1. **Graceful serialization** — numpy arrays → lists, NaN → null, complex objects → strings; export never fails on serialization errors.
-2. **One format** — `export_results_csv` and the aggregation CLIs (`aggregate_diagnostics`, `analyze_diagnostics`) were removed in 0.5.0 (unused); the JSON export is the canonical serialized form.
-3. **Plots live in cje.visualization** — the 0.3.x-era matplotlib re-exports from `cje.utils` were removed in 0.5.0.
+2. **One format** — the JSON export is the canonical serialized form; there is no CSV export or aggregation CLI.
+3. **Plots live in cje.visualization** — `cje.utils` has no plotting re-exports.
 
 ## Common Issues
 
