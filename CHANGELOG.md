@@ -112,9 +112,11 @@ expected numeric drift.
   identical seeds/draws per version; full report:
   <https://github.com/cimo-labs/cje-arena-experiments/blob/main/UPGRADE-COMPARISON-0.6.0.md>):
   - Supported policies: point estimates statistically unchanged (mean shift
-    ≤ 0.02 SE), SEs 4–8% tighter (ratio 0.92–0.96), 95% CI widths 7–12%
-    narrower, empirical coverage unchanged within binomial noise (94.5%
-    both versions on the oracle-carrying policy).
+    ≤ 0.02 SE); 95% CIs narrower by up to ~9–12% at small label budgets
+    (m≈100), attenuating to ~2–5% as the labeled sample grows (a second
+    harness run at larger budgets confirmed the attenuation); empirical
+    coverage unchanged within binomial noise (94.5% both versions on the
+    oracle-carrying policy).
   - Individual replicates can move a point estimate by up to ~4 SE when
     per-replicate calibration mode selection flips (rare; mean |shift| is
     ≈ 0.08–0.2 SE) — expect same-data results to differ slightly from 0.5.x.
