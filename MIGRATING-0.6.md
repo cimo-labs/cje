@@ -13,9 +13,9 @@ significance test. 0.6.0 grades a predeclared practical-equivalence margin
 
 | 0.5.x status | 0.6.0 without `delta_max` | 0.6.0 with `delta_max` |
 |---|---|---|
-| `PASS` (0 ∈ CI) | `NOT_GRADED` + `FutureWarning` | `PASS` only if the CI is wholly inside `[-delta_max, +delta_max]` (and ≥ 20 effective clusters) |
-| `WARN` (0 ∉ CI, small δ̂) | `NOT_GRADED` + `FutureWarning` | usually `INCONCLUSIVE`; `WARN` no longer exists (legacy serialized values normalize to `INCONCLUSIVE`) |
-| `FAIL` (0 ∉ CI, δ̂ ≥ 0.05) | `NOT_GRADED` + `FutureWarning` | `FAIL` only if the CI is wholly outside the margin (graded even below the cluster floor) |
+| `PASS` (0 ∈ CI) | `NOT_GRADED` + `UserWarning` | `PASS` only if the CI is wholly inside `[-delta_max, +delta_max]` (and ≥ 20 effective clusters) |
+| `WARN` (0 ∉ CI, small δ̂) | `NOT_GRADED` + `UserWarning` | usually `INCONCLUSIVE`; `WARN` no longer exists (legacy serialized values normalize to `INCONCLUSIVE`) |
+| `FAIL` (0 ∉ CI, δ̂ ≥ 0.05) | `NOT_GRADED` + `UserWarning` | `FAIL` only if the CI is wholly outside the margin (graded even below the cluster floor) |
 
 Without `delta_max`, `status == "PASS"` never fires and `status != "FAIL"`
 always passes — silently, the dangerous direction for a drift monitor.

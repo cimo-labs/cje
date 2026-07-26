@@ -106,7 +106,7 @@ The returned `BoundaryCard` dataclass carries `status`, `out_of_range`, `saturat
    - **PASS**: the CI lies wholly inside `[-delta_max, +delta_max]` (action: none). PASS additionally requires at least `min_effective_clusters` (default 20) Kish-effective clusters — cluster-robust intervals under-cover below that.
    - **FAIL**: the CI lies wholly outside the margin (action: do not reuse; collect target labels and refit). FAIL is graded even below the effective-cluster floor — an interval entirely beyond the margin is decisive evidence of unacceptable bias, not low power, so an under-sized probe cannot defeat the hard gate.
    - **INCONCLUSIVE**: the CI overlaps a margin boundary, or the probe has fewer than `min_effective_clusters` effective clusters without being decisively outside (action: collect more independent probe clusters).
-   - **NOT_GRADED**: no `delta_max` was declared — the residual estimate and CI are descriptive and can never PASS or FAIL. Calling without a margin emits a `FutureWarning` prompting you to declare one.
+   - **NOT_GRADED**: no `delta_max` was declared — the residual estimate and CI are descriptive and can never PASS or FAIL. Calling without a margin emits a `UserWarning` prompting you to declare one.
 
 `NOT_CHECKED` is the fifth state, reserved for high-level `analyze_dataset` results when no independent probe was supplied for a policy; the low-level audit never fabricates it. There is no `WARN` status — diagnostics deserialized with a legacy `WARN` value normalize to `INCONCLUSIVE` (`reason_code="legacy_warn"`).
 
