@@ -207,7 +207,7 @@ If you use CJE in your research, please cite:
 ```bibtex
 @misc{landesberg2025causaljudgeevaluationcalibrated,
   title={Causal Judge Evaluation: Calibrated Surrogate Metrics for LLM Systems},
-  author={Eddie Landesberg},
+  author={Eddie Landesberg and Manjari Narayan},
   year={2025},
   eprint={2512.11150},
   archivePrefix={arXiv},
