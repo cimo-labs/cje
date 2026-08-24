@@ -14,7 +14,10 @@ import numpy as np
 import pytest
 
 from cje.data.models import EstimationResult
-from cje.diagnostics.robust_inference import oracle_jackknife_variance
+from cje.diagnostics.robust_inference import (
+    combine_cluster_and_oracle,
+    oracle_jackknife_variance,
+)
 from cje.estimators.direct_method import CalibratedDirectEstimator
 
 
@@ -102,3 +105,81 @@ def test_apply_oua_jackknife_adds_sum_form_variance() -> None:
         var_orc, rel=1e-12
     )
     assert comps["oracle_jackknife_counts"]["policy_a"] == len(jack)
+
+
+def test_welch_satterthwaite_combines_variance_components() -> None:
+    se_cluster = 0.03
+    var_oracle = 0.0004
+    df_cluster = 39
+    folds = 5
+    se, df = combine_cluster_and_oracle(se_cluster, df_cluster, var_oracle, folds)
+    expected_df = (se_cluster**2 + var_oracle) ** 2 / (
+        se_cluster**4 / df_cluster + var_oracle**2 / (folds - 1)
+    )
+    assert se == pytest.approx(np.sqrt(se_cluster**2 + var_oracle))
+    assert df == pytest.approx(expected_df)
+    assert not float(df).is_integer()
+
+
+@pytest.mark.parametrize(
+    ("se_cluster", "df_cluster", "var_oracle", "folds", "expected_se", "expected_df"),
+    [
+        (0.03, 39, 0.0, 5, 0.03, 39.0),
+        (0.0, 39, 0.0004, 5, 0.02, 4.0),
+        (0.0, 39, 0.0, 0, 0.0, 39.0),
+        (0.03, 0, 0.0, 0, 0.03, 1.0),
+        (0.03, 39, -0.1, 5, 0.03, 39.0),
+    ],
+)
+def test_welch_satterthwaite_component_limits(
+    se_cluster: float,
+    df_cluster: int,
+    var_oracle: float,
+    folds: int,
+    expected_se: float,
+    expected_df: float,
+) -> None:
+    se, df = combine_cluster_and_oracle(se_cluster, df_cluster, var_oracle, folds)
+    assert se == pytest.approx(expected_se)
+    assert df == pytest.approx(expected_df)
+
+
+def test_welch_satterthwaite_nonfinite_component_is_unavailable() -> None:
+    se, df = combine_cluster_and_oracle(float("nan"), 19, 0.0, 0)
+    assert np.isnan(se)
+    assert df == 19.0
+
+    se, df = combine_cluster_and_oracle(0.03, 19, float("nan"), 5)
+    assert np.isnan(se)
+    assert df == 19.0
+
+
+def test_positive_oracle_variance_requires_two_folds() -> None:
+    with pytest.raises(ValueError, match="at least two jackknife folds"):
+        combine_cluster_and_oracle(0.03, 19, 0.0001, 1)
+
+
+def test_store_df_info_uses_actual_variance_shares() -> None:
+    jack = np.array([0.42, 0.47, 0.44, 0.50, 0.45])
+    se_cluster = 0.03
+    est = _JackknifeStub(jack)
+    est._df_cluster = {"policy_a": 39}
+    est._se_methods = {"policy_a": "cluster_robust"}
+    est._n_clusters = {"policy_a": 40}
+    result = EstimationResult(
+        estimates=np.array([0.45]),
+        standard_errors=np.array([se_cluster]),
+        n_samples_used={"policy_a": 100},
+        method="stub",
+        influence_functions=None,
+        diagnostics=None,
+    )
+    est._apply_oua_jackknife(result)
+    est._store_df_info(result, sampling_ses=[se_cluster])
+
+    var_oracle = oracle_jackknife_variance(jack)
+    _, expected_df = combine_cluster_and_oracle(se_cluster, 39, var_oracle, len(jack))
+    stored = result.metadata["degrees_of_freedom"]["policy_a"]
+    assert stored["df"] == pytest.approx(expected_df)
+    assert stored["df"] != len(jack) - 1
+    assert stored["df_method"] == "welch_satterthwaite"

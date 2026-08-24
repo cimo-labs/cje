@@ -37,6 +37,28 @@ def test_advanced_viz_name_resolves_lazily() -> None:
     assert advanced.plot_policy_estimates is plot_policy_estimates
 
 
+def test_policy_plot_uses_supplied_asymmetric_interval() -> None:
+    pytest.importorskip("matplotlib")
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from cje.visualization import plot_policy_estimates
+
+    fig = plot_policy_estimates(
+        estimates={"policy": 0.50},
+        standard_errors={"policy": 0.10},
+        confidence_intervals={"policy": (0.35, 0.62)},
+    )
+    ax = fig.axes[0]
+    interval_lines = []
+    for line in ax.lines:
+        xdata = np.asarray(line.get_xdata(), dtype=float)
+        if xdata.size == 2 and np.allclose(xdata, [0.35, 0.62]):
+            interval_lines.append(line)
+    assert len(interval_lines) == 1
+    assert any("0.50 [0.35, 0.62]" in text.get_text() for text in ax.texts)
+    plt.close(fig)
+
+
 def test_transport_comparison_reexport_with_matplotlib() -> None:
     """The plot moved to cje.visualization.transport in 0.5.0, but the
     cje.diagnostics import path the demo notebook uses must keep working."""

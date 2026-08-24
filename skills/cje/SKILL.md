@@ -100,10 +100,10 @@ verdict = results.compare_policies(0, 1)             # difference, CI, p-value f
 
 Use `results.compare_policies(i, j)` for pairwise claims and surface the highest point estimate
 with its diagnostics rather than silently substituting another policy. Do not rely on eyeballed
-point estimates. On the default bootstrap path `compare_policies` does paired inference over the
-bootstrap replicates (`method: "paired_bootstrap"` in the returned dict), so the difference SE
-includes calibrator-refit noise — near-tie pairs come back non-significant instead of
-confidently wrong. Report the `method` key's basis if asked how the p-value was computed. For
+point estimates. The default analytic path combines the paired sampling SE with the
+oracle-jackknife variance of the difference (`method: "paired_if_oua"`); an explicit bootstrap
+run uses the joint replicate matrix (`method: "paired_bootstrap"`). Report the `method` key's
+basis if asked how the p-value was computed. For
 many-pair audits use `results.compare_all_policies(adjust="bh")` (adds Benjamini-Hochberg
 `p_adjusted`/`significant_adjusted`). Boundary cards per policy are OK / CAUTION / REFUSE-LEVEL.
 

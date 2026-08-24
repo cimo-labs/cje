@@ -37,7 +37,7 @@ This playbook’s sections below implement those same steps using CJE APIs.
 
 ## 1) Baseline Evaluation Run
 
-Run your main analysis with bootstrap inference (default in Direct mode).
+Run your main analysis with the default calibration-aware jackknife inference.
 
 ```python
 from cje import analyze_dataset
@@ -45,11 +45,6 @@ from cje import analyze_dataset
 results = analyze_dataset(
     fresh_draws_dir="responses/current_batch",
     estimator="direct",
-    estimator_config={
-        "inference_method": "bootstrap",
-        "n_bootstrap": 2000,
-        "use_augmented_estimator": True,
-    },
 )
 
 print(results.estimates)
@@ -57,16 +52,20 @@ print(results.standard_errors)
 ```
 
 Notes:
-- `bootstrap` + `use_augmented_estimator=True` is the production default.
+- The default combines prompt-cluster-robust sampling variance with the
+  delete-one-oracle-fold jackknife variance and a t-based interval. An
+  approximate Welch–Satterthwaite df weights the two sources by their realized
+  variance shares.
+- Refit bootstrap inference remains available explicitly with
+  `estimator_config={"inference_method": "bootstrap", "n_bootstrap": 2000}`.
 
 ### Pairwise comparisons
 
 Use `results.compare_policies(i, j)` for any "is A better than B?" claim — never eyeballed
-CI overlap. On the bootstrap path it performs paired inference over the (B × P) replicate
-matrix (`method: "paired_bootstrap"` in the returned dict), so the difference SE includes
-calibrator-refit noise and stays honest on near-tie pairs (unpaired influence-function
-difference SEs were anti-conservative there — ~90% false significance in the
-pre-registered benchmark). For many-pair
+CI overlap. The default analytic path combines the paired influence-function sampling SE
+with the oracle-jackknife variance of the difference (`method: "paired_if_oua"`). On an
+explicit bootstrap run it instead uses the joint (B × P) replicate matrix
+(`method: "paired_bootstrap"`). For many-pair
 sweeps use `results.compare_all_policies(adjust="bh")` (Benjamini-Hochberg-adjusted
 p-values).
 
@@ -239,13 +238,8 @@ plan_target = plan_for_mde(
 print(plan_target.total_cost)
 ```
 
-> **Note:** `fit_variance_model` deliberately measures variance components with the
-> analytic cluster-robust + OUA instrument (see the caveats below), so while it fits
-> you will see repeated warnings that `inference_method='cluster_robust'` "was
-> explicitly requested" and that bootstrap is recommended. You did not misconfigure
-> anything — those warnings come from the planning instrument's internal calls and
-> are expected during fitting; ignore them. Use `inference_method="bootstrap"` for
-> your actual analyses as usual.
+> **Note:** `fit_variance_model` measures variance components with the same analytic
+> cluster-robust + oracle-jackknife instrument used by the default analysis path.
 
 ### Label budgeting rules
 
@@ -256,7 +250,11 @@ print(plan_target.total_cost)
 
 ### Planning caveats
 
-- MDE assumes independent policies; paired evals on a shared prompt set typically detect smaller differences (plans are conservative).
+- MDE assumes independent policies. When shared-prompt outcomes have positive
+  covariance, paired evaluation typically detects smaller differences, so that
+  pairing assumption is conservative; negative covariance can reverse the
+  direction.
+- MDE and power use asymptotic-normal critical values. The final analytic CI uses a finite-sample t critical value based on the realized evaluation/calibration variance shares, so confirm the achieved interval after collection.
 - Reported variance shares are specific to the returned allocation: `(sigma2_eval/n) / V` and `(sigma2_cal/m) / V`. Raw fitted coefficients are not variance shares.
 - Simulation planning is specific to its synthetic data-generating process. Keep the `scenario_fingerprint` returned by `simulate_planning(...)` (the simulation-planning entry point, which bundles the plan with its fingerprint — `simulate_variance_model` alone returns only the fitted variance model), vary plausible inputs, and do not present a single simulated budget as an empirical guarantee.
 - Variance components are measured with the analytic cluster-robust + OUA instrument, which tracked the realized SE of the production estimator within ~5% at every allocation in a pilot-scale validation grid (instrument experiment 2026-07-07, R=400 replicates/cell).
@@ -266,7 +264,7 @@ print(plan_target.total_cost)
 ## 7) Suggested Operational Cadence
 
 Per evaluation cycle:
-1. Run `analyze_dataset(...)` with bootstrap inference.
+1. Run `analyze_dataset(...)` with the default calibration-aware jackknife inference.
 2. Run transport audit on each deployment-relevant target policy.
 3. Route by `PASS` / `FAIL` / `INCONCLUSIVE` / `NOT_GRADED` using Section 3.
 4. Merge accepted audit labels into calibration history.
@@ -276,7 +274,7 @@ Per evaluation cycle:
 
 ## 8) Minimal Checklist
 
-- Inference: `inference_method="bootstrap"`, `n_bootstrap=2000`
+- Inference: default `inference_method="cluster_robust"` + `oua_jackknife=True`
 - Debiasing: `use_augmented_estimator=True`
 - Audit margin: predeclare `delta_max` — probe oracle-label units for the low-level audit, OUTPUT units (the units of `results.estimates`) for `TransportAuditConfig` margins
 - Probe design: held out, probability sampled, at least 20 effective independent clusters; size for the desired CI width

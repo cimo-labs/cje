@@ -137,7 +137,7 @@ Confidence intervals include finite-label calibration uncertainty on supported i
 
 ## The array API
 
-`calibrated_mean_ci` is the library's bottom layer: a ppi_py-style primitive that takes plain NumPy arrays and returns a calibrated mean and interval. Use it when you have one sample of judge scores and a probability-sampled oracle slice; use `analyze_dataset` for multi-policy comparisons.
+`calibrated_mean_ci` is the library's bottom layer: a ppi_py-style primitive that takes plain NumPy arrays and returns a calibrated mean and interval. With partial oracle coverage, it defaults to prompt-cluster-robust sampling variance plus the calibration-aware delete-one-oracle-fold jackknife, using an approximate Welch–Satterthwaite effective df for the t interval; complete oracle coverage needs no calibrator or calibration jackknife. Request `inference="bootstrap"` for refit-bootstrap percentile intervals. For backward compatibility, supplying `n_bootstrap` while omitting `inference` selects bootstrap with a warning; explicit `inference="cluster_robust"` wins and ignores `n_bootstrap` with a warning. Use the array API when you have one sample of judge scores and a probability-sampled oracle slice; use `analyze_dataset` for multi-policy comparisons.
 
 ```python
 import numpy as np
@@ -154,7 +154,7 @@ print(result.summary())
 ```
 
 ```text
-Calibrated mean: 0.5316 (SE 0.0183, CI [0.4951, 0.5678], n=400, n_oracle=100, bootstrap)
+Calibrated mean: 0.5316 (SE 0.0174, CI [0.4974, 0.5659], n=400, n_oracle=100, cluster_robust)
 ```
 
 When partial oracle coverage requires calibration, `result.calibrator` predicts in the same public judge and oracle units supplied by the caller. Complete oracle coverage returns the direct oracle mean with `result.calibrator is None`. Grade any fitted calibrator's reuse on an independent probe with `transport_audit(..., delta_max=<practical margin>)`; without a margin the result is `NOT_GRADED`. `result.diagnostics["boundary_card"]` carries the separate scalar score-support badge when calibration is fitted.

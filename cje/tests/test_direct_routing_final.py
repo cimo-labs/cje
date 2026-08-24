@@ -50,13 +50,20 @@ def _direct_result(
     inference_method: str = "cluster_robust",
     n_bootstrap: int = 120,
 ) -> EstimationResult:
-    estimator = CalibratedDirectEstimator(
-        target_policies=["A", "B"],
-        paired_comparison=paired,
-        inference_method=inference_method,
-        n_bootstrap=n_bootstrap,
-        bootstrap_seed=7,
-    )
+    if inference_method in {"bootstrap", "auto"}:
+        estimator = CalibratedDirectEstimator(
+            target_policies=["A", "B"],
+            paired_comparison=paired,
+            inference_method=inference_method,
+            n_bootstrap=n_bootstrap,
+            bootstrap_seed=7,
+        )
+    else:
+        estimator = CalibratedDirectEstimator(
+            target_policies=["A", "B"],
+            paired_comparison=paired,
+            inference_method=inference_method,
+        )
     estimator.add_fresh_draws("A", _fresh("A", a))
     estimator.add_fresh_draws("B", _fresh("B", b))
     return estimator.fit_and_estimate()
@@ -359,12 +366,10 @@ def test_unavailable_oua_does_not_claim_variance_or_cap_df() -> None:
     )
 
 
-def test_explicit_cluster_robust_coupled_warning_requires_calibrator_use(
+def test_cluster_robust_records_coupling_without_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The dropped-covariance warning is only meaningful when some policy
-    actually depends on the calibrator: with complete oracle coverage every
-    policy routes direct_oracle, so the warning must stay silent."""
+    """The validated jackknife path is supported for coupled oracle slices."""
     scores = np.linspace(0.2, 0.7, 20)
     calibration = Dataset(
         target_policies=[],
@@ -401,7 +406,8 @@ def test_explicit_cluster_robust_coupled_warning_requires_calibrator_use(
 
     caplog.clear()
 
-    # Partially labeled draws depend on the calibrator: the warning stays.
+    # Partial coverage uses the empirically supported analytic decomposition;
+    # overlap stays visible in metadata without a warning on the default path.
     partially_labeled = _estimator()
     partially_labeled.add_fresh_draws(
         "A",
@@ -421,8 +427,10 @@ def test_explicit_cluster_robust_coupled_warning_requires_calibrator_use(
         ),
     )
     with caplog.at_level(logging.WARNING, logger="cje.estimators.direct_method"):
-        partially_labeled.fit_and_estimate()
-    assert any(coupled_message in record.message for record in caplog.records)
+        partial_result = partially_labeled.fit_and_estimate()
+    assert not any(coupled_message in record.message for record in caplog.records)
+    assert partial_result.metadata["inference"]["coupled"] is True
+    assert partial_result.metadata["inference"]["coupling_overlap"] == 10
 
 
 def test_underclustered_bootstrap_policy_blocks_pairwise_fallback() -> None:

@@ -880,6 +880,9 @@ class TestEvaluationPlanAPI:
         assert "mde" in d
         assert "se_level" in d
         assert "cost_model" in d
+        assert d["critical_value_method"] == "asymptotic_normal"
+        assert d["finite_sample_confirmation_required"] is True
+        assert d["pairing_assumption"] == "independent_policies"
 
     def test_mde_formula_correctness(self) -> None:
         """Verify MDE = (z_alpha + z_beta) * sqrt(2) * SE."""

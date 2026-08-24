@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pytest
 
-from cje.data.models import EstimationResult
+from cje.data.models import CIInfo, EstimationResult
 from cje.diagnostics import DirectDiagnostics, Status
 from cje.interface.cli import best_policy_lines, create_parser, main
 
@@ -117,6 +117,16 @@ class TestAnalyzeSurface:
     def test_default_estimator_is_calibrated_direct(self) -> None:
         args = create_parser().parse_args(["analyze", "draws/"])
         assert args.estimator == "calibrated-direct"
+
+    def test_estimator_config_help_selects_bootstrap_explicitly(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            create_parser().parse_args(["analyze", "--help"])
+        assert exc_info.value.code == 0
+        help_text = " ".join(capsys.readouterr().out.split())
+        assert '"inference_method": "bootstrap"' in help_text
+        assert '"n_bootstrap": 4000' in help_text
 
     def test_scale_and_strict_options_parse(self) -> None:
         args = create_parser().parse_args(
@@ -515,6 +525,38 @@ class TestAnalyzeSurface:
         assert exit_code == 0
         payload = json.loads(output.read_text())
         assert payload  # non-empty results document
+
+    def test_console_uses_stored_percentile_interval(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        result = EstimationResult(
+            estimates=np.asarray([0.50]),
+            standard_errors=np.asarray([0.02]),
+            n_samples_used={"policy_a": 100},
+            method="calibrated_direct_bootstrap",
+            influence_functions=None,
+            diagnostics=None,
+            metadata={"target_policies": ["policy_a"]},
+            ci_info=CIInfo(
+                method="percentile",
+                alpha=0.05,
+                lower=[0.35],
+                upper=[0.62],
+            ),
+        )
+        monkeypatch.setattr(
+            "cje.interface.analysis.analyze_dataset", lambda **_: result
+        )
+
+        exit_code = _run_cli(monkeypatch, "analyze", str(tmp_path))
+
+        assert exit_code == 0
+        output = capsys.readouterr().out
+        assert "policy_a: 0.500 (SE 0.020, 95% CI [0.350, 0.620])" in output
+        assert "0.461" not in output  # estimate - 1.96 * SE
 
 
 # ---------------------------------------------------------------------------

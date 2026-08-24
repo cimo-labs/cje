@@ -44,8 +44,8 @@ result = estimator.fit_and_estimate()
 # 4. Access results
 estimates = result.estimates           # Point estimates per policy
 std_errors = result.standard_errors    # Complete SEs (sampling + calibration)
-cis = result.ci()                      # (lower, upper) tuples: percentile bootstrap
-                                       # by default; t-based under cluster_robust
+cis = result.ci()                      # (lower, upper) tuples: t-based jackknife
+                                       # by default; percentile under bootstrap
 diagnostics = result.diagnostics       # DirectDiagnostics incl. boundary cards
 ```
 
@@ -53,28 +53,32 @@ Fresh draws are auto-discovered from a `fresh_draws_dir` under the canonical `PO
 
 ## Standard Errors
 
-`standard_errors` always includes every uncertainty source: sampling noise on the eval set **and** the uncertainty from learning the calibrator on a finite oracle slice. Confidence intervals are percentile bootstrap intervals under the default `bootstrap` inference; under `cluster_robust` they use t-critical values with the limiting degrees of freedom (stored per policy in `result.metadata["degrees_of_freedom"]` with `df`, `t_critical`, `se_method`, `n_clusters` — that metadata only exists there).
+On supported calibrated routes, the default `standard_errors` includes evaluation sampling noise **and** uncertainty from learning the calibrator on a finite oracle slice. The `cluster_robust` path combines CRV1 sampling variance with the calibration-aware oracle jackknife and uses t-critical values with an approximate Welch–Satterthwaite effective df (stored per policy in `result.metadata["degrees_of_freedom"]`). Bootstrap inference reports percentile intervals. Inspect `result.metadata["se_components"]["oracle_jackknife_status_per_policy"]`: disabling the jackknife or using a calibrator without enough fold models omits calibration variance and is reported there.
 
 One exception: a policy whose fresh draws all share a single prompt cluster has fewer than two independent clusters, so no valid cluster-level inference exists. Such a policy returns its point estimate with **SE = NaN** (`se_method: "unavailable_one_cluster"`, loud warning) rather than falling back to invalid row-level IID inference. It is listed in `result.metadata["inference_unavailable_policies"]`, and `compare_policies` refuses pairs involving it with `InferenceUnavailableError` (from `cje.data`) instead of returning an anti-conservative difference SE.
 
 ### Inference methods (`inference_method` parameter)
 
-- **`"bootstrap"` (default):** cluster bootstrap by prompt — positive exponential mean-one weights per prompt cluster, no replicate discarded or retried — with a **calibrator refit per replicate**, applied to the augmented estimate `θ̂_aug = mean(f̂_full(S)) + mean(Y − f̂_oof(S))` (an AIPW-style per-policy residual correction; `use_augmented_estimator=True` by default). Refitting captures the calibration/evaluation covariance that analytic SEs miss — this is what achieves ~95% CI coverage.
-- **`"cluster_robust"`:** CRV1 cluster-robust SE of the plug-in mean (clustered by `prompt_id` for paired comparisons), augmented with the oracle-jackknife variance. Fastest; undercovers when calibration and evaluation are coupled.
-- **`"auto"`:** uses cluster_robust, switching to bootstrap when there are fewer than 20 prompt clusters or when the calibration data overlaps the evaluation draws (coupling).
+- **`"cluster_robust"` (default):** CRV1 cluster-robust SE of the augmented pseudo-outcome mean (clustered by `prompt_id`), combined with the delete-one-oracle-fold jackknife variance and a t-based CI. An approximate Welch–Satterthwaite effective df weights the two components by their realized variance shares. The corrected additive variance procedure is the paper's recommended negligible-compute path; the effective-df rule is separately regression-tested for nominal coverage.
+- **`"bootstrap"`:** cluster bootstrap by prompt — positive exponential mean-one weights per prompt cluster, no replicate discarded or retried — with a **calibrator refit per replicate**, applied to the same augmented estimate. By refitting and evaluating inside each replicate it jointly represents calibration/evaluation dependence. It returns percentile CIs and a joint replicate matrix for paired contrasts.
+- **`"auto"`:** uses cluster_robust, switching to bootstrap when there are fewer than 20 prompt clusters or when the calibration data overlaps the evaluation draws (coupling). A run in which all evaluated policies have complete oracle coverage is not marked coupled because none of its point estimates uses the calibrator; mixed complete/partial runs still receive the coupling check.
 
 ```python
 estimator = CalibratedDirectEstimator(
     target_policies=["policy_a", "policy_b"],
     reward_calibrator=cal_result.calibrator,
-    inference_method="bootstrap",  # or "cluster_robust", "auto"
-    n_bootstrap=2000,
+    inference_method="cluster_robust",  # default; or "bootstrap", "auto"
 )
 ```
 
-### Automatic fallback when the bootstrap cannot refit the calibrator
+For backward compatibility, supplying `n_bootstrap` or `bootstrap_seed` while
+omitting `inference_method` selects bootstrap with a warning. An explicit
+`inference_method="cluster_robust"` wins and ignores those bootstrap-only
+settings with a warning.
 
-The refit bootstrap needs the exact rows the calibrator was fit on. When those are unavailable, the estimator detects it before dispatching and falls back to cluster-robust + oracle jackknife, in exactly two cases:
+### Automatic fallback when bootstrap is selected
+
+The refit bootstrap needs the exact rows the calibrator was fit on. When bootstrap is selected explicitly or through `auto` and those rows are unavailable, the estimator detects it before dispatching and falls back to cluster-robust + oracle jackknife, in exactly two cases:
 
 - a calibrator exists but its fit rows (calibration provenance) are unavailable — `fallback_reason: "calibration_provenance_unavailable"`;
 - no calibrator exists and at least one policy lacks complete evaluation oracle coverage — `fallback_reason: "calibrator_unavailable_for_non_oracle_routes"`.
@@ -127,4 +131,4 @@ Calibration uses k-fold cross-fitting. `fit_cv` assigns whole oracle **prompt cl
 
 ## Summary
 
-One estimator, honestly reported: `CalibratedDirectEstimator` turns calibrated judge scores on fresh draws into per-policy estimates with complete standard errors (bootstrap-with-refit by default), calibration-aware uncertainty, and a coverage gate that refuses level claims the data cannot support.
+One estimator, honestly reported: `CalibratedDirectEstimator` turns calibrated judge scores on fresh draws into per-policy estimates with an analytic calibration-aware jackknife by default on supported calibrated routes, explicit uncertainty-component metadata, and a coverage gate that refuses level claims the data cannot support.

@@ -309,7 +309,10 @@ class TestCIInfo:
     def test_bootstrap_path_writes_percentile_ci_info(self) -> None:
         result = analyze_dataset(
             fresh_draws_data=_labeled_draws(),
-            estimator_config={"n_bootstrap": 100},
+            estimator_config={
+                "inference_method": "bootstrap",
+                "n_bootstrap": 100,
+            },
         )
         assert result.ci_info is not None
         assert result.ci_info.method == "percentile"
@@ -561,6 +564,68 @@ class TestComparePoliciesPairedBootstrap:
 
 
 # ---------------------------------------------------------------------------
+# plot_estimates: preserve estimator-computed intervals
+# ---------------------------------------------------------------------------
+
+
+class TestPlotEstimatesIntervals:
+    def test_passes_low_df_t_interval_to_visualization(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result = _make_result(
+            [0.5],
+            ["policy"],
+            standard_errors=[0.1],
+            ci_info=CIInfo(
+                method="t",
+                alpha=0.05,
+                df_per_policy={"policy": {"df": 2.0}},
+            ),
+        )
+        captured: Dict[str, Any] = {}
+        sentinel = object()
+
+        def fake_plot(**kwargs: Any) -> object:
+            captured.update(kwargs)
+            return sentinel
+
+        monkeypatch.setattr("cje.visualization.plot_policy_estimates", fake_plot)
+        returned = result.plot_estimates()
+        expected_lower, expected_upper = result.confidence_interval()
+
+        assert returned is sentinel
+        assert captured["confidence_intervals"]["policy"] == pytest.approx(
+            (expected_lower[0], expected_upper[0])
+        )
+        assert expected_lower[0] != pytest.approx(0.5 - 1.96 * 0.1)
+
+    def test_passes_asymmetric_percentile_interval_to_visualization(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result = _make_result(
+            [0.5],
+            ["policy"],
+            standard_errors=[0.1],
+            ci_info=CIInfo(
+                method="percentile",
+                alpha=0.05,
+                lower=[0.35],
+                upper=[0.62],
+            ),
+        )
+        captured: Dict[str, Any] = {}
+
+        def fake_plot(**kwargs: Any) -> object:
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setattr("cje.visualization.plot_policy_estimates", fake_plot)
+        result.plot_estimates()
+
+        assert captured["confidence_intervals"]["policy"] == pytest.approx((0.35, 0.62))
+
+
+# ---------------------------------------------------------------------------
 # compare_policies: dispatch precedence (0.5.1)
 # ---------------------------------------------------------------------------
 
@@ -625,6 +690,18 @@ class TestComparePoliciesDispatch:
         assert c10["se_difference"] == pytest.approx(c01["se_difference"])
         assert c10["p_value"] == pytest.approx(c01["p_value"])
 
+    def test_pairwise_inference_preserves_fractional_df(self) -> None:
+        result = self._full_stack_result()
+        result.bootstrap_samples = None
+        entry = result.metadata["pairwise_inference"]["0-1"]
+        entry["df"] = 7.5
+        comparison = result.compare_policies(0, 1)
+
+        expected_t = 0.1 / float(entry["se"])
+        expected_p = 2 * (1 - stats.t.cdf(abs(expected_t), 7.5))
+        assert comparison["p_value"] == pytest.approx(expected_p)
+        assert comparison["df"] == pytest.approx(7.5)
+
     def test_legacy_beats_independent(self) -> None:
         result = self._full_stack_result()
         result.bootstrap_samples = None
@@ -644,6 +721,12 @@ class TestComparePoliciesDispatch:
         result = self._full_stack_result()
         result.bootstrap_samples = None
         result.metadata["pairwise_inference"]["0-1"]["se"] = 0.0
+        assert result.compare_policies(0, 1)["method"] == "paired_if_legacy"
+
+    def test_nonfinite_stored_df_falls_through(self) -> None:
+        result = self._full_stack_result()
+        result.bootstrap_samples = None
+        result.metadata["pairwise_inference"]["0-1"]["df"] = float("-inf")
         assert result.compare_policies(0, 1)["method"] == "paired_if_legacy"
 
 
@@ -791,7 +874,10 @@ class TestComparePoliciesEndToEnd:
     def test_bootstrap_run_attaches_matrix_and_dispatches(self, tmp_path: Any) -> None:
         result = analyze_dataset(
             fresh_draws_data=_two_policy_draws(),
-            estimator_config={"n_bootstrap": 120},
+            estimator_config={
+                "inference_method": "bootstrap",
+                "n_bootstrap": 120,
+            },
         )
         assert result.bootstrap_samples is not None
         n_valid = result.metadata["inference"]["n_bootstrap_valid"]
@@ -878,7 +964,7 @@ class TestComparePoliciesEndToEnd:
         the full range, so normalization reproduces the unit-scale pipeline
         bit-for-bit and every reported quantity must be exactly 100x.
         """
-        config = {"n_bootstrap": 120}
+        config = {"inference_method": "bootstrap", "n_bootstrap": 120}
         result_unit = analyze_dataset(
             fresh_draws_data=_two_policy_draws(scale=1.0),
             estimator_config=dict(config),
@@ -928,7 +1014,7 @@ class TestComparePoliciesEndToEnd:
         assert entry_scaled["var_oua_diff"] == pytest.approx(
             100.0**2 * entry_unit["var_oua_diff"], rel=1e-9
         )
-        assert entry_scaled["df"] == entry_unit["df"]
+        assert entry_scaled["df"] == pytest.approx(entry_unit["df"])
 
         c_scaled = result_scaled.compare_policies(0, 1)
         c_unit = result_unit.compare_policies(0, 1)

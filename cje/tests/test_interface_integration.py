@@ -44,12 +44,12 @@ def test_analyze_dataset_eight_labels_reduces_folds(
     with caplog.at_level("WARNING", logger="cje.calibration.judge"):
         results = analyze_dataset(
             fresh_draws_data={"policy_a": records},
-            estimator_config={"n_bootstrap": 50},
         )
 
     assert np.all(np.isfinite(results.estimates))
     assert np.all(np.isfinite(results.standard_errors))
-    assert results.method == "calibrated_direct_bootstrap"
+    assert results.method == "calibrated_direct"
+    assert results.metadata["inference"]["method"] == "cluster_robust"
     assert results.metadata["calibration_status"] == "CALIBRATED"
     assert results.metadata["claim_tier"] == "CALIBRATED_ORACLE_MEAN"
     assert any(

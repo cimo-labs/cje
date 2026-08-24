@@ -197,11 +197,23 @@ def test_calibration_data_only_without_eval_oracle_returns_finite_estimates(
             "\n".join(json.dumps(r) for r in records) + "\n"
         )
 
-    # Supplying only n_bootstrap retains the default bootstrap inference route.
+    # The high-level API inherits the analytic calibration-aware default.
+    default_results = analyze_dataset(
+        fresh_draws_dir=str(fresh_draws_dir),
+        calibration_data_path=str(calib_path),
+    )
+    assert default_results.method == "calibrated_direct"
+    assert default_results.metadata["inference"]["method"] == "cluster_robust"
+    assert (
+        default_results.metadata["se_components"]["includes_oracle_uncertainty"] is True
+    )
+
+    # Bootstrap remains available explicitly when calibration comes from a
+    # separate file and the evaluation draws carry no oracle labels.
     results = analyze_dataset(
         fresh_draws_dir=str(fresh_draws_dir),
         calibration_data_path=str(calib_path),
-        estimator_config={"n_bootstrap": 50},
+        estimator_config={"inference_method": "bootstrap", "n_bootstrap": 50},
     )
 
     # Finite estimates and SEs — not the quiet NaNs
@@ -271,13 +283,13 @@ def test_minimal_calibration_file_loads_and_analyzes(tmp_path: Path) -> None:
     results = analyze_dataset(
         fresh_draws_dir=str(fresh_draws_dir),
         calibration_data_path=str(calib_path),
-        estimator_config={"n_bootstrap": 50},
     )
 
     assert len(results.estimates) == 2
     assert np.all(np.isfinite(results.estimates)), results.estimates
     assert np.all(np.isfinite(results.standard_errors)), results.standard_errors
-    assert results.method == "calibrated_direct_bootstrap"
+    assert results.method == "calibrated_direct"
+    assert results.metadata["inference"]["method"] == "cluster_robust"
     assert results.metadata["oracle_sources"]["calibration_data"]["n_oracle"] == 30
 
 

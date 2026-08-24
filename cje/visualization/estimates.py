@@ -1,7 +1,7 @@
 """Policy estimate visualization utilities."""
 
 from pathlib import Path
-from typing import Dict, List, Optional, Literal
+from typing import Dict, List, Optional, Literal, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -15,6 +15,7 @@ def plot_policy_estimates(
     sort_by: Literal["estimate", "name", "none"] = "estimate",
     figsize: tuple = (12, None),
     save_path: Optional[Path] = None,
+    confidence_intervals: Optional[Dict[str, Tuple[float, float]]] = None,
 ) -> plt.Figure:
     """Create forest plot of policy performance estimates with confidence intervals.
 
@@ -32,6 +33,11 @@ def plot_policy_estimates(
             "name" (alphabetical), or "none" (preserve input order)
         figsize: Figure size (width, height). Height auto-calculated if None.
         save_path: Optional path to save figure
+        confidence_intervals: Optional per-policy confidence intervals. When
+            omitted, the standalone plotting helper falls back to the legacy
+            normal approximation ``estimate ± 1.96 * SE``. The
+            ``EstimationResult.plot_estimates`` wrapper always supplies the
+            estimator's stored t or percentile intervals.
 
     Returns:
         matplotlib Figure
@@ -63,15 +69,21 @@ def plot_policy_estimates(
     color_estimate = "#1f2937"  # Dark gray/black
     color_oracle = "#dc2626"  # Red
 
+    intervals: Dict[str, Tuple[float, float]] = {}
+    for policy in policies:
+        if confidence_intervals is not None and policy in confidence_intervals:
+            lower, upper = confidence_intervals[policy]
+            intervals[policy] = (float(lower), float(upper))
+        else:
+            estimate = estimates[policy]
+            se = standard_errors[policy]
+            intervals[policy] = (estimate - 1.96 * se, estimate + 1.96 * se)
+
     # Plot each policy
     for i, policy in enumerate(policies):
         y = y_positions[i]
         est = estimates[policy]
-        se = standard_errors[policy]
-
-        # Confidence interval
-        ci_lower = est - 1.96 * se
-        ci_upper = est + 1.96 * se
+        ci_lower, ci_upper = intervals[policy]
 
         # Black CI line
         ax.plot(
@@ -128,9 +140,7 @@ def plot_policy_estimates(
     for i, policy in enumerate(policies):
         y = y_positions[i]
         est = estimates[policy]
-        se = standard_errors[policy]
-        ci_lower = est - 1.96 * se
-        ci_upper = est + 1.96 * se
+        ci_lower, ci_upper = intervals[policy]
 
         # Annotation: estimate [CI]
         annotation = f"{est:.2f} [{ci_lower:.2f}, {ci_upper:.2f}]"

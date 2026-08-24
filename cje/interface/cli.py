@@ -95,7 +95,10 @@ def create_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument(
         "--estimator-config",
         type=json.loads,
-        help="JSON config for estimator (e.g., '{\"n_bootstrap\": 4000}')",
+        help=(
+            "JSON config for estimator (e.g., "
+            '\'{"inference_method": "bootstrap", "n_bootstrap": 4000}\')'
+        ),
     )
 
     analyze_parser.add_argument(
@@ -528,11 +531,13 @@ def run_analysis(args: argparse.Namespace) -> int:
 
             # Display estimates
             target_policies = results.metadata.get("target_policies", [])
+            ci_lower, ci_upper = results.confidence_interval(alpha=0.05)
             for i, policy in enumerate(target_policies):
                 estimate = results.estimates[i]
                 se = results.standard_errors[i]
                 print(
-                    f"  {policy}: {estimate:.3f} ± {se:.3f} (1 SE; 95% CI ≈ ±1.96·SE)"
+                    f"  {policy}: {estimate:.3f} "
+                    f"(SE {se:.3f}, 95% CI [{ci_lower[i]:.3f}, {ci_upper[i]:.3f}])"
                 )
                 audit = results.metadata.get("transport_audits", {}).get(policy, {})
                 print(

@@ -577,7 +577,78 @@ def test_shared_prompt_external_provenance_couples_auto_routing() -> None:
     )
 
 
-def test_forced_cluster_robust_warns_when_frames_are_coupled(
+def test_auto_full_oracle_ignores_unused_calibrator_coupling() -> None:
+    scores = np.linspace(0.05, 0.95, 24)
+    labels = np.where(scores > 0.5, 0.8, 0.2)
+    prompts = [f"p{i}" for i in range(len(scores))]
+    calibrator = JudgeCalibrator(calibration_mode="monotone")
+    calibrator.fit_cv(scores, labels, prompt_ids=prompts)
+    estimator = CalibratedDirectEstimator(
+        ["policy"], reward_calibrator=calibrator, inference_method="auto"
+    )
+    estimator.add_fresh_draws("policy", _draws("policy", scores, labels))
+    estimator.fit()
+
+    assert estimator._calibration_overlaps_evaluation() == (False, 0)
+    assert estimator._should_use_bootstrap() == (
+        False,
+        "sufficient clusters and no coupling detected",
+    )
+    result = estimator.estimate()
+    assert result.metadata["inference"]["method"] == "cluster_robust"
+    assert result.metadata["inference"]["coupled"] is False
+
+
+def test_auto_mixed_full_and_partial_oracle_still_detects_coupling() -> None:
+    scores = np.linspace(0.05, 0.95, 24)
+    labels = np.where(scores > 0.5, 0.8, 0.2)
+    prompts = [f"p{i}" for i in range(len(scores))]
+    calibrator = JudgeCalibrator(calibration_mode="monotone")
+    calibrator.fit_cv(scores, labels, prompt_ids=prompts)
+    estimator = CalibratedDirectEstimator(
+        ["complete", "partial"],
+        reward_calibrator=calibrator,
+        inference_method="auto",
+        n_bootstrap=10,
+        calibration_provenance=CalibrationProvenance(scores, labels, prompts),
+    )
+    estimator.add_fresh_draws("complete", _draws("complete", scores, labels))
+    estimator.add_fresh_draws("partial", _draws("partial", scores))
+    estimator.fit()
+
+    assert estimator._calibration_overlaps_evaluation() == (True, 24)
+    use_bootstrap, reason = estimator._should_use_bootstrap()
+    assert use_bootstrap is True
+    assert "coupled" in reason
+
+    result = estimator.estimate()
+    assert result.metadata["inference"]["method"] == "cluster_bootstrap_refit"
+    assert result.metadata["inference"]["coupled"] is True
+    assert result.metadata["inference"]["coupling_overlap"] == 24
+
+
+def test_auto_full_oracle_still_bootstraps_with_few_clusters() -> None:
+    scores = np.linspace(0.05, 0.95, 12)
+    labels = np.where(scores > 0.5, 0.8, 0.2)
+    estimator = CalibratedDirectEstimator(
+        ["policy"],
+        reward_calibrator=None,
+        inference_method="auto",
+        n_bootstrap=20,
+    )
+    estimator.add_fresh_draws("policy", _draws("policy", scores, labels))
+    estimator.fit()
+
+    assert estimator._should_use_bootstrap() == (
+        True,
+        "few clusters (G=12 < 20)",
+    )
+    result = estimator.estimate()
+    assert result.metadata["inference"]["method"] == "cluster_bootstrap_refit"
+    assert "few clusters" in result.metadata["inference"]["bootstrap_reason"]
+
+
+def test_cluster_robust_records_coupling_without_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     scores = np.linspace(0.05, 0.95, 24)
@@ -594,12 +665,14 @@ def test_forced_cluster_robust_warns_when_frames_are_coupled(
     estimator.add_fresh_draws("policy", _draws("policy", np.linspace(0.2, 0.8, 24)))
 
     with caplog.at_level(logging.WARNING):
-        estimator.fit_and_estimate()
+        result = estimator.fit_and_estimate()
 
-    assert any(
+    assert not any(
         "calibration-evaluation covariance" in record.message
         for record in caplog.records
     )
+    assert result.metadata["inference"]["coupled"] is True
+    assert result.metadata["inference"]["coupling_overlap"] == 24
 
 
 def test_legacy_linkage_outcome_is_recorded_and_warns_on_ambiguity(
@@ -672,4 +745,4 @@ def test_array_api_raw_scale_and_full_coverage_capability_contract() -> None:
     assert full.calibrator is None
     assert full.diagnostics["estimator_route"] == "direct_oracle"
     assert full.diagnostics["calibration"]["calibrator_available"] is False
-    assert "sufficient clusters" in full.diagnostics["inference_reason"]
+    assert "cluster_robust requested/default" in full.diagnostics["inference_reason"]

@@ -10,9 +10,14 @@ For an end-to-end operational workflow (audits, drift response, label budgeting)
 from cje import analyze_dataset
 
 results = analyze_dataset(fresh_draws_dir="responses/")
+ci_lower, ci_upper = results.confidence_interval()
 
 for i, policy in enumerate(results.metadata["target_policies"]):
-    print(f"{policy}: {results.estimates[i]:.3f} ± {1.96*results.standard_errors[i]:.3f}")
+    print(
+        f"{policy}: {results.estimates[i]:.3f} "
+        f"(SE {results.standard_errors[i]:.3f}, "
+        f"95% CI [{ci_lower[i]:.3f}, {ci_upper[i]:.3f}])"
+    )
 ```
 
 ### What are fresh draws?
@@ -111,13 +116,13 @@ Running CJE analysis on examples/arena_sample/fresh_draws
 
 Results:
 ----------------------------------------
-  base: 0.755 ± 0.010 (1 SE; 95% CI ≈ ±1.96·SE)
+  base: 0.754 (SE 0.010, 95% CI [0.734, 0.775])
     residual transport: NOT_CHECKED
-  clone: 0.764 ± 0.010 (1 SE; 95% CI ≈ ±1.96·SE)
+  clone: 0.764 (SE 0.008, 95% CI [0.746, 0.783])
     residual transport: NOT_CHECKED
-  parallel_universe_prompt: 0.765 ± 0.010 (1 SE; 95% CI ≈ ±1.96·SE)
+  parallel_universe_prompt: 0.765 (SE 0.006, 95% CI [0.749, 0.780])
     residual transport: NOT_CHECKED
-  unhelpful: 0.512 ± 0.107 (1 SE; 95% CI ≈ ±1.96·SE)
+  unhelpful: 0.512 (SE 0.237, 95% CI [-0.146, 1.170])
     residual transport: NOT_CHECKED
 
 Best by point estimate: parallel_universe_prompt
@@ -131,7 +136,7 @@ The announcement is **reliability-aware**: the highest point estimate remains vi
 - `PATH`: fresh-draws directory of per-policy files, **or** a single JSONL file whose records carry a `target_policy` field
 - `--estimator`: `calibrated-direct` (default) or `direct` — aliases of the same estimator; only `metadata["estimator"]` differs
 - `--calibration-data FILE`: JSONL with judge + oracle pairs for learning the calibration
-- `--estimator-config JSON`: e.g. `'{"n_bootstrap": 4000}'`
+- `--estimator-config JSON`: e.g. `'{"inference_method": "bootstrap", "n_bootstrap": 4000}'`
 - `--judge-field` / `--oracle-field`: field names (defaults `judge_score` / `oracle_label`)
 - `--transport-probe POLICY=PATH`: held-out probe JSONL; repeat per policy
 - `--transport-margin POLICY=DELTA`: practical mean-residual margin in output units; repeat per policy
@@ -181,7 +186,7 @@ Provide `fresh_draws_dir` **or** `fresh_draws_data`.
 
 **Returns** `EstimationResult` with:
 - `.estimates` / `.standard_errors`: numpy arrays (order = `metadata["target_policies"]`)
-- `.ci()` / `.confidence_interval()`: percentile bootstrap CIs by default; t-based with finite-sample df under `cluster_robust` (`.ci_info` records which; df metadata only exists there)
+- `.ci()` / `.confidence_interval()`: t-based calibration-aware jackknife CIs by default on supported calibrated routes; complete-oracle routes need no calibration jackknife, and bootstrap inference uses percentile intervals (`.ci_info` records which)
 - `.compare_policies(i, j)`: paired policy comparison
 - `.summary()`: compact text report (per-policy estimate + 95% CI + gate flags, best-policy line)
 - `.best_policy()`: `PolicyVerdict`; with the default `reliable_only=True` a gate-flagged argmax is demoted to the best gate-passing policy (the demoted argmax travels as `runner_up` with `runner_up_reasons`, plus a logged warning); `reliable_only=False` returns the raw argmax with `flagged` attached
@@ -212,29 +217,35 @@ Report numbers with their tier. A `RAW_JUDGE_MEAN` estimate is a judge-scale qua
 ### Inference methods
 
 ```python
-# Default: cluster bootstrap with calibrator refit + augmented estimator
+# Default: cluster-robust sampling SE + calibration-aware oracle jackknife
 results = analyze_dataset(fresh_draws_dir="responses/")
 
-# Equivalent explicit config
+# Equivalent explicit config (the jackknife is enabled automatically when calibrated)
 results = analyze_dataset(
     fresh_draws_dir="responses/",
     estimator_config={
-        "inference_method": "bootstrap",   # "bootstrap" | "cluster_robust" | "auto"
+        "inference_method": "cluster_robust",
         "use_augmented_estimator": True,
-        "n_bootstrap": 2000,
     },
 )
 
-# Cluster-robust (fast; CRV1 SEs + oracle-jackknife calibration variance)
+# Optional refit bootstrap (percentile CI + joint replicate matrix)
 results = analyze_dataset(
     fresh_draws_dir="responses/",
-    estimator_config={"inference_method": "cluster_robust"},
+    estimator_config={"inference_method": "bootstrap", "n_bootstrap": 2000},
 )
 ```
 
-- **`bootstrap`** (default): cluster bootstrap with per-replicate calibrator refit and an AIPW-style augmented estimate — captures calibrator uncertainty and calibration/evaluation coupling. Recommended for valid CIs.
-- **`cluster_robust`**: CRV1 cluster-robust SEs augmented with the delete-one-oracle-fold jackknife (`oua_jackknife=True` by default). Faster; the estimator downgrades to this automatically (loudly, recorded in `metadata["inference"]`) when the calibrator's fit rows are unavailable for per-replicate refitting (`fallback_reason` `"calibration_provenance_unavailable"` or `"calibrator_unavailable_for_non_oracle_routes"`). Label-free fresh draws with `calibration_data_path` are *not* a fallback case — they run the refit bootstrap on the calibration rows.
-- **`auto`**: cluster-robust, switching to bootstrap when calibration/evaluation coupling or few clusters are detected.
+- **`cluster_robust`** (default): CRV1 cluster-robust sampling SEs augmented with the delete-one-oracle-fold jackknife (`oua_jackknife=True` when calibrated), with t-based CIs and an approximate Welch–Satterthwaite effective df. This is the paper's recommended calibration-aware default.
+- **`bootstrap`**: cluster bootstrap with per-replicate calibrator refit and an AIPW-style augmented estimate — percentile CIs plus a joint replicate matrix for paired contrasts. The joint refit explicitly resamples calibration/evaluation dependence. If exact calibration provenance is unavailable, bootstrap selected explicitly or through `auto` falls back loudly to the analytic jackknife path and records the reason in `metadata["inference"]`.
+- **`auto`**: cluster-robust, switching to bootstrap when calibration/evaluation coupling or few clusters are detected. A run in which all evaluated policies have complete oracle coverage is not treated as coupled because none of its point estimates uses the calibrator; mixed complete/partial runs still receive the coupling check.
+
+For backward compatibility, `estimator_config` containing `n_bootstrap` or
+`bootstrap_seed` without `inference_method` selects bootstrap with a warning.
+An explicit `inference_method="cluster_robust"` wins and ignores those
+bootstrap-only settings with a warning. Results preserve the requested config
+in `metadata["estimator_config"]` and the normalized config actually used in
+`metadata["estimator_config_effective"]`.
 
 ### Covariates
 

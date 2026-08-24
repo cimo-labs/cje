@@ -931,9 +931,14 @@ class EstimationResult(BaseModel):
         if not isinstance(se_raw, (int, float)) or not isinstance(df_raw, (int, float)):
             return None
         se_difference = float(se_raw)
-        df = max(int(df_raw), 1)
-        if not np.isfinite(se_difference) or se_difference <= 0:
+        df_unfloored = float(df_raw)
+        if (
+            not np.isfinite(se_difference)
+            or se_difference <= 0
+            or not np.isfinite(df_unfloored)
+        ):
             return None
+        df = max(df_unfloored, 1.0)
 
         from scipy import stats
 
@@ -1187,6 +1192,7 @@ class EstimationResult(BaseModel):
         # Build estimates and standard_errors dicts
         estimates = {}
         standard_errors = {}
+        confidence_intervals: Dict[str, Tuple[float, float]] = {}
 
         # Add base policy if provided
         if base_policy_stats:
@@ -1196,9 +1202,14 @@ class EstimationResult(BaseModel):
             standard_errors["base"] = base_policy_stats.get("se", 0.0)
 
         # Add target policies
+        ci_lower, ci_upper = self.confidence_interval(alpha=0.05)
         for i, policy in enumerate(policies):
             estimates[policy] = float(self.estimates[i])
             standard_errors[policy] = float(self.standard_errors[i])
+            confidence_intervals[policy] = (
+                float(ci_lower[i]),
+                float(ci_upper[i]),
+            )
 
         # Call visualization function
         from pathlib import Path
@@ -1206,6 +1217,7 @@ class EstimationResult(BaseModel):
         return plot_policy_estimates(
             estimates=estimates,
             standard_errors=standard_errors,
+            confidence_intervals=confidence_intervals,
             oracle_values=oracle_values,
             policy_labels=policy_labels,
             save_path=Path(save_path) if save_path else None,

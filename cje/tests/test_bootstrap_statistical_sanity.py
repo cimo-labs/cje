@@ -17,7 +17,7 @@ them.  These tests bound the scheme against known statistical targets:
   weighting would deflate the bootstrap SE below the band.
 - SLOW (@pytest.mark.slow, excluded from CI): ~100-replication Monte Carlo
   harness with a known truth asserting >= 88% empirical coverage of the
-  default bootstrap path's 95% CIs, mirroring the loose bounds of
+  explicit bootstrap path's 95% CIs, mirroring the loose bounds of
   test_mc_coverage.py (which only exercises inference_method =
   "cluster_robust").
 """
@@ -151,9 +151,9 @@ def test_bootstrap_se_matches_analytic_se_full_oracle() -> None:
 
 
 def test_bootstrap_se_matches_analytic_se_with_calibrator_refit() -> None:
-    """Calibrator-refit route: default bootstrap SE vs cluster-robust + OUA SE.
+    """Calibrator-refit route: explicit bootstrap SE vs default jackknife SE.
 
-    Partial prompt-level oracle labels exercise the full default path — the
+    Partial prompt-level oracle labels exercise the full refit-bootstrap path — the
     per-replicate calibrator refit on exponentially reweighted calibration
     rows, the evaluation-linked weight coupling, and the weighted-ratio
     residual augmentation.  The analytic comparator combines the
@@ -169,22 +169,27 @@ def test_bootstrap_se_matches_analytic_se_with_calibrator_refit() -> None:
     labels = np.asarray([s.oracle_label for s in labeled])
     prompts = [s.prompt_id for s in labeled]
 
-    def run(inference_method: Optional[str]) -> EstimationResult:
+    def run(inference_method: str) -> EstimationResult:
         calibrator = JudgeCalibrator(calibration_mode="monotone")
         calibrator.fit_cv(scores, labels, prompt_ids=prompts)
-        estimator = CalibratedDirectEstimator(
-            ["policy"],
-            calibrator,
-            inference_method=inference_method,
-            n_bootstrap=300,
-        )
+        if inference_method == "bootstrap":
+            estimator = CalibratedDirectEstimator(
+                ["policy"],
+                calibrator,
+                inference_method=inference_method,
+                n_bootstrap=300,
+            )
+        else:
+            estimator = CalibratedDirectEstimator(
+                ["policy"],
+                calibrator,
+                inference_method=inference_method,
+            )
         estimator.add_fresh_draws("policy", draws)
         return estimator.fit_and_estimate()
 
     result_analytic = run("cluster_robust")
-    # inference_method=None pins the DEFAULT: bootstrap whenever a reward
-    # calibrator is supplied.
-    result_bootstrap = run(None)
+    result_bootstrap = run("bootstrap")
 
     inference = result_bootstrap.metadata["inference"]
     assert inference["method"] == "cluster_bootstrap_refit"
@@ -269,7 +274,7 @@ def test_paired_bootstrap_difference_se_matches_analytic_paired_se() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SLOW layer: 95% CI coverage of the default bootstrap path
+# SLOW layer: 95% CI coverage of the explicit bootstrap path
 # ---------------------------------------------------------------------------
 
 # E[0.2 + 0.6*S] with S ~ U(0, 1); prompt and row noise are mean-zero and the
@@ -280,10 +285,10 @@ R_SLOW_BOOTSTRAP = 100
 
 @pytest.mark.slow
 def test_slow_bootstrap_ci_coverage() -> None:
-    """Empirical 95% CI coverage of the default (bootstrap) inference path.
+    """Empirical 95% CI coverage of the explicit bootstrap inference path.
 
     100 seeded replications of the coupled partial-oracle design: labels on
-    half the prompts fit the calibrator, the default estimator runs the
+    half the prompts fit the calibrator, the explicitly requested estimator runs the
     positive-weight bootstrap with per-replicate refit, and the percentile
     CI must cover the known truth in >= 88% of replications (same loose
     bound as test_mc_coverage.py's slow cell for the analytic path; a
@@ -305,6 +310,7 @@ def test_slow_bootstrap_ci_coverage() -> None:
         estimator = CalibratedDirectEstimator(
             target_policies=["target"],
             reward_calibrator=calibrator,
+            inference_method="bootstrap",
             n_bootstrap=200,
         )
         estimator.add_fresh_draws("target", draws)
@@ -316,6 +322,6 @@ def test_slow_bootstrap_ci_coverage() -> None:
 
     coverage = covered / R_SLOW_BOOTSTRAP
     assert coverage >= 0.88, (
-        f"default bootstrap path: 95% CI coverage {coverage:.1%} over "
+        f"explicit bootstrap path: 95% CI coverage {coverage:.1%} over "
         f"{R_SLOW_BOOTSTRAP} replications below 88%"
     )

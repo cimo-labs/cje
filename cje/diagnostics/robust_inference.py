@@ -434,38 +434,76 @@ def oracle_jackknife_estimates(
 
 def combine_cluster_and_oracle(
     se_base: float,
-    df_cluster: int,
+    df_cluster: float,
     jackknife_variance: float,
     n_jackknife_folds: int = 0,
-) -> Tuple[float, int]:
+) -> Tuple[float, float]:
     """Combine a cluster-robust SE with the oracle-jackknife variance.
 
     The additive decomposition used by cluster-robust inference:
 
         se_total = sqrt(se_base² + Var_cal)
 
-    with degrees of freedom capped by the jackknife fold count when the
-    oracle component is informative (K >= 2 fold models):
+    with an approximate Welch--Satterthwaite effective degrees of freedom
+    when both variance components are informative:
 
-        df = max(min(df_cluster, K - 1), 1)
+        df = (V_cluster + V_oracle)^2 /
+             (V_cluster^2 / df_cluster + V_oracle^2 / (K - 1))
+
+    This weights each component by its actual contribution to total variance.
+    In particular, a small oracle component no longer forces the entire
+    interval to use ``K - 1`` degrees of freedom.
+
+    Like the additive SE decomposition itself, the effective-df calculation
+    is an approximation that treats the two estimated variance components as
+    independent. Coupled calibration/evaluation designs should retain and
+    inspect the estimator's coupling metadata.
 
     Args:
         se_base: Cluster-robust (or standard) SE of the evaluation mean
         df_cluster: Degrees of freedom from clustering (typically G - 1)
         jackknife_variance: Var_cal from `oracle_jackknife_variance` (0.0
             when the OUA component is skipped or unavailable)
-        n_jackknife_folds: Number of oracle fold models (caps df at K - 1
-            when >= 2; fewer than 2 folds carry no jackknife variance and
-            do not constrain df)
+        n_jackknife_folds: Number of oracle fold models. Positive oracle
+            variance requires at least two folds and contributes ``K - 1``
+            degrees of freedom to the approximation.
 
     Returns:
-        Tuple of (se_total, df)
+        Tuple of (se_total, approximate effective df)
     """
-    se_total = float(np.sqrt(se_base**2 + max(jackknife_variance, 0.0)))
-    df = int(df_cluster)
-    if n_jackknife_folds >= 2:
-        df = min(df, n_jackknife_folds - 1)
-    return se_total, max(df, 1)
+    se_base = float(se_base)
+    var_oracle_raw = float(jackknife_variance)
+    df_cluster_eff = float(df_cluster)
+    if not np.isfinite(df_cluster_eff):
+        raise ValueError("df_cluster must be finite")
+    df_cluster_eff = max(df_cluster_eff, 1.0)
+
+    if not np.isfinite(se_base) or not np.isfinite(var_oracle_raw):
+        return float("nan"), df_cluster_eff
+
+    var_cluster = se_base**2
+    var_oracle = max(var_oracle_raw, 0.0)
+    var_total = var_cluster + var_oracle
+    se_total = float(np.sqrt(var_total))
+
+    if var_oracle == 0.0:
+        return se_total, df_cluster_eff
+    if n_jackknife_folds < 2:
+        raise ValueError(
+            "positive jackknife_variance requires at least two jackknife folds"
+        )
+
+    df_oracle = float(n_jackknife_folds - 1)
+    if var_cluster == 0.0:
+        return se_total, df_oracle
+
+    # The weighted form avoids squaring very small absolute variances twice.
+    weight_cluster = var_cluster / var_total
+    weight_oracle = var_oracle / var_total
+    df_effective = 1.0 / (
+        weight_cluster**2 / df_cluster_eff + weight_oracle**2 / df_oracle
+    )
+    return se_total, max(float(df_effective), 1.0)
 
 
 # ========== Direct Mode Bootstrap Data Structures ==========
