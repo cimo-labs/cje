@@ -577,6 +577,77 @@ def test_shared_prompt_external_provenance_couples_auto_routing() -> None:
     )
 
 
+def test_auto_full_oracle_ignores_unused_calibrator_coupling() -> None:
+    scores = np.linspace(0.05, 0.95, 24)
+    labels = np.where(scores > 0.5, 0.8, 0.2)
+    prompts = [f"p{i}" for i in range(len(scores))]
+    calibrator = JudgeCalibrator(calibration_mode="monotone")
+    calibrator.fit_cv(scores, labels, prompt_ids=prompts)
+    estimator = CalibratedDirectEstimator(
+        ["policy"], reward_calibrator=calibrator, inference_method="auto"
+    )
+    estimator.add_fresh_draws("policy", _draws("policy", scores, labels))
+    estimator.fit()
+
+    assert estimator._calibration_overlaps_evaluation() == (False, 0)
+    assert estimator._should_use_bootstrap() == (
+        False,
+        "sufficient clusters and no coupling detected",
+    )
+    result = estimator.estimate()
+    assert result.metadata["inference"]["method"] == "cluster_robust"
+    assert result.metadata["inference"]["coupled"] is False
+
+
+def test_auto_mixed_full_and_partial_oracle_still_detects_coupling() -> None:
+    scores = np.linspace(0.05, 0.95, 24)
+    labels = np.where(scores > 0.5, 0.8, 0.2)
+    prompts = [f"p{i}" for i in range(len(scores))]
+    calibrator = JudgeCalibrator(calibration_mode="monotone")
+    calibrator.fit_cv(scores, labels, prompt_ids=prompts)
+    estimator = CalibratedDirectEstimator(
+        ["complete", "partial"],
+        reward_calibrator=calibrator,
+        inference_method="auto",
+        n_bootstrap=10,
+        calibration_provenance=CalibrationProvenance(scores, labels, prompts),
+    )
+    estimator.add_fresh_draws("complete", _draws("complete", scores, labels))
+    estimator.add_fresh_draws("partial", _draws("partial", scores))
+    estimator.fit()
+
+    assert estimator._calibration_overlaps_evaluation() == (True, 24)
+    use_bootstrap, reason = estimator._should_use_bootstrap()
+    assert use_bootstrap is True
+    assert "coupled" in reason
+
+    result = estimator.estimate()
+    assert result.metadata["inference"]["method"] == "cluster_bootstrap_refit"
+    assert result.metadata["inference"]["coupled"] is True
+    assert result.metadata["inference"]["coupling_overlap"] == 24
+
+
+def test_auto_full_oracle_still_bootstraps_with_few_clusters() -> None:
+    scores = np.linspace(0.05, 0.95, 12)
+    labels = np.where(scores > 0.5, 0.8, 0.2)
+    estimator = CalibratedDirectEstimator(
+        ["policy"],
+        reward_calibrator=None,
+        inference_method="auto",
+        n_bootstrap=20,
+    )
+    estimator.add_fresh_draws("policy", _draws("policy", scores, labels))
+    estimator.fit()
+
+    assert estimator._should_use_bootstrap() == (
+        True,
+        "few clusters (G=12 < 20)",
+    )
+    result = estimator.estimate()
+    assert result.metadata["inference"]["method"] == "cluster_bootstrap_refit"
+    assert "few clusters" in result.metadata["inference"]["bootstrap_reason"]
+
+
 def test_cluster_robust_records_coupling_without_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

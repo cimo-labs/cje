@@ -3,12 +3,13 @@
 Synthetic DGP with a KNOWN policy value:
 
 - judge scores S ~ U(0,1) on logged data;
-- true outcome mu(S) = 0.25 + 0.5*S, oracle labels Y = clip(mu + noise, 0, 1)
+- true outcome mu(S) = 0.25 + 0.5*S, oracle labels Y = mu + bounded noise
   observed on a 25% random slice;
 - fresh draws S' follow the mean-one tilted score density
   w(S) = 0.4 + 1.2*S. Logged and fresh scores share a prompt-level uniform
-  latent, matching the coupled "same prompts, different policy response"
-  design used by Direct evaluation.
+  latent with controlled probability; otherwise a target draw gets fresh
+  within-prompt variation. This preserves the exact tilted marginal while
+  matching a coupled "same prompts, stochastic policy response" design.
 
 True policy value: V(pi') = E[w(S) * mu(S)] under U(0,1)
                  = 0.4*0.25 + (0.4*0.5 + 1.2*0.25)*1/2 + 1.2*0.5*1/3 = 0.55.
@@ -28,7 +29,7 @@ Two layers:
   on out-of-range judge scores.
 
 - SLOW (@pytest.mark.slow, excluded from CI): R=300 replicates; asserts 95%
-  CI coverage >= 88% for the direct estimator at 25% oracle coverage.
+  CI coverage in [88%, 99%] for the direct estimator at 25% oracle coverage.
 """
 
 from typing import Any, Dict, List, Tuple
@@ -46,6 +47,7 @@ from cje.estimators.direct_method import CalibratedDirectEstimator
 POLICY = "target"
 DEFAULT_ORACLE_FRAC = 0.25
 OUTCOME_NOISE = 0.08
+PROMPT_COUPLING = 0.70
 
 # E[w(S) * mu(S)] with w(S)=0.4+1.2S, mu(S)=0.25+0.5S, S~U(0,1)
 TRUE_VALUE = 0.4 * 0.25 + (0.4 * 0.5 + 1.2 * 0.25) * 0.5 + 1.2 * 0.5 / 3.0
@@ -72,7 +74,7 @@ def _simulate(
     for i in range(n):
         s = float(rng.uniform())
         prompt_latents.append(s)
-        y = float(np.clip(_mu(np.array(s)) + rng.normal(0, OUTCOME_NOISE), 0, 1))
+        y = float(_mu(np.array(s)) + rng.uniform(-OUTCOME_NOISE, OUTCOME_NOISE))
         samples.append(
             Sample(
                 prompt_id=f"p{i}",
@@ -87,14 +89,22 @@ def _simulate(
 
     fresh_samples = []
     for i, prompt_latent in enumerate(prompt_latents):
-        target_score = _tilted_quantile(prompt_latent)
         for d in range(m_draws):
+            target_quantile = (
+                prompt_latent
+                if rng.uniform() < PROMPT_COUPLING
+                else float(rng.uniform())
+            )
+            target_score = _tilted_quantile(target_quantile)
             fresh_samples.append(
                 FreshDrawSample(
                     prompt_id=f"p{i}",
                     judge_score=target_score,
                     oracle_label=(
-                        float(_mu(np.asarray(target_score)))
+                        float(
+                            _mu(np.asarray(target_score))
+                            + rng.uniform(-OUTCOME_NOISE, OUTCOME_NOISE)
+                        )
                         if oracle_frac >= 1.0
                         else None
                     ),
@@ -105,6 +115,15 @@ def _simulate(
             )
     fresh = FreshDrawDataset(samples=fresh_samples, target_policy=POLICY)
     return dataset, fresh
+
+
+def test_simulation_preserves_stochastic_within_prompt_draws() -> None:
+    """The coupled DGP must not collapse all draws for a prompt to one score."""
+    _, fresh = _simulate(100, 3, np.random.default_rng(20260824))
+    by_prompt: Dict[str, set[float]] = {}
+    for sample in fresh.samples:
+        by_prompt.setdefault(sample.prompt_id, set()).add(float(sample.judge_score))
+    assert any(len(scores) > 1 for scores in by_prompt.values())
 
 
 def _run_replicate(
@@ -453,13 +472,9 @@ def test_slow_ci_coverage(
     lo = slow_replicates[name]["ci_lo"]
     hi = slow_replicates[name]["ci_hi"]
     covered = float(np.mean((lo <= TRUE_VALUE) & (TRUE_VALUE <= hi)))
-    # Lower bound is the real guard: under-coverage is the failure mode this
-    # harness exists to catch (the OUA /K bug produced ~50-80% here). No upper
-    # bound: the K=5 delete-one-fold jackknife on isotonic calibrators is
-    # conservative in oracle-dominated regimes (~99% observed), which is the
-    # honest direction.
-    assert covered >= 0.88, (
-        f"{name}: 95% CI coverage {covered:.1%} over {len(lo)} replicates " f"below 88%"
+    assert 0.88 <= covered <= 0.99, (
+        f"{name}: 95% CI coverage {covered:.1%} over {len(lo)} replicates "
+        "outside [88%, 99%]"
     )
 
 
@@ -471,7 +486,7 @@ def test_slow_array_api_same_row_ci_coverage(
     lo = slow_array_replicates["ci_lo"]
     hi = slow_array_replicates["ci_hi"]
     covered = float(np.mean((lo <= 0.5) & (0.5 <= hi)))
-    assert covered >= 0.88, (
+    assert 0.88 <= covered <= 0.99, (
         f"array API: 95% CI coverage {covered:.1%} over {len(lo)} replicates "
-        "below 88%"
+        "outside [88%, 99%]"
     )

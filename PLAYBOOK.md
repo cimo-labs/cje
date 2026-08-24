@@ -53,7 +53,9 @@ print(results.standard_errors)
 
 Notes:
 - The default combines prompt-cluster-robust sampling variance with the
-  delete-one-oracle-fold jackknife variance and a t-based interval.
+  delete-one-oracle-fold jackknife variance and a t-based interval. An
+  approximate Welch–Satterthwaite df weights the two sources by their realized
+  variance shares.
 - Refit bootstrap inference remains available explicitly with
   `estimator_config={"inference_method": "bootstrap", "n_bootstrap": 2000}`.
 
@@ -248,7 +250,11 @@ print(plan_target.total_cost)
 
 ### Planning caveats
 
-- MDE assumes independent policies; paired evals on a shared prompt set typically detect smaller differences (plans are conservative).
+- MDE assumes independent policies. When shared-prompt outcomes have positive
+  covariance, paired evaluation typically detects smaller differences, so that
+  pairing assumption is conservative; negative covariance can reverse the
+  direction.
+- MDE and power use asymptotic-normal critical values. The final analytic CI uses a finite-sample t critical value based on the realized evaluation/calibration variance shares, so confirm the achieved interval after collection.
 - Reported variance shares are specific to the returned allocation: `(sigma2_eval/n) / V` and `(sigma2_cal/m) / V`. Raw fitted coefficients are not variance shares.
 - Simulation planning is specific to its synthetic data-generating process. Keep the `scenario_fingerprint` returned by `simulate_planning(...)` (the simulation-planning entry point, which bundles the plan with its fingerprint — `simulate_variance_model` alone returns only the fitted variance model), vary plausible inputs, and do not present a single simulated budget as an empirical guarantee.
 - Variance components are measured with the analytic cluster-robust + OUA instrument, which tracked the realized SE of the production estimator within ~5% at every allocation in a pilot-scale validation grid (instrument experiment 2026-07-07, R=400 replicates/cell).

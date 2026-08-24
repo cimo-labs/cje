@@ -169,20 +169,26 @@ def test_bootstrap_se_matches_analytic_se_with_calibrator_refit() -> None:
     labels = np.asarray([s.oracle_label for s in labeled])
     prompts = [s.prompt_id for s in labeled]
 
-    def run(inference_method: Optional[str]) -> EstimationResult:
+    def run(inference_method: str) -> EstimationResult:
         calibrator = JudgeCalibrator(calibration_mode="monotone")
         calibrator.fit_cv(scores, labels, prompt_ids=prompts)
-        estimator = CalibratedDirectEstimator(
-            ["policy"],
-            calibrator,
-            inference_method=inference_method,
-            n_bootstrap=300,
-        )
+        if inference_method == "bootstrap":
+            estimator = CalibratedDirectEstimator(
+                ["policy"],
+                calibrator,
+                inference_method=inference_method,
+                n_bootstrap=300,
+            )
+        else:
+            estimator = CalibratedDirectEstimator(
+                ["policy"],
+                calibrator,
+                inference_method=inference_method,
+            )
         estimator.add_fresh_draws("policy", draws)
         return estimator.fit_and_estimate()
 
-    # inference_method=None pins the default calibration-aware jackknife path.
-    result_analytic = run(None)
+    result_analytic = run("cluster_robust")
     result_bootstrap = run("bootstrap")
 
     inference = result_bootstrap.metadata["inference"]

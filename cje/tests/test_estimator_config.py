@@ -8,6 +8,7 @@ value overrides the default, unknown keys raise a ValueError listing the
 valid keys, and reward_calibrator is rejected outright.
 """
 
+import logging
 from typing import Any, Dict, List
 
 import pytest
@@ -83,3 +84,54 @@ class TestRewardCalibratorRejected:
                 fresh_draws_data=_labeled_draws(),
                 estimator_config={"reward_calibrator": object()},
             )
+
+
+class TestBootstrapOnlyConfig:
+    def test_legacy_n_bootstrap_selects_bootstrap_loudly(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            result = analyze_dataset(
+                fresh_draws_data=_labeled_draws(),
+                estimator_config={"n_bootstrap": 20, "bootstrap_seed": 9},
+            )
+        inference = result.metadata["inference"]
+        assert inference["method"] == "cluster_bootstrap_refit"
+        assert inference["n_bootstrap_requested"] == 20
+        assert inference["seed"] == 9
+        assert result.metadata["estimator_config"] == {
+            "n_bootstrap": 20,
+            "bootstrap_seed": 9,
+        }
+        assert result.metadata["estimator_config_effective"] == {
+            "oua_jackknife": True,
+            "inference_method": "bootstrap",
+            "n_bootstrap": 20,
+            "bootstrap_seed": 9,
+        }
+        assert any(
+            "selecting inference_method='bootstrap'" in record.message
+            for record in caplog.records
+        )
+
+    def test_bootstrap_keys_ignored_for_explicit_cluster_robust_loudly(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            result = analyze_dataset(
+                fresh_draws_data=_labeled_draws(),
+                estimator_config={
+                    "inference_method": "cluster_robust",
+                    "n_bootstrap": 20,
+                },
+            )
+        assert result.metadata["inference"]["method"] == "cluster_robust"
+        assert any("will be ignored" in record.message for record in caplog.records)
+        assert result.metadata["estimator_config"] == {
+            "inference_method": "cluster_robust",
+            "n_bootstrap": 20,
+        }
+        assert result.metadata["estimator_config_effective"] == {
+            "oua_jackknife": True,
+            "inference_method": "cluster_robust",
+        }

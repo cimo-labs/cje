@@ -114,6 +114,19 @@ class TestPlanningVisualizationSmoke:
         assert len(fig.axes) == 3
         plt.close(fig)
 
+    def test_dashboard_qualifies_normal_theory_outputs(
+        self, synthetic_model: FittedVarianceModel, cost_model: CostModel
+    ) -> None:
+        from cje.visualization.planning import plot_planning_dashboard
+
+        fig = plot_planning_dashboard(synthetic_model, cost_model)
+        assert "Asymptotic-normal MDE" in fig.axes[0].get_ylabel()
+        assert "Normal-theory" in fig.axes[0].get_title()
+        assert "Asymptotic-normal Power" in fig.axes[1].get_ylabel()
+        assert "Normal-theory" in fig.axes[2].get_title()
+        assert any("finite-sample interval" in text.get_text() for text in fig.texts)
+        plt.close(fig)
+
     def test_custom_budget_range(
         self, synthetic_model: FittedVarianceModel, cost_model: CostModel
     ) -> None:

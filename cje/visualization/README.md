@@ -66,6 +66,7 @@ from cje.visualization import (
 fig = plot_policy_estimates(
     estimates={"clone": 0.74, "parallel_universe_prompt": 0.76, "unhelpful": 0.17},
     standard_errors={"clone": 0.02, "parallel_universe_prompt": 0.03, "unhelpful": 0.01},
+    confidence_intervals={"clone": (0.69, 0.79), "parallel_universe_prompt": (0.68, 0.83), "unhelpful": (0.14, 0.20)},
     oracle_values={"clone": 0.74, "parallel_universe_prompt": 0.77, "unhelpful": 0.18},
 )
 
@@ -74,6 +75,8 @@ from cje import analyze_dataset
 
 result = analyze_dataset(fresh_draws_dir="responses/")
 fig = result.plot_estimates(save_path="estimates.png")
+# This convenience method always uses result.confidence_interval(): t-based
+# intervals for the default analytic path, percentile intervals for bootstrap.
 
 # Planning dashboard (3 panels: MDE vs budget, power curve, cost sensitivity)
 from cje.diagnostics import CostModel, fit_variance_model

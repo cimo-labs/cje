@@ -166,8 +166,8 @@ def plot_planning_dashboard(
             )
 
     ax.set_xlabel("Budget ($K)", fontsize=11)
-    ax.set_ylabel("Minimum Detectable Effect (%)", fontsize=11)
-    ax.set_title("MDE vs Budget", fontsize=12, fontweight="bold")
+    ax.set_ylabel("Asymptotic-normal MDE (%)", fontsize=11)
+    ax.set_title("Normal-theory MDE vs Budget", fontsize=12, fontweight="bold")
     ax.legend(loc="upper right", fontsize=9)
     ax.grid(True, alpha=0.3)
     ax.set_xlim(budget_range[0] / 1000, budget_range[1] / 1000)
@@ -205,7 +205,7 @@ def plot_planning_dashboard(
     )
 
     ax.set_xlabel("Effect Size (%)", fontsize=11)
-    ax.set_ylabel("Statistical Power", fontsize=11)
+    ax.set_ylabel("Asymptotic-normal Power", fontsize=11)
     ax.set_title(
         f"Power Curve (${ref_budget/1000:.0f}K: n={plan.n_samples:,}, m={plan.m_oracle})",
         fontsize=12,
@@ -254,12 +254,22 @@ def plot_planning_dashboard(
         )
 
     ax.set_xlabel("Budget ($K)", fontsize=11)
-    ax.set_ylabel("Minimum Detectable Effect (%)", fontsize=11)
-    ax.set_title("Cost Sensitivity", fontsize=12, fontweight="bold")
+    ax.set_ylabel("Asymptotic-normal MDE (%)", fontsize=11)
+    ax.set_title("Normal-theory Cost Sensitivity", fontsize=12, fontweight="bold")
     ax.legend(title="Oracle Cost", loc="upper right", fontsize=8, title_fontsize=9)
     ax.grid(True, alpha=0.3)
 
-    plt.tight_layout()
+    fig.text(
+        0.5,
+        0.01,
+        "Planning uses asymptotic-normal critical values; confirm the realized "
+        "finite-sample interval after collection.",
+        ha="center",
+        va="bottom",
+        fontsize=9,
+        color="#6b7280",
+    )
+    plt.tight_layout(rect=(0, 0.05, 1, 1))
 
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="white")

@@ -13,7 +13,9 @@ or `CalibratedDirectEstimator` directly.
 
 import logging
 from dataclasses import dataclass
+from numbers import Integral
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
+import warnings
 
 import numpy as np
 from scipy import stats
@@ -37,6 +39,18 @@ from .diagnostics.transport import TransportDiagnostics, audit_transportability
 logger = logging.getLogger(__name__)
 
 _VALID_INFERENCE = ("auto", "bootstrap", "cluster_robust")
+
+
+class _DefaultInference(str):
+    """Typed marker for an omitted inference option in the public signature."""
+
+
+class _DefaultInt(int):
+    """Typed marker for an omitted integer option in the public signature."""
+
+
+_DEFAULT_INFERENCE = _DefaultInference("cluster_robust")
+_DEFAULT_N_BOOTSTRAP = _DefaultInt(2000)
 
 
 @dataclass
@@ -289,7 +303,7 @@ def _direct_oracle_mean_ci(
         )
         estimate = float(res["estimate"])
         se = float(res["se"])
-        df = int(res["df"])
+        df = float(res["df"])
         t_crit = float(stats.t.ppf(1 - alpha / 2, df))
         ci = (estimate - t_crit * se, estimate + t_crit * se)
         method = "cluster_robust"
@@ -322,8 +336,8 @@ def calibrated_mean_ci(
     covariates: Optional[Any] = None,
     alpha: float = 0.05,
     n_folds: int = 5,
-    inference: str = "cluster_robust",
-    n_bootstrap: int = 2000,
+    inference: str = _DEFAULT_INFERENCE,
+    n_bootstrap: int = _DEFAULT_N_BOOTSTRAP,
     seed: int = 42,
 ) -> CalibratedMeanResult:
     """Calibrated mean of judge scores against a partial oracle slice, with CI.
@@ -338,7 +352,8 @@ def calibrated_mean_ci(
 
     - "cluster_robust": CRV1 cluster-robust SE of the augmented
       pseudo-outcome mean, combined with the delete-one-oracle-fold jackknife
-      variance (t-based CI; default).
+      variance (t-based CI with approximate Welch--Satterthwaite effective df;
+      default).
     - "bootstrap": cluster bootstrap with per-replicate calibrator refit
       (AIPW-style augmented estimate; percentile CI). Captures calibrator
       uncertainty and the calibration/evaluation covariance.
@@ -362,7 +377,9 @@ def calibrated_mean_ci(
             oracle jackknife. Fold count is reduced when cluster support is
             insufficient.
         inference: "cluster_robust" (default) | "bootstrap" | "auto".
-        n_bootstrap: Bootstrap replicates (bootstrap path only).
+        n_bootstrap: Bootstrap replicates (default 2000 on the bootstrap
+            path). Supplying this without ``inference`` selects bootstrap for
+            backward compatibility and emits a warning.
         seed: Seed for fold assignment and the bootstrap.
 
     Returns:
@@ -384,11 +401,44 @@ def calibrated_mean_ci(
         >>> result = calibrated_mean_ci(scores, labels)
         >>> print(result.summary())  # doctest: +SKIP
     """
-    if inference not in _VALID_INFERENCE:
+    inference_explicit = not isinstance(inference, _DefaultInference)
+    n_bootstrap_explicit = not isinstance(n_bootstrap, _DefaultInt)
+    if not inference_explicit and n_bootstrap_explicit:
+        warnings.warn(
+            "n_bootstrap was supplied without inference; selecting "
+            "inference='bootstrap' for backward compatibility. Set inference "
+            "explicitly to silence this warning.",
+            UserWarning,
+            stacklevel=2,
+        )
+        inference = "bootstrap"
+    resolved_inference = (
+        "cluster_robust" if isinstance(inference, _DefaultInference) else inference
+    )
+    if resolved_inference not in _VALID_INFERENCE:
         raise ValueError(
-            f"Invalid inference '{inference}'. Expected one of: "
+            f"Invalid inference '{resolved_inference}'. Expected one of: "
             f"{', '.join(_VALID_INFERENCE)}."
         )
+    if resolved_inference == "cluster_robust" and n_bootstrap_explicit:
+        warnings.warn(
+            "n_bootstrap does not apply to inference='cluster_robust' and "
+            "will be ignored.",
+            UserWarning,
+            stacklevel=2,
+        )
+        resolved_n_bootstrap = 2000
+    else:
+        resolved_n_bootstrap = (
+            2000 if isinstance(n_bootstrap, _DefaultInt) else n_bootstrap
+        )
+        if not isinstance(resolved_n_bootstrap, Integral) or isinstance(
+            resolved_n_bootstrap, bool
+        ):
+            raise TypeError("n_bootstrap must be an integer")
+        resolved_n_bootstrap = int(resolved_n_bootstrap)
+        if resolved_n_bootstrap < 2:
+            raise ValueError("n_bootstrap must be at least 2")
     if not 0.0 < alpha < 1.0:
         raise ValueError(f"alpha must be in (0, 1), got {alpha}.")
 
@@ -407,8 +457,8 @@ def calibrated_mean_ci(
             cluster_codes,
             cluster_strings,
             alpha=alpha,
-            inference=inference,
-            n_bootstrap=n_bootstrap,
+            inference=resolved_inference,
+            n_bootstrap=resolved_n_bootstrap,
             seed=seed,
         )
 
@@ -434,7 +484,7 @@ def calibrated_mean_ci(
     # Resolve "auto" with CalibratedDirectEstimator's rule. The oracle slice is
     # drawn from the evaluation sample itself, so calibration and evaluation
     # are always coupled here.
-    if inference == "auto":
+    if resolved_inference == "auto":
         if n_clusters < 20:
             reason = f"auto: few clusters (G={n_clusters} < 20)"
         else:
@@ -443,11 +493,11 @@ def calibrated_mean_ci(
                 "inside the evaluation sample)"
             )
         resolved = "bootstrap"
-    elif inference == "cluster_robust":
-        resolved = inference
+    elif resolved_inference == "cluster_robust":
+        resolved = resolved_inference
         reason = "cluster_robust requested/default"
     else:
-        resolved = inference
+        resolved = resolved_inference
         reason = "explicitly requested"
 
     diagnostics: Dict[str, Any] = {
@@ -495,7 +545,7 @@ def calibrated_mean_ci(
         boot = cluster_bootstrap_direct_with_refit(
             eval_table=table,
             calibrator_factory=factory,
-            n_bootstrap=n_bootstrap,
+            n_bootstrap=resolved_n_bootstrap,
             alpha=alpha,
             seed=seed,
             point_calibrator=calibrator,
@@ -506,7 +556,7 @@ def calibrated_mean_ci(
         ci = (float(boot["ci_lower"][0]), float(boot["ci_upper"][0]))
         diagnostics["bootstrap"] = {
             "refit_mode": boot_mode,
-            "n_bootstrap_requested": n_bootstrap,
+            "n_bootstrap_requested": resolved_n_bootstrap,
             "n_valid_replicates": int(boot["n_valid_replicates"]),
             "n_attempts": int(boot["n_attempts"]),
             "skip_rate": float(boot["skip_rate"]),
@@ -540,7 +590,7 @@ def calibrated_mean_ci(
             alpha=alpha,
         )
         se_base = float(res["se"])
-        df = int(res["df"])
+        df = float(res["df"])
 
         var_oracle = 0.0
         n_jack = 0
@@ -559,6 +609,7 @@ def calibrated_mean_ci(
         diagnostics["cluster_robust"] = {
             "se_cluster": se_base,
             "df": df,
+            "df_method": ("welch_satterthwaite" if var_oracle > 0.0 else "cluster"),
             "oracle_jackknife_folds": n_jack,
             "var_oracle": float(var_oracle),
             "oua_skipped_at_full_coverage": False,

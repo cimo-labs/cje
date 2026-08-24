@@ -8,7 +8,7 @@ Following CJE test philosophy:
 
 import numpy as np
 import pytest
-from typing import Dict
+from typing import Any, Dict
 
 from cje.data.fresh_draws import FreshDrawDataset
 from cje.data.models import EstimationResult
@@ -202,13 +202,13 @@ class TestBootstrapE2EWorkflows:
             err_msg="Bootstrap and cluster_robust should give identical point estimates (both plug-in)",
         )
 
-        # CIs should be properly centered for cluster_robust (z-based)
+        # Analytic t intervals are centered on the point estimate.
         # Bootstrap uses percentile CIs which may differ slightly from SE-based
         lower_cr, upper_cr = result_cr.confidence_interval()
         lower_boot, upper_boot = result_boot.confidence_interval()
 
         for i in range(len(policies)):
-            # Cluster-robust uses z-based CIs - should be centered
+            # Cluster-robust uses centered t-based CIs.
             ci_center_cr = (lower_cr[i] + upper_cr[i]) / 2
             assert abs(result_cr.estimates[i] - ci_center_cr) < 1e-6
 
@@ -322,6 +322,76 @@ class TestDirectEstimatorDefaults:
                 inference_method="oua_jackknife",
             )
 
+    @pytest.mark.parametrize(
+        "bootstrap_kwargs",
+        [
+            {"n_bootstrap": 2000},
+            {"bootstrap_seed": 42},
+            {"n_bootstrap": 7, "bootstrap_seed": 123},
+        ],
+    )
+    def test_bootstrap_option_without_method_selects_bootstrap_loudly(
+        self, bootstrap_kwargs: Dict[str, Any]
+    ) -> None:
+        with pytest.warns(UserWarning, match="selecting inference_method='bootstrap'"):
+            estimator = CalibratedDirectEstimator(
+                target_policies=["base"],
+                **bootstrap_kwargs,
+            )
+
+        assert estimator.inference_method == "bootstrap"
+        assert estimator.n_bootstrap == bootstrap_kwargs.get("n_bootstrap", 2000)
+        assert estimator.bootstrap_seed == bootstrap_kwargs.get("bootstrap_seed", 42)
+        assert estimator._inference_method_explicit is True
+
+    def test_explicit_cluster_robust_ignores_bootstrap_options_loudly(self) -> None:
+        with pytest.warns(UserWarning, match="will be ignored"):
+            estimator = CalibratedDirectEstimator(
+                target_policies=["base"],
+                inference_method="cluster_robust",
+                n_bootstrap=7,
+                bootstrap_seed=123,
+            )
+
+        assert estimator.inference_method == "cluster_robust"
+        assert estimator.n_bootstrap == 2000
+        assert estimator.bootstrap_seed == 42
+
+    def test_public_signature_keeps_documented_defaults(self) -> None:
+        import copy
+        import inspect
+        import json
+        import pickle
+        import warnings
+
+        signature = inspect.signature(CalibratedDirectEstimator)
+        n_default = signature.parameters["n_bootstrap"].default
+        seed_default = signature.parameters["bootstrap_seed"].default
+        assert isinstance(n_default, int) and n_default == 2000
+        assert isinstance(seed_default, int) and seed_default == 42
+        assert json.dumps([n_default, seed_default]) == "[2000, 42]"
+        assert signature.parameters["n_bootstrap"].annotation in (int, "int")
+        assert signature.parameters["bootstrap_seed"].annotation in (int, "int")
+
+        copied_defaults = (
+            (copy.copy(n_default), copy.copy(seed_default)),
+            (copy.deepcopy(n_default), copy.deepcopy(seed_default)),
+            (
+                pickle.loads(pickle.dumps(n_default)),
+                pickle.loads(pickle.dumps(seed_default)),
+            ),
+        )
+        for copied_n, copied_seed in copied_defaults:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                estimator = CalibratedDirectEstimator(
+                    ["base"],
+                    n_bootstrap=copied_n,
+                    bootstrap_seed=copied_seed,
+                )
+            assert not caught
+            assert estimator.inference_method == "cluster_robust"
+
 
 # ============================================================================
 # Feature Tests - Bootstrap Behavior
@@ -380,13 +450,8 @@ class TestBootstrapBehavior:
             assert "p10" in summary
             assert "median" in summary
 
-    def test_bootstrap_ci_uses_se_based_intervals(self) -> None:
-        """Test that confidence_interval() uses SE-based CIs, not bootstrap percentile CIs.
-
-        After the fix to use original calibrator for point estimates, bootstrap
-        percentile CIs would be mis-centered. We now use estimate ± z*SE for
-        proper coverage.
-        """
+    def test_bootstrap_ci_uses_percentile_intervals(self) -> None:
+        """confidence_interval() returns the stored bootstrap percentiles."""
         # Create result with bootstrap CIs in metadata
         result = EstimationResult(
             estimates=np.array([0.5, 0.6]),

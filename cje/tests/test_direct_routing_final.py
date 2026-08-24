@@ -50,13 +50,20 @@ def _direct_result(
     inference_method: str = "cluster_robust",
     n_bootstrap: int = 120,
 ) -> EstimationResult:
-    estimator = CalibratedDirectEstimator(
-        target_policies=["A", "B"],
-        paired_comparison=paired,
-        inference_method=inference_method,
-        n_bootstrap=n_bootstrap,
-        bootstrap_seed=7,
-    )
+    if inference_method in {"bootstrap", "auto"}:
+        estimator = CalibratedDirectEstimator(
+            target_policies=["A", "B"],
+            paired_comparison=paired,
+            inference_method=inference_method,
+            n_bootstrap=n_bootstrap,
+            bootstrap_seed=7,
+        )
+    else:
+        estimator = CalibratedDirectEstimator(
+            target_policies=["A", "B"],
+            paired_comparison=paired,
+            inference_method=inference_method,
+        )
     estimator.add_fresh_draws("A", _fresh("A", a))
     estimator.add_fresh_draws("B", _fresh("B", b))
     return estimator.fit_and_estimate()

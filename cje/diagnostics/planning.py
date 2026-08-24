@@ -2,7 +2,7 @@
 
 Implements the Square Root Allocation Law from CJE paper Appendix F.
 
-The key insight is that total variance decomposes into two independent components:
+The key insight is that total variance is modeled as two additive components:
     V_total(n, m) = σ²_eval/n + σ²_cal/m
 
 where:
@@ -137,6 +137,11 @@ class FittedVarianceModel:
 class EvaluationPlan:
     """Result of evaluation planning with MDE-centric outputs.
 
+    MDE and power calculations use asymptotic normal critical values. The
+    shipped analytic interval uses a finite-sample t critical value with an
+    effective df determined from the realized variance shares, so callers
+    should confirm the achieved interval after collecting the planned data.
+
     Attributes:
         n_samples: Number of evaluation samples (prompts) to collect.
         m_oracle: Number of oracle labels to collect.
@@ -168,7 +173,7 @@ class EvaluationPlan:
 
     @property
     def se_comparison(self) -> float:
-        """SE for pairwise comparison (conservative √2 × SE_level)."""
+        """Independent-policy pairwise SE (√2 × SE_level)."""
         return float(np.sqrt(2)) * self.se_level
 
     @property
@@ -195,13 +200,13 @@ class EvaluationPlan:
         return 1.0 - self.eval_variance_fraction
 
     def mde_at_power(self, power: float) -> float:
-        """Compute MDE at a different power level."""
+        """Compute normal-theory MDE at a different power level."""
         z_alpha = float(stats.norm.ppf(1 - self.alpha / 2))
         z_power = float(stats.norm.ppf(power))
         return (z_alpha + z_power) * self.se_comparison
 
     def power_to_detect(self, effect_size: float) -> float:
-        """Compute power to detect a specific effect size.
+        """Compute asymptotic-normal power for a specific effect size.
 
         Raises:
             ValueError: If the plan's comparison SE is zero (degenerate plan).
@@ -230,9 +235,10 @@ class EvaluationPlan:
             f"  Planned variance: {self.eval_variance_fraction:.0%} evaluation, "
             f"{self.cal_variance_fraction:.0%} calibration\n"
             f"  MDE ({self.power:.0%} power): {self.mde:.1%}\n"
-            f"  Note: MDE assumes independent policies; paired evals on a shared "
-            f"prompt set typically detect smaller differences (this plan is "
-            f"conservative).\n"
+            f"  Note: MDE assumes independent policies. With positive "
+            f"shared-prompt covariance, that pairing assumption is conservative.\n"
+            f"  Note: MDE uses asymptotic-normal critical values; confirm the "
+            f"realized finite-sample interval after collection.\n"
             f"  → Can detect {self.mde:.1%} difference between policies"
         )
 
@@ -248,6 +254,9 @@ class EvaluationPlan:
             "se_comparison": self.se_comparison,
             "power": self.power,
             "alpha": self.alpha,
+            "critical_value_method": "asymptotic_normal",
+            "finite_sample_confirmation_required": True,
+            "pairing_assumption": "independent_policies",
             "sigma2_eval": self.sigma2_eval,
             "sigma2_cal": self.sigma2_cal,
             "eval_variance_component": self.eval_variance_component,
@@ -491,8 +500,10 @@ def plan_evaluation(
             labels plus m_min surrogate scores (since n ≥ m ≥ m_min).
 
     Note:
-        MDE assumes independent policies; paired evals on a shared prompt set
-        typically detect smaller differences (this plan is conservative).
+        MDE assumes independent policies. With positive shared-prompt
+        covariance, that pairing assumption is conservative.
+        MDE uses asymptotic normal critical values; the final analytic CI uses
+        a finite-sample t critical value based on realized variance shares.
         Planning on a model with fit_ok False logs a warning.
     """
     _warn_if_poor_fit(variance_model)
@@ -630,8 +641,10 @@ def plan_for_mde(
     (budget is bumped minimally if integer rounding pushes it over).
 
     Note:
-        MDE assumes independent policies; paired evals on a shared prompt set
-        typically detect smaller differences (this plan is conservative).
+        MDE assumes independent policies. With positive shared-prompt
+        covariance, that pairing assumption is conservative.
+        MDE uses asymptotic normal critical values; the final analytic CI uses
+        a finite-sample t critical value based on realized variance shares.
         Planning on a model with fit_ok False logs a warning (once).
     """
     _warn_if_poor_fit(variance_model)

@@ -8,17 +8,39 @@
   `CalibratedDirectEstimator`, `analyze_dataset`, and `calibrated_mean_ci` now
   default calibrated, partial-label routes to prompt-cluster-robust sampling
   variance plus the delete-one-oracle-fold jackknife variance, with a t-based
-  CI. Complete-oracle and uncalibrated routes remain cluster-robust without a
-  calibration jackknife. This aligns the package with the corrected v4
-  coverage results: the analytic procedure had
-  nominal-to-conservative coverage on the paper's shared-prompt Arena grid and
-  is a negligible-compute default after fixing the former factor-of-K
-  jackknife aggregation bug. Refit bootstrap inference remains available via
-  `inference_method="bootstrap"` / `inference="bootstrap"`; `"auto"` retains
-  its adaptive few-cluster and calibration-coupling behavior. Analytic results
-  record calibration/evaluation overlap in inference metadata; explicit
+  CI. Complete-oracle and uncalibrated default routes are also analytic but
+  skip the calibration jackknife. The two variance components now use an
+  approximate Welch–Satterthwaite effective df instead of applying `K - 1` to
+  the whole interval regardless of the oracle component's variance share.
+  This avoids the former flat ~1.4x width inflation when five calibration
+  folds contribute only a small share of total variance. The additive variance
+  procedure builds on the corrected v4 Arena analysis; the effective-df change
+  is separately covered by coupled stochastic and same-row Monte Carlo tests
+  (96% coverage in both 300-replicate checks). In the pre-registered 0.5.1
+  planning-instrument experiment (2026-07-07, R=400/cell), the bootstrap
+  instrument's SE ran 17–23% high while analytic cluster-robust + OUA tracked
+  realized SE with ratios from 0.976 to 1.045.
+
+  Refit bootstrap inference remains available via
+  `inference_method="bootstrap"` / `inference="bootstrap"`. `"auto"` retains
+  its adaptive few-cluster and calibration-coupling rules, but a run in which
+  all evaluated policies have complete oracle coverage is now correctly treated
+  as uncoupled because its point estimates do not use the calibrator. Analytic
+  results record calibration/evaluation overlap in inference metadata; explicit
   bootstrap remains the joint-refit option when that resampling representation
   of dependence is desired.
+  Public APIs that supply `n_bootstrap` or `bootstrap_seed` without an inference
+  method select bootstrap with a warning for backward compatibility instead of
+  silently ignoring those settings. When `cluster_robust` is explicit, the
+  bootstrap-only settings are ignored with a warning. High-level results retain
+  the request in `metadata["estimator_config"]` and record the normalized values
+  actually used in `metadata["estimator_config_effective"]`.
+
+  CLI, notebook, and estimate-plot output now use the interval actually stored
+  by the estimator (finite-df t or bootstrap percentile) instead of rebuilding
+  `estimate ± 1.96 × SE`. Planning summaries, serialized plans, and dashboards
+  now label their MDE and power calculations as asymptotic-normal and require
+  confirmation against the realized finite-sample interval.
 
 ## [0.6.0] - 2026-07-26
 

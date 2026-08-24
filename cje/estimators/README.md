@@ -53,15 +53,15 @@ Fresh draws are auto-discovered from a `fresh_draws_dir` under the canonical `PO
 
 ## Standard Errors
 
-On supported calibrated routes, the default `standard_errors` includes evaluation sampling noise **and** uncertainty from learning the calibrator on a finite oracle slice. The `cluster_robust` path combines CRV1 sampling variance with the calibration-aware oracle jackknife and uses t-critical values with the limiting degrees of freedom (stored per policy in `result.metadata["degrees_of_freedom"]`). Bootstrap inference reports percentile intervals. Inspect `result.metadata["se_components"]["oracle_jackknife_status_per_policy"]`: disabling the jackknife or using a calibrator without enough fold models omits calibration variance and is reported there.
+On supported calibrated routes, the default `standard_errors` includes evaluation sampling noise **and** uncertainty from learning the calibrator on a finite oracle slice. The `cluster_robust` path combines CRV1 sampling variance with the calibration-aware oracle jackknife and uses t-critical values with an approximate Welch–Satterthwaite effective df (stored per policy in `result.metadata["degrees_of_freedom"]`). Bootstrap inference reports percentile intervals. Inspect `result.metadata["se_components"]["oracle_jackknife_status_per_policy"]`: disabling the jackknife or using a calibrator without enough fold models omits calibration variance and is reported there.
 
 One exception: a policy whose fresh draws all share a single prompt cluster has fewer than two independent clusters, so no valid cluster-level inference exists. Such a policy returns its point estimate with **SE = NaN** (`se_method: "unavailable_one_cluster"`, loud warning) rather than falling back to invalid row-level IID inference. It is listed in `result.metadata["inference_unavailable_policies"]`, and `compare_policies` refuses pairs involving it with `InferenceUnavailableError` (from `cje.data`) instead of returning an anti-conservative difference SE.
 
 ### Inference methods (`inference_method` parameter)
 
-- **`"cluster_robust"` (default):** CRV1 cluster-robust SE of the augmented pseudo-outcome mean (clustered by `prompt_id`), combined with the delete-one-oracle-fold jackknife variance and a t-based CI. The corrected jackknife achieved nominal-to-conservative coverage in the paper's validation grid at negligible compute.
+- **`"cluster_robust"` (default):** CRV1 cluster-robust SE of the augmented pseudo-outcome mean (clustered by `prompt_id`), combined with the delete-one-oracle-fold jackknife variance and a t-based CI. An approximate Welch–Satterthwaite effective df weights the two components by their realized variance shares. The corrected additive variance procedure is the paper's recommended negligible-compute path; the effective-df rule is separately regression-tested for nominal coverage.
 - **`"bootstrap"`:** cluster bootstrap by prompt — positive exponential mean-one weights per prompt cluster, no replicate discarded or retried — with a **calibrator refit per replicate**, applied to the same augmented estimate. By refitting and evaluating inside each replicate it jointly represents calibration/evaluation dependence. It returns percentile CIs and a joint replicate matrix for paired contrasts.
-- **`"auto"`:** uses cluster_robust, switching to bootstrap when there are fewer than 20 prompt clusters or when the calibration data overlaps the evaluation draws (coupling).
+- **`"auto"`:** uses cluster_robust, switching to bootstrap when there are fewer than 20 prompt clusters or when the calibration data overlaps the evaluation draws (coupling). A run in which all evaluated policies have complete oracle coverage is not marked coupled because none of its point estimates uses the calibrator; mixed complete/partial runs still receive the coupling check.
 
 ```python
 estimator = CalibratedDirectEstimator(
@@ -70,6 +70,11 @@ estimator = CalibratedDirectEstimator(
     inference_method="cluster_robust",  # default; or "bootstrap", "auto"
 )
 ```
+
+For backward compatibility, supplying `n_bootstrap` or `bootstrap_seed` while
+omitting `inference_method` selects bootstrap with a warning. An explicit
+`inference_method="cluster_robust"` wins and ignores those bootstrap-only
+settings with a warning.
 
 ### Automatic fallback when bootstrap is selected
 

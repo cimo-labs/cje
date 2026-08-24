@@ -130,9 +130,13 @@ class TestEstimatorEquivalence:
         # OUA jackknife term is computed with the same recipe on the same
         # calibrator. Only float-op ordering differs.
         assert res.se == pytest.approx(float(ref.standard_errors[0]), rel=1e-9)
-        # CI: same t-critical value (df = min(G-1, K-1)) both sides.
+        # CI: same Welch--Satterthwaite effective df on both paths.
         assert res.ci[0] == pytest.approx(float(ref_lo[0]), rel=1e-9)
         assert res.ci[1] == pytest.approx(float(ref_hi[0]), rel=1e-9)
+        array_df = res.diagnostics["cluster_robust"]["df"]
+        direct_df = ref.metadata["degrees_of_freedom"][policy]["df"]
+        assert array_df == pytest.approx(direct_df, rel=1e-12)
+        assert res.diagnostics["cluster_robust"]["df_method"] == ("welch_satterthwaite")
         assert res.method == "cluster_robust"
         assert res.n == len(judge)
         assert res.n_oracle == int(np.sum(~np.isnan(labels)))
@@ -176,6 +180,85 @@ class TestEstimatorEquivalence:
             res.diagnostics["bootstrap"]["n_valid_replicates"]
             == ref.metadata["inference"]["n_bootstrap_valid"]
         )
+
+
+class TestInferenceOptionCompatibility:
+    def test_n_bootstrap_without_inference_selects_bootstrap_loudly(self) -> None:
+        scores = np.asarray([0.2, 0.8])
+        labels = np.asarray([0.0, 1.0])
+
+        with pytest.warns(UserWarning, match="selecting inference='bootstrap'"):
+            result = calibrated_mean_ci(
+                scores,
+                labels,
+                cluster_ids=["shared", "shared"],
+                n_bootstrap=2000,
+                seed=123,
+            )
+
+        assert result.method == "bootstrap"
+        assert result.diagnostics["bootstrap"]["n_bootstrap_requested"] == 2000
+        assert result.diagnostics["bootstrap"]["seed"] == 123
+
+    def test_explicit_cluster_robust_ignores_n_bootstrap_loudly(self) -> None:
+        scores = np.linspace(0.0, 1.0, 20)
+        labels = np.asarray([0.0, 1.0] * 10)
+
+        with pytest.warns(UserWarning, match="will be ignored"):
+            result = calibrated_mean_ci(
+                scores,
+                labels,
+                inference="cluster_robust",
+                n_bootstrap=7,
+                seed=9,
+            )
+
+        assert result.method == "cluster_robust"
+
+    def test_seed_alone_does_not_select_bootstrap(self) -> None:
+        scores = np.linspace(0.0, 1.0, 20)
+        labels = np.asarray([0.0, 1.0] * 10)
+        result = calibrated_mean_ci(scores, labels, seed=9)
+        assert result.method == "cluster_robust"
+
+    def test_public_signature_keeps_documented_defaults(self) -> None:
+        import copy
+        import inspect
+        import json
+        import pickle
+        import warnings
+
+        signature = inspect.signature(calibrated_mean_ci)
+        inference_default = signature.parameters["inference"].default
+        n_default = signature.parameters["n_bootstrap"].default
+        assert isinstance(inference_default, str)
+        assert inference_default == "cluster_robust"
+        assert isinstance(n_default, int) and n_default == 2000
+        assert json.dumps([inference_default, n_default]) == '["cluster_robust", 2000]'
+        assert signature.parameters["inference"].annotation in (str, "str")
+        assert signature.parameters["n_bootstrap"].annotation in (int, "int")
+
+        copied_defaults = (
+            (copy.copy(inference_default), copy.copy(n_default)),
+            (copy.deepcopy(inference_default), copy.deepcopy(n_default)),
+            (
+                pickle.loads(pickle.dumps(inference_default)),
+                pickle.loads(pickle.dumps(n_default)),
+            ),
+        )
+        scores = np.linspace(0.0, 1.0, 20)
+        labels = np.asarray([0.0, 1.0] * 10)
+        for copied_inference, copied_n in copied_defaults:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                result = calibrated_mean_ci(
+                    scores,
+                    labels,
+                    inference=copied_inference,
+                    n_bootstrap=copied_n,
+                )
+            assert not caught
+            assert result.method == "cluster_robust"
 
 
 # ============================================================================

@@ -126,7 +126,10 @@ def analyze_dataset(
             keys: oua_jackknife, inference_method, n_bootstrap, bootstrap_seed,
             use_augmented_estimator, paired_comparison. Unknown keys raise a
             ValueError; reward_calibrator is managed by analyze_dataset and is
-            rejected.
+            rejected. For backward compatibility, supplying n_bootstrap or
+            bootstrap_seed without inference_method selects bootstrap and logs
+            a migration warning. If cluster_robust is explicit, those settings
+            are ignored with a warning.
         verbose: Whether to print progress messages
         fresh_judge_scale: Optional declared ``(minimum, maximum)`` scale for
             evaluation judge scores. Without it, out-of-unit fresh scores keep
@@ -730,7 +733,14 @@ def analyze_dataset(
             results.metadata["oracle_coverage"] = oracle_coverage
 
     if estimator_config:
+        # Preserve the user's request for backward-compatible provenance, and
+        # record the normalized config actually forwarded to the estimator so
+        # inferred/ignored compatibility options are auditable.
         results.metadata["estimator_config"] = dict(estimator_config)
+        results.metadata["estimator_config_effective"] = {
+            "oua_jackknife": oua_jackknife,
+            **estimator_kwargs,
+        }
 
     if oracle_sources_metadata:
         _scale_oracle_source_metadata(oracle_sources_metadata, result_output_scale)
@@ -1332,6 +1342,30 @@ def _validated_estimator_config(
             f"Unknown estimator_config key(s): {', '.join(unknown)}. "
             f"Valid keys: {', '.join(_ESTIMATOR_CONFIG_KEYS)}."
         )
+
+    bootstrap_only_keys = sorted(
+        key for key in ("n_bootstrap", "bootstrap_seed") if key in cfg
+    )
+    inference_method = cfg.get("inference_method")
+    if bootstrap_only_keys and inference_method is None:
+        cfg["inference_method"] = "bootstrap"
+        logger.warning(
+            "estimator_config supplied %s without inference_method; selecting "
+            "inference_method='bootstrap' for backward compatibility. Specify "
+            "the inference method explicitly in new code.",
+            ", ".join(bootstrap_only_keys),
+        )
+    elif bootstrap_only_keys and str(inference_method).strip().lower() == (
+        "cluster_robust"
+    ):
+        logger.warning(
+            "estimator_config supplied %s with "
+            "inference_method='cluster_robust'; those bootstrap-only settings "
+            "will be ignored.",
+            ", ".join(bootstrap_only_keys),
+        )
+        for key in bootstrap_only_keys:
+            cfg.pop(key)
 
     return oua_jackknife, cfg
 

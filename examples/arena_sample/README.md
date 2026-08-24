@@ -89,13 +89,16 @@ from cje import analyze_dataset
 
 # CJE automatically uses the oracle labels in base_responses.jsonl for calibration
 results = analyze_dataset(fresh_draws_dir="examples/arena_sample/fresh_draws")
+ci_lower, ci_upper = results.confidence_interval()
 
-for policy, est, se in zip(
+for policy, est, se, lo, hi in zip(
     results.metadata["target_policies"],
     results.estimates,
-    results.standard_errors
+    results.standard_errors,
+    ci_lower,
+    ci_upper,
 ):
-    print(f"{policy}: {est:.3f} ± {1.96*se:.3f}")
+    print(f"{policy}: {est:.3f} (SE {se:.3f}, 95% CI [{lo:.3f}, {hi:.3f}])")
 ```
 
 ### Using the logged data as a calibration source

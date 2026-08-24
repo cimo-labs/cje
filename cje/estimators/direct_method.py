@@ -18,10 +18,12 @@ Use this when you want: "Which policy is best on this eval set?"
 Don't use for: "What would happen if we deployed π' in production?"
 """
 
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, cast
 import numpy as np
 import logging
+import warnings
 from dataclasses import dataclass
+from numbers import Integral
 
 from ..data.models import CIInfo, EstimationResult
 from ..diagnostics.models import DirectDiagnostics, Status
@@ -41,6 +43,14 @@ from ..diagnostics.robust_inference import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _DefaultInt(int):
+    """Typed marker for an omitted integer option in the public signature."""
+
+
+_DEFAULT_N_BOOTSTRAP = _DefaultInt(2000)
+_DEFAULT_BOOTSTRAP_SEED = _DefaultInt(42)
 
 
 @dataclass
@@ -80,9 +90,14 @@ class CalibratedDirectEstimator:
             - "bootstrap": Cluster bootstrap with calibrator refit
             - "auto": Choose based on data characteristics
             The bootstrap remains available when refit-based percentile intervals
-            are desired; it is never selected implicitly unless "auto" is requested.
-        n_bootstrap: Number of bootstrap replicates (default 2000)
-        bootstrap_seed: Random seed for bootstrap reproducibility
+            are desired. For backward compatibility, supplying a bootstrap-only
+            option while omitting this argument also selects bootstrap with a warning.
+        n_bootstrap: Number of bootstrap replicates (default 2000 when
+            bootstrap is selected). Supplying this without ``inference_method``
+            selects bootstrap for backward compatibility and emits a warning.
+        bootstrap_seed: Random seed for bootstrap reproducibility (default 42).
+            Supplying this without ``inference_method`` has the same backward-
+            compatibility behavior as ``n_bootstrap``.
         use_augmented_estimator: If True, use AIPW-style residual augmentation
 
     Example:
@@ -105,8 +120,8 @@ class CalibratedDirectEstimator:
         paired_comparison: bool = True,
         oua_jackknife: bool = True,
         inference_method: Optional[str] = None,
-        n_bootstrap: int = 2000,
-        bootstrap_seed: int = 42,
+        n_bootstrap: int = _DEFAULT_N_BOOTSTRAP,
+        bootstrap_seed: int = _DEFAULT_BOOTSTRAP_SEED,
         use_augmented_estimator: bool = True,
         calibration_provenance: Optional[CalibrationProvenance] = None,
         label_design: Optional[LabelDesign] = None,
@@ -117,7 +132,23 @@ class CalibratedDirectEstimator:
         self.paired_comparison = paired_comparison
         self._fitted = False
         self._results: Optional[EstimationResult] = None
-        self._inference_method_explicit = inference_method is not None
+        bootstrap_options_explicit = not isinstance(
+            n_bootstrap, _DefaultInt
+        ) or not isinstance(bootstrap_seed, _DefaultInt)
+        self._inference_method_explicit = (
+            inference_method is not None or bootstrap_options_explicit
+        )
+
+        if inference_method is None and bootstrap_options_explicit:
+            warnings.warn(
+                "n_bootstrap/bootstrap_seed were supplied without "
+                "inference_method; selecting inference_method='bootstrap' "
+                "for backward compatibility. Set inference_method explicitly "
+                "to silence this warning.",
+                UserWarning,
+                stacklevel=2,
+            )
+            inference_method = "bootstrap"
 
         normalized_inference = (
             inference_method.strip().lower()
@@ -132,10 +163,38 @@ class CalibratedDirectEstimator:
                 "If you want oracle jackknife augmentation, set "
                 "oua_jackknife=True with a valid inference_method."
             )
+        if normalized_inference == "cluster_robust" and bootstrap_options_explicit:
+            warnings.warn(
+                "n_bootstrap/bootstrap_seed do not apply to "
+                "inference_method='cluster_robust' and will be ignored.",
+                UserWarning,
+                stacklevel=2,
+            )
+            resolved_n_bootstrap = 2000
+            resolved_bootstrap_seed = 42
+        else:
+            resolved_n_bootstrap = (
+                2000 if isinstance(n_bootstrap, _DefaultInt) else n_bootstrap
+            )
+            if not isinstance(resolved_n_bootstrap, Integral) or isinstance(
+                resolved_n_bootstrap, bool
+            ):
+                raise TypeError("n_bootstrap must be an integer")
+            resolved_n_bootstrap = int(resolved_n_bootstrap)
+            if resolved_n_bootstrap < 2:
+                raise ValueError("n_bootstrap must be at least 2")
+            resolved_bootstrap_seed = (
+                42 if isinstance(bootstrap_seed, _DefaultInt) else bootstrap_seed
+            )
+            if not isinstance(resolved_bootstrap_seed, Integral) or isinstance(
+                resolved_bootstrap_seed, bool
+            ):
+                raise TypeError("bootstrap_seed must be an integer")
+            resolved_bootstrap_seed = int(resolved_bootstrap_seed)
 
         self.inference_method = normalized_inference
-        self.n_bootstrap = n_bootstrap
-        self.bootstrap_seed = bootstrap_seed
+        self.n_bootstrap = resolved_n_bootstrap
+        self.bootstrap_seed = resolved_bootstrap_seed
         self.use_augmented_estimator = use_augmented_estimator
         if calibration_provenance is not None and reward_calibrator is None:
             raise ValueError(
@@ -951,7 +1010,7 @@ class CalibratedDirectEstimator:
         self._apply_oua_jackknife(result)
 
         # Store DF info for t-based CIs (computed automatically by EstimationResult.confidence_interval())
-        self._store_df_info(result)
+        self._store_df_info(result, sampling_ses=standard_errors)
 
         # Store per-pair difference SEs (pairing-aware sampling SE + OUA
         # variance of the difference) for compare_policies. Uses the
@@ -1278,19 +1337,23 @@ class CalibratedDirectEstimator:
             return None
         return matrix[:, self.target_policies.index(policy)].copy()
 
-    def _store_df_info(self, result: EstimationResult) -> None:
+    def _store_df_info(
+        self, result: EstimationResult, sampling_ses: List[float]
+    ) -> None:
         """Store degrees of freedom information for t-based CI computation.
 
         This method stores DF information that EstimationResult.confidence_interval()
         will use to automatically compute t-based CIs.
 
-        The degrees of freedom is determined by the limiting factor:
-        - If cluster-robust SE was used: df from clustering (typically n_clusters - 1)
-        - If oracle-jackknife inference was applied: min(df_cluster, K - 1)
+        Cluster-only intervals use the cluster degrees of freedom (typically
+        ``n_clusters - 1``). When oracle-jackknife variance is present, the
+        two components use an approximate Welch--Satterthwaite effective df.
 
         Args:
             result: EstimationResult with estimates and standard_errors already populated
                    (including oracle-jackknife adjustment if applicable)
+            sampling_ses: Per-policy standard errors before adding oracle-
+                jackknife variance.
 
         Side effects:
             - Stores DF info in result.metadata["degrees_of_freedom"]
@@ -1310,6 +1373,7 @@ class CalibratedDirectEstimator:
         )
         jk_counts = components.get("oracle_jackknife_counts", {})
         jk_statuses = components.get("oracle_jackknife_status_per_policy", {})
+        oracle_variances = components.get("oracle_variance_per_policy", {})
 
         for i, policy in enumerate(self.target_policies):
             if np.isnan(result.estimates[i]) or np.isnan(result.standard_errors[i]):
@@ -1327,19 +1391,28 @@ class CalibratedDirectEstimator:
             # Get cluster DF
             df_cluster = self._df_cluster.get(policy, len(result.estimates) - 1)
 
-            # If oracle-jackknife inference was applied, cap DF by the
-            # oracle fold count (shared combining rule)
+            # Combine the actual sampling and oracle components. Passing
+            # dummy zero variances here would silently reinstate a fold-count
+            # cap irrespective of the oracle component's variance share.
             status = str(jk_statuses.get(policy, "not_requested"))
             K = int(jk_counts.get(policy, 0)) if status == "applied" else 0
-
-            _, df_final = combine_cluster_and_oracle(0.0, df_cluster, 0.0, K)
+            se_sampling = (
+                float(sampling_ses[i]) if i < len(sampling_ses) else float("nan")
+            )
+            var_oracle = (
+                float(oracle_variances.get(policy, 0.0)) if status == "applied" else 0.0
+            )
+            _, df_final = combine_cluster_and_oracle(
+                se_sampling, df_cluster, var_oracle, K
+            )
 
             # Compute t-critical value for logging
             t_crit = stats.t.ppf(1 - 0.05 / 2, df_final)
 
             df_info[policy] = {
                 "available": True,
-                "df": int(df_final),
+                "df": float(df_final),
+                "df_method": ("welch_satterthwaite" if var_oracle > 0.0 else "cluster"),
                 "t_critical": float(t_crit),
                 "se_method": self._se_methods.get(policy, "standard"),
                 "n_clusters": self._n_clusters.get(policy, len(result.estimates)),
@@ -1389,8 +1462,8 @@ class CalibratedDirectEstimator:
           analytic near-tie no-op is correct, unlike the bootstrap path's
           residual-correction noise);
 
-        as se = sqrt(se_sampling² + var_oua_diff) with
-        df = max(min(df_pairs, K - 1), 1) via combine_cluster_and_oracle.
+        as se = sqrt(se_sampling² + var_oua_diff), with an approximate
+        Welch--Satterthwaite effective df via combine_cluster_and_oracle.
 
         Args:
             result: Assembled result (post-OUA standard errors).
@@ -1564,7 +1637,8 @@ class CalibratedDirectEstimator:
             "policy1": p1,
             "policy2": p2,
             "se": float(se_total),
-            "df": int(df_final),
+            "df": float(df_final),
+            "df_method": ("welch_satterthwaite" if var_oua_diff > 0.0 else "cluster"),
             "basis": basis,
             "se_sampling": float(se_sampling),
             "var_oua_diff": float(var_oua_diff),
