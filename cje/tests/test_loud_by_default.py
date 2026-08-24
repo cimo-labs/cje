@@ -95,7 +95,14 @@ class TestZeroOracleDirectMode:
             data[policy] = records
 
         results = analyze_dataset(fresh_draws_data=data)
-        assert results.method == "direct_oracle_bootstrap"
+        assert results.method == "direct_oracle"
+        assert results.metadata["inference"]["method"] == "cluster_robust"
+        assert results.metadata["inference"]["defaulted"] is True
+        assert results.metadata["inference"]["selection_reason"] == (
+            "default cluster_robust"
+        )
+        assert results.metadata["inference"]["coupled"] is False
+        assert results.metadata["inference"]["coupling_overlap"] == 0
         assert results.metadata["point_estimator"]["routes"] == [
             "direct_oracle",
             "direct_oracle",

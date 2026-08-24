@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Calibration-aware jackknife is now the default Direct inference path.**
+  `CalibratedDirectEstimator`, `analyze_dataset`, and `calibrated_mean_ci` now
+  default calibrated, partial-label routes to prompt-cluster-robust sampling
+  variance plus the delete-one-oracle-fold jackknife variance, with a t-based
+  CI. Complete-oracle and uncalibrated routes remain cluster-robust without a
+  calibration jackknife. This aligns the package with the corrected v4
+  coverage results: the analytic procedure had
+  nominal-to-conservative coverage on the paper's shared-prompt Arena grid and
+  is a negligible-compute default after fixing the former factor-of-K
+  jackknife aggregation bug. Refit bootstrap inference remains available via
+  `inference_method="bootstrap"` / `inference="bootstrap"`; `"auto"` retains
+  its adaptive few-cluster and calibration-coupling behavior. Analytic results
+  record calibration/evaluation overlap in inference metadata; explicit
+  bootstrap remains the joint-refit option when that resampling representation
+  of dependence is desired.
+
 ## [0.6.0] - 2026-07-26
 
 Correctness and claim-calibration release. This version makes scale handling explicit,

@@ -43,7 +43,7 @@ results = analyze_dataset(
     oracle_field="oracle_label",
     calibration_covariates=None,  # e.g. ["domain"] — fields from record metadata
     include_response_length=False,  # auto word-count covariate (needs "response")
-    estimator_config=None,        # e.g. {"n_bootstrap": 4000}
+    estimator_config=None,        # default jackknife; bootstrap explicit or via auto
     verbose=False,
     fresh_judge_scale=None,       # declared (min, max) for evaluation judge scores
     fresh_oracle_scale=None,      # declared scale for oracle labels in the fresh draws
@@ -127,7 +127,7 @@ result = calibrated_mean_ci(
     covariates=None,       # (n, d) matrix for two-stage calibration
     alpha=0.05,
     n_folds=5,             # 4-9 labels -> folds auto-reduce with a warning (noisier); <4 raises
-    inference="auto",      # "bootstrap" (default when calibrated) | "cluster_robust"
+    inference="cluster_robust",  # default jackknife path | "bootstrap" | "auto"
     n_bootstrap=2000,
     seed=42,
 )

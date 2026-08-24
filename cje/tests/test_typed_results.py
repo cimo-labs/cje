@@ -309,7 +309,10 @@ class TestCIInfo:
     def test_bootstrap_path_writes_percentile_ci_info(self) -> None:
         result = analyze_dataset(
             fresh_draws_data=_labeled_draws(),
-            estimator_config={"n_bootstrap": 100},
+            estimator_config={
+                "inference_method": "bootstrap",
+                "n_bootstrap": 100,
+            },
         )
         assert result.ci_info is not None
         assert result.ci_info.method == "percentile"
@@ -791,7 +794,10 @@ class TestComparePoliciesEndToEnd:
     def test_bootstrap_run_attaches_matrix_and_dispatches(self, tmp_path: Any) -> None:
         result = analyze_dataset(
             fresh_draws_data=_two_policy_draws(),
-            estimator_config={"n_bootstrap": 120},
+            estimator_config={
+                "inference_method": "bootstrap",
+                "n_bootstrap": 120,
+            },
         )
         assert result.bootstrap_samples is not None
         n_valid = result.metadata["inference"]["n_bootstrap_valid"]
@@ -878,7 +884,7 @@ class TestComparePoliciesEndToEnd:
         the full range, so normalization reproduces the unit-scale pipeline
         bit-for-bit and every reported quantity must be exactly 100x.
         """
-        config = {"n_bootstrap": 120}
+        config = {"inference_method": "bootstrap", "n_bootstrap": 120}
         result_unit = analyze_dataset(
             fresh_draws_data=_two_policy_draws(scale=1.0),
             estimator_config=dict(config),

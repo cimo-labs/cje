@@ -577,7 +577,7 @@ def test_shared_prompt_external_provenance_couples_auto_routing() -> None:
     )
 
 
-def test_forced_cluster_robust_warns_when_frames_are_coupled(
+def test_cluster_robust_records_coupling_without_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     scores = np.linspace(0.05, 0.95, 24)
@@ -594,12 +594,14 @@ def test_forced_cluster_robust_warns_when_frames_are_coupled(
     estimator.add_fresh_draws("policy", _draws("policy", np.linspace(0.2, 0.8, 24)))
 
     with caplog.at_level(logging.WARNING):
-        estimator.fit_and_estimate()
+        result = estimator.fit_and_estimate()
 
-    assert any(
+    assert not any(
         "calibration-evaluation covariance" in record.message
         for record in caplog.records
     )
+    assert result.metadata["inference"]["coupled"] is True
+    assert result.metadata["inference"]["coupling_overlap"] == 24
 
 
 def test_legacy_linkage_outcome_is_recorded_and_warns_on_ambiguity(
@@ -672,4 +674,4 @@ def test_array_api_raw_scale_and_full_coverage_capability_contract() -> None:
     assert full.calibrator is None
     assert full.diagnostics["estimator_route"] == "direct_oracle"
     assert full.diagnostics["calibration"]["calibrator_available"] is False
-    assert "sufficient clusters" in full.diagnostics["inference_reason"]
+    assert "cluster_robust requested/default" in full.diagnostics["inference_reason"]

@@ -569,12 +569,6 @@ def analyze_dataset(
         # Default: include calibration uncertainty when calibrated
         default_oua_jackknife=calibration_result is not None,
     )
-    if direct_oracle_without_calibration and "inference_method" not in (
-        estimator_config or {}
-    ):
-        # Full-oracle analysis needs no calibrator refit. Keep the high-level
-        # default lightweight while honoring an explicitly requested bootstrap.
-        estimator_kwargs["inference_method"] = "cluster_robust"
     label_design_obj = _build_label_design(
         label_design,
         label_propensities,

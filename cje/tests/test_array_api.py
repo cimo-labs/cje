@@ -302,12 +302,21 @@ class TestMaskSemantics:
         assert r1.ci == r2.ci
         assert r1.diagnostics["bootstrap"] == r2.diagnostics["bootstrap"]
 
+    def test_default_uses_calibration_aware_jackknife(self) -> None:
+        scores, labels_full, mask = _synthetic()
+        labels = np.where(mask, labels_full, np.nan)
+        res = calibrated_mean_ci(scores, labels, seed=5)
+        assert res.method == "cluster_robust"
+        assert res.diagnostics["cluster_robust"]["oracle_jackknife_folds"] > 0
+
     def test_auto_resolves_to_bootstrap(self) -> None:
         """The oracle slice lives inside the evaluation sample, so 'auto'
         follows the estimator's coupling rule and selects bootstrap."""
         scores, labels_full, mask = _synthetic()
         labels = np.where(mask, labels_full, np.nan)
-        res = calibrated_mean_ci(scores, labels, n_bootstrap=30, seed=5)
+        res = calibrated_mean_ci(
+            scores, labels, inference="auto", n_bootstrap=30, seed=5
+        )
         assert res.method == "bootstrap"
         assert "coupled" in res.diagnostics["inference_reason"]
 

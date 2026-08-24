@@ -302,14 +302,15 @@ class TestCalibratorFactory:
 class TestDirectEstimatorDefaults:
     """Regression tests for Direct estimator default inference configuration."""
 
-    def test_calibrated_direct_defaults_to_bootstrap_augmented_per_policy(self) -> None:
+    def test_calibrated_direct_defaults_to_jackknife_augmented_per_policy(self) -> None:
         calibrator = JudgeCalibrator(calibration_mode="monotone")
         estimator = CalibratedDirectEstimator(
             target_policies=["base", "target"],
             reward_calibrator=calibrator,
         )
 
-        assert estimator.inference_method == "bootstrap"
+        assert estimator.inference_method == "cluster_robust"
+        assert estimator.oua_jackknife is True
         assert estimator.use_augmented_estimator is True
 
     def test_invalid_inference_method_raises(self) -> None:

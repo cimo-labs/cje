@@ -5,8 +5,10 @@ Synthetic DGP with a KNOWN policy value:
 - judge scores S ~ U(0,1) on logged data;
 - true outcome mu(S) = 0.25 + 0.5*S, oracle labels Y = clip(mu + noise, 0, 1)
   observed on a 25% random slice;
-- fresh draws S' ~ a mean-one tilted score density w(S) = 0.4 + 1.2*S via
-  rejection sampling.
+- fresh draws S' follow the mean-one tilted score density
+  w(S) = 0.4 + 1.2*S. Logged and fresh scores share a prompt-level uniform
+  latent, matching the coupled "same prompts, different policy response"
+  design used by Direct evaluation.
 
 True policy value: V(pi') = E[w(S) * mu(S)] under U(0,1)
                  = 0.4*0.25 + (0.4*0.5 + 1.2*0.25)*1/2 + 1.2*0.5*1/3 = 0.55.
@@ -34,9 +36,11 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import pytest
 
+from cje.array_api import calibrated_mean_ci
 from cje.calibration import calibrate_dataset
 from cje.data.fresh_draws import FreshDrawDataset, FreshDrawSample
 from cje.data.models import Dataset, Sample
+from cje.diagnostics.robust_inference import CalibrationProvenance
 from cje.estimators.direct_method import CalibratedDirectEstimator
 
 POLICY = "target"
@@ -51,16 +55,9 @@ def _mu(s: np.ndarray) -> np.ndarray:
     return np.asarray(0.25 + 0.5 * s)
 
 
-def _tilt(s: float) -> float:
-    return 0.4 + 1.2 * s  # mean-one under U(0,1)
-
-
-def _sample_tilted_score(rng: np.random.Generator) -> float:
-    """Rejection-sample S' from the tilted density w(s) on [0,1]."""
-    while True:
-        s = float(rng.uniform())
-        if rng.uniform(0, 1.6) <= _tilt(s):
-            return s
+def _tilted_quantile(u: float) -> float:
+    """Map U(0,1) to density w(s)=0.4+1.2s via its inverse CDF."""
+    return float((-0.4 + np.sqrt(0.16 + 2.4 * u)) / 1.2)
 
 
 def _simulate(
@@ -71,8 +68,10 @@ def _simulate(
 ) -> Tuple[Dataset, FreshDrawDataset]:
     """One replicate of logged data + fresh draws from the DGP."""
     samples = []
+    prompt_latents = []
     for i in range(n):
         s = float(rng.uniform())
+        prompt_latents.append(s)
         y = float(np.clip(_mu(np.array(s)) + rng.normal(0, OUTCOME_NOISE), 0, 1))
         samples.append(
             Sample(
@@ -87,13 +86,18 @@ def _simulate(
     dataset = Dataset(samples=samples, target_policies=[POLICY])
 
     fresh_samples = []
-    for i in range(n):
+    for i, prompt_latent in enumerate(prompt_latents):
+        target_score = _tilted_quantile(prompt_latent)
         for d in range(m_draws):
             fresh_samples.append(
                 FreshDrawSample(
                     prompt_id=f"p{i}",
-                    judge_score=_sample_tilted_score(rng),
-                    oracle_label=None,
+                    judge_score=target_score,
+                    oracle_label=(
+                        float(_mu(np.asarray(target_score)))
+                        if oracle_frac >= 1.0
+                        else None
+                    ),
                     response=None,
                     target_policy=POLICY,
                     draw_idx=d,
@@ -124,6 +128,14 @@ def _run_replicate(
         n_folds=5,
     )
     calibrator = cal_result.calibrator
+    oracle_rows = [
+        sample for sample in dataset.samples if sample.oracle_label is not None
+    ]
+    provenance = CalibrationProvenance(
+        judge_scores=np.asarray([sample.judge_score for sample in oracle_rows]),
+        oracle_labels=np.asarray([sample.oracle_label for sample in oracle_rows]),
+        prompt_ids=[sample.prompt_id for sample in oracle_rows],
+    )
 
     out: Dict[str, Dict[str, float]] = {}
     for name in estimator_names:
@@ -132,14 +144,19 @@ def _run_replicate(
             est = CalibratedDirectEstimator(
                 target_policies=[POLICY],
                 reward_calibrator=calibrator,
-                inference_method="cluster_robust",
-                oua_jackknife=True,
+                calibration_provenance=provenance,
             )
             est.add_fresh_draws(POLICY, fresh)
         else:  # pragma: no cover - defensive
             raise ValueError(f"Unknown estimator '{name}'")
 
         result = est.fit_and_estimate()
+        if oracle_frac < 1.0:
+            assert result.metadata["inference"]["coupled"] is True
+            assert result.metadata["inference"]["coupling_overlap"] == len(oracle_rows)
+        else:
+            assert result.metadata["inference"]["coupled"] is False
+            assert result.metadata["inference"]["coupling_overlap"] == 0
         lo, hi = result.confidence_interval(alpha=0.05)
         out[name] = {
             "estimate": float(result.estimates[0]),
@@ -203,10 +220,10 @@ def fast_direct_replicates() -> Dict[str, Dict[str, np.ndarray]]:
 def fast_direct_full_oracle_replicates() -> Dict[str, Dict[str, np.ndarray]]:
     """R_FAST replicates at 100% oracle coverage.
 
-    With every logged sample labeled, the OUA jackknife is skipped by
-    design, so the reported SE is the cluster-robust IF component alone and
-    the empirical SD across replicates is the matching truth. This isolates
-    IF-SE correctness from oracle-jackknife behavior.
+    With every evaluation draw labeled, the estimator routes directly to the
+    oracle mean and skips the OUA jackknife. The reported SE is therefore the
+    cluster-robust IF component alone, isolating its calibration from the
+    oracle-jackknife behavior.
     """
     return _collect(
         ["direct"],
@@ -223,8 +240,9 @@ def test_fast_direct_point_estimate_unbiased(
 ) -> None:
     """The calibrated plug-in mean over tilted draws must hit TRUE_VALUE.
 
-    The DGP encodes the truth in the draw distribution itself: fresh draws
-    are rejection-sampled from w(s), so E[f*(S')] = E[w(S) mu(S)] = 0.55.
+    The DGP encodes the truth in the draw distribution itself: the inverse-CDF
+    transform gives fresh scores density w(s), so
+    E[f*(S')] = E[w(S) mu(S)] = 0.55.
     Tolerance is MC noise plus a small isotonic-boundary allowance.
     """
     estimates = fast_direct_replicates["direct"]["estimate"]
@@ -321,8 +339,6 @@ def _run_direct_with_fresh_scores(
     est = CalibratedDirectEstimator(
         target_policies=[POLICY],
         reward_calibrator=cal_result.calibrator,
-        inference_method="cluster_robust",
-        oua_jackknife=True,
     )
     est.add_fresh_draws(POLICY, fresh)
     return est.fit_and_estimate()
@@ -378,6 +394,13 @@ SLOW_ESTIMATORS = ["direct"]
 
 @pytest.fixture(scope="module")
 def slow_replicates() -> Dict[str, Dict[str, np.ndarray]]:
+    """Coupled-data coverage evidence for the default analytic path.
+
+    ``_simulate`` gives the oracle slice and fresh draws the same prompt IDs,
+    so calibration and evaluation overlap by construction. The slow check
+    therefore exercises the default additive cluster-robust + oracle-jackknife
+    interval in the coupled setting, rather than an artificially disjoint one.
+    """
     return _collect(
         SLOW_ESTIMATORS,
         n_reps=R_SLOW,
@@ -385,6 +408,41 @@ def slow_replicates() -> Dict[str, Dict[str, np.ndarray]]:
         m_draws=2,
         seed0=8_000_000,
     )
+
+
+@pytest.fixture(scope="module")
+def slow_array_replicates() -> Dict[str, np.ndarray]:
+    """Same-row partial-label coverage for the array API's analytic default."""
+    rows: Dict[str, List[float]] = {
+        "estimate": [],
+        "ci_lo": [],
+        "ci_hi": [],
+    }
+    for replicate in range(R_SLOW):
+        rng = np.random.default_rng(18_000_000 + replicate)
+        scores = rng.uniform(size=N_SLOW)
+        full_labels = np.clip(
+            _mu(scores) + rng.normal(0, OUTCOME_NOISE, size=N_SLOW), 0, 1
+        )
+        oracle_indices = rng.choice(
+            N_SLOW, size=int(DEFAULT_ORACLE_FRAC * N_SLOW), replace=False
+        )
+        observed_labels = np.full(N_SLOW, np.nan)
+        observed_labels[oracle_indices] = full_labels[oracle_indices]
+
+        result = calibrated_mean_ci(
+            scores,
+            observed_labels,
+            cluster_ids=[f"p{i}" for i in range(N_SLOW)],
+        )
+        assert result.method == "cluster_robust"
+        assert result.diagnostics["inference_reason"] == (
+            "cluster_robust requested/default"
+        )
+        rows["estimate"].append(result.estimate)
+        rows["ci_lo"].append(result.ci[0])
+        rows["ci_hi"].append(result.ci[1])
+    return {key: np.asarray(values) for key, values in rows.items()}
 
 
 @pytest.mark.slow
@@ -402,4 +460,18 @@ def test_slow_ci_coverage(
     # honest direction.
     assert covered >= 0.88, (
         f"{name}: 95% CI coverage {covered:.1%} over {len(lo)} replicates " f"below 88%"
+    )
+
+
+@pytest.mark.slow
+def test_slow_array_api_same_row_ci_coverage(
+    slow_array_replicates: Dict[str, np.ndarray],
+) -> None:
+    """The default interval covers a same-row partially labeled mean."""
+    lo = slow_array_replicates["ci_lo"]
+    hi = slow_array_replicates["ci_hi"]
+    covered = float(np.mean((lo <= 0.5) & (0.5 <= hi)))
+    assert covered >= 0.88, (
+        f"array API: 95% CI coverage {covered:.1%} over {len(lo)} replicates "
+        "below 88%"
     )

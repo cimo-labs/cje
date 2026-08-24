@@ -75,15 +75,15 @@ class CalibratedDirectEstimator:
         paired_comparison: If True, use within-prompt differences when possible
         oua_jackknife: Whether to include calibration uncertainty via the oracle jackknife
         inference_method: How to compute standard errors. One of:
-            - "bootstrap": Cluster bootstrap with calibrator refit (default when
-              reward_calibrator is provided)
-            - "cluster_robust": Cluster-robust SEs without bootstrap
+            - "cluster_robust": Cluster-robust SEs plus the calibration-aware
+              oracle jackknife (default)
+            - "bootstrap": Cluster bootstrap with calibrator refit
             - "auto": Choose based on data characteristics
-            Note: When reward_calibrator=None, defaults to "cluster_robust" since
-            bootstrap would create a new calibrator, defeating uncalibrated mode.
+            The bootstrap remains available when refit-based percentile intervals
+            are desired; it is never selected implicitly unless "auto" is requested.
         n_bootstrap: Number of bootstrap replicates (default 2000)
         bootstrap_seed: Random seed for bootstrap reproducibility
-        use_augmented_estimator: If True, use AIPW-style debiasing in bootstrap
+        use_augmented_estimator: If True, use AIPW-style residual augmentation
 
     Example:
         >>> # Fresh draws from multiple policies
@@ -117,11 +117,12 @@ class CalibratedDirectEstimator:
         self.paired_comparison = paired_comparison
         self._fitted = False
         self._results: Optional[EstimationResult] = None
+        self._inference_method_explicit = inference_method is not None
 
         normalized_inference = (
             inference_method.strip().lower()
             if inference_method is not None
-            else ("bootstrap" if reward_calibrator is not None else "cluster_robust")
+            else "cluster_robust"
         )
         if normalized_inference not in self._VALID_INFERENCE_METHODS:
             allowed = ", ".join(sorted(self._VALID_INFERENCE_METHODS))
@@ -296,15 +297,22 @@ class CalibratedDirectEstimator:
         """Check if calibration and evaluation data are coupled.
 
         Coupling occurs when oracle labels used for calibration come from
-        prompts that are also in the evaluation set. This creates covariance
-        between calibration error and evaluation error that additive variance
-        decomposition doesn't capture.
+        prompts that are also in the evaluation set. Joint refit bootstrap
+        represents that dependence directly; the analytic path records the
+        overlap and uses the additive decomposition validated on the paper's
+        shared-prompt Arena grid.
 
         Returns:
             Tuple of (coupled: bool, overlap_count: int)
             - coupled: True if there's any cluster overlap
             - overlap_count: Number of clusters that appear in both sets
         """
+        if (
+            self.reward_calibrator is None
+            or self._all_policies_have_complete_oracle_coverage()
+        ):
+            return False, 0
+
         # Explicit provenance is authoritative.  Legacy direct constructor
         # calls lack row roles, so retain the historical heuristic only for
         # their metadata/auto-routing.
@@ -340,7 +348,8 @@ class CalibratedDirectEstimator:
         1. inference_method == "bootstrap" (explicit request)
         2. inference_method == "auto" AND:
            - G < 20 clusters (cluster asymptotics unreliable), OR
-           - Calibration is coupled with evaluation (covariance term needed)
+           - Calibration is coupled with evaluation (joint refitting represents
+             the dependence directly)
 
         Returns:
             Tuple of (use_bootstrap: bool, reason: str)
@@ -350,23 +359,24 @@ class CalibratedDirectEstimator:
 
         if self.inference_method == "cluster_robust":
             coupled, overlap = self._calibration_overlaps_evaluation()
-            # With complete oracle coverage every policy routes direct_oracle
-            # (no calibrator dependence), so there is no dropped
-            # calibration-evaluation covariance term to warn about.
             if (
                 coupled
                 and self.reward_calibrator is not None
                 and not self._all_policies_have_complete_oracle_coverage()
             ):
-                logger.warning(
-                    "inference_method='cluster_robust' was explicitly requested "
-                    f"but the calibration and evaluation frames share {overlap} "
-                    "prompt cluster(s). Cluster-robust SEs treat the frames as "
-                    "independent and drop the calibration-evaluation covariance "
-                    "term; use inference_method='bootstrap' (or 'auto') to "
-                    "capture it."
+                logger.info(
+                    "The analytic path is using the paper-validated additive "
+                    "cluster-robust + oracle-jackknife decomposition "
+                    f"with {overlap} calibration/evaluation prompt cluster(s) "
+                    "in common. Request inference_method='bootstrap' (or "
+                    "'auto') when joint refit resampling is desired."
                 )
-            return False, "cluster_robust explicitly requested"
+            reason = (
+                "cluster_robust explicitly requested"
+                if self._inference_method_explicit
+                else "default cluster_robust"
+            )
+            return False, reason
 
         # Auto mode: check conditions
         if self.inference_method == "auto":
@@ -890,7 +900,16 @@ class CalibratedDirectEstimator:
                 f"(n={n}, method={se_method})"
             )
 
+        coupled, coupling_overlap = self._calibration_overlaps_evaluation()
         extra_metadata: Dict[str, Any] = {
+            "inference": {
+                "method": "cluster_robust",
+                "requested_method": self.inference_method,
+                "defaulted": not self._inference_method_explicit,
+                "selection_reason": bootstrap_reason,
+                "coupled": coupled,
+                "coupling_overlap": coupling_overlap,
+            },
             "se_components": {
                 "includes_oracle_uncertainty": False,  # Will be set to True by _apply_oua_jackknife()
                 "includes_mc_variance": False,
@@ -917,11 +936,7 @@ class CalibratedDirectEstimator:
         # Record a bootstrap-to-cluster-robust downgrade so the SE basis
         # is visible in results, not just in a log line
         if bootstrap_fallback is not None:
-            extra_metadata["inference"] = {
-                "method": "cluster_robust",
-                "requested_method": self.inference_method,
-                "fallback_reason": bootstrap_fallback,
-            }
+            extra_metadata["inference"]["fallback_reason"] = bootstrap_fallback
 
         result = self._assemble_result(
             estimates=estimates,
@@ -1573,10 +1588,14 @@ class CalibratedDirectEstimator:
         """Compute estimates using cluster bootstrap with calibrator refit.
 
         This method is used when bootstrap inference is preferred over
-        analytic cluster-robust SEs. It captures:
+        analytic cluster-robust SEs. It jointly resamples:
         1. Prompt sampling variance
         2. Calibrator uncertainty
-        3. Calibration/evaluation covariance (the key term missing from oracle-jackknife-only inference)
+        3. Calibration/evaluation dependence
+
+        The analytic default instead uses the additive cluster-robust +
+        oracle-jackknife decomposition validated on the paper's shared-prompt
+        Arena grid and records any frame overlap in result metadata.
 
         Args:
             bootstrap_reason: Reason why bootstrap was selected (for metadata)

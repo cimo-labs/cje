@@ -203,6 +203,9 @@ def _direct_oracle_mean_ci(
             if resolved == "bootstrap"
             else "auto: direct oracle mean with sufficient clusters"
         )
+    elif inference == "cluster_robust":
+        resolved = inference
+        reason = "cluster_robust requested/default"
     else:
         resolved = inference
         reason = "explicitly requested"
@@ -319,7 +322,7 @@ def calibrated_mean_ci(
     covariates: Optional[Any] = None,
     alpha: float = 0.05,
     n_folds: int = 5,
-    inference: str = "auto",
+    inference: str = "cluster_robust",
     n_bootstrap: int = 2000,
     seed: int = 42,
 ) -> CalibratedMeanResult:
@@ -333,12 +336,12 @@ def calibrated_mean_ci(
     Inference matches
     `CalibratedDirectEstimator`:
 
+    - "cluster_robust": CRV1 cluster-robust SE of the augmented
+      pseudo-outcome mean, combined with the delete-one-oracle-fold jackknife
+      variance (t-based CI; default).
     - "bootstrap": cluster bootstrap with per-replicate calibrator refit
       (AIPW-style augmented estimate; percentile CI). Captures calibrator
       uncertainty and the calibration/evaluation covariance.
-    - "cluster_robust": CRV1 cluster-robust SE of the augmented
-      pseudo-outcome mean, combined with the delete-one-oracle-fold jackknife
-      variance (t-based CI).
     - "auto": the estimator's rule — bootstrap when there are < 20 clusters or
       when calibration is coupled with evaluation. Partial oracle coverage here
       is coupled and resolves to bootstrap; complete coverage needs no
@@ -358,7 +361,7 @@ def calibrated_mean_ci(
         n_folds: CV folds for the full-data calibrator, bootstrap refits, and
             oracle jackknife. Fold count is reduced when cluster support is
             insufficient.
-        inference: "auto" | "bootstrap" | "cluster_robust".
+        inference: "cluster_robust" (default) | "bootstrap" | "auto".
         n_bootstrap: Bootstrap replicates (bootstrap path only).
         seed: Seed for fold assignment and the bootstrap.
 
@@ -440,6 +443,9 @@ def calibrated_mean_ci(
                 "inside the evaluation sample)"
             )
         resolved = "bootstrap"
+    elif inference == "cluster_robust":
+        resolved = inference
+        reason = "cluster_robust requested/default"
     else:
         resolved = inference
         reason = "explicitly requested"
