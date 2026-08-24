@@ -1,6 +1,19 @@
 # Changelog
 
-## [Unreleased]
+## [0.7.0] - 2026-08-24
+
+Default-inference release. Calibrated partial-label Direct evaluation now uses
+prompt-cluster-robust sampling variance plus the delete-one-oracle-fold jackknife
+by default, combines those variance components with a Welch–Satterthwaite effective
+degrees of freedom, and reports the estimator's actual finite-sample interval on
+every public output surface.
+
+**Upgrade note:** calls that did not select an inference method may now return
+analytic t intervals instead of refit-bootstrap percentile intervals. Set
+`inference_method="bootstrap"` (or `inference="bootstrap"` in the array API) to
+request bootstrap explicitly. Existing calls that pass `n_bootstrap` or
+`bootstrap_seed` without a method continue to select bootstrap with a migration
+warning.
 
 ### Changed
 
