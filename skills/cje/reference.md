@@ -43,7 +43,9 @@ results = analyze_dataset(
     oracle_field="oracle_label",
     calibration_covariates=None,  # e.g. ["domain"] — fields from record metadata
     include_response_length=False,  # auto word-count covariate (needs "response")
-    estimator_config=None,        # default jackknife; bootstrap explicit or via auto
+    estimator_config=None,        # default jackknife; bootstrap explicit or via auto.
+                                  # n_bootstrap/bootstrap_seed alone select bootstrap (warns) —
+                                  # set inference_method explicitly to avoid surprises
     verbose=False,
     fresh_judge_scale=None,       # declared (min, max) for evaluation judge scores
     fresh_oracle_scale=None,      # declared scale for oracle labels in the fresh draws
@@ -111,7 +113,10 @@ fallback), never by this parameter — its only observable effect is which name 
 - `.gates` → `Dict[str, GateResult]` (typed view of `metadata["reliability_gates"]`); `.target_policies`
 - `.metadata` keys: `target_policies`, `reliability_gates` (`{policy: {"flagged": bool, ...}}`),
   `boundary_cards`, `normalization`, `oracle_sources`, `bootstrap_ci`, `pairwise_inference`
-  (cluster-robust runs: per-pair difference SE/df with pairing basis)
+  (cluster-robust runs: per-pair difference SE/df with pairing basis), `inference` (SE basis,
+  selection reason, coupling), `degrees_of_freedom` (per-policy df + `t_critical`;
+  Welch–Satterthwaite effective df when the oracle jackknife applies — cite these if asked how
+  a CI was computed)
 - `.diagnostics` (DirectDiagnostics): `overall_status` (GOOD/WARNING/CRITICAL), `status_per_policy`,
   `boundary_cards`, `refuse_level_policies`, `calibration_rmse`, `n_oracle_labels`, `.summary()`
 
@@ -128,7 +133,7 @@ result = calibrated_mean_ci(
     alpha=0.05,
     n_folds=5,             # 4-9 labels -> folds auto-reduce with a warning (noisier); <4 raises
     inference="cluster_robust",  # default jackknife path | "bootstrap" | "auto"
-    n_bootstrap=2000,
+    n_bootstrap=2000,      # bootstrap path; supplying it without inference= selects bootstrap (warns)
     seed=42,
 )
 # result: estimate, se, ci, n, n_oracle, method, calibrator, diagnostics, .summary()
