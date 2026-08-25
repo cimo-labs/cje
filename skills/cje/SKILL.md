@@ -58,36 +58,38 @@ lines to the user's data; keep the call shape):
 ```python
 from cje import analyze_dataset
 
-# One policy carries the calibration slice. This is enough to fit a shared
-# judge-to-oracle map, but residual transport to fable-5 must be audited with
-# separate held-out oracle probes before making transport-dependent claims.
-labeled = [(0.62, 0.55), (0.68, 0.60), (0.72, 0.70), (0.76, 0.74), (0.79, 0.75),
-           (0.83, 0.80), (0.85, 0.90), (0.88, 0.92), (0.91, 0.88), (0.95, 0.97)]
-unlabeled = [0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94]
-judge_only = [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94,
-              0.72, 0.76, 0.79, 0.80, 0.84, 0.85, 0.88, 0.89, 0.91, 0.95]
+# Two policies answered the same 20 prompts; one LLM judge scored every
+# response. Ground-truth labels (human ratings, a downstream KPI, ...) were
+# collected for 10 of gpt-5.6's responses — None means "not labeled".
+judge_gpt = [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
+             0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94]
+oracle_gpt = [0.55, 0.60, 0.70, 0.74, 0.75, 0.80, 0.90, 0.92, 0.88, 0.97,
+              None, None, None, None, None, None, None, None, None, None]
+judge_fable = [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94,
+               0.72, 0.76, 0.79, 0.80, 0.84, 0.85, 0.88, 0.89, 0.91, 0.95]
 
+# gpt-5.6's labeled slice calibrates the judge for BOTH policies. Reusing
+# that map for fable-5 is an assumption; the output flags it as
+# "residual transport NOT_CHECKED" until a held-out probe audit grades it.
 draws = {
     "gpt-5.6": [
         {"prompt_id": f"q{i:02d}", "judge_score": s, "oracle_label": y}
-        for i, (s, y) in enumerate(labeled + [(u, None) for u in unlabeled])
+        for i, (s, y) in enumerate(zip(judge_gpt, oracle_gpt))
     ],
     "fable-5": [
         {"prompt_id": f"q{i:02d}", "judge_score": s}
-        for i, s in enumerate(judge_only)
+        for i, s in enumerate(judge_fable)
     ],
 }
 results = analyze_dataset(fresh_draws_data=draws)
-
-for policy, estimate, (lo, hi) in zip(
-    results.metadata["target_policies"], results.estimates, results.ci()
-):
-    print(f"{policy:15s} {estimate:.3f}  95% CI [{lo:.3f}, {hi:.3f}]")
+print(results.summary())
 ```
 
-The call returns a point estimate for each policy. A policy with no calibration labels of its
-own still depends on the shared-calibration assumption; grade residual transport separately
-with held-out oracle probes and a predeclared practical margin.
+`summary()` reports each policy's calibrated estimate with a 95% CI, the best policy, and
+its limitations. A policy with no calibration labels of its own still depends on the
+shared-calibration assumption; grade residual transport separately with held-out oracle
+probes and a predeclared practical margin. For programmatic access use `results.estimates`,
+`results.ci()`, and `results.metadata["target_policies"]`.
 
 ## Read the gates before reporting
 
