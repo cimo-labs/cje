@@ -70,11 +70,12 @@ Every policy gets a calibrated estimate and a confidence interval — including 
 
 ## Use CJE from your AI agent
 
-You don't need to learn the API to use CJE well. [`skills/cje/`](https://github.com/cimo-labs/cje/tree/main/skills/cje) is an [Agent Skill](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview) that teaches Claude Code and similar agents to run CJE correctly — reshape your eval data, drive the labeling loop, calibrate, compare, and respect the refusal gates — instead of averaging raw judge scores.
+You don't have to learn the API yourself. [`skills/cje/`](https://github.com/cimo-labs/cje/tree/main/skills/cje) teaches a coding agent the full workflow — reshape your eval data, drive the labeling loop, calibrate, compare, respect the refusal gates. It's plain Markdown: any agent can use it, and agents with [skill support](https://github.com/cimo-labs/cje/tree/main/skills/cje#install) load it natively. Or just paste:
 
-- **Claude Code (all projects):** `mkdir -p ~/.claude/skills/cje && curl -fsSL https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/SKILL.md -o ~/.claude/skills/cje/SKILL.md && curl -fsSL https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/reference.md -o ~/.claude/skills/cje/reference.md`
-- **Project-level:** `cp -r skills/cje .claude/skills/` from a checkout of this repo.
-- **Any other agent:** [`SKILL.md`](https://github.com/cimo-labs/cje/blob/main/skills/cje/SKILL.md) is plain Markdown (`reference.md` loads on demand). A prompt like *"Read https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/SKILL.md, then use CJE to compare the policies in my eval data"* is enough.
+```text
+Read https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/SKILL.md,
+then use CJE to compare the policies in my eval data.
+```
 
 ## Is CJE the right tool?
 
@@ -173,7 +174,7 @@ When partial oracle coverage requires calibration, `result.calibrator` predicts 
 | Resource | Description |
 |----------|-------------|
 | **[Interactive Tutorial](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb)** | Walk through a complete example in Colab — no setup required |
-| **[Agent Skill](https://github.com/cimo-labs/cje/tree/main/skills/cje)** | Teach Claude Code or any coding agent to run CJE correctly |
+| **[Agent Skill](https://github.com/cimo-labs/cje/tree/main/skills/cje)** | Teach any coding agent to run CJE correctly |
 | **[CJE in 3 Minutes](https://youtu.be/VbSYrby8iaQ)** | Video: why raw judge scores mislead and how CJE fixes it |
 | **[Technical Walkthrough](https://youtu.be/r0dinGsPuqY)** | Video: calibration, evaluation, and transport auditing pipeline |
 | **[Operational Playbook](https://github.com/cimo-labs/cje/blob/main/PLAYBOOK.md)** | End-to-end runbook: audits, drift correction, label budgeting |
