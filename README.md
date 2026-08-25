@@ -65,7 +65,7 @@ Limitations: residual transport NOT_CHECKED
 Status: warning
 ```
 
-Every policy gets a calibrated estimate and a confidence interval — including `fable-5`, which has no labels of its own. The `Limitations` line is the guardrails talking: CJE hands you the estimate but never lets an unchecked assumption pass silently ([how to clear it](#guardrails-claims-cje-refuses-to-make)). Supported inference paths account for evaluation sampling and finite-label calibration uncertainty; interpretation still depends on the declared sampling design and shared-calibration assumptions.
+Every policy gets a calibrated estimate and a confidence interval — including `fable-5`, which has no labels of its own. The `Limitations` line is the guardrails talking: CJE hands you the estimate but never lets an unchecked assumption pass silently ([how to clear it](#guardrails-claims-cje-refuses-to-make)). The intervals account for evaluation sampling and the finite label budget; interpreting them still depends on the sampling design and shared-calibration assumptions.
 
 → [Runnable Colab with real data](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb) · [Full docs](https://cimolabs.com/cje)
 
@@ -83,8 +83,8 @@ then use CJE to compare the policies in my eval data.
 | Your situation | Use |
 |---|---|
 | Rank/compare policies using an LLM judge, with some ground-truth labels | **CJE** |
-| One dataset, labels sampled from it, want a CI on its mean | PPI works; CJE's `calibrated_mean_ci` provides the same core primitive plus scalar-support metadata and an optional held-out residual audit |
-| Evaluate **many** policies without labeling under each | **CJE**, provided the shared calibration and sampling assumptions are justified; use held-out probes and an explicit bias margin to grade residual transport |
+| One dataset, labels sampled from it, want a CI on its mean | PPI works; CJE's `calibrated_mean_ci` is the same primitive with extra diagnostics built in |
+| Evaluate **many** policies without labeling under each | **CJE** — labels pool across policies; audit that reuse with held-out probes before relying on it |
 | Predict how a *specific response* will score | Not CJE — per-item prediction (conformal methods) |
 | Off-policy estimates from logs only (importance weighting / doubly robust) | `pip install "cje-eval==0.3.*"` — the frozen OPE line; this library is Direct-mode only (see [Why Direct mode only?](#why-direct-mode-only-no-ipsdr)) |
 
@@ -179,7 +179,7 @@ When partial oracle coverage requires calibration, `result.calibrator` predicts 
 | **[CJE in 3 Minutes](https://youtu.be/VbSYrby8iaQ)** | Video: why raw judge scores mislead and how CJE fixes it |
 | **[Technical Walkthrough](https://youtu.be/r0dinGsPuqY)** | Video: calibration, evaluation, and transport auditing pipeline |
 | **[Operational Playbook](https://github.com/cimo-labs/cje/blob/main/PLAYBOOK.md)** | End-to-end runbook: audits, drift correction, label budgeting |
-| **[MIGRATING-0.6.md](https://github.com/cimo-labs/cje/blob/main/MIGRATING-0.6.md)** | Upgrading from an earlier release? See MIGRATING-0.6.md |
+| **[Migration Guide](https://github.com/cimo-labs/cje/blob/main/MIGRATING-0.6.md)** | Upgrading from 0.5.x or earlier: what changed and how to adapt |
 | **[Planning Notebook](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_planning.ipynb)** | Optimize your evaluation budget with pilot data |
 | **[Full Docs](https://cimolabs.com/cje)** | Installation, assumptions, API reference, research notes |
 

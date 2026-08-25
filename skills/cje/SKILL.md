@@ -168,10 +168,10 @@ rather than silently treated as a pass.
 
 Drive it yourself: select 10–25 items for the user to label, **spread across the judge-score
 range** (score-range coverage is what prevents REFUSE-LEVEL later — not the top-scored items,
-not a blind random draw). Ground truth = human judgment, expert review, or a downstream KPI —
-not another LLM, and never a model from the judge's own family (shared biases contaminate the
-calibration target; if the user insists on a model oracle, it redefines the estimand as that
-model's opinion and must be reported as such). Labels may all sit in one policy. Then run the canonical flow. For "how many labels do I need?"
+not a blind random draw). Ground truth = human judgment, expert review, or a downstream KPI.
+A trusted stronger model can also serve (ideally from a different family than the judge) — the
+estimate then targets that model's judgment, so say so when reporting. Labels may all sit in
+one policy. Then run the canonical flow. For "how many labels do I need?"
 use the planning API in `reference.md`.
 
 ## Refusal discipline — hard rules
