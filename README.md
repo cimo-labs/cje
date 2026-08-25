@@ -23,32 +23,33 @@ pip install cje-eval
 
 **Rather delegate?** Point your coding agent at the [bundled agent skill](#use-cje-from-your-ai-agent) and it handles everything below — data reshaping, calibration, diagnostics.
 
-You need three things: responses from each policy on a shared prompt set, an LLM judge score for every response, and ground-truth labels (`oracle_label`) on a random slice you can afford — human ratings, expert review, or a downstream KPI. Each record is one judged response: `{"prompt_id", "judge_score", "oracle_label" (optional)}`. Any bounded judge and oracle scales work (0–1, 0–100, Likert).
+You need three things: responses from each policy on a shared prompt set, a score for every response from **one fixed LLM judge**, and ground-truth labels (`oracle_label`) on a random slice you can afford — human ratings, expert review, or a downstream KPI. Each record is one judged response: `{"prompt_id", "judge_score", "oracle_label" (optional)}`. Any bounded judge and oracle scales work (0–1, 0–100, Likert).
 
 ```python
 from cje import analyze_dataset
 
-# Two policies answered the same 20 prompts; one LLM judge scored every
-# response. Ground-truth labels (human ratings, a downstream KPI, ...) were
-# collected for 10 of gpt-5.6's responses — None means "not labeled".
-judge_gpt = [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
-             0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94]
-oracle_gpt = [0.55, 0.60, 0.70, 0.74, 0.75, 0.80, 0.90, 0.92, 0.88, 0.97,
+# Comparing two policies: gpt-5.6 vs fable-5. Both answered the same 20
+# prompts, and ONE separate fixed judge scored all 40 responses. Ground
+# truth ("oracle_label") comes from human raters — collected for 10 of
+# gpt-5.6's responses; None means "not labeled".
+gpt_scores = [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
+              0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94]
+gpt_labels = [0.55, 0.60, 0.70, 0.74, 0.75, 0.80, 0.90, 0.92, 0.88, 0.97,
               None, None, None, None, None, None, None, None, None, None]
-judge_fable = [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94,
-               0.72, 0.76, 0.79, 0.80, 0.84, 0.85, 0.88, 0.89, 0.91, 0.95]
+fable_scores = [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94,
+                0.72, 0.76, 0.79, 0.80, 0.84, 0.85, 0.88, 0.89, 0.91, 0.95]
 
-# gpt-5.6's labeled slice calibrates the judge for BOTH policies. Reusing
-# that map for fable-5 is an assumption; the output flags it as
+# The labeled slice calibrates the judge for BOTH policies. Reusing that
+# map for fable-5 is an assumption; the output flags it as
 # "residual transport NOT_CHECKED" until a held-out probe audit grades it.
 draws = {
     "gpt-5.6": [
         {"prompt_id": f"q{i:02d}", "judge_score": s, "oracle_label": y}
-        for i, (s, y) in enumerate(zip(judge_gpt, oracle_gpt))
+        for i, (s, y) in enumerate(zip(gpt_scores, gpt_labels))
     ],
     "fable-5": [
         {"prompt_id": f"q{i:02d}", "judge_score": s}
-        for i, s in enumerate(judge_fable)
+        for i, s in enumerate(fable_scores)
     ],
 }
 results = analyze_dataset(fresh_draws_data=draws)
