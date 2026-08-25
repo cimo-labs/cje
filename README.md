@@ -23,14 +23,14 @@ pip install cje-eval
 
 **Rather delegate?** Point your coding agent at the [bundled agent skill](#use-cje-from-your-ai-agent) and it handles everything below — data reshaping, calibration, diagnostics.
 
-You need three things: responses from each policy on a shared prompt set, a score for every response from **one fixed LLM judge**, and ground-truth labels (`oracle_label`) on a random slice you can afford — human ratings, expert review, or a downstream KPI. Each record is one judged response: `{"prompt_id", "judge_score", "oracle_label" (optional)}`. Any bounded judge and oracle scales work (0–1, 0–100, Likert).
+You need three things: responses from each policy on a shared prompt set, a score for every response from **one fixed LLM judge**, and ground-truth labels (`oracle_label`) on a randomly sampled slice you can afford — human ratings, expert review, or a downstream KPI (stratify the sample by judge score to cover the range). Each record is one judged response: `{"prompt_id", "judge_score", "oracle_label" (optional)}` — CJE calls these *fresh draws*: the responses you sampled from each policy for this eval, as opposed to logged production traffic. Any bounded judge and oracle scales work (0–1, 0–100, Likert), and they don't need to match each other.
 
 ```python
 from cje import analyze_dataset
 
 # Two policies, gpt-5.6 vs fable-5, each answered the same 20 prompts.
-# One fixed judge scored all 40 responses; human raters labeled 10 of
-# gpt-5.6's responses (None = not labeled).
+# A separate fixed judge model scored all 40 responses; human raters
+# labeled a random half of gpt-5.6's (None = not labeled).
 judge_scores = {
     "gpt-5.6": [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
                 0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94],
@@ -84,7 +84,7 @@ then use CJE to compare the policies in my eval data.
 | Your situation | Use |
 |---|---|
 | Rank/compare policies using an LLM judge, with some ground-truth labels | **CJE** |
-| One dataset, labels sampled from it, want a CI on its mean | PPI works; CJE's `calibrated_mean_ci` is the same primitive with extra diagnostics built in |
+| One dataset, labels sampled from it, want a CI on its mean | Either works — this is prediction-powered inference (PPI); CJE's `calibrated_mean_ci` is the same primitive with the diagnostics built in |
 | Evaluate **many** policies without labeling under each | **CJE** — labels pool across policies; audit that reuse with held-out probes before relying on it |
 | Predict how a *specific response* will score | Not CJE — per-item prediction (conformal methods) |
 | Off-policy estimates from logs only (importance weighting / doubly robust) | `pip install "cje-eval==0.3.*"` — the frozen OPE line; this library is Direct-mode only (see [Why Direct mode only?](#why-direct-mode-only-no-ipsdr)) |
@@ -128,14 +128,14 @@ The badge checks scalar support only — it does not test mean residual bias, co
 from cje import TransportAuditConfig
 
 transport = TransportAuditConfig(
-    probes_by_policy={"fable-5": held_out_probe_rows},
+    probes_by_policy={"fable-5": held_out_probe_rows},  # same record shape as draws, oracle_label filled
     delta_max_by_policy={"fable-5": 0.03},  # OUTPUT units (units of results.estimates)
 )
 results = analyze_dataset(fresh_draws_data=draws, transport=transport)
 print(results.metadata["transport_audits"]["fable-5"]["status"])
 ```
 
-`PASS` requires the simultaneous residual CI to lie wholly inside `[-delta_max, +delta_max]`; wholly outside is `FAIL`; overlap is `INCONCLUSIVE`; omitting the margin is `NOT_GRADED`. Fewer than 20 effective clusters withholds `PASS` but can still grade `FAIL` — an under-sized probe cannot defeat the hard gate. Policies without probes stay `NOT_CHECKED`. Only an observed `FAIL` hard-flags a policy; every other unresolved state remains visible as a limitation without suppressing the estimate. For an already fitted calibrator, the array primitive `transport_audit(probe_scores, probe_labels, results.calibrator, delta_max=...)` runs the same audit directly.
+`PASS` requires the simultaneous residual CI to lie wholly inside `[-delta_max, +delta_max]`; wholly outside is `FAIL`; overlap is `INCONCLUSIVE`; omitting the margin is `NOT_GRADED`. Fewer than 20 effective clusters withholds `PASS` but can still grade `FAIL` — a policy cannot escape a `FAIL` by supplying too small a probe. Policies without probes stay `NOT_CHECKED`. Only an observed `FAIL` hard-flags a policy; every other unresolved state remains visible as a limitation without suppressing the estimate. For an already fitted calibrator, the array primitive `transport_audit(probe_scores, probe_labels, results.calibrator, delta_max=...)` runs the same audit directly.
 
 **Reliability-aware winner.** `results.best_policy()` demotes a gate-flagged argmax to the best gate-passing policy (the default, `reliable_only=True`), and the demotion is loud — the flagged raw winner stays visible with its limitations (`reliable_only=False` returns the raw argmax, marked `flagged`):
 

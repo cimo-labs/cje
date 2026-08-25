@@ -60,8 +60,8 @@ lines to the user's data; keep the call shape):
 from cje import analyze_dataset
 
 # Two policies, gpt-5.6 vs fable-5, each answered the same 20 prompts.
-# One fixed judge scored all 40 responses; human raters labeled 10 of
-# gpt-5.6's responses (None = not labeled).
+# A separate fixed judge model scored all 40 responses; human raters
+# labeled a random half of gpt-5.6's (None = not labeled).
 judge_scores = {
     "gpt-5.6": [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
                 0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94],
@@ -160,17 +160,19 @@ diag = transport_audit(
 ```
 
 `PASS` means the simultaneous residual CI is wholly inside the declared margin. `FAIL` means
-it is wholly outside (graded even below the 20-effective-cluster floor — an under-sized probe
-cannot defeat the hard gate). Boundary overlap or too few effective clusters is `INCONCLUSIVE`;
+it is wholly outside (graded even below the 20-effective-cluster floor — a policy cannot
+escape a FAIL by supplying too small a probe). Boundary overlap or too few effective clusters is `INCONCLUSIVE`;
 no margin is `NOT_GRADED` and can never PASS or FAIL. These verdicts do not replace the
 separate scalar support card. A policy without a supplied probe is recorded as `NOT_CHECKED`
 rather than silently treated as a pass.
 
 ## Labeling loop — when labels are missing or short
 
-Drive it yourself: select 10–25 items for the user to label, **spread across the judge-score
-range** (score-range coverage is what prevents REFUSE-LEVEL later — not the top-scored items,
-not a blind random draw). Ground truth = human judgment, expert review, or a downstream KPI.
+Drive it yourself: select 10–25 items for the user to label — **random within judge-score
+strata**, so the slice stays a probability sample while covering the score range
+(score-range coverage is what prevents REFUSE-LEVEL later; labeling only the top-scored
+items is the classic mistake; see `label_design` in `reference.md` if strata are sampled
+unevenly). Ground truth = human judgment, expert review, or a downstream KPI.
 A trusted stronger model can also serve — the estimate then targets that model's judgment, so
 say so when reporting. Labels may all sit in one policy. Then run the canonical flow. For "how many labels do I need?"
 use the planning API in `reference.md`.
