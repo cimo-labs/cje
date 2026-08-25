@@ -28,28 +28,29 @@ You need three things: responses from each policy on a shared prompt set, a scor
 ```python
 from cje import analyze_dataset
 
-# Comparing two policies: gpt-5.6 vs fable-5. Both answered the same 20
-# prompts, and ONE separate fixed judge scored all 40 responses. Ground
-# truth ("oracle_label") comes from human raters — collected for 10 of
-# gpt-5.6's responses; None means "not labeled".
-gpt_scores = [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
-              0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94]
-gpt_labels = [0.55, 0.60, 0.70, 0.74, 0.75, 0.80, 0.90, 0.92, 0.88, 0.97,
-              None, None, None, None, None, None, None, None, None, None]
-fable_scores = [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94,
-                0.72, 0.76, 0.79, 0.80, 0.84, 0.85, 0.88, 0.89, 0.91, 0.95]
+# Two policies, gpt-5.6 vs fable-5, each answered the same 20 prompts.
+# One fixed judge scored all 40 responses; human raters labeled 10 of
+# gpt-5.6's responses (None = not labeled).
+judge_scores = {
+    "gpt-5.6": [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
+                0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94],
+    "fable-5": [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94,
+                0.72, 0.76, 0.79, 0.80, 0.84, 0.85, 0.88, 0.89, 0.91, 0.95],
+}
+human_labels = [0.55, 0.60, 0.70, 0.74, 0.75, 0.80, 0.90, 0.92, 0.88, 0.97,
+                None, None, None, None, None, None, None, None, None, None]
 
-# The labeled slice calibrates the judge for BOTH policies. Reusing that
-# map for fable-5 is an assumption; the output flags it as
+# gpt-5.6's labeled slice calibrates the judge for BOTH policies. Reusing
+# that map for fable-5 is an assumption; the output flags it as
 # "residual transport NOT_CHECKED" until a held-out probe audit grades it.
 draws = {
     "gpt-5.6": [
         {"prompt_id": f"q{i:02d}", "judge_score": s, "oracle_label": y}
-        for i, (s, y) in enumerate(zip(gpt_scores, gpt_labels))
+        for i, (s, y) in enumerate(zip(judge_scores["gpt-5.6"], human_labels))
     ],
     "fable-5": [
         {"prompt_id": f"q{i:02d}", "judge_score": s}
-        for i, s in enumerate(fable_scores)
+        for i, s in enumerate(judge_scores["fable-5"])
     ],
 }
 results = analyze_dataset(fresh_draws_data=draws)
