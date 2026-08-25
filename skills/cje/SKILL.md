@@ -58,27 +58,28 @@ lines to the user's data; keep the call shape):
 ```python
 from cje import analyze_dataset
 
-# Two policies answered the same 20 prompts; one LLM judge scored every
-# response. Ground-truth labels (human ratings, a downstream KPI, ...) were
-# collected for 10 of gpt-5.6's responses — None means "not labeled".
-judge_gpt = [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
-             0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94]
-oracle_gpt = [0.55, 0.60, 0.70, 0.74, 0.75, 0.80, 0.90, 0.92, 0.88, 0.97,
+# Comparing two policies: gpt-5.6 vs fable-5. Both answered the same 20
+# prompts, and ONE separate fixed judge scored all 40 responses. Ground
+# truth ("oracle_label") comes from human raters — collected for 10 of
+# gpt-5.6's responses; None means "not labeled".
+gpt_scores = [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
+              0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94]
+gpt_labels = [0.55, 0.60, 0.70, 0.74, 0.75, 0.80, 0.90, 0.92, 0.88, 0.97,
               None, None, None, None, None, None, None, None, None, None]
-judge_fable = [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94,
-               0.72, 0.76, 0.79, 0.80, 0.84, 0.85, 0.88, 0.89, 0.91, 0.95]
+fable_scores = [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94,
+                0.72, 0.76, 0.79, 0.80, 0.84, 0.85, 0.88, 0.89, 0.91, 0.95]
 
-# gpt-5.6's labeled slice calibrates the judge for BOTH policies. Reusing
-# that map for fable-5 is an assumption; the output flags it as
+# The labeled slice calibrates the judge for BOTH policies. Reusing that
+# map for fable-5 is an assumption; the output flags it as
 # "residual transport NOT_CHECKED" until a held-out probe audit grades it.
 draws = {
     "gpt-5.6": [
         {"prompt_id": f"q{i:02d}", "judge_score": s, "oracle_label": y}
-        for i, (s, y) in enumerate(zip(judge_gpt, oracle_gpt))
+        for i, (s, y) in enumerate(zip(gpt_scores, gpt_labels))
     ],
     "fable-5": [
         {"prompt_id": f"q{i:02d}", "judge_score": s}
-        for i, s in enumerate(judge_fable)
+        for i, s in enumerate(fable_scores)
     ],
 }
 results = analyze_dataset(fresh_draws_data=draws)
@@ -168,7 +169,9 @@ rather than silently treated as a pass.
 Drive it yourself: select 10–25 items for the user to label, **spread across the judge-score
 range** (score-range coverage is what prevents REFUSE-LEVEL later — not the top-scored items,
 not a blind random draw). Ground truth = human judgment, expert review, or a downstream KPI.
-Labels may all sit in one policy. Then run the canonical flow. For "how many labels do I need?"
+A trusted stronger model can also serve (ideally from a different family than the judge) — the
+estimate then targets that model's judgment, so say so when reporting. Labels may all sit in
+one policy. Then run the canonical flow. For "how many labels do I need?"
 use the planning API in `reference.md`.
 
 ## Refusal discipline — hard rules

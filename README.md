@@ -23,32 +23,33 @@ pip install cje-eval
 
 **Rather delegate?** Point your coding agent at the [bundled agent skill](#use-cje-from-your-ai-agent) and it handles everything below — data reshaping, calibration, diagnostics.
 
-You need three things: responses from each policy on a shared prompt set, an LLM judge score for every response, and ground-truth labels (`oracle_label`) on a random slice you can afford — human ratings, expert review, or a downstream KPI. Each record is one judged response: `{"prompt_id", "judge_score", "oracle_label" (optional)}`. Any bounded judge and oracle scales work (0–1, 0–100, Likert).
+You need three things: responses from each policy on a shared prompt set, a score for every response from **one fixed LLM judge**, and ground-truth labels (`oracle_label`) on a random slice you can afford — human ratings, expert review, or a downstream KPI. Each record is one judged response: `{"prompt_id", "judge_score", "oracle_label" (optional)}`. Any bounded judge and oracle scales work (0–1, 0–100, Likert).
 
 ```python
 from cje import analyze_dataset
 
-# Two policies answered the same 20 prompts; one LLM judge scored every
-# response. Ground-truth labels (human ratings, a downstream KPI, ...) were
-# collected for 10 of gpt-5.6's responses — None means "not labeled".
-judge_gpt = [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
-             0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94]
-oracle_gpt = [0.55, 0.60, 0.70, 0.74, 0.75, 0.80, 0.90, 0.92, 0.88, 0.97,
+# Comparing two policies: gpt-5.6 vs fable-5. Both answered the same 20
+# prompts, and ONE separate fixed judge scored all 40 responses. Ground
+# truth ("oracle_label") comes from human raters — collected for 10 of
+# gpt-5.6's responses; None means "not labeled".
+gpt_scores = [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
+              0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94]
+gpt_labels = [0.55, 0.60, 0.70, 0.74, 0.75, 0.80, 0.90, 0.92, 0.88, 0.97,
               None, None, None, None, None, None, None, None, None, None]
-judge_fable = [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94,
-               0.72, 0.76, 0.79, 0.80, 0.84, 0.85, 0.88, 0.89, 0.91, 0.95]
+fable_scores = [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94,
+                0.72, 0.76, 0.79, 0.80, 0.84, 0.85, 0.88, 0.89, 0.91, 0.95]
 
-# gpt-5.6's labeled slice calibrates the judge for BOTH policies. Reusing
-# that map for fable-5 is an assumption; the output flags it as
+# The labeled slice calibrates the judge for BOTH policies. Reusing that
+# map for fable-5 is an assumption; the output flags it as
 # "residual transport NOT_CHECKED" until a held-out probe audit grades it.
 draws = {
     "gpt-5.6": [
         {"prompt_id": f"q{i:02d}", "judge_score": s, "oracle_label": y}
-        for i, (s, y) in enumerate(zip(judge_gpt, oracle_gpt))
+        for i, (s, y) in enumerate(zip(gpt_scores, gpt_labels))
     ],
     "fable-5": [
         {"prompt_id": f"q{i:02d}", "judge_score": s}
-        for i, s in enumerate(judge_fable)
+        for i, s in enumerate(fable_scores)
     ],
 }
 results = analyze_dataset(fresh_draws_data=draws)
@@ -64,7 +65,7 @@ Limitations: residual transport NOT_CHECKED
 Status: warning
 ```
 
-Every policy gets a calibrated estimate and a confidence interval — including `fable-5`, which has no labels of its own. The `Limitations` line is the guardrails talking: CJE hands you the estimate but never lets an unchecked assumption pass silently ([how to clear it](#guardrails-claims-cje-refuses-to-make)). Supported inference paths account for evaluation sampling and finite-label calibration uncertainty; interpretation still depends on the declared sampling design and shared-calibration assumptions.
+Every policy gets a calibrated estimate and a confidence interval — including `fable-5`, which has no labels of its own. The `Limitations` line is the guardrails talking: CJE hands you the estimate but never lets an unchecked assumption pass silently ([how to clear it](#guardrails-claims-cje-refuses-to-make)). The intervals account for evaluation sampling and the finite label budget; interpreting them still depends on the sampling design and shared-calibration assumptions.
 
 → [Runnable Colab with real data](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb) · [Full docs](https://cimolabs.com/cje)
 
@@ -82,8 +83,8 @@ then use CJE to compare the policies in my eval data.
 | Your situation | Use |
 |---|---|
 | Rank/compare policies using an LLM judge, with some ground-truth labels | **CJE** |
-| One dataset, labels sampled from it, want a CI on its mean | PPI works; CJE's `calibrated_mean_ci` provides the same core primitive plus scalar-support metadata and an optional held-out residual audit |
-| Evaluate **many** policies without labeling under each | **CJE**, provided the shared calibration and sampling assumptions are justified; use held-out probes and an explicit bias margin to grade residual transport |
+| One dataset, labels sampled from it, want a CI on its mean | PPI works; CJE's `calibrated_mean_ci` is the same primitive with extra diagnostics built in |
+| Evaluate **many** policies without labeling under each | **CJE** — labels pool across policies; audit that reuse with held-out probes before relying on it |
 | Predict how a *specific response* will score | Not CJE — per-item prediction (conformal methods) |
 | Off-policy estimates from logs only (importance weighting / doubly robust) | `pip install "cje-eval==0.3.*"` — the frozen OPE line; this library is Direct-mode only (see [Why Direct mode only?](#why-direct-mode-only-no-ipsdr)) |
 
@@ -178,7 +179,7 @@ When partial oracle coverage requires calibration, `result.calibrator` predicts 
 | **[CJE in 3 Minutes](https://youtu.be/VbSYrby8iaQ)** | Video: why raw judge scores mislead and how CJE fixes it |
 | **[Technical Walkthrough](https://youtu.be/r0dinGsPuqY)** | Video: calibration, evaluation, and transport auditing pipeline |
 | **[Operational Playbook](https://github.com/cimo-labs/cje/blob/main/PLAYBOOK.md)** | End-to-end runbook: audits, drift correction, label budgeting |
-| **[MIGRATING-0.6.md](https://github.com/cimo-labs/cje/blob/main/MIGRATING-0.6.md)** | Upgrading from an earlier release? See MIGRATING-0.6.md |
+| **[Migration Guide](https://github.com/cimo-labs/cje/blob/main/MIGRATING-0.6.md)** | Upgrading from 0.5.x or earlier: what changed and how to adapt |
 | **[Planning Notebook](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_planning.ipynb)** | Optimize your evaluation budget with pilot data |
 | **[Full Docs](https://cimolabs.com/cje)** | Installation, assumptions, API reference, research notes |
 
