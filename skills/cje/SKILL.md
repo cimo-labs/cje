@@ -36,9 +36,10 @@ and refuses claims the data can't support.
 Produce them first: pick ONE fixed judge model and a short rubric, and score every policy's
 outputs identically — same rubric, same scale, and the judge must not see which policy wrote the
 response. Any bounded scale works (a 1–5 rubric is typical); record one `judge_score` per
-response. If the judge shares a model family with a candidate (including yourself), expect
-self-preference bias — calibration corrects it only where oracle labels exist, so the labeled
-slice is not optional in this mode. Then continue below.
+response. If the judge shares a model family with some candidates but not others (including
+yourself), expect asymmetric self-preference bias — it favors those candidates in the ranking,
+and calibration corrects it only where oracle labels exist. Make sure labels or held-out
+probes cover the advantaged policies. Then continue below.
 
 ## Reshape the user's data
 
@@ -169,9 +170,8 @@ rather than silently treated as a pass.
 Drive it yourself: select 10–25 items for the user to label, **spread across the judge-score
 range** (score-range coverage is what prevents REFUSE-LEVEL later — not the top-scored items,
 not a blind random draw). Ground truth = human judgment, expert review, or a downstream KPI.
-A trusted stronger model can also serve (ideally from a different family than the judge) — the
-estimate then targets that model's judgment, so say so when reporting. Labels may all sit in
-one policy. Then run the canonical flow. For "how many labels do I need?"
+A trusted stronger model can also serve — the estimate then targets that model's judgment, so
+say so when reporting. Labels may all sit in one policy. Then run the canonical flow. For "how many labels do I need?"
 use the planning API in `reference.md`.
 
 ## Refusal discipline — hard rules
