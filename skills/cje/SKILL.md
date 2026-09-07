@@ -1,6 +1,6 @@
 ---
 name: cje
-description: Runs CJE (Causal Judge Evaluation, pip install cje-eval) to compare LLM models, prompts, or policies from LLM-judge scores, producing calibrated estimates with calibration-aware confidence intervals and explicit diagnostics. Use when the user wants to compare models/prompts/policies using judge scores or eval-harness output, put a confidence interval on an LLM eval metric, calibrate an LLM judge against ground-truth (oracle/human) labels, check whether an existing judge calibration still holds on new data, or decide how many human labels an eval needs. Raw judge-score averages can be miscalibrated; use the calibrated analysis and state its sampling assumptions.
+description: Runs CJE (Causal Judge Evaluation, pip install cje-eval) to compare LLM models, prompts, or policies from LLM-judge scores, producing calibrated estimates with calibration-aware confidence intervals and explicit diagnostics. Use when the user wants to compare models/prompts/policies using judge scores or eval-harness output, put a confidence interval on an LLM eval metric, calibrate an LLM judge against ground-truth (oracle/human) labels, check whether an existing judge calibration still holds on new data, plan an evaluation's power or label budget, or decide how many human labels an eval needs. Raw judge-score averages can be miscalibrated; use the calibrated analysis and state its sampling assumptions.
 ---
 
 # CJE — calibrated LLM-judge evaluation
@@ -15,6 +15,9 @@ and refuses claims the data can't support.
 
 ## Decide the flow
 
+- Planning a future evaluation (sample size, label budget, detectable effect, or power) →
+  **Planning flow**. Existing data and only a comparison requested? Use the analysis routes
+  below; planning is optional, not a prerequisite.
 - No judge scores at all → **Step 0** below, then continue.
 - Judge scores but <4 oracle labels total → **Labeling loop**. Do not fabricate labels; do not
   fall back to raw means (0 labels runs only as a loudly-flagged `naive_direct` fallback, and
@@ -30,6 +33,33 @@ and refuses claims the data can't support.
   **Transport audit** first.
 - Off-policy estimates from logs only (IPS/DR) → not this library; `pip install "cje-eval==0.3.*"`
   (Python ≤3.12). Predicting one response's score → not CJE (conformal methods).
+
+## Planning flow — size a future evaluation
+
+1. Establish the comparison, target population, practical effect size and its units, desired
+   power, significance level, and budget. Record judge-score and oracle-label costs explicitly;
+   distinguish the planner's allocation from additional candidate-policy, pilot, and transport-
+   probe costs.
+2. Use a probability-sampled pilot from the base policy where calibration will be learned.
+   Variance fitting typically needs roughly 200+ independent prompts and 100+ randomly sampled
+   oracle labels, with enough labeled and unlabeled data to vary both sample size and label
+   count. The 10–25-label loop below starts calibration; it is not a sufficient planning pilot.
+   With no suitable pilot, request one. Simulated variance models are optional sensitivity
+   scenarios, clearly labeled as assumption-based, not evidence from the user's evaluation.
+3. Follow `reference.md` §Planning: fit the variance model; inspect fit quality and warnings;
+   then use `plan_evaluation` for a fixed budget or `plan_for_mde` for a target effect.
+   A failed fit, `fit_ok=False`, or unresolved pilot sampling problem means the allocation is
+   unreliable: explain what pilot evidence is missing rather than presenting a firm plan.
+4. Report planned samples and labels, modeled cost, projected MDE/power, and assumptions.
+   The planner uses independent-policy variance and asymptotic-normal critical values.
+   Positive shared-prompt covariance makes the independence assumption conservative, but this
+   is not a design-specific paired-power calculation or a guaranteed finite-sample result.
+5. Save the plan before collection. Once data arrive, run the canonical analysis and read its
+   realized intervals, comparisons, and gates. Report departures from the plan; do not describe
+   projected power as achieved power.
+
+Planning does not establish representative labeling or calibration transport. Passing
+diagnostics cannot prove every assumption behind a statistical claim.
 
 ## Step 0 — no judge scores yet
 
@@ -174,8 +204,9 @@ strata**, so the slice stays a probability sample while covering the score range
 items is the classic mistake; see `label_design` in `reference.md` if strata are sampled
 unevenly). Ground truth = human judgment, expert review, or a downstream KPI.
 A trusted stronger model can also serve — the estimate then targets that model's judgment, so
-say so when reporting. Labels may all sit in one policy. Then run the canonical flow. For "how many labels do I need?"
-use the planning API in `reference.md`.
+say so when reporting. Labels may all sit in one policy. Then run the canonical flow.
+For prospective sample-size or label-budget decisions, use the separate **Planning flow**
+above; do not treat this starter batch as a sufficient variance-fitting pilot.
 
 ## Refusal discipline — hard rules
 
@@ -203,6 +234,26 @@ Give: each policy's calibrated estimate **with its 95% CI** (never a bare point 
 pairwise verdict from `compare_policies` (difference, CI, p-value); gate status per policy; and
 for any limited claim, the one-line reason plus the concrete fix (e.g. "collect labels in the
 0.6–0.95 judge-score range"). Never infer that a ranking survives from a scalar support badge.
+
+## Save an auditable run
+
+Leave an executable analysis script and an output directory, not only a chat summary. Save:
+
+- Inputs or retained locations plus checksums; prompt/cluster identifiers; sampling and label-
+  selection design (including inclusion probabilities when applicable); label source and
+  target meaning; judge/rubric versions; and any excluded records.
+- Python and `cje-eval` versions, exact configuration and random seeds, declared score scales,
+  effect/power/alpha/cost settings, and sampling/calibration assumptions marked known or
+  unresolved. Preserve the plan, fitted variance components, fit quality, and warnings.
+- `plan.to_dict()` when planning; `results.to_dict()` for the comparison; explicit requested-
+  alpha policy intervals and pairwise results; diagnostics, gates, and transport verdicts.
+  Do not discard a warning or failed gate when saving the run.
+- The rerun command, environment requirements, and a short readout of what the evidence does
+  and does not support. See `reference.md` for result-export limits.
+
+These are files the agent assembles using existing APIs, not a new CJE audit API. Keep source
+inputs available for reruns; a checksum alone is not the data. “Auditable” means the evidence
+and analysis can be inspected and reproduced, not that their assumptions are guaranteed.
 
 ## Pitfalls
 
