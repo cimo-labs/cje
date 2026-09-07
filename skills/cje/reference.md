@@ -100,7 +100,8 @@ fallback), never by this parameter — its only observable effect is which name 
   pair with `policy1`/`policy2` names; `adjust="bh"` adds Benjamini-Hochberg
   `p_adjusted`/`significant_adjusted` for many-pair audits
 - `.bootstrap_samples` → (B, P) bootstrap replicate matrix on bootstrap runs (columns follow
-  `metadata["target_policies"]`); powers the paired comparisons, omitted from JSON export
+  `metadata["target_policies"]`); powers paired comparisons, omitted from default portable
+  JSON export (`to_dict(detail="full")` retains it)
 - `.best_policy()` → PolicyVerdict (name, index, estimate, flagged, all_flagged, runner_up,
   runner_up_reasons); defaults to `reliable_only=True`: a gate-flagged argmax is demoted to the
   best gate-passing policy, loudly (the demoted argmax travels as `runner_up` with its gate
@@ -173,31 +174,88 @@ print(diag.summary())
 
 ## Planning: "how many labels do I need?"
 
-With pilot data (a `FreshDrawDataset` or the draws from a first run):
+Use this for a future evaluation, not as a requirement for analyzing existing data.
+`fit_variance_model` takes one base-policy `FreshDrawDataset`, not the raw policy-to-records
+dictionary accepted by `analyze_dataset`.
+
+Example with pilot judge scores and oracle labels already on a declared [0, 1] scale:
 
 ```python
 from cje import CostModel, fit_variance_model, plan_evaluation, plan_for_mde
+from cje.data.fresh_draws import fresh_draws_from_dict
 
-vm = fit_variance_model(fresh_draws)                     # decomposes eval vs calibration variance
-cost = CostModel(surrogate_cost=0.01, oracle_cost=2.00)  # $/judge-score, $/oracle-label
-plan = plan_evaluation(budget=500.0, variance_model=vm, cost_model=cost)  # or plan_for_mde(0.02, ...)
-print(plan.summary())   # n_samples, m_oracle, MDE at 80% power
+# pilot_rows contains real base-policy records; missing oracle labels stay missing.
+pilots, _ = fresh_draws_from_dict({"base": pilot_rows}, auto_normalize=False)
+vm = fit_variance_model(pilots["base"], n_replicates=50, seed=42)
+print(vm.summary())
+if not vm.fit_ok:
+    raise ValueError("Unreliable pilot variance fit; inspect the pilot before planning.")
+
+cost = CostModel(surrogate_cost=0.01, oracle_cost=2.00)
+budget_plan = plan_evaluation(
+    budget=500.0, variance_model=vm, cost_model=cost,
+    m_min=30, power=0.80, alpha=0.05,
+)
+effect_plan = plan_for_mde(
+    target_mde=0.02, variance_model=vm, cost_model=cost,
+    m_min=30, power=0.80, alpha=0.05,
+)
+print(budget_plan.summary())
+print(effect_plan.summary())
 ```
 
-`fit_variance_model` needs a real pilot — roughly 200+ prompts with 100+ randomly sampled oracle
-labels (smaller pilots raise a `ValueError` such as "Need at least 2 valid n values" or "Grid has
-insufficient variation", and label-starved pilots may still fit but warn "Low R² - inspect the
-sampling design" — treat those plans as unreliable) — and runs in seconds
-(the default `n_replicates=50` gives a stable fit in a few seconds; `n_replicates=150` for an extra-stable fit, ~20s).
-Always pass explicit costs: budget and costs must be in the same units (dollars in ⇒ dollars
-out), and plans floor at `m_min=30` oracle labels regardless of budget. The variance
-components come from the analytic cluster-robust + OUA instrument (within ~5% of realized SE on
-the validation grid).
+Here `0.02` means two percentage points on the declared [0, 1] oracle scale, not a relative
+2% change. If converting other scales for planning, save that mapping and express the target
+effect in the same units as the fitted variance model.
 
-No pilot data yet? `from cje import simulate_variance_model, correlation_to_r2` — the `r2`
-parameter is the **isotonic R², not the correlation**: call
-`simulate_variance_model(r2=correlation_to_r2(rho))` if what you have is a judge–oracle
-correlation ρ. Treat simulated plans as rough — prefer the pilot path once any real labels exist.
+**Pilot requirements.** Use probability-sampled prompts and randomly sampled oracle labels
+from the population where calibration will be learned. Roughly 200+ independent prompts with
+100+ oracle labels is a starting recommendation, not a sufficiency guarantee. Both labeled
+and unlabeled observations must support variation in the sample-size/label-count grid.
+Insufficient grids raise `ValueError`; poor fits can instead warn and return `fit_ok=False`.
+Inspect the sampling design and fit warnings, not only whether the call returned.
+The 10–25-label calibration starter loop is a different task.
+
+**Budget scope.** Supply explicit costs in the same units as the budget. The modeled cost is
+`n_samples * surrogate_cost + m_oracle * oracle_cost`; it does not automatically total the
+extra scores for every candidate, pilot collection, response generation, or held-out transport
+probes. State what the budget includes. The default minimum is 30 labels; an infeasible budget
+raises rather than authorizing a smaller reliable evaluation.
+
+**Interpretation.** `EvaluationPlan` reports `n_samples`, `m_oracle`, `total_cost`, `mde`,
+`power`, and `alpha`; `.to_dict()` preserves these and the planning assumptions.
+`.power_to_detect(effect_size)` reports projected normal-theory power.
+Pairwise MDE uses independent-policy variance (`sqrt(2) * se_level`) and asymptotic-normal
+critical values. Positive shared-prompt covariance makes the independence assumption
+conservative, but the planner does not fit the actual paired-difference variance.
+After collection, inspect the realized finite-sample interval and pairwise inference.
+A target power is not demonstrated power, and a good variance fit does not establish random
+label selection or calibration transport.
+
+**No suitable pilot?** `simulate_variance_model` can support explicitly hypothetical
+sensitivity scenarios. Its `r2` is isotonic R², not correlation; use
+`correlation_to_r2(rho)` when starting from a judge–oracle correlation. Do not present
+simulated assumptions as observed pilot evidence.
+
+**Worked example.** [`scripts/planning_example.py`](scripts/planning_example.py) demonstrates
+pilot → allocation → held-out comparison and saved audit artifacts using bundled data.
+Run it from a repository checkout; its fixed demonstration frame does not establish coverage
+or power on a user's population. The example's stated sampling and transport limitations
+remain part of the result.
+
+## Audit exports
+
+Save the executable script and retained inputs alongside the exported result. `plan.to_dict()`
+preserves the allocation; `results.to_dict()` uses the default portable result format.
+Also save the policy intervals and pairwise comparisons at the alpha actually requested,
+plus diagnostics and all gate/transport states.
+
+Portable result JSON stores paired comparison results at alpha 0.05 without the large
+bootstrap matrix. `results.to_dict(detail="full")` retains bootstrap/influence arrays when
+available; `detail="summary"` does not preserve paired-inference capability.
+Neither JSON form retains a fitted calibrator for prediction. Refit from retained inputs
+when a rerun or calibrator is needed; do not silently substitute independent inference
+because exported state is missing.
 
 ## CLI
 
