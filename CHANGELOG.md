@@ -1,9 +1,16 @@
 # Changelog
 
-## Unreleased
+## [0.7.1] - 2026-09-09
+
+Maintenance release for installed-package diagnostics and repository examples.
+Core estimation and inference behavior is unchanged. Bridge scripts, notebooks,
+and the agent skill are distributed through the repository.
 
 ### Fixed
 
+- Show planning budgets in dollars, so a $500 budget is not rounded to $0K.
+- Keep calibration and inference return types compatible with newer NumPy stubs
+  without changing their numerical results.
 - Preserve response-level label identity in integration bridges, accept sparse
   label sheets, reject ambiguous joins and OpenCompass model-name collisions,
   parse verdicts strictly, and return a failing exit status when CJE fails.
