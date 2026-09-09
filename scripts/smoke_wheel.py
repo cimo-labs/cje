@@ -45,6 +45,12 @@ def main() -> None:
                 for row in rows
             )
         )
+        # Check the installed console entrypoint as well as the module CLI.
+        subprocess.run(
+            [str(Path(sys.executable).with_name("cje")), "--help"],
+            check=True,
+            cwd=directory,
+        )
         for command in ("validate", "analyze"):
             subprocess.run(
                 [sys.executable, "-m", "cje", command, str(data)],
