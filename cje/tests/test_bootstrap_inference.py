@@ -20,6 +20,30 @@ from cje.diagnostics.robust_inference import (
 from cje.estimators.direct_method import CalibratedDirectEstimator
 from cje.calibration.judge import JudgeCalibrator
 
+
+@pytest.fixture
+def reverse_order_arena_fresh_draws(
+    arena_fresh_draws: Dict[str, FreshDrawDataset],
+) -> Dict[str, FreshDrawDataset]:
+    """Exercise real workflows with the labeled base last, independent of glob order.
+
+    Each workflow still runs only once at its original bootstrap replication
+    count. A regression to selecting the first policy therefore fails even on
+    filesystems whose directory iteration happens to put the base policy first.
+    """
+    assert {
+        "base",
+        "clone",
+    } <= arena_fresh_draws.keys(), "Bundled base and clone fresh draws are required"
+    reverse_ordered = {
+        policy: arena_fresh_draws[policy]
+        for policy in sorted(arena_fresh_draws, reverse=True)
+    }
+    assert list(reverse_ordered)[-1] == "base"
+    assert next(iter(reverse_ordered)) != "base"
+    return reverse_ordered
+
+
 # ============================================================================
 # E2E Tests - Complete Workflows with Real Arena Data
 # ============================================================================
@@ -29,7 +53,7 @@ class TestBootstrapE2EWorkflows:
     """End-to-end tests using real arena data."""
 
     def test_direct_mode_bootstrap_workflow(
-        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
+        self, reverse_order_arena_fresh_draws: Dict[str, FreshDrawDataset]
     ) -> None:
         """Test complete Direct mode bootstrap workflow with real arena data.
 
@@ -39,11 +63,9 @@ class TestBootstrapE2EWorkflows:
         3. Create Direct estimator with bootstrap
         4. Get estimates with bootstrap CIs
         """
-        if len(arena_fresh_draws) < 2:
-            pytest.skip("Need at least 2 policies for comparison")
-
-        policies = list(arena_fresh_draws.keys())[:2]
-        fd_dict = {p: arena_fresh_draws[p] for p in policies}
+        assert {"base", "clone"} <= reverse_order_arena_fresh_draws.keys()
+        policies = ["base", "clone"]
+        fd_dict = {p: reverse_order_arena_fresh_draws[p] for p in policies}
 
         # Collect oracle data from first policy for calibration
         first_policy = policies[0]
@@ -54,8 +76,7 @@ class TestBootstrapE2EWorkflows:
                 oracle_scores.append(sample.judge_score)
                 oracle_labels.append(sample.oracle_label)
 
-        if len(oracle_scores) < 30:
-            pytest.skip("Not enough oracle labels for bootstrap test")
+        assert len(oracle_scores) >= 30, "Bundled base policy needs 30 oracle labels"
 
         # Fit calibrator
         calibrator = JudgeCalibrator(calibration_mode="monotone")
@@ -93,17 +114,16 @@ class TestBootstrapE2EWorkflows:
         )
 
     def test_direct_mode_cluster_robust_workflow(
-        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
+        self, reverse_order_arena_fresh_draws: Dict[str, FreshDrawDataset]
     ) -> None:
         """Test Direct mode with explicit cluster_robust (no bootstrap).
 
         Verifies that users can opt out of bootstrap.
         """
-        if not arena_fresh_draws:
-            pytest.skip("No fresh draws available")
+        assert reverse_order_arena_fresh_draws, "Bundled arena fresh draws are required"
 
-        policies = list(arena_fresh_draws.keys())[:1]
-        fd_dict = {p: arena_fresh_draws[p] for p in policies}
+        policies = ["base"]
+        fd_dict = {p: reverse_order_arena_fresh_draws[p] for p in policies}
 
         # Collect oracle data
         first_policy = policies[0]
@@ -114,8 +134,7 @@ class TestBootstrapE2EWorkflows:
                 oracle_scores.append(sample.judge_score)
                 oracle_labels.append(sample.oracle_label)
 
-        if len(oracle_scores) < 10:
-            pytest.skip("Not enough oracle labels")
+        assert len(oracle_scores) >= 10, "Bundled base policy needs 10 oracle labels"
 
         # Fit calibrator
         calibrator = JudgeCalibrator(calibration_mode="monotone")
@@ -139,7 +158,7 @@ class TestBootstrapE2EWorkflows:
         assert "bootstrap_ci" not in result.metadata
 
     def test_bootstrap_and_cluster_robust_give_same_point_estimates(
-        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
+        self, reverse_order_arena_fresh_draws: Dict[str, FreshDrawDataset]
     ) -> None:
         """REGRESSION TEST: Bootstrap and cluster_robust must give identical point estimates.
 
@@ -147,11 +166,10 @@ class TestBootstrapE2EWorkflows:
         for point estimates, while cluster_robust used the original calibrator.
         Point estimates should always use the original calibrator.
         """
-        if not arena_fresh_draws:
-            pytest.skip("No fresh draws available")
+        assert reverse_order_arena_fresh_draws, "Bundled arena fresh draws are required"
 
-        policies = list(arena_fresh_draws.keys())[:2]
-        fd_dict = {p: arena_fresh_draws[p] for p in policies}
+        policies = ["base", "clone"]
+        fd_dict = {p: reverse_order_arena_fresh_draws[p] for p in policies}
 
         # Collect oracle data from first policy
         first_policy = policies[0]
@@ -162,8 +180,7 @@ class TestBootstrapE2EWorkflows:
                 oracle_scores.append(sample.judge_score)
                 oracle_labels.append(sample.oracle_label)
 
-        if len(oracle_scores) < 30:
-            pytest.skip("Not enough oracle labels")
+        assert len(oracle_scores) >= 30, "Bundled base policy needs 30 oracle labels"
 
         # Fit calibrator ONCE
         calibrator = JudgeCalibrator(calibration_mode="monotone")
@@ -229,27 +246,25 @@ class TestDirectEvalTableInfrastructure:
     """Test DirectEvalTable data structure (infrastructure test)."""
 
     def test_build_from_arena_data(
-        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
+        self, reverse_order_arena_fresh_draws: Dict[str, FreshDrawDataset]
     ) -> None:
         """Test building eval table from real arena fresh draws."""
-        if not arena_fresh_draws:
-            pytest.skip("No fresh draws available")
+        assert reverse_order_arena_fresh_draws, "Bundled arena fresh draws are required"
 
-        table = build_direct_eval_table(arena_fresh_draws)
+        table = build_direct_eval_table(reverse_order_arena_fresh_draws)
 
-        assert table.n_policies == len(arena_fresh_draws)
+        assert table.n_policies == len(reverse_order_arena_fresh_draws)
         assert table.n_clusters > 0
         assert len(table.cluster_to_rows) == table.n_clusters
         assert all(len(rows) > 0 for rows in table.cluster_to_rows.values())
 
     def test_cluster_to_rows_precomputed(
-        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
+        self, reverse_order_arena_fresh_draws: Dict[str, FreshDrawDataset]
     ) -> None:
         """Test that cluster-to-rows mapping is precomputed correctly."""
-        if not arena_fresh_draws:
-            pytest.skip("No fresh draws available")
+        assert reverse_order_arena_fresh_draws, "Bundled arena fresh draws are required"
 
-        table = build_direct_eval_table(arena_fresh_draws)
+        table = build_direct_eval_table(reverse_order_arena_fresh_draws)
 
         # Verify each cluster maps to correct rows
         for cluster_id, rows in table.cluster_to_rows.items():
@@ -257,13 +272,12 @@ class TestDirectEvalTableInfrastructure:
             assert all(table.prompt_ids[r] == cluster_id for r in rows)
 
     def test_oracle_mask_accuracy(
-        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
+        self, reverse_order_arena_fresh_draws: Dict[str, FreshDrawDataset]
     ) -> None:
         """Test that oracle mask correctly identifies labeled samples."""
-        if not arena_fresh_draws:
-            pytest.skip("No fresh draws available")
+        assert reverse_order_arena_fresh_draws, "Bundled arena fresh draws are required"
 
-        table = build_direct_eval_table(arena_fresh_draws)
+        table = build_direct_eval_table(reverse_order_arena_fresh_draws)
 
         # Check oracle mask matches NaN pattern
         for i, is_oracle in enumerate(table.oracle_mask):
@@ -402,13 +416,12 @@ class TestBootstrapBehavior:
     """Test bootstrap-specific behaviors."""
 
     def test_resample_until_valid(
-        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
+        self, reverse_order_arena_fresh_draws: Dict[str, FreshDrawDataset]
     ) -> None:
         """Test that resample-until-valid works correctly."""
-        if not arena_fresh_draws:
-            pytest.skip("No fresh draws available")
+        assert reverse_order_arena_fresh_draws, "Bundled arena fresh draws are required"
 
-        table = build_direct_eval_table(arena_fresh_draws)
+        table = build_direct_eval_table(reverse_order_arena_fresh_draws)
         factory = make_calibrator_factory(mode="monotone", seed=42)
 
         # Request high min_oracle threshold to trigger resampling
@@ -426,13 +439,12 @@ class TestBootstrapBehavior:
         assert result["n_attempts"] >= result["n_valid_replicates"]
 
     def test_oracle_count_summary(
-        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
+        self, reverse_order_arena_fresh_draws: Dict[str, FreshDrawDataset]
     ) -> None:
         """Test that oracle count summary is provided."""
-        if not arena_fresh_draws:
-            pytest.skip("No fresh draws available")
+        assert reverse_order_arena_fresh_draws, "Bundled arena fresh draws are required"
 
-        table = build_direct_eval_table(arena_fresh_draws)
+        table = build_direct_eval_table(reverse_order_arena_fresh_draws)
         factory = make_calibrator_factory(mode="monotone", seed=42)
 
         result = cluster_bootstrap_direct_with_refit(
@@ -485,25 +497,23 @@ class TestCouplingDetection:
     """Test calibration/evaluation coupling detection."""
 
     def test_coupling_detection_with_arena_data(
-        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
+        self, reverse_order_arena_fresh_draws: Dict[str, FreshDrawDataset]
     ) -> None:
         """Test that coupling is detected correctly with real data."""
-        if not arena_fresh_draws:
-            pytest.skip("No fresh draws available")
+        assert reverse_order_arena_fresh_draws, "Bundled arena fresh draws are required"
 
-        policies = list(arena_fresh_draws.keys())[:1]
+        policies = ["base"]
 
         # Collect oracle data
         first_policy = policies[0]
         oracle_scores = []
         oracle_labels = []
-        for sample in arena_fresh_draws[first_policy].samples:
+        for sample in reverse_order_arena_fresh_draws[first_policy].samples:
             if sample.oracle_label is not None:
                 oracle_scores.append(sample.judge_score)
                 oracle_labels.append(sample.oracle_label)
 
-        if len(oracle_scores) < 10:
-            pytest.skip("Not enough oracle labels")
+        assert len(oracle_scores) >= 10, "Bundled base policy needs 10 oracle labels"
 
         calibrator = JudgeCalibrator(calibration_mode="monotone")
         calibrator.fit_cv(np.array(oracle_scores), np.array(oracle_labels), n_folds=5)
@@ -513,7 +523,9 @@ class TestCouplingDetection:
             reward_calibrator=calibrator,
             inference_method="auto",
         )
-        estimator.add_fresh_draws(first_policy, arena_fresh_draws[first_policy])
+        estimator.add_fresh_draws(
+            first_policy, reverse_order_arena_fresh_draws[first_policy]
+        )
         estimator.fit()
 
         # Oracle labels come from same prompts as evaluation (coupled)
@@ -526,7 +538,7 @@ class TestLowOracleCoverage:
     """Tests for bootstrap with low oracle coverage (regression tests for oracle data asymmetry fix)."""
 
     def test_bootstrap_with_10_percent_oracle_coverage(
-        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
+        self, reverse_order_arena_fresh_draws: Dict[str, FreshDrawDataset]
     ) -> None:
         """Test bootstrap works correctly with 10% oracle coverage.
 
@@ -540,11 +552,11 @@ class TestLowOracleCoverage:
         1. Complete successfully (adaptive min_oracle_per_replicate)
         2. Have similar SE magnitudes to cluster_robust/oracle-jackknife inference at the same coverage
         """
-        if len(arena_fresh_draws) < 1:
-            pytest.skip("No fresh draws available")
-
-        policy = list(arena_fresh_draws.keys())[0]
-        fd = arena_fresh_draws[policy]
+        assert (
+            "base" in reverse_order_arena_fresh_draws
+        ), "Bundled base policy is required"
+        policy = "base"
+        fd = reverse_order_arena_fresh_draws[policy]
 
         # Collect all oracle data
         all_oracle_scores = []
@@ -557,8 +569,9 @@ class TestLowOracleCoverage:
                 all_prompt_ids.append(sample.prompt_id)
 
         n_total_oracle = len(all_oracle_scores)
-        if n_total_oracle < 50:
-            pytest.skip(f"Need at least 50 oracle labels, got {n_total_oracle}")
+        assert (
+            n_total_oracle >= 50
+        ), f"Need at least 50 oracle labels, got {n_total_oracle}"
 
         # Simulate 20% oracle coverage (enough for bootstrap to work)
         np.random.seed(42)
@@ -634,7 +647,7 @@ class TestLowOracleCoverage:
         assert 0 < result.estimates[0] < 1
 
     def test_bootstrap_adaptive_min_oracle(
-        self, arena_fresh_draws: Dict[str, FreshDrawDataset]
+        self, reverse_order_arena_fresh_draws: Dict[str, FreshDrawDataset]
     ) -> None:
         """Test that adaptive min_oracle_per_replicate works at low coverage.
 
@@ -642,17 +655,18 @@ class TestLowOracleCoverage:
         would cause 100% rejection rate. Adaptive min_oracle should allow
         bootstrap to complete.
         """
-        if len(arena_fresh_draws) < 1:
-            pytest.skip("No fresh draws available")
-
-        policy = list(arena_fresh_draws.keys())[0]
-        fd = arena_fresh_draws[policy]
+        assert (
+            "base" in reverse_order_arena_fresh_draws
+        ), "Bundled base policy is required"
+        policy = "base"
+        fd = reverse_order_arena_fresh_draws[policy]
 
         # Find oracle samples
         oracle_samples = [s for s in fd.samples if s.oracle_label is not None]
         n_total_oracle = len(oracle_samples)
-        if n_total_oracle < 30:
-            pytest.skip(f"Need at least 30 oracle labels, got {n_total_oracle}")
+        assert (
+            n_total_oracle >= 30
+        ), f"Need at least 30 oracle labels, got {n_total_oracle}"
 
         # Keep only ~20 oracle samples (below the old fixed threshold of 30)
         np.random.seed(123)
