@@ -99,7 +99,7 @@ calibrated_dataset, cal_result = calibrate_dataset(
     oracle_field="oracle_label",
 )
 
-# Two-stage with covariates (response_length auto-computed from response text)
+# Two-stage with numeric covariates (response_length auto-computed from response text)
 calibrated_dataset, cal_result = calibrate_dataset(
     dataset,
     use_response_length=True,
@@ -127,6 +127,12 @@ rewards = calibrator.predict(judge_scores)                # global model
 oof = calibrator.predict_oof(judge_scores, result.fold_ids)  # out-of-fold
 info = calibrator.get_calibration_info()                  # fit-time metrics
 ```
+
+With an explicit boolean `oracle_mask`, pass full-length `judge_scores` and the compact
+`oracle_labels` subset selected by that mask. This differs from `calibrated_mean_ci`,
+which takes full-length labels with NaN for unlabeled rows. Covariates must be numeric;
+encode categorical metadata such as domains into explicit indicator columns before fitting,
+and retain the same encoding for evaluation and probes.
 
 (For a one-call version of this — calibrated mean with a CI from plain arrays — use `cje.calibrated_mean_ci`.)
 

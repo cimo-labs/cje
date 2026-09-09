@@ -41,18 +41,24 @@ pytest = "^8.0"
 pytest-cov = "^5.0"
 pre-commit = "^3.7"
 ipykernel = "^6.29.5"
+nbformat = "^5.10"
+nbconvert = "^7.16"
 # Documentation now hosted on cimolabs.com - Sphinx dependencies removed
 pytest-xdist = "^3.7.0"
 matplotlib = "^3.8"  # Required for testing visualization code
 
-# CLI scripts can be defined here when needed
+[tool.poetry.group.research]
+optional = true
+
+[tool.poetry.group.research.dependencies]
+pandas = "^2.2"
 
 [tool.black]
 line-length = 88
 target-version = ['py310', 'py311', 'py312', 'py313']
 
 [tool.mypy]
-python_version = "3.11"
+# Use the active interpreter's target so dependency stubs match its Python syntax.
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

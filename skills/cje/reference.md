@@ -41,7 +41,7 @@ results = analyze_dataset(
     estimator="auto",             # "auto"/"direct"/"calibrated-direct": same estimator (see below)
     judge_field="judge_score",
     oracle_field="oracle_label",
-    calibration_covariates=None,  # e.g. ["domain"] — fields from record metadata
+    calibration_covariates=None,  # e.g. ["domain"] — numeric fields from record metadata
     include_response_length=False,  # auto word-count covariate (needs "response")
     estimator_config=None,        # default jackknife; bootstrap explicit or via auto.
                                   # n_bootstrap/bootstrap_seed alone select bootstrap (warns) —
@@ -132,9 +132,8 @@ result = calibrated_mean_ci(
     cluster_ids=None,      # cluster by prompt when there are multiple draws per prompt
     covariates=None,       # (n, d) matrix for two-stage calibration
     alpha=0.05,
-    n_folds=5,             # 4-9 labels -> folds auto-reduce with a warning (noisier); <4 raises
+    n_folds=5,             # calibration needs >=4 independent labeled clusters; folds auto-reduce
     inference="cluster_robust",  # default jackknife path | "bootstrap" | "auto"
-    n_bootstrap=2000,      # bootstrap path; supplying it without inference= selects bootstrap (warns)
     seed=42,
 )
 # result: estimate, se, ci, n, n_oracle, method, calibrator, diagnostics, .summary()
@@ -142,6 +141,10 @@ result = calibrated_mean_ci(
 
 This is the ppi-style bottom layer for ONE sample of judge scores. Multi-policy comparisons
 belong in `analyze_dataset` (paired, gate-aware).
+Complete oracle coverage uses the direct oracle mean without a calibrator, so the four-cluster
+calibration floor does not apply. With one independent cluster, inference remains unavailable.
+For refit-bootstrap intervals, set `inference="bootstrap", n_bootstrap=2000` instead.
+Supplying `n_bootstrap` without an inference choice selects bootstrap with a compatibility warning.
 
 **Transport audit** — before reusing `result.calibrator` (or `results.calibrator`) on new
 data (check it is not `None` first — complete oracle coverage fits no calibrator):
@@ -167,7 +170,7 @@ print(diag.summary())
   and `.plot()` (viz extra).
 - `delta_max` is predeclared. Units: probe oracle-label units for this low-level audit;
   OUTPUT units (units of `results.estimates`) for `TransportAuditConfig` margins. Omitting it
-  gives NOT_GRADED (never PASS/FAIL) and emits a FutureWarning prompting you to declare a
+  gives NOT_GRADED (never PASS/FAIL) and emits a UserWarning prompting you to declare a
   margin. Pass analysis weights for unequal
   sampling probabilities and `family_size` for all groups used in the decision.
 - `decile_residuals` and probe-bin occupancy are display-only; never gate on them.
@@ -290,14 +293,14 @@ directories.
 | Symptom | Meaning / fix |
 |---|---|
 | `Only N independent oracle-labeled prompt clusters are available (<4 ...); returning the UNCALIBRATED raw-judge tier` warning (`analyze_dataset`, 1–3 labels) | Below the 4-cluster floor no calibrator can be fit; the run returns the flagged `naive_direct` tier. Treat as blocked — run the labeling loop (SKILL.md §Labeling); never invent labels. |
-| `ValueError: Too few unique oracle prompt clusters (N) for cross-fitted calibration. Need at least 4 independent prompt clusters ...` (`calibrated_mean_ci`) | Same 4-cluster floor on the array API — repeated labels within one prompt do not create independent folds. Run the labeling loop; never invent labels. |
+| `ValueError: Too few unique oracle prompt clusters (N) for cross-fitted calibration. Need at least 4 independent prompt clusters ...` (`calibrated_mean_ci`) | Partial coverage requires calibration and at least four independent labeled clusters. Repeated labels within one prompt do not create independent folds. Complete coverage uses the direct oracle mean without calibration. |
 | `No oracle labels found` → `method="naive_direct"` | 0 labels: raw judge means with a loud warning. Never report these as the answer — treat as blocked and run the labeling loop. |
-| `reducing calibration folds from 5 to K` warning | 4–9 labels: valid but noisier. Recommend ≥10 labels to the user. |
+| `reducing calibration folds from 5 to K` warning | 4–9 independent labeled clusters: valid but noisier. Recommend ≥10 independent labeled clusters to the user. |
 | `ImportError: ... pip install "cje-eval[viz]"` | Plotting needs the viz extra; estimates work without it. |
 | Scores on 0–100 / Likert | Pass as-is — auto-normalized, results returned in the original scale. |
 | `... outside [0, 1]` error on a calibration file | `calibration_data_path` defaults to [0, 1]. Declare `calibration_judge_scale`/`calibration_oracle_scale`, rescale the file, or pass the data via `fresh_draws_data` (auto-normalizes). |
 | `TypeError: ... 'logged_data_path'` / `calibrated-ips` errors | `analyze_dataset` has no `logged_data_path` parameter and no IPS/DR estimators. Logged judge+oracle data works via `calibration_data_path`. For IPS/DR pin `pip install "cje-eval==0.3.*"` (Python ≤3.12). |
-| `FutureWarning: ... audits without delta_max are NOT_GRADED` | Declare a practical margin (`delta_max=`) — no-margin audits can never PASS or FAIL. |
+| `UserWarning: ... audits without delta_max are NOT_GRADED` | Declare a practical margin (`delta_max=`) — no-margin audits can never PASS or FAIL. |
 | `results.calibrator is None` | Complete oracle coverage: the estimate is the direct oracle mean; no calibrator was fit. Check for `None` before a transport audit. |
 | `ImportError`/`ValueError` naming a replacement (e.g. `BaseCJEEstimator`, `calibrate_from_raw_data`) | Consolidated API: the error message names the current entry point — use it. |
 | Python version | CJE requires Python 3.10–3.13. |

@@ -25,6 +25,23 @@ from cje.diagnostics.simulation_planning import (
 )
 
 
+@pytest.fixture(scope="module")
+def simulated_variance_model() -> FittedVarianceModel:
+    """Run the full seeded simulation once for its read-only assertions."""
+    return simulate_variance_model(r2=0.7, verbose=False)
+
+
+@pytest.fixture(scope="module")
+def simulated_planning_result() -> SimulationPlanningResult:
+    """Exercise the public planning wrapper without reducing its replicates."""
+    return simulate_planning(
+        r2=0.7,
+        budget=5000,
+        cost_model=CostModel(surrogate_cost=0.01, oracle_cost=0.16),
+        verbose=False,
+    )
+
+
 def _fake_analyze_dataset_factory(
     capture: List[Tuple[int, int]],
 ) -> Any:
@@ -314,9 +331,11 @@ class TestSimulateVarianceModel:
             simulate_variance_model(r2=1.5)
 
     @pytest.mark.slow
-    def test_returns_fitted_variance_model(self) -> None:
+    def test_returns_fitted_variance_model(
+        self, simulated_variance_model: FittedVarianceModel
+    ) -> None:
         """Returns a FittedVarianceModel with positive variance components."""
-        model = simulate_variance_model(r2=0.7, verbose=False)
+        model = simulated_variance_model
         assert isinstance(model, FittedVarianceModel)
         assert model.sigma2_eval >= 0
         assert model.sigma2_cal >= 0
@@ -324,10 +343,12 @@ class TestSimulateVarianceModel:
         assert model.n_measurements > 0  # Simulation produces real measurements
 
     @pytest.mark.slow
-    def test_compatible_with_plan_evaluation(self) -> None:
+    def test_compatible_with_plan_evaluation(
+        self, simulated_variance_model: FittedVarianceModel
+    ) -> None:
         """Variance model works with plan_evaluation."""
         cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-        model = simulate_variance_model(r2=0.7, verbose=False)
+        model = simulated_variance_model
 
         plan = plan_evaluation(budget=5000, variance_model=model, cost_model=cost)
 
@@ -336,10 +357,12 @@ class TestSimulateVarianceModel:
         assert plan.mde > 0
 
     @pytest.mark.slow
-    def test_compatible_with_plan_for_mde(self) -> None:
+    def test_compatible_with_plan_for_mde(
+        self, simulated_variance_model: FittedVarianceModel
+    ) -> None:
         """Variance model works with plan_for_mde."""
         cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-        model = simulate_variance_model(r2=0.7, verbose=False)
+        model = simulated_variance_model
 
         plan = plan_for_mde(target_mde=0.05, variance_model=model, cost_model=cost)
 
@@ -347,9 +370,11 @@ class TestSimulateVarianceModel:
         assert plan.m_oracle > 0
 
     @pytest.mark.slow
-    def test_matches_fit_variance_model_interface(self) -> None:
+    def test_matches_fit_variance_model_interface(
+        self, simulated_variance_model: FittedVarianceModel
+    ) -> None:
         """Has same interface as fit_variance_model output."""
-        model = simulate_variance_model(r2=0.7, verbose=False)
+        model = simulated_variance_model
 
         # Should have all the same attributes
         assert hasattr(model, "sigma2_eval")
@@ -381,10 +406,11 @@ class TestSimulatePlanning:
             simulate_planning(r2=1.5, budget=5000, cost_model=cost)
 
     @pytest.mark.slow
-    def test_returns_valid_result(self) -> None:
+    def test_returns_valid_result(
+        self, simulated_planning_result: SimulationPlanningResult
+    ) -> None:
         """Returns valid SimulationPlanningResult."""
-        cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-        result = simulate_planning(r2=0.7, budget=5000, cost_model=cost, verbose=False)
+        result = simulated_planning_result
 
         assert isinstance(result, SimulationPlanningResult)
         assert result.r2 == 0.7
@@ -393,19 +419,21 @@ class TestSimulatePlanning:
         assert result.plan.mde > 0
 
     @pytest.mark.slow
-    def test_variance_fractions_sum_to_one(self) -> None:
+    def test_variance_fractions_sum_to_one(
+        self, simulated_planning_result: SimulationPlanningResult
+    ) -> None:
         """Variance fractions sum to 1.0."""
-        cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-        result = simulate_planning(r2=0.7, budget=5000, cost_model=cost, verbose=False)
+        result = simulated_planning_result
 
         total = result.eval_variance_fraction + result.cal_variance_fraction
         assert total == pytest.approx(1.0)
 
     @pytest.mark.slow
-    def test_summary_contains_key_info(self) -> None:
+    def test_summary_contains_key_info(
+        self, simulated_planning_result: SimulationPlanningResult
+    ) -> None:
         """Summary string contains key information."""
-        cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-        result = simulate_planning(r2=0.7, budget=5000, cost_model=cost, verbose=False)
+        result = simulated_planning_result
         summary = result.summary()
 
         assert "R² = 0.70" in summary
@@ -413,10 +441,11 @@ class TestSimulatePlanning:
         assert "MDE" in summary
 
     @pytest.mark.slow
-    def test_explain_provides_educational_content(self) -> None:
+    def test_explain_provides_educational_content(
+        self, simulated_planning_result: SimulationPlanningResult
+    ) -> None:
         """Explain method provides educational content."""
-        cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-        result = simulate_planning(r2=0.7, budget=5000, cost_model=cost, verbose=False)
+        result = simulated_planning_result
         explanation = result.explain()
 
         assert "good" in explanation  # R²=0.7 is "good" quality
@@ -456,12 +485,14 @@ class TestIntegrationWithExistingPlanning:
     """Test integration with existing planning infrastructure."""
 
     @pytest.mark.slow
-    def test_simulate_variance_model_with_plan_evaluation(self) -> None:
+    def test_simulate_variance_model_with_plan_evaluation(
+        self, simulated_variance_model: FittedVarianceModel
+    ) -> None:
         """simulate_variance_model + plan_evaluation = composable workflow."""
         cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
 
         # Core primitive workflow (parallels pilot-based workflow)
-        variance_model = simulate_variance_model(r2=0.7, verbose=False)
+        variance_model = simulated_variance_model
         plan = plan_evaluation(
             budget=5000, variance_model=variance_model, cost_model=cost
         )
@@ -471,11 +502,13 @@ class TestIntegrationWithExistingPlanning:
         assert plan.mde > 0
 
     @pytest.mark.slow
-    def test_simulate_variance_model_with_plan_for_mde(self) -> None:
+    def test_simulate_variance_model_with_plan_for_mde(
+        self, simulated_variance_model: FittedVarianceModel
+    ) -> None:
         """simulate_variance_model + plan_for_mde = composable workflow."""
         cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
 
-        variance_model = simulate_variance_model(r2=0.7, verbose=False)
+        variance_model = simulated_variance_model
         plan = plan_for_mde(
             target_mde=0.05, variance_model=variance_model, cost_model=cost
         )
@@ -483,10 +516,11 @@ class TestIntegrationWithExistingPlanning:
         assert plan.n_samples > 0
 
     @pytest.mark.slow
-    def test_plan_has_correct_variance_components(self) -> None:
+    def test_plan_has_correct_variance_components(
+        self, simulated_planning_result: SimulationPlanningResult
+    ) -> None:
         """Plan includes correct variance components from simulation."""
-        cost = CostModel(surrogate_cost=0.01, oracle_cost=0.16)
-        result = simulate_planning(r2=0.7, budget=5000, cost_model=cost, verbose=False)
+        result = simulated_planning_result
 
         # Plan should have variance components
         assert result.plan.sigma2_eval >= 0

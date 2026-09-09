@@ -15,6 +15,7 @@ from typing import (
     Callable,
     TYPE_CHECKING,
     Literal,
+    cast,
 )
 from dataclasses import dataclass, field
 from scipy import stats
@@ -920,7 +921,7 @@ def residual_predictions_for_evaluation(
             np.asarray(linked_folds, dtype=int),
             covariates,
         )
-    return np.clip(predictions, 0.0, 1.0)
+    return cast(np.ndarray, np.clip(predictions, 0.0, 1.0))
 
 
 def compute_direct_point_estimate(

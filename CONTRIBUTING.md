@@ -20,6 +20,18 @@ poetry install
 poetry run pytest  # Verify everything works
 ```
 
+Notebook execution dependencies are part of the development environment; notebook tests
+must execute rather than skip for missing packages. For the optional research examples:
+
+```bash
+poetry install --with research
+make test-examples  # Real notebook kernels, documented calls, and experiment regressions
+```
+
+CI executes these examples on every pull request, including the planning notebook's
+production configuration and the documented bootstrap workflow. Release qualification
+also includes the research tests.
+
 ## 📝 Code Standards
 
 1. **Type everything** - Use type hints

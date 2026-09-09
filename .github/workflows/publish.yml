@@ -81,13 +81,13 @@ jobs:
           fi
 
       - name: Install locked dependencies
-        run: poetry install --sync --no-interaction
+        run: poetry install --sync --with research --no-interaction
 
       - name: Qualify source tree
         run: |
           poetry run black --check cje
           poetry run mypy cje
-          poetry run python -m pytest cje/tests --cov=cje --cov-report=term-missing --cov-fail-under=85
+          poetry run python -m pytest cje/tests experiments --cov=cje --cov-report=term-missing --cov-fail-under=85
 
       - name: Build artifacts once
         run: poetry build
@@ -99,11 +99,10 @@ jobs:
           set -euo pipefail
           WHEEL="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
           test -n "${WHEEL}"
-          poetry run pip install --force-reinstall --no-deps "${WHEEL}"
-          VENV="$(poetry env info --path)"
-          cd /tmp
-          "${VENV}/bin/python" -c "import cje; assert cje.__version__ == '${VERSION}', cje.__version__"
-          "${VENV}/bin/cje" --help >/dev/null
+          python -m venv "${RUNNER_TEMP}/cje-wheel-smoke"
+          "${RUNNER_TEMP}/cje-wheel-smoke/bin/python" -m pip install "${WHEEL}"
+          cd "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/cje-wheel-smoke/bin/python" "${GITHUB_WORKSPACE}/scripts/smoke_wheel.py" --expected-version "${VERSION}"
 
       - name: Preserve qualified artifacts
         uses: actions/upload-artifact@v4

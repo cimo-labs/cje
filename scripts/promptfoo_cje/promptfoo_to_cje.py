@@ -21,11 +21,12 @@ Notes:
 - `judge_score` is taken from `result.score` (0-1). If missing, falls back to `gradingResult.score`.
 - `prompt_id` must be stable across policies. Default is a deterministic hash of:
     prompt.label + normalized(vars)
-  You can switch to `raw` mode (uses prompt.label only) if vars already uniquely identify the test.
+  `raw` mode uses only prompt.label and ignores vars; use it only when each
+  label uniquely identifies an evaluation prompt.
 
 Oracle labels:
 - Optional. Provide a JSONL or CSV file with at least:
-    provider_id,prompt_id,oracle_label
+    provider_id,prompt_id,response_id,oracle_label
   (extra columns are ignored)
 
 Outputs:
@@ -38,15 +39,27 @@ from __future__ import annotations
 
 import argparse
 import csv
+from collections import Counter
 import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, cast
+
+# Keep the converters runnable directly from a clone, without packaging scripts.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from cje_bridges._labels import (
+    OracleLabels,
+    ResponseIds,
+    finite_number,
+    load_oracle_labels,
+)
 
 
 def _stable_json(obj: Any) -> str:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
 
 
 def _hash_str(s: str) -> str:
@@ -133,7 +146,7 @@ def _judge_score(r: Dict[str, Any]) -> Optional[float]:
     score = r.get("score")
     # NOTE: bool is a subclass of int in Python; exclude it explicitly.
     if isinstance(score, (int, float)) and not isinstance(score, bool):
-        return float(score)
+        return finite_number(score, context="Promptfoo judge score")
 
     # Fall back to gradingResult.score
     gr = r.get("gradingResult")
@@ -142,34 +155,32 @@ def _judge_score(r: Dict[str, Any]) -> Optional[float]:
         and isinstance(gr.get("score"), (int, float))
         and not isinstance(gr.get("score"), bool)
     ):
-        return float(gr["score"])
+        return finite_number(gr["score"], context="Promptfoo gradingResult.score")
 
     return None
+
+
+def _output_data(r: Dict[str, Any]) -> tuple[bool, Any]:
+    """Keep raw JSON types in response identity, including scalar outputs."""
+    resp = r.get("response")
+    if isinstance(resp, dict) and "output" in resp:
+        return True, resp["output"]
+    for field_name in ("output", "text"):
+        if field_name in r:
+            return True, r[field_name]
+    return False, None
 
 
 def _output_text(r: Dict[str, Any]) -> Optional[str]:
-    # Promptfoo stores provider response under response.output
-    resp = r.get("response")
-    if isinstance(resp, dict):
-        out = resp.get("output")
-        if isinstance(out, str):
-            return out
-        # Sometimes structured output is an object
-        if isinstance(out, (dict, list)):
-            return _stable_json(out)
-
-    # Older formats may use output/text directly
-    if isinstance(r.get("output"), str):
-        return cast(str, r["output"])
-    if isinstance(r.get("text"), str):
-        return cast(str, r["text"])
-
-    return None
+    present, value = _output_data(r)
+    if not present:
+        return None
+    return value if isinstance(value, str) else _stable_json(value)
 
 
 def _make_prompt_id(prompt_label: str, vars_obj: Dict[str, Any], mode: str) -> str:
     if mode == "raw":
-        # Only safe if you know vars already unique OR you don't care about collision.
+        # Only safe when the label itself uniquely identifies the prompt.
         return prompt_label
 
     if mode == "hash":
@@ -177,37 +188,6 @@ def _make_prompt_id(prompt_label: str, vars_obj: Dict[str, Any], mode: str) -> s
         return f"{prompt_label}::{_hash_str(key)}"
 
     raise ValueError(f"Unknown prompt_id mode: {mode}")
-
-
-def _load_oracle_labels(path: Path) -> Dict[Tuple[str, str], float]:
-    """Map (provider_id, prompt_id) -> oracle_label."""
-    labels: Dict[Tuple[str, str], float] = {}
-
-    if path.suffix.lower() == ".jsonl":
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            provider_id = row.get("provider_id") or row.get("provider")
-            prompt_id = row.get("prompt_id")
-            oracle_label = row.get("oracle_label")
-            if provider_id is None or prompt_id is None or oracle_label is None:
-                continue
-            labels[(str(provider_id), str(prompt_id))] = float(oracle_label)
-        return labels
-
-    # CSV
-    with path.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            provider_id = row.get("provider_id") or row.get("provider")
-            prompt_id = row.get("prompt_id")
-            oracle_label = row.get("oracle_label")
-            if not provider_id or not prompt_id or oracle_label is None:
-                continue
-            labels[(str(provider_id), str(prompt_id))] = float(oracle_label)
-
-    return labels
 
 
 def main() -> int:
@@ -225,7 +205,7 @@ def main() -> int:
     ap.add_argument(
         "--oracle-labels",
         default=None,
-        help="Optional oracle labels file (.csv or .jsonl) with provider_id,prompt_id,oracle_label",
+        help="Optional oracle labels file (.csv or .jsonl) with provider_id,prompt_id,response_id,oracle_label",
     )
     ap.add_argument(
         "--label-template",
@@ -249,12 +229,16 @@ def main() -> int:
     payload = json.loads(results_path.read_text(encoding="utf-8"))
     records = _detect_results(payload)
 
-    oracle_map: Dict[Tuple[str, str], float] = {}
-    if args.oracle_labels:
-        oracle_map = _load_oracle_labels(Path(args.oracle_labels))
+    oracle_labels = (
+        load_oracle_labels(Path(args.oracle_labels), ("provider_id", "provider"))
+        if args.oracle_labels
+        else OracleLabels()
+    )
 
     fresh_draws: Dict[str, List[Dict[str, Any]]] = {}
     template_rows: List[Dict[str, Any]] = []
+    response_ids = ResponseIds()
+    source_prompt_counts: Counter[tuple[str, str]] = Counter()
 
     missing_score = 0
     for r in records:
@@ -262,16 +246,24 @@ def main() -> int:
         prompt_label = _prompt_label(r)
         vars_obj = _vars(r)
         prompt_id = _make_prompt_id(prompt_label, vars_obj, args.prompt_id_mode)
+        source_prompt_counts[(provider_id, prompt_id)] += 1
 
         judge_score = _judge_score(r)
         if judge_score is None:
             missing_score += 1
             continue
 
-        sample: Dict[str, Any] = {"prompt_id": prompt_id, "judge_score": judge_score}
-        oracle = oracle_map.get((provider_id, prompt_id))
-        if oracle is not None:
-            sample["oracle_label"] = oracle
+        response_id = response_ids.create(
+            provider_id,
+            prompt_id,
+            _output_data(r),
+            native_id=r.get("id"),
+        )
+        sample: Dict[str, Any] = {
+            "prompt_id": prompt_id,
+            "response_id": response_id,
+            "judge_score": judge_score,
+        }
 
         fresh_draws.setdefault(provider_id, []).append(sample)
 
@@ -280,13 +272,23 @@ def main() -> int:
             {
                 "provider_id": provider_id,
                 "prompt_id": prompt_id,
+                "response_id": response_id,
                 "prompt_label": prompt_label,
                 "vars_json": _stable_json(vars_obj),
                 "output": (_output_text(r) or ""),
                 "judge_score": judge_score,
-                "oracle_label": oracle if oracle is not None else "",
+                "oracle_label": "",
             }
         )
+
+    oracle_labels.apply(fresh_draws, source_prompt_counts=source_prompt_counts)
+    by_response = {
+        (policy, sample["response_id"]): sample.get("oracle_label", "")
+        for policy, samples in fresh_draws.items()
+        for sample in samples
+    }
+    for row in template_rows:
+        row["oracle_label"] = by_response[(row["provider_id"], row["response_id"])]
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -299,6 +301,7 @@ def main() -> int:
             fieldnames = [
                 "provider_id",
                 "prompt_id",
+                "response_id",
                 "prompt_label",
                 "vars_json",
                 "output",
@@ -319,12 +322,12 @@ def main() -> int:
         )
 
     if args.run_cje:
-        if not args.oracle_labels:
+        if not oracle_labels.values:
             print(
-                "--run-cje requested but --oracle-labels not provided; skipping.",
+                "--run-cje requested but no oracle labels were provided.",
                 file=sys.stderr,
             )
-            return 0
+            return 1
         try:
             from cje import analyze_dataset  # type: ignore
 
@@ -336,9 +339,14 @@ def main() -> int:
                 print(f"Estimates count: {len(est0)}")
         except Exception as e:
             print(f"CJE run failed: {e}", file=sys.stderr)
+            return 1
 
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except (ValueError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(2)

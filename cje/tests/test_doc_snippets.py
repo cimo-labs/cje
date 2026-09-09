@@ -9,9 +9,9 @@ checks it at two levels:
    references to modules/functions that do not exist (the review found several
    snippets importing from the wrong module or using deleted APIs).
 
-Snippets are not executed end-to-end (most need data files or API keys), but
-attribute chains on cje modules referenced by the imports are verified, which
-is where docs historically drifted.
+Runnable examples are also executed with explicit fixture inputs in
+test_doc_workflows.py. Signature sketches and removed-API demonstrations remain
+syntax/import checks only.
 """
 
 import ast
@@ -29,6 +29,7 @@ README_PATHS = sorted(
         REPO_ROOT / "README.md",
         REPO_ROOT / "MIGRATING-0.6.md",
         REPO_ROOT / "PLAYBOOK.md",
+        REPO_ROOT / "examples" / "arena_sample" / "README.md",
         *(REPO_ROOT / "cje").glob("*/README.md"),
         *(REPO_ROOT / "skills").glob("*/*.md"),
     ]
@@ -99,7 +100,7 @@ def test_snippet_imports_resolve(path: str, line: int, code: str) -> None:
         if isinstance(node, (ast.Import, ast.ImportFrom))
     ]
     if not import_nodes:
-        pytest.skip("snippet has no imports")
+        return  # Syntax and executable-workflow checks cover import-free blocks.
     lines = code.splitlines()
     documented_import_errors = {
         stmt.strip()

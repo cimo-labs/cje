@@ -28,11 +28,10 @@ class TestFreshDrawLoading:
             Path(__file__).parent.parent.parent
             / "examples"
             / "arena_sample"
-            / "responses"
+            / "fresh_draws"
         )
 
-        if not responses_dir.exists():
-            pytest.skip("Arena sample data not available")
+        assert responses_dir.is_dir(), f"Bundled Arena sample missing: {responses_dir}"
 
         # Load using official function
         fresh_dataset = load_fresh_draws_auto(

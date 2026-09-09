@@ -11,7 +11,7 @@ then delegates model fitting and prediction.
 
 import hashlib
 import numpy as np
-from typing import Optional, Tuple, Dict, List, Literal, TYPE_CHECKING, Any
+from typing import Optional, Tuple, Dict, List, Literal, TYPE_CHECKING, Any, cast
 from dataclasses import dataclass
 import logging
 
@@ -308,12 +308,15 @@ class JudgeCalibrator:
                 "Covariates provided but calibrator was fitted in monotone mode without covariate support"
             )
 
-        return np.clip(
-            self._flexible_calibrator.predict(
-                np.asarray(judge_scores), folds=None, covariates=covariates
+        return cast(
+            np.ndarray,
+            np.clip(
+                self._flexible_calibrator.predict(
+                    np.asarray(judge_scores), folds=None, covariates=covariates
+                ),
+                0.0,
+                1.0,
             ),
-            0.0,
-            1.0,
         )
 
     def fit_cv(
@@ -730,8 +733,11 @@ class JudgeCalibrator:
                 f"those used in fit_cv."
             )
 
-        return np.clip(
-            self._flexible_calibrator.predict(judge_scores, fold_ids, covariates),
-            0.0,
-            1.0,
+        return cast(
+            np.ndarray,
+            np.clip(
+                self._flexible_calibrator.predict(judge_scores, fold_ids, covariates),
+                0.0,
+                1.0,
+            ),
         )

@@ -155,7 +155,7 @@ def plot_planning_dashboard(
             color = colors[i % len(colors)]
             ax.scatter([budget / 1000], [plan.mde * 100], color=color, s=80, zorder=5)
             ax.annotate(
-                f"${budget/1000:.0f}K → {plan.mde*100:.1f}%",
+                f"${budget:,.0f} → {plan.mde*100:.1f}%",
                 xy=(budget / 1000, plan.mde * 100),
                 xytext=(
                     budget / 1000 + (budget_range[1] - budget_range[0]) / 20000,
@@ -207,7 +207,7 @@ def plot_planning_dashboard(
     ax.set_xlabel("Effect Size (%)", fontsize=11)
     ax.set_ylabel("Asymptotic-normal Power", fontsize=11)
     ax.set_title(
-        f"Power Curve (${ref_budget/1000:.0f}K: n={plan.n_samples:,}, m={plan.m_oracle})",
+        f"Power Curve (${ref_budget:,.0f}: n={plan.n_samples:,}, m={plan.m_oracle})",
         fontsize=12,
         fontweight="bold",
     )
