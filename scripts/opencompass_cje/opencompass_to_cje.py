@@ -33,12 +33,11 @@ Judge score mapping (default):
 - strings:
     - yes/true/correct/pass/A -> 1.0
     - no/false/incorrect/fail/B -> 0.0
-  If a messy string contains a standalone 'A' or 'B' (e.g. "Answer: A"),
-  we extract it with a regex.
+  Explicit verdicts such as "Answer: A" are supported; ambiguous prose is dropped.
 
 Oracle labels (optional):
 - Provide a CSV or JSONL file with at least:
-    policy_name,prompt_id,oracle_label
+    policy_name,prompt_id,response_id,oracle_label
   (extra columns ignored)
 
 Outputs:
@@ -53,12 +52,22 @@ from __future__ import annotations
 
 import argparse
 import csv
+from collections import Counter
 import hashlib
 import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from cje_bridges._labels import (
+    OracleLabels,
+    ResponseIds,
+    finite_number,
+    first_identifier,
+    load_oracle_labels,
+)
 
 
 _PROMPT_CANDIDATES = [
@@ -90,11 +99,17 @@ _PRED_CANDIDATES = [
 _DETAILS_LIST_CANDIDATES = ["details", "detail", "records", "data"]
 _NESTED_CONTAINER_CANDIDATES = ["result", "results", "eval", "evaluation"]
 
-_AB_RE = re.compile(r"\b([AB])\b", re.IGNORECASE)
+_AB_VERDICT_RE = re.compile(
+    r"(?:(?:final\s+)?(?:answer|choice|decision|verdict|winner)\s*[:=]\s*)?"
+    r"([AB]|\([AB]\)|\[[AB]\])[.!]?",
+    re.IGNORECASE,
+)
 
 
 def _stable_json(obj: Any) -> str:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
 
 
 def _hash_str(s: str) -> str:
@@ -198,7 +213,7 @@ def _normalize_pred(v: Any) -> Optional[float]:
 
     # NOTE: bool is a subclass of int; exclude explicitly.
     if isinstance(v, (int, float)) and not isinstance(v, bool):
-        return float(v)
+        return finite_number(v, context="OpenCompass judge score")
 
     s = str(v).strip()
     if not s:
@@ -212,16 +227,17 @@ def _normalize_pred(v: Any) -> Optional[float]:
     if s_lower in {"b", "no", "n", "false", "incorrect", "fail", "0"}:
         return 0.0
 
-    # Extract A/B from messy strings ("Answer: A", "(B)", "choice=A", etc.)
-    m = _AB_RE.search(s)
+    # Match the complete verdict, never an article or an option in explanation text.
+    m = _AB_VERDICT_RE.fullmatch(s)
     if m:
-        return 1.0 if m.group(1).upper() == "A" else 0.0
+        return 1.0 if m.group(1).strip("()[]").upper() == "A" else 0.0
 
     # Try parse numeric strings
     try:
-        return float(s_lower)
+        score = float(s_lower)
     except ValueError:
         return None
+    return finite_number(score, context="OpenCompass judge score")
 
 
 def _make_prompt_id(prompt_text: str, index: int, mode: str) -> str:
@@ -233,37 +249,6 @@ def _make_prompt_id(prompt_text: str, index: int, mode: str) -> str:
         return f"oc::{_hash_str(key)}"
 
     raise ValueError(f"Unknown prompt_id mode: {mode}")
-
-
-def _load_oracle_labels(path: Path) -> Dict[Tuple[str, str], float]:
-    """Map (policy_name, prompt_id) -> oracle_label."""
-    labels: Dict[Tuple[str, str], float] = {}
-
-    if path.suffix.lower() == ".jsonl":
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            policy = row.get("policy_name") or row.get("policy")
-            prompt_id = row.get("prompt_id")
-            oracle_label = row.get("oracle_label")
-            if policy is None or prompt_id is None or oracle_label is None:
-                continue
-            labels[(str(policy), str(prompt_id))] = float(oracle_label)
-        return labels
-
-    # CSV
-    with path.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            policy = row.get("policy_name") or row.get("policy")
-            prompt_id = row.get("prompt_id")
-            oracle_label = row.get("oracle_label")
-            if not policy or not prompt_id or oracle_label is None:
-                continue
-            labels[(str(policy), str(prompt_id))] = float(oracle_label)
-
-    return labels
 
 
 def main() -> int:
@@ -301,7 +286,7 @@ def main() -> int:
     ap.add_argument(
         "--oracle-labels",
         default=None,
-        help="Optional oracle labels file (.csv or .jsonl) with policy_name,prompt_id,oracle_label",
+        help="Optional oracle labels file (.csv or .jsonl) with policy_name,prompt_id,response_id,oracle_label",
     )
     ap.add_argument(
         "--label-template",
@@ -322,12 +307,29 @@ def main() -> int:
         print(f"No JSON files found under {in_path}", file=sys.stderr)
         return 2
 
-    oracle_map: Dict[Tuple[str, str], float] = {}
-    if args.oracle_labels:
-        oracle_map = _load_oracle_labels(Path(args.oracle_labels))
+    if not args.policy_name:
+        by_stem: Dict[str, List[Path]] = {}
+        for path in inputs:
+            by_stem.setdefault(path.stem, []).append(path)
+        for policy, paths in by_stem.items():
+            if len(paths) > 1:
+                raise ValueError(
+                    f"Multiple input files would merge into policy {policy!r}: "
+                    + ", ".join(str(path) for path in paths)
+                    + ". Convert each model separately with --policy-name; "
+                    "use one explicit --policy-name only for files from one model."
+                )
+
+    oracle_labels = (
+        load_oracle_labels(Path(args.oracle_labels), ("policy_name", "policy"))
+        if args.oracle_labels
+        else OracleLabels()
+    )
 
     fresh_draws: Dict[str, List[Dict[str, Any]]] = {}
     template_rows: List[Dict[str, Any]] = []
+    response_ids = ResponseIds()
+    source_prompt_counts: Counter[tuple[str, str]] = Counter()
 
     missing_prompt = 0
     missing_pred = 0
@@ -359,21 +361,32 @@ def main() -> int:
                 missing_prompt += 1
                 continue
 
+            prompt_id = _make_prompt_id(prompt_text, i, args.prompt_id_mode)
+            source_prompt_counts[(policy_name, prompt_id)] += 1
             judge_score = _normalize_pred(pred_val)
             if judge_score is None:
                 missing_pred += 1
                 continue
 
-            prompt_id = _make_prompt_id(prompt_text, i, args.prompt_id_mode)
+            response_id = response_ids.create(
+                policy_name,
+                prompt_id,
+                {
+                    "file": (
+                        str(path.relative_to(in_path))
+                        if in_path.is_dir()
+                        else path.name
+                    ),
+                    "record": d,
+                },
+                native_id=first_identifier(d.get("response_id"), d.get("record_id")),
+            )
 
             row: Dict[str, Any] = {
                 "prompt_id": prompt_id,
+                "response_id": response_id,
                 "judge_score": judge_score,
             }
-
-            oracle = oracle_map.get((policy_name, prompt_id))
-            if oracle is not None:
-                row["oracle_label"] = float(oracle)
 
             out_list.append(row)
 
@@ -381,6 +394,7 @@ def main() -> int:
                 {
                     "policy_name": policy_name,
                     "prompt_id": prompt_id,
+                    "response_id": response_id,
                     "judge_score": judge_score,
                     "prompt": (
                         (prompt_text[:300] + "...")
@@ -391,19 +405,32 @@ def main() -> int:
                 }
             )
 
+    oracle_labels.apply(fresh_draws, source_prompt_counts=source_prompt_counts)
+    by_response = {
+        (policy, sample["response_id"]): sample.get("oracle_label", "")
+        for policy, samples in fresh_draws.items()
+        for sample in samples
+    }
+    for row in template_rows:
+        row["oracle_label"] = by_response[(row["policy_name"], row["response_id"])]
+
     out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(
-        json.dumps(fresh_draws, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(fresh_draws, indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
     )
 
     if not args.no_label_template:
         lt_path = Path(args.label_template)
+        lt_path.parent.mkdir(parents=True, exist_ok=True)
         with lt_path.open("w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(
                 f,
                 fieldnames=[
                     "policy_name",
                     "prompt_id",
+                    "response_id",
                     "judge_score",
                     "prompt",
                     "oracle_label",
@@ -442,4 +469,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except (ValueError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(2)

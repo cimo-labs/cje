@@ -23,9 +23,11 @@ The data is structured to demonstrate the CJE workflow:
 
 1. **Calibration training**: Uses oracle labels from `base_responses.jsonl` (~48% coverage)
 2. **Policy estimation**: Uses all samples in `fresh_draws/` (judge scores only for target policies)
-3. **Transportability testing**: Uses the held-out `probe_slice/` to verify calibration transfers
+3. **Transportability testing**: Reserves probe prompt clusters before fitting, then uses their oracle labels to check calibration transfers
 
-This separation ensures calibration is trained only on base policy data, and probe samples are held out for transportability validation.
+The probe files contain additional oracle labels for selected target-policy evaluation responses. Their prompt IDs can also appear in the labeled base-policy data, so separate files alone do **not** ensure independent calibration and validation. Exclude every reserved probe prompt ID from all calibration/evaluation inputs before fitting, as shown below. If using `logged_data.jsonl` as a calibration source, exclude those IDs there too.
+
+The core notebook also reserves baseline monitoring rows before fitting. It splits the adversarial probe between policy audits and the three-week monitoring simulation, excludes monitoring IDs from the other policy probes, and uses different prompt clusters in each week. Small slices may correctly produce INCONCLUSIVE audits.
 
 ## Format
 
@@ -37,7 +39,7 @@ This separation ensures calibration is trained only on base policy data, and pro
   "prompt": "User question",
   "response": "Model response",
   "judge_score": 0.85,
-  "oracle_label": 0.86,  // Only in base_responses.jsonl
+  "oracle_label": 0.86,
   "draw_idx": 0
 }
 ```
@@ -50,7 +52,7 @@ This separation ensures calibration is trained only on base policy data, and pro
   "prompt": "User question",
   "response": "Model response",
   "judge_score": 0.1,
-  "oracle_label": 0.0,  // All probe samples have oracle labels
+  "oracle_label": 0.0,
   "draw_idx": 0
 }
 ```
@@ -63,8 +65,8 @@ Judge + oracle pairs from the base policy, plus 0.3.x-era logprob fields that 0.
 {
   "prompt": "User question",
   "response": "Base policy response",
-  "base_policy_logprob": -60.88,     // ignored in 0.4.0
-  "target_policy_logprobs": { ... }, // ignored in 0.4.0
+  "base_policy_logprob": -60.88,
+  "target_policy_logprobs": {"clone": -58.0},
   "judge_score": 0.85,
   "oracle_label": 0.7,
   "metadata": {
@@ -111,35 +113,44 @@ cje analyze examples/arena_sample/fresh_draws --calibration-data examples/arena_
 
 ```python
 import json
+from pathlib import Path
 from cje import analyze_dataset
 from cje.diagnostics import audit_transportability, plot_transport_comparison
 
-# Get calibrator from analysis
-results = analyze_dataset(fresh_draws_dir="examples/arena_sample/fresh_draws")
+root = Path("examples/arena_sample")
+policies = ["base", "clone", "parallel_universe_prompt", "unhelpful"]
 
-# Load probe as list of dicts (no wrapper needed!)
-probe = [json.loads(line) for line in open("examples/arena_sample/probe_slice/unhelpful_probe.jsonl")]
+def read_jsonl(path):
+    with open(path) as handle:
+        return [json.loads(line) for line in handle if line.strip()]
 
-# Run canonical transportability audit — declare a practical residual margin
-# (audits without delta_max are NOT_GRADED and can never PASS or FAIL)
-diag = audit_transportability(
-    results.calibrator, probe, group_label="policy:unhelpful", delta_max=0.05
-)
-print(diag.summary())
-# Residual transport: FAIL | Group: policy:unhelpful | N=50 (50 clusters) | delta: -0.331 (CI: [-0.403, -0.259]) | margin: +/-0.050 | Action: do not reuse this calibration; collect target labels and refit
+probes = {
+    policy: read_jsonl(root / "probe_slice" / f"{policy}_probe.jsonl")
+    for policy in policies if policy != "base"
+}
+heldout_ids = {row["prompt_id"] for rows in probes.values() for row in rows}
+evaluation_data = {
+    policy: [
+        row for row in read_jsonl(root / "fresh_draws" / f"{policy}_responses.jsonl")
+        if row["prompt_id"] not in heldout_ids
+    ]
+    for policy in policies
+}
+results = analyze_dataset(fresh_draws_data=evaluation_data)
 
-# Visualize
-diag.plot()  # Decile-level residuals
-
-# Or compare all policies at once
-audits = {}
-for policy in ["clone", "parallel_universe_prompt", "unhelpful"]:
-    probe = [json.loads(line) for line in open(f"examples/arena_sample/probe_slice/{policy}_probe.jsonl")]
-    audits[policy] = audit_transportability(
-        results.calibrator, probe, group_label=f"policy:{policy}", delta_max=0.05
+# Predeclare one three-policy audit family and a practical margin in oracle units.
+audits = {
+    policy: audit_transportability(
+        results.calibrator, rows, group_label=f"policy:{policy}",
+        delta_max=0.05, family_size=len(probes),
     )
+    for policy, rows in probes.items()
+}
+for audit in audits.values():
+    print(audit.summary())
 
 fig = plot_transport_comparison(audits)
+audits["unhelpful"].plot()  # Residuals by score bin
 ```
 
 The adversarial `unhelpful` policy is the point of this dataset: its judge scores look plausible, but the transport audit catches that the calibration learned on base-policy data does not hold for it.

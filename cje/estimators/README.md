@@ -37,8 +37,8 @@ estimator = CalibratedDirectEstimator(
 )
 
 # 3. Attach fresh draws per policy, then estimate
-# estimator.add_fresh_draws("policy_a", fresh_draws_a)
-# estimator.add_fresh_draws("policy_b", fresh_draws_b)
+estimator.add_fresh_draws("policy_a", fresh_draws_a)
+estimator.add_fresh_draws("policy_b", fresh_draws_b)
 result = estimator.fit_and_estimate()
 
 # 4. Access results

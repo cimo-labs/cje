@@ -1,12 +1,15 @@
 # CJE Makefile
 
-.PHONY: test lint format help
+.PHONY: test test-examples lint format help
 
 # Documentation now hosted on cimolabs.com
 
 # Development commands
 test:  ## Run tests
 	poetry run pytest cje/tests/ -v
+
+test-examples:  ## Run documented workflows and research examples (poetry install --with research)
+	poetry run pytest cje/tests/test_examples.py cje/tests/test_doc_workflows.py experiments -v
 
 lint:  ## Run linting
 	poetry run black --check cje/

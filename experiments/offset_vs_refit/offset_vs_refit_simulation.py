@@ -128,12 +128,16 @@ def _sample_policy_data(
     scenario: Scenario,
     period: Literal["old", "new"],
     rng: np.random.Generator,
+    sample_prefix: str,
 ) -> Dict[str, np.ndarray]:
     score = rng.beta(policy.score_alpha, policy.score_beta, size=n)
     covariate = rng.binomial(1, policy.covariate_prob, size=n).astype(float)
     judge = _judge_score(score, covariate, rng)
     oracle = _oracle_function(score, covariate, scenario, period, rng)
     return {
+        "prompt_id": np.array(
+            [f"{sample_prefix}:{policy.name}:{i}" for i in range(n)], dtype=object
+        ),
         "policy": np.full(n, policy.name, dtype=object),
         "score": score,
         "covariate": covariate,
@@ -157,6 +161,7 @@ def _sample_audit_slice(
     scenario: Scenario,
     audit_profile: Dict[str, float],
     rng: np.random.Generator,
+    sample_prefix: str,
 ) -> Dict[str, np.ndarray]:
     policy_names = list(audit_profile.keys())
     probs = np.array([audit_profile[name] for name in policy_names], dtype=float)
@@ -175,6 +180,7 @@ def _sample_audit_slice(
                 scenario=scenario,
                 period="new",
                 rng=rng,
+                sample_prefix=sample_prefix,
             )
         )
     return _concat_data(grouped)
@@ -186,27 +192,23 @@ def _fit_calibrator(
     covariate: np.ndarray | None,
     kind: CalibratorKind,
     seed: int,
+    prompt_ids: np.ndarray,
 ) -> JudgeCalibrator:
-    if kind == "two_stage":
-        calibrator = JudgeCalibrator(
-            random_seed=seed,
-            calibration_mode="two_stage",
-            covariate_names=["covariate"],
-        )
-        calibrator.fit_transform(
-            judge_scores=judge,
-            oracle_labels=oracle,
-            covariates=covariate.reshape(-1, 1) if covariate is not None else None,
-        )
-        return calibrator
-
+    """Fit on observed labels, keeping repeated prompt clusters in one fold."""
+    if kind == "two_stage" and covariate is None:
+        raise ValueError("Two-stage calibration requires the covariate array.")
     calibrator = JudgeCalibrator(
         random_seed=seed,
-        calibration_mode="monotone",
+        calibration_mode=kind,
+        covariate_names=["covariate"] if kind == "two_stage" else None,
     )
-    calibrator.fit_transform(
+    mask = np.isfinite(oracle)
+    calibrator.fit_cv(
         judge_scores=judge,
-        oracle_labels=oracle,
+        oracle_labels=oracle[mask],
+        oracle_mask=mask,
+        prompt_ids=prompt_ids.tolist(),
+        covariates=covariate.reshape(-1, 1) if covariate is not None else None,
     )
     return calibrator
 
@@ -233,8 +235,44 @@ def _method_estimates(
     audit_slice: Dict[str, np.ndarray],
     eval_by_policy: Dict[str, Dict[str, np.ndarray]],
     seed: int,
+    delta_max: float,
+    audit_alpha: float,
+    family_size: int,
 ) -> Tuple[Dict[str, Dict[str, float]], Dict[str, float | str]]:
     """Compute all method estimates and transport diagnostics."""
+    # This is an independent audit of the OLD fit. Record it before using the
+    # probes for corrections/refits; the same rows cannot certify those refits.
+    old_ids = set(old_labels["prompt_id"])
+    audit_ids = set(audit_slice["prompt_id"])
+    eval_ids = {pid for data in eval_by_policy.values() for pid in data["prompt_id"]}
+    if old_ids & audit_ids or old_ids & eval_ids or audit_ids & eval_ids:
+        raise ValueError(
+            "Old fit, audit, and evaluation prompt clusters must be disjoint."
+        )
+    probe = [
+        {"prompt_id": str(pid), "judge_score": float(j), "oracle_label": float(y)}
+        for pid, j, y in zip(
+            audit_slice["prompt_id"], audit_slice["judge"], audit_slice["oracle"]
+        )
+    ]
+    diag = audit_transportability(
+        old_calibrator,
+        probe,
+        group_label="old_calibrator:audit_profile_mixture",
+        delta_max=delta_max,
+        alpha=audit_alpha,
+        family_size=family_size,
+    )
+    transport_info: Dict[str, float | str] = {
+        "delta_hat": float(diag.delta_hat),
+        "delta_ci_low": float(diag.delta_ci[0]),
+        "delta_ci_high": float(diag.delta_ci[1]),
+        "status": str(diag.status),
+        "delta_max": float(delta_max),
+        "alpha": float(audit_alpha),
+        "family_size": family_size,
+        "effective_clusters": float(diag.effective_clusters),
+    }
     method_to_estimates: Dict[str, Dict[str, float]] = {
         method: {} for method in METHODS
     }
@@ -277,6 +315,7 @@ def _method_estimates(
         covariate=None,
         kind="monotone",
         seed=seed + 11,
+        prompt_ids=audit_slice["prompt_id"],
     )
     recent_two_stage = _fit_calibrator(
         judge=audit_slice["judge"],
@@ -284,6 +323,7 @@ def _method_estimates(
         covariate=audit_slice["covariate"],
         kind="two_stage",
         seed=seed + 13,
+        prompt_ids=audit_slice["prompt_id"],
     )
 
     # Pooled refits
@@ -294,12 +334,16 @@ def _method_estimates(
     pooled_cov = np.concatenate(
         [old_labels["covariate"], audit_slice["covariate"]], axis=0
     )
+    pooled_prompt_ids = np.concatenate(
+        [old_labels["prompt_id"], audit_slice["prompt_id"]]
+    )
     pooled_mono = _fit_calibrator(
         judge=pooled_judge,
         oracle=pooled_oracle,
         covariate=None,
         kind="monotone",
         seed=seed + 17,
+        prompt_ids=pooled_prompt_ids,
     )
     pooled_two_stage = _fit_calibrator(
         judge=pooled_judge,
@@ -307,6 +351,7 @@ def _method_estimates(
         covariate=pooled_cov,
         kind="two_stage",
         seed=seed + 19,
+        prompt_ids=pooled_prompt_ids,
     )
 
     for policy, data in eval_by_policy.items():
@@ -335,21 +380,6 @@ def _method_estimates(
             kind="two_stage",
         )
 
-    # Transport diagnostics for old calibrator on audit slice
-    probe = [
-        {
-            "judge_score": float(j),
-            "oracle_label": float(y),
-        }
-        for j, y in zip(audit_slice["judge"], audit_slice["oracle"])
-    ]
-    diag = audit_transportability(old_calibrator, probe, group_label="audit_slice")
-    transport_info: Dict[str, float | str] = {
-        "delta_hat": float(diag.delta_hat),
-        "delta_ci_low": float(diag.delta_ci[0]),
-        "delta_ci_high": float(diag.delta_ci[1]),
-        "status": str(diag.status),
-    }
     return method_to_estimates, transport_info
 
 
@@ -380,7 +410,29 @@ def run_experiment_suite(
     seed: int = 42,
     scenarios: Iterable[Scenario] | None = None,
     audit_profiles: Iterable[str] | None = None,
+    delta_max: float = 0.05,
+    audit_alpha: float = 0.05,
+    family_size: int | None = None,
 ) -> pd.DataFrame:
+    """Simulate method error; audit the old fit against a predeclared margin.
+
+    The default margin is an illustrative five points on the synthetic [0, 1]
+    oracle scale. The audit population is each profile's sampling mixture;
+    its verdict is not a per-policy transport claim or an audit of a refit.
+    Simultaneity covers all scenario/profile/size cells within one replicate.
+    Replicates are separate simulated worlds used to estimate rates.
+    """
+    if not audit_sizes or min(audit_sizes) < 10:
+        raise ValueError("Provide audit sizes of at least 10 independent prompts.")
+    if n_reps < 1 or n_old_labels < 4 or n_eval_per_policy < 1:
+        raise ValueError(
+            "Need positive replicates/evaluation sizes and at least 4 old labels."
+        )
+    if not np.isfinite(delta_max) or delta_max <= 0:
+        raise ValueError("delta_max must be a finite positive predeclared margin.")
+    if not 0 < audit_alpha < 0.5:
+        raise ValueError("audit_alpha must be in (0, 0.5).")
+    audit_sizes = sorted(set(audit_sizes))
     rng_master = np.random.default_rng(seed)
     rows: List[Dict[str, object]] = []
     max_audit_size = max(audit_sizes)
@@ -402,6 +454,20 @@ def run_experiment_suite(
     else:
         profile_items = [(name, AUDIT_PROFILES[name]) for name in audit_profiles]
 
+    n_audits = len(scenario_values) * len(profile_items) * len(audit_sizes)
+    if not n_audits:
+        raise ValueError("Select at least one scenario and audit profile.")
+    if family_size is None:
+        family_size = n_audits
+    if (
+        isinstance(family_size, bool)
+        or not isinstance(family_size, int)
+        or family_size < n_audits
+    ):
+        raise ValueError(
+            f"family_size must be an integer >= {n_audits} configured audits."
+        )
+
     for scenario in scenario_values:
         for audit_profile_name, audit_profile in profile_items:
             for rep in range(n_reps):
@@ -415,6 +481,7 @@ def run_experiment_suite(
                     scenario=scenario,
                     period="old",
                     rng=rng,
+                    sample_prefix=f"old:{rep_seed}",
                 )
                 old_calibrator = _fit_calibrator(
                     judge=old_labels["judge"],
@@ -422,6 +489,7 @@ def run_experiment_suite(
                     covariate=None,
                     kind="monotone",
                     seed=rep_seed + 7,
+                    prompt_ids=old_labels["prompt_id"],
                 )
 
                 # New-period evaluation data per policy (used for truth + estimates).
@@ -434,6 +502,7 @@ def run_experiment_suite(
                         scenario=scenario,
                         period="new",
                         rng=rng,
+                        sample_prefix=f"evaluation:{rep_seed}",
                     )
                     eval_by_policy[policy.name] = data
                     truth[policy.name] = float(np.mean(data["oracle"]))
@@ -444,6 +513,7 @@ def run_experiment_suite(
                     scenario=scenario,
                     audit_profile=audit_profile,
                     rng=rng,
+                    sample_prefix=f"audit:{rep_seed}",
                 )
                 perm = rng.permutation(max_audit_size)
                 for key in audit_full.keys():
@@ -459,6 +529,9 @@ def run_experiment_suite(
                         audit_slice=audit_slice,
                         eval_by_policy=eval_by_policy,
                         seed=rep_seed + audit_size,
+                        delta_max=delta_max,
+                        audit_alpha=audit_alpha,
+                        family_size=family_size,
                     )
 
                     for method, estimates in method_to_estimates.items():
@@ -480,6 +553,12 @@ def run_experiment_suite(
                                 ],
                                 "transport_delta_ci_high": transport_info[
                                     "delta_ci_high"
+                                ],
+                                "transport_delta_max": transport_info["delta_max"],
+                                "transport_alpha": transport_info["alpha"],
+                                "transport_family_size": transport_info["family_size"],
+                                "transport_effective_clusters": transport_info[
+                                    "effective_clusters"
                                 ],
                             }
                         )
@@ -522,7 +601,11 @@ def summarize_results(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
         .rename_axis(columns=None)
     )
-    for col in ("PASS", "WARN", "FAIL"):
+    statuses = ("PASS", "FAIL", "INCONCLUSIVE", "NOT_GRADED", "NOT_CHECKED")
+    unexpected = set(df["transport_status"]) - set(statuses)
+    if unexpected:
+        raise ValueError(f"Unknown transport statuses: {sorted(unexpected)}")
+    for col in statuses:
         if col not in status_pivot.columns:
             status_pivot[col] = 0
 
@@ -531,9 +614,8 @@ def summarize_results(df: pd.DataFrame) -> pd.DataFrame:
         on=["scenario", "audit_profile", "audit_size", "method"],
         how="left",
     )
-    merged["pass_rate"] = merged["PASS"] / merged["n"]
-    merged["warn_rate"] = merged["WARN"] / merged["n"]
-    merged["fail_rate"] = merged["FAIL"] / merged["n"]
+    for status in statuses:
+        merged[f"{status.lower()}_rate"] = merged[status] / merged["n"]
     return merged
 
 
@@ -626,6 +708,19 @@ def main() -> int:
         )
     )
     parser.add_argument(
+        "--delta-max",
+        type=float,
+        required=True,
+        help="Predeclared practical residual margin in synthetic [0, 1] oracle units.",
+    )
+    parser.add_argument("--audit-alpha", type=float, default=0.05)
+    parser.add_argument(
+        "--family-size",
+        type=int,
+        default=None,
+        help="Audit family size; defaults to all scenario/profile/size cells per replicate.",
+    )
+    parser.add_argument(
         "--audit-sizes",
         type=str,
         default="20,50,100,200",
@@ -678,6 +773,9 @@ def main() -> int:
         n_old_labels=args.n_old_labels,
         n_eval_per_policy=args.n_eval_per_policy,
         seed=args.seed,
+        delta_max=args.delta_max,
+        audit_alpha=args.audit_alpha,
+        family_size=args.family_size,
     )
     summary = summarize_results(df)
 
@@ -693,6 +791,13 @@ def main() -> int:
                 "seed": args.seed,
                 "audit_profiles": AUDIT_PROFILES,
                 "methods": list(METHODS),
+                "transport_delta_max": args.delta_max,
+                "transport_alpha": args.audit_alpha,
+                "transport_family_size": int(df["transport_family_size"].iloc[0]),
+                "transport_estimand": "Old-calibrator mean residual in each audit-profile mixture",
+                "transport_family": "All scenario/profile/audit-size cells within a replicate; replicates are separate simulated worlds",
+                "refit_transport_validated": False,
+                "power_validated": False,
             },
             f,
             indent=2,

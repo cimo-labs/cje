@@ -49,11 +49,16 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from cje_bridges._labels import ResponseIds, finite_number
 
 
 def _stable_json(obj: Any) -> str:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
 
 
 def _hash_str(s: str) -> str:
@@ -65,7 +70,7 @@ def _as_float(v: Any) -> Optional[float]:
         # Avoid silently treating True/False as 1/0 unless user explicitly wants it.
         return None
     if isinstance(v, (int, float)):
-        return float(v)
+        return finite_number(v, context="LangSmith feedback score")
     return None
 
 
@@ -219,6 +224,7 @@ def main() -> int:
 
     fresh_draws: Dict[str, List[Dict[str, Any]]] = {}
     template_rows: List[Dict[str, Any]] = []
+    response_ids = ResponseIds()
 
     for project_name, policy_name in zip(projects, policies):
         # Use is_root=True unless user opts into child runs.
@@ -264,9 +270,16 @@ def main() -> int:
 
             prompt_id = _run_prompt_id(r)
             judge_score = judge_map[rid].score
+            response_id = response_ids.create(
+                policy_name,
+                prompt_id,
+                getattr(r, "outputs", None),
+                native_id=rid,
+            )
 
             sample: Dict[str, Any] = {
                 "prompt_id": prompt_id,
+                "response_id": response_id,
                 "judge_score": judge_score,
             }
             if args.oracle_feedback_key and rid in oracle_map:
@@ -281,6 +294,7 @@ def main() -> int:
                         "project_name": project_name,
                         "run_id": rid,
                         "prompt_id": prompt_id,
+                        "response_id": response_id,
                         "inputs_json": _stable_json(getattr(r, "inputs", {}) or {}),
                         "outputs_json": _stable_json(getattr(r, "outputs", {}) or {}),
                         "judge_score": judge_score,
@@ -310,6 +324,7 @@ def main() -> int:
                 "project_name",
                 "run_id",
                 "prompt_id",
+                "response_id",
                 "inputs_json",
                 "outputs_json",
                 "judge_score",
@@ -333,7 +348,7 @@ def main() -> int:
                 "Provide --oracle-feedback-key or label a subset via the CSV template.",
                 file=sys.stderr,
             )
-            return 0
+            return 1
         try:
             from cje import analyze_dataset  # type: ignore
 
@@ -344,9 +359,14 @@ def main() -> int:
                 print(f"Estimates count: {len(est0)}")
         except Exception as e:
             print(f"CJE run failed: {e}", file=sys.stderr)
+            return 1
 
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except (ValueError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(2)

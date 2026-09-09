@@ -49,7 +49,7 @@ The minimal record is two fields:
 **Fields:**
 - `prompt_id`: Identifies the prompt (optional — auto-generated from a `prompt` field's hash if missing; integer ids are coerced to strings). Records with neither `prompt_id` nor `prompt` are rejected — ids are never fabricated.
 - `judge_score`: **Required** — judge evaluation on any bounded scale
-- `oracle_label`: Optional — ground truth for reward calibration (label 5–25% of rows; CJE needs ≥ 10 labeled rows pooled across policies)
+- `oracle_label`: Optional — ground truth for reward calibration (probability-sample a slice of rows; ≥10 independent labeled prompt clusters recommended, 4 required for calibration)
 - `response`: Optional — the generated text (required only when `include_response_length=True`)
 - `draw_idx`: Optional — missing values auto-assign sequentially per prompt (0, 1, 2, ...); explicit duplicate values for the same prompt are an error naming both rows
 - `fold_id`: Optional — CV fold override
@@ -80,7 +80,7 @@ A calibration file needs only judge + oracle pairs:
 {"prompt_id": "calib_1", "judge_score": 0.81, "oracle_label": 0.77}
 ```
 
-No `prompt`, `response`, or logprob fields are required (they're accepted and ignored). Your old 0.3.x logged data works here as-is — the judge/oracle pairs are used to learn the judge→oracle mapping and everything else is ignored. Calibration values must already be in [0, 1]: out-of-range `judge_score`/`oracle_label` values raise a hard error naming the observed range (rescale them, or pass your data in-memory via `fresh_draws_data`, which auto-normalizes any bounded scale).
+No `prompt`, `response`, or logprob fields are required. Old 0.3.x logged data can supply the judge/oracle pairs; prompt IDs preserve dependence clusters. Calibration files default to [0, 1]: declare `calibration_judge_scale` and `calibration_oracle_scale` in `analyze_dataset` for other bounded scales, or rescale before calling the low-level loader. Out-of-range values without a matching scale declaration raise an error. In-memory `fresh_draws_data` can also auto-normalize bounded scales.
 
 ## Core Concepts
 
@@ -163,7 +163,7 @@ print(f"Difference: {comparison['difference']:.3f} (p={comparison['p_value']:.3f
 
 # Typed results — metadata mirrors stay the serialized source of truth
 print(result.summary())              # per-policy estimates + CIs + gate flags
-verdict = result.best_policy()       # highest point estimate plus limitations
+verdict = result.best_policy()       # best gate-passing policy, with any demotion explained
 print(verdict.name, verdict.flagged, verdict.runner_up)
 gates = result.gates                 # {policy: GateResult(flagged, refuse_level_claims, reasons)}
 policies_typed = result.target_policies  # == metadata["target_policies"]
@@ -216,9 +216,13 @@ from cje import analyze_dataset
 # Auto-compute response_length (word count; requires a "response" field)
 result = analyze_dataset(fresh_draws_dir="responses/", include_response_length=True)
 
-# Or use custom metadata fields
+# Or use numeric metadata fields (e.g. domain=1 for health, 0 otherwise)
 result = analyze_dataset(fresh_draws_dir="responses/", calibration_covariates=["domain"])
 ```
+
+Categorical strings are not accepted as covariates. For several domains, create explicit
+indicator columns, pass their names, and use the same encoding for calibration, evaluation,
+and probes; do not imply an ordering by assigning arbitrary numeric category codes.
 
 Under the hood, `compute_response_covariates()` fills `FreshDrawSample.metadata`:
 

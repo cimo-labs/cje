@@ -8,7 +8,7 @@ description: Runs CJE (Causal Judge Evaluation, pip install cje-eval) to compare
 LLM-judge scores are cheap but can be miscalibrated: in CJE's Chatbot Arena benchmark, naive
 95% CIs built on raw judge scores covered the truth 0% of the time. CJE calibrates the judge
 against a pooled slice
-of ground-truth labels (≥10 recommended; 4 is the hard floor), evaluates every policy at scale,
+of ground-truth labels (≥10 independent labeled prompt clusters recommended; 4 is the calibration floor), evaluates every policy at scale,
 and refuses claims the data can't support.
 
 **Hard rule: never report a raw judge-score average as a policy comparison or a quality level.**
@@ -19,15 +19,18 @@ and refuses claims the data can't support.
   **Planning flow**. Existing data and only a comparison requested? Use the analysis routes
   below; planning is optional, not a prerequisite.
 - No judge scores at all → **Step 0** below, then continue.
-- Judge scores but <4 oracle labels total → **Labeling loop**. Do not fabricate labels; do not
+- Complete oracle coverage for one sample → `calibrated_mean_ci` returns the direct oracle
+  mean without fitting a calibrator. The four-cluster calibration floor does not apply;
+  one independent cluster still cannot support a confidence interval.
+- Partial oracle coverage with <4 independent labeled prompt clusters → **Labeling loop**. Do not fabricate labels; do not
   fall back to raw means (0 labels runs only as a loudly-flagged `naive_direct` fallback, and
   1–3 labels fall back to the same loudly-flagged UNCALIBRATED `naive_direct` tier in
   `analyze_dataset` — a calibrator cannot be fit below 4 independent labeled clusters. Treat
   the run as blocked and never report those numbers. `calibrated_mean_ci` raises a
-  `ValueError` for <4 labels).
-- 4–9 labels → runs, but calibration folds auto-reduce with a warning and CIs are noisier.
+  `ValueError` below this floor when calibration is needed).
+- 4–9 independent labeled prompt clusters → runs, but calibration folds auto-reduce with a warning and CIs are noisier.
   Report results as provisional and run the labeling loop toward ≥10.
-- ≥10 labels, two or more policies → **Canonical flow** (`analyze_dataset`).
+- ≥10 independent labeled prompt clusters, two or more policies → **Canonical flow** (`analyze_dataset`).
 - One sample of scores, want a calibrated mean + CI → `calibrated_mean_ci`.
 - Reusing a previously fitted calibrator on new data (new month/domain/policy family) →
   **Transport audit** first.
@@ -74,8 +77,10 @@ probes cover the advantaged policies. Then continue below.
 ## Reshape the user's data
 
 Target shape: `fresh_draws_data={policy_name: [records]}` where each record is
-`{"prompt_id": ..., "judge_score": ..., "oracle_label": ...}` — `prompt_id` optional (enables
-paired comparisons), `judge_score` required (any bounded scale, auto-normalized; pass 0–100 or
+`{"prompt_id": ..., "judge_score": ..., "oracle_label": ...}` — each record requires `prompt_id`
+or nonempty `prompt` text from which CJE can derive it. Reuse the same prompt ID across
+policies and repeated responses to preserve pairing and dependence clusters; a response ID
+is a separate identity. `judge_score` is required (any bounded scale, auto-normalized; pass 0–100 or
 Likert as-is), `oracle_label` optional (`None`/`NaN`/missing = unlabeled). You are good at data
 reshaping: convert the user's CSV/JSON/eval-harness export yourself with a few lines of pandas —
 do not ask the user to reformat their data. Files on disk (`fresh_draws_dir`) and separate
@@ -215,8 +220,10 @@ above; do not treat this starter batch as a sufficient variance-fitting pilot.
   the same loudly-flagged UNCALIBRATED `naive_direct` tier in `analyze_dataset` (a calibrator
   cannot be fit below 4 independent labeled clusters; all policies gate-FLAGGED) — treat the
   run as blocked and never report those numbers; `calibrated_mean_ci` raises a `ValueError`
-  for <4 labels. 4–9 labels calibrate with reduced folds — report the CIs as noisier and
-  provisional, and recommend ≥10. Never fabricate, impute, or self-generate oracle labels to
+  for <4 independent labeled clusters when calibration is needed. Complete oracle coverage
+  in the array API instead returns the direct oracle mean without calibration. With 4–9
+  independent labeled clusters, folds reduce — report the CIs as noisier and provisional,
+  and recommend ≥10. Never fabricate, impute, or self-generate oracle labels to
   get past the floor — run the labeling loop.
 - **REFUSE-LEVEL badge on a policy**: never state an absolute quality number for that policy.
   The scalar badge does not establish ranking validity; use the paired comparison and separate
@@ -263,7 +270,7 @@ and analysis can be inspected and reproduced, not that their assumptions are gua
 | Buying labels under every policy | Labels pool; one calibration can serve every policy — but grade that transfer with held-out probes before relying on it |
 | Reusing last month's calibrator silently | Held-out `transport_audit` with an explicit margin and at least 20 effective clusters |
 | Rescaling Likert/0–100 scores before calling | Pass as-is; bounded scales auto-normalize |
-| Running with <4 labels, or inventing labels | `analyze_dataset` returns only the loudly-flagged UNCALIBRATED `naive_direct` tier (0–3 labels; `calibrated_mean_ci` raises a `ValueError`) — treat as blocked and run the labeling loop |
+| Fitting calibration with <4 independent labeled prompt clusters, or inventing labels | Treat the flagged `naive_direct` fallback as blocked and run the labeling loop. The array API raises when partial coverage needs calibration; complete oracle coverage can use the direct oracle mean. |
 
 Full signatures, `fresh_draws_dir`/CLI usage, planning API, diagnostics glossary, and
 troubleshooting: read `reference.md` in this directory.

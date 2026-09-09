@@ -18,6 +18,7 @@ curl -fsSL https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/SKILL
 curl -fsSL https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/reference.md -o ~/.claude/skills/cje/reference.md
 
 # Claude Code, one project (from a checkout of this repo)
+mkdir -p .claude/skills
 cp -r skills/cje .claude/skills/
 ```
 

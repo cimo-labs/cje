@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.7.1] - 2026-09-09
+
+Maintenance release for installed-package diagnostics and repository examples.
+Core estimation and inference behavior is unchanged. Bridge scripts, notebooks,
+and the agent skill are distributed through the repository.
+
+### Fixed
+
+- Show planning budgets in dollars, so a $500 budget is not rounded to $0K.
+- Keep calibration and inference return types compatible with newer NumPy stubs
+  without changing their numerical results.
+- Preserve response-level label identity in integration bridges, accept sparse
+  label sheets, reject ambiguous joins and OpenCompass model-name collisions,
+  parse verdicts strictly, and return a failing exit status when CJE fails.
+- Keep notebook transport audits independent of calibration, account for all
+  planned comparisons, recover incomplete sample caches, and distinguish
+  inconclusive audit results from passing results.
+- Update the offset-versus-refit experiment to the current calibration API,
+  require a CLI audit tolerance, and report graded audit outcomes with explicit
+  comparison families and independent prompt clusters.
+- Correct executable documentation and skill guidance for calibration inputs,
+  prompt identity, inference settings, and estimator setup.
+
+### Changed
+
+- Require notebook execution dependencies in development, declare optional
+  research dependencies, and run notebook, documentation, experiment, and
+  isolated core-wheel checks in CI and release validation.
+- Reuse unchanged expensive simulation fixtures across assertions while
+  retaining their full simulation settings and acceptance checks.
+
 ## [0.7.0] - 2026-08-24
 
 Default-inference release. Calibrated partial-label Direct evaluation now uses

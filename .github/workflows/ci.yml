@@ -47,6 +47,38 @@ jobs:
           --cov-report=xml
           --cov-fail-under=85
 
+  examples:
+    name: Notebooks and research examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Poetry
+        run: pipx install "poetry==${POETRY_VERSION}"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: poetry
+      - name: Install locked example dependencies
+        run: |
+          poetry check --lock
+          poetry install --sync --with research --no-interaction
+      - name: Execute notebooks, documentation, and experiment regressions
+        run: >-
+          poetry run python -m pytest cje/tests/test_examples.py
+          cje/tests/test_doc_workflows.py experiments --durations=15
+      - name: Verify an installed core-only wheel
+        run: |
+          set -euo pipefail
+          poetry build
+          VERSION="$(poetry version -s)"
+          WHEEL="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "${WHEEL}"
+          python -m venv "${RUNNER_TEMP}/cje-wheel-smoke"
+          "${RUNNER_TEMP}/cje-wheel-smoke/bin/python" -m pip install "${WHEEL}"
+          cd "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/cje-wheel-smoke/bin/python" "${GITHUB_WORKSPACE}/scripts/smoke_wheel.py" --expected-version "${VERSION}"
+
   quality:
     name: Format and types
     runs-on: ubuntu-latest
