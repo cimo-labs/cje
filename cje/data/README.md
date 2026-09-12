@@ -51,7 +51,7 @@ The minimal record is two fields:
 - `judge_score`: **Required** — judge evaluation on any bounded scale
 - `oracle_label`: Optional — ground truth for reward calibration (probability-sample a slice of rows; ≥10 independent labeled prompt clusters recommended, 4 required for calibration)
 - `response`: Optional — the generated text (required only when `include_response_length=True`)
-- `draw_idx`: Optional — missing values auto-assign sequentially per prompt (0, 1, 2, ...); explicit duplicate values for the same prompt are an error naming both rows
+- `draw_idx`: Optional — may appear at the top level or in `metadata`; conflicting aliases are rejected. Missing values auto-assign sequentially per prompt (0, 1, 2, ...); explicit duplicate values for the same prompt are an error naming both rows.
 - `fold_id`: Optional — CV fold override
 - `target_policy`: Optional in per-policy files (inferred from the filename); **required** per record in a single combined JSONL file
 - `metadata`: Optional dict for per-response covariates

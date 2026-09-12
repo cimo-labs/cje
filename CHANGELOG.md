@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Preserve `metadata.draw_idx` when loading fresh responses, reject conflicting
+  top-level and metadata draw indices, and apply duplicate-draw checks to either
+  representation instead of silently assigning new indices.
+- Correct the API guide's small-label behavior: count independent prompt
+  clusters, distinguish raw fallback from direct oracle estimates, and replace
+  fixed labeling-percentage advice with sampling and precision requirements.
+
 ## [0.7.1] - 2026-09-09
 
 Maintenance release for installed-package diagnostics and repository examples.

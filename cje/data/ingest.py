@@ -160,6 +160,7 @@ def canonicalize_record(
 
     prompt_raw = read_aliased_field(record, prompt_field)
     response_raw = read_aliased_field(record, response_field)
+    draw_idx = read_aliased_field(record, "draw_idx")
     oracle_raw = read_aliased_field(record, oracle_field)
     oracle_label: Optional[float] = None
     if oracle_raw is not None:
@@ -311,8 +312,8 @@ def canonicalize_record(
         canonical["reward"] = record["reward"]
     if target_policy is not None:
         canonical["target_policy"] = str(target_policy)
-    if "draw_idx" in record:
-        canonical["draw_idx"] = record["draw_idx"]
+    if draw_idx is not None:
+        canonical["draw_idx"] = draw_idx
     if observation_id_raw is not None:
         canonical["observation_id"] = str(observation_id_raw)
     return canonical
