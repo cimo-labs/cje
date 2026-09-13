@@ -9,10 +9,29 @@ from typing import Optional, Dict, Any, Literal, Callable, List
 from sklearn.isotonic import IsotonicRegression
 from sklearn.preprocessing import SplineTransformer
 from sklearn.linear_model import RidgeCV
-from sklearn.pipeline import make_pipeline
+from sklearn.pipeline import Pipeline, make_pipeline
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _predict_spline_ridge(model: Pipeline, X: np.ndarray) -> np.ndarray:
+    """Evaluate the fitted smooth map in a fixed order for every row.
+
+    Ridge's matrix product can round differently for different batch shapes.
+    A last-bit difference can cross an ECDF knot and become a large change in
+    calibrated reward. Accumulate the same spline coefficients in the same
+    order for training ranks, full predictions and held-out fold predictions.
+    This changes no fitted coefficients and introduces no tolerance-based ties.
+    """
+    spline, ridge = model.steps[0][1], model.steps[1][1]
+    features = np.asarray(spline.transform(X), dtype=float)
+    coefficients = np.asarray(ridge.coef_, dtype=float)
+    predictions = np.zeros(features.shape[0], dtype=float)
+    for column, coefficient in enumerate(coefficients):
+        predictions += features[:, column] * coefficient
+    predictions += float(ridge.intercept_)
+    return predictions
 
 
 def _fit_ecdf(
@@ -316,7 +335,7 @@ class FlexibleCalibrator:
             self._g_models[k] = g_model
 
             # Fit ECDF on g(S, X_cov) predictions for this fold's training data
-            g_train = g_model.predict(X_train)
+            g_train = _predict_spline_ridge(g_model, X_train)
             self._ecdf_models[k] = _fit_ecdf(g_train, weight_train)
 
         # Step 2: Fit isotonic on rank-transformed space for each fold
@@ -336,7 +355,7 @@ class FlexibleCalibrator:
                     X_train = S[train_mask].reshape(-1, 1)
 
                 # Transform training data through g and ECDF
-                g_train = self._g_models[k].predict(X_train)
+                g_train = _predict_spline_ridge(self._g_models[k], X_train)
                 T_ranked_train = self._ecdf_models[k](g_train)
             else:
                 # Fallback: use ECDF on original scores
@@ -402,7 +421,7 @@ class FlexibleCalibrator:
                 self._full_g_model.fit(X_full, Y, **fit_kwargs)
 
                 # Fit ECDF on g(S, X_cov)
-                g_full = self._full_g_model.predict(X_full)
+                g_full = _predict_spline_ridge(self._full_g_model, X_full)
                 self._full_ecdf = _fit_ecdf(g_full, sample_weight)
 
                 # Fit isotonic on ranked space
@@ -507,7 +526,7 @@ class FlexibleCalibrator:
                 else:
                     X = S.reshape(-1, 1)
 
-                g_pred = self._full_g_model.predict(X)
+                g_pred = _predict_spline_ridge(self._full_g_model, X)
                 T_ranked = self._full_ecdf(g_pred)
                 return np.asarray(self._full_iso_model.predict(T_ranked))
             elif self._full_monotone_model is not None:
@@ -526,7 +545,7 @@ class FlexibleCalibrator:
                                 X = np.column_stack([S, covariates])
                             else:
                                 X = S.reshape(-1, 1)
-                            g_pred = g_model.predict(X)
+                            g_pred = _predict_spline_ridge(g_model, X)
                             T_ranked = self._ecdf_models[k](g_pred)
                         else:
                             T_ranked = self._ecdf_models[k](S)
@@ -556,7 +575,7 @@ class FlexibleCalibrator:
                             X_fold = np.column_stack([S[mask], covariates[mask]])
                         else:
                             X_fold = S[mask].reshape(-1, 1)
-                        g_pred = self._g_models[k].predict(X_fold)
+                        g_pred = _predict_spline_ridge(self._g_models[k], X_fold)
                         T_ranked = self._ecdf_models[k](g_pred)
                     else:
                         T_ranked = self._ecdf_models[k](S[mask])
@@ -573,7 +592,7 @@ class FlexibleCalibrator:
                             X_fallback = np.column_stack([S[mask], covariates[mask]])
                         else:
                             X_fallback = S[mask].reshape(-1, 1)
-                        g_pred = self._full_g_model.predict(X_fallback)
+                        g_pred = _predict_spline_ridge(self._full_g_model, X_fallback)
                         T_ranked = self._full_ecdf(g_pred)
                         Y_hat[mask] = self._full_iso_model.predict(T_ranked)
                     elif self._full_monotone_model is not None:
