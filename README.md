@@ -137,6 +137,8 @@ print(results.metadata["transport_audits"]["fable-5"]["status"])
 
 `PASS` requires the simultaneous residual CI to lie wholly inside `[-delta_max, +delta_max]`; wholly outside is `FAIL`; overlap is `INCONCLUSIVE`; omitting the margin is `NOT_GRADED`. Fewer than 20 effective clusters withholds `PASS` but can still grade `FAIL` — a policy cannot escape a `FAIL` by supplying too small a probe. Policies without probes stay `NOT_CHECKED`. Only an observed `FAIL` hard-flags a policy; every other unresolved state remains visible as a limitation without suppressing the estimate. For an already fitted calibrator, the array primitive `transport_audit(probe_scores, probe_labels, results.calibrator, delta_max=...)` runs the same audit directly.
 
+**Plan audit labels before collecting them.** `plan_transport_audits` estimates independent audit units under declared residual assumptions, checks availability, and counts calibration plus audit ratings in the human-label budget. It is a Gaussian planning model, not an observed audit. See the [audit budget guide](guides/audit-budget-planning.md).
+
 **Reliability-aware winner.** `results.best_policy()` demotes a gate-flagged argmax to the best gate-passing policy (the default, `reliable_only=True`), and the demotion is loud — the flagged raw winner stays visible with its limitations (`reliable_only=False` returns the raw argmax, marked `flagged`):
 
 ```text
