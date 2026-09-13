@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-09-13
+
+Maintenance release for response draw identity and calibration guidance. The
+estimation and inference algorithms are unchanged.
+
 ### Fixed
 
 - Preserve `metadata.draw_idx` when loading fresh responses, reject conflicting
