@@ -67,7 +67,18 @@ from .simulation_planning import (
     correlation_to_r2,
 )
 
+from .audit_planning import (
+    AuditScenario,
+    AuditBudgetPlan,
+    PolicyAuditPlan,
+    plan_transport_audits,
+)
+
 __all__ = [
+    "AuditScenario",
+    "AuditBudgetPlan",
+    "PolicyAuditPlan",
+    "plan_transport_audits",
     # Data models
     "DirectDiagnostics",
     "Status",
