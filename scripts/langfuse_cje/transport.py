@@ -78,7 +78,8 @@ def collect(client: Any, config: dict) -> dict:
     policies = config["policies"]
     if len(policies) != 2 or len(set(policies.values())) != 2:
         raise ValueError("This importer needs two distinct experiment IDs")
-    items, scores = {}, []
+    items: dict[str, list[dict]] = {}
+    scores: list[dict] = []
     for policy, experiment_id in policies.items():
         identifier(policy, "policy")
         identifier(experiment_id, "experiment ID")
