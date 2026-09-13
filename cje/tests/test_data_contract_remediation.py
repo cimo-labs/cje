@@ -10,6 +10,7 @@ import pytest
 
 from cje import analyze_dataset
 from cje.data.fresh_draws import (
+    FreshDrawDataset,
     discover_policies_from_fresh_draws,
     fresh_draws_data_from_dir,
     fresh_draws_from_dict,
@@ -303,6 +304,70 @@ def test_draw_indices_are_unique_when_explicit_and_implicit_values_mix() -> None
         }
     )
     assert [sample.draw_idx for sample in datasets["a"].samples] == [1, 0]
+
+
+def _load_draw_alias_records(
+    records: list[dict[str, Any]], tmp_path: Path, source_kind: str
+) -> FreshDrawDataset:
+    if source_kind == "memory":
+        datasets, _ = fresh_draws_from_dict({"a": records})
+        return datasets["a"]
+    path = tmp_path / "a.jsonl"
+    path.write_text(
+        "\n".join(json.dumps({**record, "target_policy": "a"}) for record in records)
+        + "\n"
+    )
+    if source_kind == "directory":
+        return load_fresh_draws_auto(tmp_path, "a")
+    return FreshDrawLoader.load_from_jsonl(str(path))["a"]
+
+
+@pytest.mark.parametrize("source_kind", ["memory", "directory", "combined"])
+@pytest.mark.parametrize("location", ["top_level", "metadata", "both"])
+def test_draw_index_aliases_preserve_identity_across_fresh_loaders(
+    tmp_path: Path, source_kind: str, location: str
+) -> None:
+    records: list[dict[str, Any]] = []
+    for draw_idx in [0, 7]:
+        record: dict[str, Any] = {"prompt_id": "p", "judge_score": 0.4}
+        if location in {"top_level", "both"}:
+            record["draw_idx"] = draw_idx
+        if location in {"metadata", "both"}:
+            record["metadata"] = {"draw_idx": draw_idx}
+        records.append(record)
+    records.append({"prompt_id": "p", "judge_score": 0.6})
+
+    dataset = _load_draw_alias_records(records, tmp_path, source_kind)
+
+    assert [sample.draw_idx for sample in dataset.samples] == [0, 7, 1]
+
+
+@pytest.mark.parametrize("source_kind", ["memory", "directory", "combined"])
+def test_conflicting_draw_index_aliases_fail_at_public_ingestion(
+    tmp_path: Path, source_kind: str
+) -> None:
+    records = [
+        {
+            "prompt_id": "p",
+            "judge_score": 0.4,
+            "draw_idx": 2,
+            "metadata": {"draw_idx": 7},
+        }
+    ]
+    with pytest.raises(ValueError, match="Conflicting values for field 'draw_idx'"):
+        _load_draw_alias_records(records, tmp_path, source_kind)
+
+
+@pytest.mark.parametrize("source_kind", ["memory", "directory", "combined"])
+def test_duplicate_metadata_draw_indices_fail_at_public_ingestion(
+    tmp_path: Path, source_kind: str
+) -> None:
+    records = [
+        {"prompt_id": "p", "judge_score": score, "metadata": {"draw_idx": 7}}
+        for score in [0.4, 0.6]
+    ]
+    with pytest.raises(ValueError, match="Duplicate draw_idx=7.*prompt_id='p'"):
+        _load_draw_alias_records(records, tmp_path, source_kind)
 
 
 def test_lower_level_fresh_loaders_share_draw_identity_contract(
