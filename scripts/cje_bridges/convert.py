@@ -48,6 +48,7 @@ def main() -> int:
         print(
             "Usage: python3 scripts/cje_bridges/convert.py <tool> [args...]\n\n"
             "Tools:\n"
+            "  langfuse    Export and validate two frozen Langfuse experiments\n"
             "  promptfoo    Convert Promptfoo results JSON to CJE fresh_draws_data\n"
             "  trulens      Convert TruLens records+feedback to CJE fresh_draws_data\n"
             "  langsmith    Convert LangSmith runs+feedback to CJE fresh_draws_data\n"
@@ -74,6 +75,10 @@ def main() -> int:
     langsmith_script = scripts_dir / "langsmith_cje" / "langsmith_to_cje.py"
     opencompass_script = scripts_dir / "opencompass_cje" / "opencompass_to_cje.py"
 
+    if tool == "langfuse":
+        sys.path.insert(0, str(scripts_dir / "langfuse_cje"))
+        return _run_script(scripts_dir / "langfuse_cje" / "export.py", rest)
+
     if tool == "promptfoo":
         if not promptfoo_script.exists():
             print(f"Missing script: {promptfoo_script}", file=sys.stderr)
@@ -99,7 +104,7 @@ def main() -> int:
         return _run_script(opencompass_script, rest)
 
     print(
-        f"Unknown tool {tool!r}. Expected one of: promptfoo, trulens, langsmith, opencompass.",
+        f"Unknown tool {tool!r}. Expected one of: promptfoo, trulens, langsmith, opencompass, langfuse.",
         file=sys.stderr,
     )
     return 2
