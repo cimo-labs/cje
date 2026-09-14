@@ -40,5 +40,7 @@ def test_audit_correction_example(tmp_path: Path) -> None:
     assert abs(original["estimate"]) < 1e-12
     assert abs(corrected["estimate"] - 0.15) < 0.025
     assert corrected["method"] == "paired_if_oua"
+    assert original["gate_flagged"] == ["candidate"]
+    assert corrected["gate_flagged"] == []
     assert corrected["se"] > 0 and corrected["se"] != original["se"]
     assert corrected["ci"][0] < corrected["estimate"] < corrected["ci"][1]

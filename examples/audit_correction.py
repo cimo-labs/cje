@@ -27,7 +27,9 @@ def run_example(
     directory: Path,
 ) -> tuple[EstimationResult, EstimationResult, dict[str, int]]:
     rng = np.random.default_rng(42)
-    fit_scores = rng.uniform(0.2, 0.6, 40)
+    # Include both endpoints so this fixture isolates residual bias from
+    # unrelated extrapolation beyond the calibration score range.
+    fit_scores = np.r_[0.2, rng.uniform(0.2, 0.6, 38), 0.6]
     fit_labels = 0.2 + 0.5 * fit_scores + rng.normal(0, 0.025, 40)
     path = directory / "anchor_calibration.jsonl"
     path.write_text(
@@ -142,6 +144,7 @@ def summarize(result: EstimationResult) -> dict[str, Any]:
                 else None
             ),
             "method": comparison["method"],
+            "gate_flagged": comparison.get("gate_flagged", []),
         },
     }
 
