@@ -21,6 +21,12 @@
 pip install cje-eval
 ```
 
+**Upgrading to 0.8.0:** Refit saved two-stage calibrators to rebuild their
+empirical-rank boundaries with the corrected prediction arithmetic. Calibrated
+scores are now stable when prediction rows are split into batches or reordered;
+values at learned rank boundaries can differ from earlier versions. See the
+[release notes](https://github.com/cimo-labs/cje/releases/tag/v0.8.0).
+
 **Rather delegate?** Point your coding agent at the [bundled agent skill](#use-cje-from-your-ai-agent) and it handles everything below — data reshaping, calibration, diagnostics.
 
 You need three things: responses from each policy on a shared prompt set, a score for every response from **one fixed LLM judge**, and ground-truth labels (`oracle_label`) on a randomly sampled slice you can afford — human ratings, expert review, or a downstream KPI (stratify the sample by judge score to cover the range). Each record is one judged response: `{"prompt_id", "judge_score", "oracle_label" (optional)}` — CJE calls these *fresh draws*: the responses you sampled from each policy for this eval, as opposed to logged production traffic. Any bounded judge and oracle scales work (0–1, 0–100, Likert), and they don't need to match each other.

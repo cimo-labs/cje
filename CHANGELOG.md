@@ -2,13 +2,37 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-27
+
+Adds verified Langfuse imports and transport-audit budget planning, fixes
+batch-dependent two-stage calibration, and documents the existing audit-label
+bias correction workflow.
+
+**Upgrade note:** Refit saved two-stage calibrators after upgrading. Their
+empirical-rank boundaries must be rebuilt using the fixed prediction arithmetic.
+Predictions at learned rank boundaries can differ from earlier versions.
+
+### Added
+
+- Import two frozen Langfuse experiments with `cje.bridges.langfuse.prepare`.
+  Validate response identities, complete populations, and human-label provenance
+  while preserving unlabeled responses. When native dataset-item versions are
+  absent, require an explicit frozen dataset export.
+- Provide a GET-only companion exporter in `scripts/langfuse_cje` that saves
+  complete reads before validation and resumes offline. The converter ships in
+  the package; the exporter runs from the repository. Core runtime dependencies
+  are unchanged.
+- Plan held-out transport-audit labels with `AuditScenario` and
+  `plan_transport_audits`. Report required independent units, availability, and
+  calibration-plus-audit human-label costs under declared Gaussian residual
+  assumptions. The planner does not produce an observed audit PASS.
+
 ### Fixed
 
 - Make two-stage calibrated predictions independent of prediction batch size and
   order. A fixed coefficient summation order prevents last-bit smooth-prediction
   changes from crossing empirical-rank boundaries. Training ranks and fold
-  inference use the same arithmetic. Refit saved two-stage calibrators to rebuild
-  their rank boundaries consistently.
+  inference use the same arithmetic.
 - Clarify that diagnostic audit inputs do not activate residual correction; add
   a tested example that reuses representative labels on evaluation rows while
   preserving the external calibration fit and recomputing uncertainty.
