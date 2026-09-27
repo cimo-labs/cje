@@ -139,6 +139,8 @@ print(results.metadata["transport_audits"]["fable-5"]["status"])
 
 **Use audit labels for correction.** Audit-only probes do not alter the point estimate. Attach probability-sampled labels to their matching evaluation responses to use the existing augmented estimator, then inspect `metadata["point_estimator"]["routes"]` and the recomputed intervals. The [audit-to-correction guide](guides/audit-correction.md) includes a runnable example that keeps calibration fixed and distinguishes correction from independent validation.
 
+**Plan audit labels before collecting them.** `plan_transport_audits` estimates independent audit units under declared residual assumptions, checks availability, and counts calibration plus audit ratings in the human-label budget. It is a Gaussian planning model, not an observed audit. See the [audit budget guide](guides/audit-budget-planning.md).
+
 **Reliability-aware winner.** `results.best_policy()` demotes a gate-flagged argmax to the best gate-passing policy (the default, `reliable_only=True`), and the demotion is loud — the flagged raw winner stays visible with its limitations (`reliable_only=False` returns the raw argmax, marked `flagged`):
 
 ```text
