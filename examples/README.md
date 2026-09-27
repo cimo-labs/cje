@@ -29,6 +29,10 @@ No setup required — runs entirely in Google Colab with real Chatbot Arena data
 
 CJE is Direct-mode only; IPS/DR off-policy evaluation lives on the frozen 0.3.x line (`pip install "cje-eval==0.3.*"`). [`cje_advanced.ipynb`](cje_advanced.ipynb) is a stub pointing there; the full OPE notebook lives at the [v0.3.0 tag](https://github.com/cimo-labs/cje/blob/v0.3.0/examples/cje_advanced.ipynb).
 
+## Audit labels and bias correction
+
+[`audit_correction.py`](audit_correction.py) is a complete synthetic example of auditing a fixed calibration map and then using the same probability-sampled labels for residual correction. It prints the estimator routes, corrections, new intervals, original audit and complete human-label count. See the [guide](../guides/audit-correction.md) for label roles and sampling assumptions.
+
 ## Dataset
 
 Examples use a curated Chatbot Arena-derived dataset:

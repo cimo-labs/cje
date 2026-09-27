@@ -183,7 +183,11 @@ Recommended pattern:
 
 ### Step B: Apply policy-specific EIF correction (default)
 
-Re-run `analyze_dataset` with the expanded oracle labels pooled in (same pattern as Section 4). The augmented estimator (`use_augmented_estimator=True`) estimates a policy-specific mean residual correction under the stated sampling assumptions. It does not by itself establish transport to a different policy or future cycle.
+Attach sampled target-policy `oracle_label` values to their matching evaluation responses and rerun `analyze_dataset`. Labels supplied only through `TransportAuditConfig` diagnose the calibration map without changing the estimate. The augmented estimator (`use_augmented_estimator=True`, already the default) applies the policy-specific mean residual correction when the labeling design supports it.
+
+To preserve an external calibration fit, keep `calibration_data_path` and set `combine_oracle_sources=False`. This prevents those evaluation labels from refitting calibration while still allowing residual augmentation. Check `metadata["point_estimator"]["routes"]` for `augmented` and use the recomputed intervals. The [runnable guide](guides/audit-correction.md) demonstrates the complete workflow and label budget.
+
+Retain the original audit as evidence about the old map. The same labels are no longer an independent validation sample for the corrected estimate, and correction does not establish transport to another policy or a future cycle.
 
 ### Step C: Escalate to refit if residuals show structural drift
 

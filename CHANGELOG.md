@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Make two-stage calibrated predictions independent of prediction batch size and
+  order. A fixed coefficient summation order prevents last-bit smooth-prediction
+  changes from crossing empirical-rank boundaries. Training ranks and fold
+  inference use the same arithmetic. Refit saved two-stage calibrators to rebuild
+  their rank boundaries consistently.
+- Clarify that diagnostic audit inputs do not activate residual correction; add
+  a tested example that reuses representative labels on evaluation rows while
+  preserving the external calibration fit and recomputing uncertainty.
+
 ## [0.7.2] - 2026-09-13
 
 Maintenance release for response draw identity and calibration guidance. The
