@@ -1,4 +1,4 @@
-# CJE bridges (Promptfoo, TruLens, LangSmith, OpenCompass)
+# CJE bridges (Promptfoo, TruLens, LangSmith, OpenCompass, Langfuse)
 
 This folder is a **thin convenience wrapper** around the standalone converters in this repo.
 
@@ -12,6 +12,14 @@ Refs:
 - CJE package: `pip install cje-eval`
 
 ---
+
+## Langfuse
+
+[The Langfuse guide](../langfuse_cje/README.md) covers a read-only, resumable export of two experiments, exact observation score joins, native or imported human provenance, and frozen dataset identity. Its pure converter ships in the wheel as `cje.bridges.langfuse.prepare`; the network companion runs from this checkout:
+
+```sh
+python scripts/cje_bridges/convert.py langfuse --config config.json --out-dir export-01 --online
+```
 
 ## Quickstart
 
