@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-27
+
+Documentation maintenance release. Estimation and inference behavior is unchanged
+from 0.8.0.
+
+### Fixed
+
+- Use absolute guide links in the package description so audit-correction and
+  audit-budget guidance works on PyPI as well as GitHub.
+- Clarify historical calibration labels, observed production responses, and
+  unsupported counterfactual OPE. Distinguish policy levels from rankings and
+  incremental annotation cost from total label acquisition cost.
+- Qualify HealthBench's single retrospective replay and Arena's headline versus
+  average results; document the scalar support threshold accurately.
+- Update the portable agent skill with audit-budget planning, representative
+  target-label correction, Langfuse export guidance, and fit/version provenance.
+- Check guide snippets, package-description links, and the two-file skill install.
+
+**Upgrade note:** No new calibrator migration is needed from 0.8.0. When upgrading
+from an earlier release, refit saved two-stage calibrators from retained inputs
+as described in the 0.8.0 notes below.
+
 ## [0.8.0] - 2026-09-27
 
 Adds verified Langfuse imports and transport-audit budget planning, fixes
