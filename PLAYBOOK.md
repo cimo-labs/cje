@@ -73,7 +73,7 @@ p-values).
 
 ## 2) Run a Transport Audit (Probe Protocol)
 
-Use oracle-labeled probes that were not used to fit the calibrator. Sample them according to a documented probability design on each deployment-relevant policy/group. At least 20 effective independent clusters are required to grade the audit; the needed sample size is otherwise determined by the desired CI width and practical margin. Pass `TransportAuditConfig` to `analyze_dataset` to store every policy's state and merge an observed `FAIL` into the result gate:
+Use oracle-labeled probes that were not used to fit the calibrator. Sample them according to a documented probability design on each deployment-relevant policy/group. At least 20 effective independent clusters are required for `PASS`; a decisive interval can still grade `FAIL` below that floor; the needed sample size is otherwise determined by the desired CI width and practical margin. Pass `TransportAuditConfig` to `analyze_dataset` to store every policy's state and merge an observed `FAIL` into the result gate:
 
 ```python
 import json
@@ -114,7 +114,7 @@ Predeclare `delta_max` from the smallest mean bias that would change the operati
 - `PASS`: the entire simultaneous CI lies inside `[-delta_max, +delta_max]` — requires at least 20 effective clusters.
 - `FAIL`: the entire simultaneous CI lies outside that interval on either side. FAIL is graded even below the effective-cluster floor: a decisive out-of-margin interval is evidence of unacceptable bias, not low power, so an under-sized probe cannot defeat the hard gate.
 - `INCONCLUSIVE`: the CI overlaps a margin boundary, or there are fewer than 20 effective clusters without the CI being decisively outside.
-- `NOT_GRADED`: probes were evaluated but no practical margin was declared — the residual estimate and CI are descriptive only, and the audit emits a `FutureWarning` prompting you to declare one.
+- `NOT_GRADED`: probes were evaluated but no practical margin was declared — the residual estimate and CI are descriptive only, and the audit emits a `UserWarning` prompting you to declare one.
 - `NOT_CHECKED`: no independent probe was supplied for that policy.
 
 Pass `cluster_ids` when rows share an independence unit, `sample_weights` for unequal-probability probes, and the same fitted covariates used by the calibrator. Score-bin occupancy and decile residual plots are descriptive only; they never determine the verdict.

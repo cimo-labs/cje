@@ -19,16 +19,16 @@ Logprob fields from 0.3.x logged data are accepted and ignored.
 
 **Three ways to supply data to `analyze_dataset`:**
 
-1. `fresh_draws_data={policy_name: [records]}` — in-memory, the default choice when you reshaped the user's data yourself.
-2. `fresh_draws_dir="responses/"` — one JSONL per policy, named `{policy}_responses.jsonl` (also accepted: `{policy}.jsonl`). Policy name comes from the filename; keep names identical everywhere. A single JSONL file path (records grouped by `target_policy`) also works here.
-3. `calibration_data_path="labeled.jsonl"` — a separate judge+oracle file (e.g. historical labeled logs) used as the calibration source. Values default to [0, 1]; for other scales declare `calibration_judge_scale=(lo, hi)` / `calibration_oracle_scale=(lo, hi)` (external calibration data never infers its scale from observations). Out-of-range files raise a hard error naming the observed range. With `combine_oracle_sources=True` (default) any `oracle_label`s in the fresh draws are pooled with it; `metadata["oracle_sources"]` reports provenance and cross-source conflicts.
+1. `fresh_draws_data={policy_name: [records]}`: in-memory, the default choice when you reshaped the user's data yourself.
+2. `fresh_draws_dir="responses/"`: one JSONL per policy, named `{policy}_responses.jsonl` (also accepted: `{policy}.jsonl`). Policy name comes from the filename; keep names identical everywhere. A single JSONL file path (records grouped by `target_policy`) also works here.
+3. `calibration_data_path="labeled.jsonl"`: a separate judge+oracle file (e.g. historical labeled logs) used as the calibration source. Values default to [0, 1]; for other scales declare `calibration_judge_scale=(lo, hi)` / `calibration_oracle_scale=(lo, hi)` (external calibration data never infers its scale from observations). Out-of-range files raise a hard error naming the observed range. With `combine_oracle_sources=True` (default) any `oracle_label`s in the fresh draws are pooled with it; `metadata["oracle_sources"]` reports provenance and cross-source conflicts.
 
 Field names differ in the user's data? Pass `judge_field="score"`, `oracle_field="human_rating"` instead of renaming.
 
 ## `analyze_dataset`
 
 All arguments are keyword-only. Provide exactly ONE evaluation source
-(`fresh_draws_data` or `fresh_draws_dir` — passing both raises):
+(`fresh_draws_data` or `fresh_draws_dir`; passing both raises):
 
 ```python
 from cje import analyze_dataset
@@ -60,7 +60,7 @@ results = analyze_dataset(
 )
 ```
 
-**Wiring transport audits into the analysis** — probes are held-out oracle-labeled
+**Wiring transport audits into the analysis:** probes are held-out oracle-labeled
 rows in the same public units and field names as the call; margins are in OUTPUT
 units (the units of `results.estimates`):
 
@@ -80,21 +80,21 @@ results = analyze_dataset(fresh_draws_data=draws, transport=transport)
 
 `estimator` values are aliases of the one calibrated estimator: whether calibration
 runs is driven solely by oracle-label availability (0 labels → the loud `naive_direct`
-fallback), never by this parameter — its only observable effect is which name lands in
+fallback), never by this parameter; its only observable effect is which name lands in
 `metadata["estimator"]` (`"auto"` records `"direct"`).
 
 **`EstimationResult`:**
 
 - `.estimates` (np.ndarray, order matches `metadata["target_policies"]`), `.standard_errors`
 - `.ci(alpha=0.05)` → list of `(lo, hi)` per policy; `.confidence_interval()` → `(lo_array, hi_array)`
-- `.compare_policies(i, j, alpha=0.05)` → dict with difference, SE, CI, p-value — use this for
+- `.compare_policies(i, j, alpha=0.05)` → dict with difference, SE, CI, p-value; use this for
   pairwise claims. The `method` key names the inference basis, best-first: `"paired_bootstrap"`
-  (bootstrap runs: paired inference over the replicate matrix — the difference SE includes
+  (bootstrap runs: paired inference over the replicate matrix; the difference SE includes
   calibrator noise, honest on near-tie pairs; sign-test p-value floored at 2/(B+1)),
   `"paired_if_oua"` (cluster-robust runs: t-test from the stored pairwise SE + oracle-jackknife
   difference variance), `"paired_if_legacy"` (only for deserialized results from older releases
   that stored unpaired IF z-tests), `"independent_conservative"` (no pairing info). `gate_flagged` lists any policy in
-  the pair with a flagged reliability gate — a difference CI cannot repair a biased input
+  the pair with a flagged reliability gate; a difference CI cannot repair a biased input
   (e.g. after a transport-audit FAIL), so treat such comparisons per the gates discipline
 - `.compare_all_policies(alpha=0.05, adjust=None)` → list of comparison dicts for every (i < j)
   pair with `policy1`/`policy2` names; `adjust="bh"` adds Benjamini-Hochberg
@@ -107,7 +107,7 @@ fallback), never by this parameter — its only observable effect is which name 
   best gate-passing policy, loudly (the demoted argmax travels as `runner_up` with its gate
   reasons, a warning is logged, and `summary()` prints both). Pass `reliable_only=False` for the
   raw argmax with `flagged=True`. If everything is flagged, the argmax returns with
-  `all_flagged=True` — do not crown it
+  `all_flagged=True`; do not crown it
 - `.calibrator` → fitted calibrator when calibration is required; complete oracle coverage may return `None`
 - `.metadata["transport_audits"]` → per-policy PASS / FAIL / INCONCLUSIVE / NOT_GRADED / NOT_CHECKED records when using `TransportAuditConfig`; FAIL adds a hard result gate only when the current estimate depends on that calibrator
 - `.summary()` → compact text report (per-policy estimate + 95% CI + gate flags, best-policy line)
@@ -116,7 +116,7 @@ fallback), never by this parameter — its only observable effect is which name 
   `boundary_cards`, `normalization`, `oracle_sources`, `bootstrap_ci`, `pairwise_inference`
   (cluster-robust runs: per-pair difference SE/df with pairing basis), `inference` (SE basis,
   selection reason, coupling), `degrees_of_freedom` (per-policy df + `t_critical`;
-  Welch–Satterthwaite effective df when the oracle jackknife applies — cite these if asked how
+  Welch–Satterthwaite effective df when the oracle jackknife applies; cite these if asked how
   a CI was computed)
 - `.diagnostics` (DirectDiagnostics): `overall_status` (GOOD/WARNING/CRITICAL), `status_per_policy`,
   `boundary_cards`, `refuse_level_policies`, `calibration_rmse`, `n_oracle_labels`, `.summary()`
@@ -146,8 +146,8 @@ calibration floor does not apply. With one independent cluster, inference remain
 For refit-bootstrap intervals, set `inference="bootstrap", n_bootstrap=2000` instead.
 Supplying `n_bootstrap` without an inference choice selects bootstrap with a compatibility warning.
 
-**Transport audit** — before reusing `result.calibrator` (or `results.calibrator`) on new
-data (check it is not `None` first — complete oracle coverage fits no calibrator):
+**Transport audit:** before reusing `result.calibrator` (or `results.calibrator`) on new
+data (check it is not `None` first; complete oracle coverage fits no calibrator):
 
 ```python
 diag = transport_audit(
@@ -240,11 +240,94 @@ sensitivity scenarios. Its `r2` is isotonic R², not correlation; use
 `correlation_to_r2(rho)` when starting from a judge–oracle correlation. Do not present
 simulated assumptions as observed pilot evidence.
 
-**Worked example.** [`scripts/planning_example.py`](scripts/planning_example.py) demonstrates
+**Worked example.** [`scripts/planning_example.py`](https://github.com/cimo-labs/cje/blob/main/skills/cje/scripts/planning_example.py) demonstrates
 pilot → allocation → held-out comparison and saved audit artifacts using bundled data.
 Run it from a repository checkout; its fixed demonstration frame does not establish coverage
 or power on a user's population. The example's stated sampling and transport limitations
 remain part of the result.
+
+## Audit budget: can the residual audit resolve?
+
+Use `plan_transport_audits` for residual-equivalence audit power, separate from evaluation
+precision/MDE planning above. Choose the margin before seeing audit outcomes. The inputs
+below are hypothetical residual standard deviations, not standard errors:
+
+```python
+from cje import AuditScenario, CostModel, plan_transport_audits
+
+plan = plan_transport_audits(
+    {
+        "baseline": AuditScenario(0.10, 0.05, available_clusters=130),
+        "candidate": AuditScenario(0.20, 0.05, available_clusters=130),
+    },
+    calibration_labels=40,
+    cost_model=CostModel(oracle_cost=2.0),
+    budget=1000,
+    power=0.80,
+    alpha=0.05,
+)
+print(plan.summary())
+```
+
+This plans 63 and 245 independent audit clusters, totaling 348 labels including calibration,
+at a cost of 696. The candidate's 130 available clusters are insufficient. `power` targets all
+supplied audits passing, under the declared Gaussian independent-cluster residual model and
+family adjustment. This is not an observed audit or a `PASS`. Examine plausible bias/variance
+scenarios; weighted or unequal-contribution clusters need a justified model beyond this
+calculator. Count all underlying ratings with `labels_per_cluster`, and separate new annotation
+cost from total acquired-label cost. Save `plan.to_dict()`.
+See the [audit budget guide](https://github.com/cimo-labs/cje/blob/main/guides/audit-budget-planning.md)
+for assumptions, feasibility limits, and cost scope.
+
+## Correction: use representative target labels
+
+A probe passed only through `TransportAuditConfig` diagnoses the calibration map; it does not
+alter estimates. To correct the current target estimate:
+
+1. Attach each probability-sampled `oracle_label` to its exact evaluation response, preserving
+   unlabeled rows. A label in a calibration-history file alone is not a target residual.
+2. For a fixed external fit, keep `calibration_data_path` and set
+   `combine_oracle_sources=False`. The default augmented estimator can then add the estimated
+   target mean residual without refitting calibration on the correction labels.
+3. Declare `label_design="representative"` only for a justified representative slice. For
+   known unequal inclusion probabilities, use `label_design="known_propensity"` and
+   `label_propensities`: one vector per policy with a positive probability for **every**
+   evaluation row, in row order, including unlabeled rows. For targeted labels with unknown
+   probabilities, use `"targeted_unknown"`; CJE keeps an explicit plug-in route.
+4. Inspect `results.metadata["point_estimator"]["routes"]` to confirm `augmented` where
+   applicable. Use the recomputed SEs, CIs, and paired comparisons, not an old interval shifted
+   by the correction. Retain the original audit as evidence about the unchanged map.
+5. Do not call reused correction labels independent validation of the corrected estimate.
+   Correction targets the sampled population; a future cycle or new fit needs its own evidence.
+
+The [correction guide](https://github.com/cimo-labs/cje/blob/main/guides/audit-correction.md)
+and [runnable example](https://github.com/cimo-labs/cje/blob/main/examples/audit_correction.py)
+show the complete audit-to-correction workflow. Refit pre-0.8.0 saved two-stage calibrators
+before use; retain package version, fit provenance and inputs with the run.
+
+## Production outcomes and ranking
+
+Historical judge/outcome pairs can train calibration through `calibration_data_path`. Logs
+can also supply observed responses for the policies and population being evaluated, when
+sampling and dependence are accounted for. Neither is counterfactual estimation of outputs
+that another policy never generated. Define the outcome, join the exact response, record
+judge/rubric versions, and justify selection and transport. Available feedback is not
+necessarily representative; do not fabricate inclusion probabilities for organic feedback.
+
+For two policies, the oracle difference equals the calibrated-prediction difference plus
+the difference in their mean residuals. A shared offset can cancel, so a failed level audit
+alone does not prove the ordering wrong. Individual monotonicity and a scalar support badge
+also do not prove ordering survives a shift. Use the paired comparison plus evidence about
+residual differences; there is no validated automatic label-free reuse gate in CJE.
+
+## Langfuse
+
+Use [`cje.bridges.langfuse.prepare`](https://github.com/cimo-labs/cje/blob/main/scripts/langfuse_cje/README.md)
+for exported experiments before constructing custom joins. The pure converter ships in the
+wheel; its GET-only online exporter runs from a source checkout with `httpx`. Declare the
+project, dataset population/version, two experiments, score selectors and scales. Preserve
+unlabeled responses and verify exact response identity and human-label provenance. A prepared
+export is not an estimate, an audit pass, or evidence of representative sampling.
 
 ## Audit exports
 
@@ -286,21 +369,21 @@ directories.
 | `overall_status` | GOOD / WARNING / CRITICAL | CRITICAL: results shipped with explicit caveats only |
 | Boundary card | OK / CAUTION / REFUSE-LEVEL | Scalar score-range support only. REFUSE-LEVEL: no absolute level claim from this fit; it does not establish ranking validity |
 | `reliability_gates[p]["flagged"]` | bool | Surface the point estimate with the limitation; do not substitute another policy silently |
-| Transport `status` | PASS / FAIL / INCONCLUSIVE / NOT_GRADED / NOT_CHECKED | Equivalence verdict for the declared residual margin; interpret only for the audited population and family. NOT_CHECKED = no probe was supplied for that policy — never treat it as a pass |
+| Transport `status` | PASS / FAIL / INCONCLUSIVE / NOT_GRADED / NOT_CHECKED | Equivalence verdict for the declared residual margin; interpret only for the audited population and family. NOT_CHECKED = no probe was supplied for that policy; never treat it as a pass |
 
 ## Troubleshooting
 
 | Symptom | Meaning / fix |
 |---|---|
-| `Only N independent oracle-labeled prompt clusters are available (<4 ...); returning the UNCALIBRATED raw-judge tier` warning (`analyze_dataset`, 1–3 labels) | Below the 4-cluster floor no calibrator can be fit; the run returns the flagged `naive_direct` tier. Treat as blocked — run the labeling loop (SKILL.md §Labeling); never invent labels. |
+| `Only N independent oracle-labeled prompt clusters are available (<4 ...); returning the UNCALIBRATED raw-judge tier` warning (`analyze_dataset`, 1–3 labels) | Below the 4-cluster floor no calibrator can be fit; the run returns the flagged `naive_direct` tier. Treat as blocked; run the labeling loop (SKILL.md §Labeling); never invent labels. |
 | `ValueError: Too few unique oracle prompt clusters (N) for cross-fitted calibration. Need at least 4 independent prompt clusters ...` (`calibrated_mean_ci`) | Partial coverage requires calibration and at least four independent labeled clusters. Repeated labels within one prompt do not create independent folds. Complete coverage uses the direct oracle mean without calibration. |
-| `No oracle labels found` → `method="naive_direct"` | 0 labels: raw judge means with a loud warning. Never report these as the answer — treat as blocked and run the labeling loop. |
+| `No oracle labels found` → `method="naive_direct"` | 0 labels: raw judge means with a loud warning. Never report these as the answer; treat as blocked and run the labeling loop. |
 | `reducing calibration folds from 5 to K` warning | 4–9 independent labeled clusters: valid but noisier. Recommend ≥10 independent labeled clusters to the user. |
 | `ImportError: ... pip install "cje-eval[viz]"` | Plotting needs the viz extra; estimates work without it. |
-| Scores on 0–100 / Likert | Pass as-is — auto-normalized, results returned in the original scale. |
+| Scores on 0–100 / Likert | Pass as-is; auto-normalized, results returned in the original scale. |
 | `... outside [0, 1]` error on a calibration file | `calibration_data_path` defaults to [0, 1]. Declare `calibration_judge_scale`/`calibration_oracle_scale`, rescale the file, or pass the data via `fresh_draws_data` (auto-normalizes). |
 | `TypeError: ... 'logged_data_path'` / `calibrated-ips` errors | `analyze_dataset` has no `logged_data_path` parameter and no IPS/DR estimators. Logged judge+oracle data works via `calibration_data_path`. For IPS/DR pin `pip install "cje-eval==0.3.*"` (Python ≤3.12). |
-| `UserWarning: ... audits without delta_max are NOT_GRADED` | Declare a practical margin (`delta_max=`) — no-margin audits can never PASS or FAIL. |
+| `UserWarning: ... audits without delta_max are NOT_GRADED` | Declare a practical margin (`delta_max=`); no-margin audits can never PASS or FAIL. |
 | `results.calibrator is None` | Complete oracle coverage: the estimate is the direct oracle mean; no calibrator was fit. Check for `None` before a transport audit. |
-| `ImportError`/`ValueError` naming a replacement (e.g. `BaseCJEEstimator`, `calibrate_from_raw_data`) | Consolidated API: the error message names the current entry point — use it. |
+| `ImportError`/`ValueError` naming a replacement (e.g. `BaseCJEEstimator`, `calibrate_from_raw_data`) | Consolidated API: the error message names the current entry point; use it. |
 | Python version | CJE requires Python 3.10–3.13. |

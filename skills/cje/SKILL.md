@@ -1,9 +1,9 @@
 ---
 name: cje
-description: Runs CJE (Causal Judge Evaluation, pip install cje-eval) to compare LLM models, prompts, or policies from LLM-judge scores, producing calibrated estimates with calibration-aware confidence intervals and explicit diagnostics. Use when the user wants to compare models/prompts/policies using judge scores or eval-harness output, put a confidence interval on an LLM eval metric, calibrate an LLM judge against ground-truth (oracle/human) labels, check whether an existing judge calibration still holds on new data, plan an evaluation's power or label budget, or decide how many human labels an eval needs. Raw judge-score averages can be miscalibrated; use the calibrated analysis and state its sampling assumptions.
+description: Use CJE (pip install cje-eval) to compare policies from judge scores and oracle labels, report calibrated means and paired differences with uncertainty, audit or correct calibration reuse, and plan evaluation or audit-label budgets. Use for eval-harness exports and production judge/outcome records; counterfactual IPS/DR evaluation is outside current CJE.
 ---
 
-# CJE — calibrated LLM-judge evaluation
+# CJE: calibrated LLM-judge evaluation
 
 LLM-judge scores are cheap but can be miscalibrated: in CJE's Chatbot Arena benchmark, naive
 95% CIs built on raw judge scores covered the truth 0% of the time. CJE calibrates the judge
@@ -15,6 +15,8 @@ and refuses claims the data can't support.
 
 ## Decide the flow
 
+- Planning labels to resolve a residual transport audit → **Audit budget** in `reference.md`;
+  use `plan_transport_audits`, not the evaluation-power planner.
 - Planning a future evaluation (sample size, label budget, detectable effect, or power) →
   **Planning flow**. Existing data and only a comparison requested? Use the analysis routes
   below; planning is optional, not a prerequisite.
@@ -25,7 +27,7 @@ and refuses claims the data can't support.
 - Partial oracle coverage with <4 independent labeled prompt clusters → **Labeling loop**. Do not fabricate labels; do not
   fall back to raw means (0 labels runs only as a loudly-flagged `naive_direct` fallback, and
   1–3 labels fall back to the same loudly-flagged UNCALIBRATED `naive_direct` tier in
-  `analyze_dataset` — a calibrator cannot be fit below 4 independent labeled clusters. Treat
+  `analyze_dataset`; a calibrator cannot be fit below 4 independent labeled clusters. Treat
   the run as blocked and never report those numbers. `calibrated_mean_ci` raises a
   `ValueError` below this floor when calibration is needed).
 - 4–9 independent labeled prompt clusters → runs, but calibration folds auto-reduce with a warning and CIs are noisier.
@@ -33,11 +35,15 @@ and refuses claims the data can't support.
 - ≥10 independent labeled prompt clusters, two or more policies → **Canonical flow** (`analyze_dataset`).
 - One sample of scores, want a calibrated mean + CI → `calibrated_mean_ci`.
 - Reusing a previously fitted calibrator on new data (new month/domain/policy family) →
-  **Transport audit** first.
-- Off-policy estimates from logs only (IPS/DR) → not this library; `pip install "cje-eval==0.3.*"`
+  check fit/version provenance, then **Transport audit**.
+- A transport audit failed and representative target labels are available → **Correction**
+  in `reference.md`. Audit-only probes do not change the estimate.
+- Existing production judge/outcome records → **Production outcomes** in `reference.md`;
+  distinguish calibration data, observed evaluation responses, and counterfactual OPE.
+- Counterfactual estimates for unobserved policy outputs (IPS/DR) → not this library; `pip install "cje-eval==0.3.*"`
   (Python ≤3.12). Predicting one response's score → not CJE (conformal methods).
 
-## Planning flow — size a future evaluation
+## Planning flow: size a future evaluation
 
 1. Establish the comparison, target population, practical effect size and its units, desired
    power, significance level, and budget. Record judge-score and oracle-label costs explicitly;
@@ -64,32 +70,39 @@ and refuses claims the data can't support.
 Planning does not establish representative labeling or calibration transport. Passing
 diagnostics cannot prove every assumption behind a statistical claim.
 
-## Step 0 — no judge scores yet
+## Step 0: no judge scores yet
 
 Produce them first: pick ONE fixed judge model and a short rubric, and score every policy's
-outputs identically — same rubric, same scale, and the judge must not see which policy wrote the
+outputs identically; same rubric, same scale, and the judge must not see which policy wrote the
 response. Any bounded scale works (a 1–5 rubric is typical); record one `judge_score` per
 response. If the judge shares a model family with some candidates but not others (including
-yourself), expect asymmetric self-preference bias — it favors those candidates in the ranking,
+yourself), expect asymmetric self-preference bias; it favors those candidates in the ranking,
 and calibration corrects it only where oracle labels exist. Make sure labels or held-out
 probes cover the advantaged policies. Then continue below.
 
 ## Reshape the user's data
 
 Target shape: `fresh_draws_data={policy_name: [records]}` where each record is
-`{"prompt_id": ..., "judge_score": ..., "oracle_label": ...}` — each record requires `prompt_id`
+`{"prompt_id": ..., "judge_score": ..., "oracle_label": ...}`; each record requires `prompt_id`
 or nonempty `prompt` text from which CJE can derive it. Reuse the same prompt ID across
 policies and repeated responses to preserve pairing and dependence clusters; a response ID
 is a separate identity. `judge_score` is required (any bounded scale, auto-normalized; pass 0–100 or
-Likert as-is), `oracle_label` optional (`None`/`NaN`/missing = unlabeled). You are good at data
-reshaping: convert the user's CSV/JSON/eval-harness export yourself with a few lines of pandas —
-do not ask the user to reformat their data. Files on disk (`fresh_draws_dir`) and separate
-labeled logs (`calibration_data_path`) also work — see `reference.md`.
+Likert as-is), `oracle_label` optional (`None`/`NaN`/missing = unlabeled). For Langfuse, use
+the existing bridge before writing custom joins; see **Langfuse** in `reference.md`. For other
+formats, convert CSV/JSON exports while preserving response identity, missing labels, and
+sampling provenance. Files on disk (`fresh_draws_dir`) and separate labeled logs
+(`calibration_data_path`) also work; see `reference.md`.
 
-## Canonical flow — compare policies
+## Canonical flow: compare policies
 
-Install with `pip install cje-eval`. The one fully-worked example (adapt the data-construction
-lines to the user's data; keep the call shape):
+Install with `pip install cje-eval` (Python 3.10–3.13). Record the package version and the
+version that fitted any reused calibrator. **When upgrading to 0.8.0, refit pre-0.8.0 saved two-stage calibrators
+from retained inputs before reuse** to rebuild empirical-rank boundaries with corrected
+arithmetic. If fit provenance is unknown, refit from retained inputs rather than assuming
+compatibility. See [the release notes](https://github.com/cimo-labs/cje/releases/tag/v0.8.0).
+
+Adapt this synthetic example to the user's data; it demonstrates the API, not sufficient
+power for a real evaluation:
 
 ```python
 from cje import analyze_dataset
@@ -161,12 +174,14 @@ coverage, check that `result.calibrator` is not `None` before reusing it for a t
 audit; complete coverage reports the direct oracle mean without fitting a calibrator.
 Full signature in `reference.md`.
 
-## Reusing a calibrator — audit first, always
+## Reusing a calibrator
 
-Never reuse a calibrator on a new time period, domain, or policy family without held-out,
-probability-sampled probes. Use at least 20 effective independent clusters and size the probe
+Check version/fit provenance as above. Before relying on calibration transport for a new
+time period, domain, or policy family, audit with held-out, probability-sampled probes.
+Without probes, retain `NOT_CHECKED` as an unresolved assumption, not an observed failure.
+Use at least 20 effective independent clusters and size the probe
 for the desired interval width. For high-level analyses, pass the probes with the run so the
-state is preserved in results and a `FAIL` augments the policy gate:
+state is preserved in results and a `FAIL` augments the gate when the estimate depends on that map:
 
 ```python
 from cje import TransportAuditConfig
@@ -195,52 +210,57 @@ diag = transport_audit(
 ```
 
 `PASS` means the simultaneous residual CI is wholly inside the declared margin. `FAIL` means
-it is wholly outside (graded even below the 20-effective-cluster floor — a policy cannot
+it is wholly outside (graded even below the 20-effective-cluster floor; a policy cannot
 escape a FAIL by supplying too small a probe). Boundary overlap or too few effective clusters is `INCONCLUSIVE`;
 no margin is `NOT_GRADED` and can never PASS or FAIL. These verdicts do not replace the
 separate scalar support card. A policy without a supplied probe is recorded as `NOT_CHECKED`
 rather than silently treated as a pass.
 
-## Labeling loop — when labels are missing or short
+## Labeling loop: when labels are missing or short
 
-Drive it yourself: select 10–25 items for the user to label — **random within judge-score
+Drive it yourself: select 10–25 items for the user to label; **random within judge-score
 strata**, so the slice stays a probability sample while covering the score range
 (score-range coverage is what prevents REFUSE-LEVEL later; labeling only the top-scored
 items is the classic mistake; see `label_design` in `reference.md` if strata are sampled
 unevenly). Ground truth = human judgment, expert review, or a downstream KPI.
-A trusted stronger model can also serve — the estimate then targets that model's judgment, so
+A trusted stronger model can also serve; the estimate then targets that model's judgment, so
 say so when reporting. Labels may all sit in one policy. Then run the canonical flow.
 For prospective sample-size or label-budget decisions, use the separate **Planning flow**
 above; do not treat this starter batch as a sufficient variance-fitting pilot.
 
-## Refusal discipline — hard rules
+## Reporting limitations
 
 - **Too few pooled labels**: 0 labels fall back to raw judge means marked `naive_direct` with a
-  loud warning — never report those naive numbers as the answer. 1–3 labels also fall back to
+  loud warning; never report those naive numbers as the answer. 1–3 labels also fall back to
   the same loudly-flagged UNCALIBRATED `naive_direct` tier in `analyze_dataset` (a calibrator
-  cannot be fit below 4 independent labeled clusters; all policies gate-FLAGGED) — treat the
+  cannot be fit below 4 independent labeled clusters; all policies gate-FLAGGED); treat the
   run as blocked and never report those numbers; `calibrated_mean_ci` raises a `ValueError`
   for <4 independent labeled clusters when calibration is needed. Complete oracle coverage
   in the array API instead returns the direct oracle mean without calibration. With 4–9
-  independent labeled clusters, folds reduce — report the CIs as noisier and provisional,
+  independent labeled clusters, folds reduce; report the CIs as noisier and provisional,
   and recommend ≥10. Never fabricate, impute, or self-generate oracle labels to
-  get past the floor — run the labeling loop.
+  get past the floor; run the labeling loop.
 - **REFUSE-LEVEL badge on a policy**: never state an absolute quality number for that policy.
   The scalar badge does not establish ranking validity; use the paired comparison and separate
   residual/covariate evidence for any ranking claim.
 - **Flagged diagnostic evidence**: still surface the highest point estimate, with its limitation
   adjacent. Do not silently substitute a different policy estimand.
-- **Transport FAIL**: do not reuse the calibrator for transport-dependent decisions. Keep the
-  requested point estimate visible and label the failed assumption.
+- **Transport FAIL**: keep the requested point estimate visible with the failed assumption;
+  do not base a decision on the unchanged calibration map. Consider representative target-label
+  correction (reference §Correction). A failed level audit alone does not disprove a ranking;
+  a ranking claim needs evidence about the difference in policy mean residuals.
 - Surface gate/diagnostic status alongside every estimate. Never bypass, suppress, or explain
-  away a gate to give the user a cleaner answer — the refusal IS the product.
+  away a gate to give the user a cleaner answer.
 
 ## Reporting back to the user
 
 Give: each policy's calibrated estimate **with its 95% CI** (never a bare point estimate); the
 pairwise verdict from `compare_policies` (difference, CI, p-value); gate status per policy; and
 for any limited claim, the one-line reason plus the concrete fix (e.g. "collect labels in the
-0.6–0.95 judge-score range"). Never infer that a ranking survives from a scalar support badge.
+0.6–0.95 judge-score range"). Never infer that a ranking survives from a scalar support badge. Overlapping marginal CIs
+do not establish equivalence; use the paired difference and a predeclared practical margin
+for an equivalence claim. Plan the analysis sample/stopping rule before collection; repeated
+looks require an appropriate sequential design.
 
 ## Save an auditable run
 
@@ -266,8 +286,8 @@ and analysis can be inspected and reproduced, not that their assumptions are gua
 
 | Pitfall | Instead |
 |---|---|
-| Averaging raw judge scores to compare policies | `analyze_dataset` — naive CIs had 0% coverage |
-| Buying labels under every policy | Labels pool; one calibration can serve every policy — but grade that transfer with held-out probes before relying on it |
+| Averaging raw judge scores to compare policies | `analyze_dataset`; naive CIs had 0% coverage in the Arena benchmark |
+| Buying labels under every policy | Labels pool; one calibration can serve every policy; but grade that transfer with held-out probes before relying on it |
 | Reusing last month's calibrator silently | Held-out `transport_audit` with an explicit margin and at least 20 effective clusters |
 | Rescaling Likert/0–100 scores before calling | Pass as-is; bounded scales auto-normalize |
 | Fitting calibration with <4 independent labeled prompt clusters, or inventing labels | Treat the flagged `naive_direct` fallback as blocked and run the labeling loop. The array API raises when partial coverage needs calibration; complete oracle coverage can use the direct oracle mean. |

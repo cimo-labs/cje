@@ -29,6 +29,7 @@ README_PATHS = sorted(
         REPO_ROOT / "README.md",
         REPO_ROOT / "MIGRATING-0.6.md",
         REPO_ROOT / "PLAYBOOK.md",
+        *(REPO_ROOT / "guides").glob("*.md"),
         REPO_ROOT / "examples" / "arena_sample" / "README.md",
         *(REPO_ROOT / "cje").glob("*/README.md"),
         *(REPO_ROOT / "skills").glob("*/*.md"),
