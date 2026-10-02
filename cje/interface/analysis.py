@@ -52,6 +52,7 @@ _ESTIMATOR_CONFIG_KEYS = (
     "bootstrap_seed",
     "use_augmented_estimator",
     "paired_comparison",
+    "correction_weight",
 )
 
 

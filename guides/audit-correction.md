@@ -26,6 +26,17 @@ corrected mean = mean calibrated prediction across evaluation rows
 
 The result records the applied correction, label design and route in `metadata["point_estimator"]`. Inspect this metadata before comparing methods; requesting augmentation does not prove it was applicable to the supplied data.
 
+## Weight the prediction, or not
+
+The formula above applies the calibrated prediction at weight one. That is only optimal when the prediction's spread within the policy matches its covariance with the human label. A binary judge, or a calibration map that transfers imperfectly to the evaluated policy, over-corrects at weight one, and the corrected estimate can then be less precise than the labeled mean alone. `estimator_config={"correction_weight": "tuned"}` estimates the weight from the labeled slice as the power-tuned weight of PPI++ (the least-squares slope of labels on predictions, clipped to [0, 1]):
+
+```text
+corrected mean = w * mean calibrated prediction across evaluation rows
+               + mean(human label - w * calibrated prediction) on the labeled slice
+```
+
+With `w` tuned, the corrected estimate's variance is never above the labeled mean's, and it equals the weight-one variance when weight one was right. The per-policy weights are reported in `metadata["point_estimator"]["correction_weights"]`; the bootstrap and the oracle-fold jackknife re-estimate the weight in every replicate. The default stays `"one"` in this release. Across sixteen settings on five public corpora (371 policies), the tuned weight was never wider than weight one by more than 1%, was narrower in 177, and removed every case (70 of 371) where weight one had been worse than ignoring the judge.
+
 ## Keep the statistical roles explicit
 
 `label_design="representative"` requires a justified representative sample, such as the uniform prompt sample used here. For unequal-probability sampling, use the supported label-design and propensity inputs. With targeted labels and unknown inclusion probabilities, CJE retains an explicit plug-in route rather than treating those labels as representative.

@@ -924,6 +924,42 @@ def residual_predictions_for_evaluation(
     return cast(np.ndarray, np.clip(predictions, 0.0, 1.0))
 
 
+def resolve_correction_weight(
+    rule: str,
+    outcomes: np.ndarray,
+    predictions: np.ndarray,
+    weights: np.ndarray,
+) -> float:
+    """Weight on the calibrated prediction inside the residual correction.
+
+    ``"one"`` is the plain augmented estimator (plug-in plus mean residual).
+    ``"tuned"`` is the power-tuned weight of PPI++: the weighted least-squares
+    slope of the labelled outcomes on their predictions, clipped to [0, 1].
+    It minimises the variance of the corrected estimate, so the correction can
+    never be worse than the labelled mean alone; weight one can be, when the
+    prediction is binary or the calibration map transfers imperfectly.  The
+    rule falls back to one when fewer than two labels exist or the labelled
+    predictions carry no variance.
+    """
+    if rule == "one":
+        return 1.0
+    if rule != "tuned":
+        raise ValueError(f"correction_weight must be 'one' or 'tuned', got {rule!r}")
+    outcomes = np.asarray(outcomes, dtype=float)
+    predictions = np.asarray(predictions, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    if len(outcomes) < 2:
+        return 1.0
+    mean_prediction = float(np.average(predictions, weights=weights))
+    mean_outcome = float(np.average(outcomes, weights=weights))
+    centred = predictions - mean_prediction
+    variance = float(np.average(centred**2, weights=weights))
+    if not np.isfinite(variance) or variance <= 1e-12:
+        return 1.0
+    covariance = float(np.average(centred * (outcomes - mean_outcome), weights=weights))
+    return float(np.clip(covariance / variance, 0.0, 1.0))
+
+
 def compute_direct_point_estimate(
     calibrated_full: np.ndarray,
     eval_table: DirectEvalTable,
@@ -932,6 +968,7 @@ def compute_direct_point_estimate(
     use_augmented_estimator: bool = True,
     observation_weights: Optional[np.ndarray] = None,
     label_propensities: Optional[np.ndarray] = None,
+    correction_weight: str = "one",
 ) -> DirectPointEstimate:
     """Compute the Direct estimand on one (possibly weighted) data world.
 
@@ -940,7 +977,8 @@ def compute_direct_point_estimate(
 
     * complete evaluation oracle coverage: weighted raw-oracle mean;
     * partial coverage with a valid label design: calibrated plug-in plus a
-      Horvitz-Thompson residual correction;
+      Horvitz-Thompson residual correction, with the prediction weighted by
+      one or by the tuned PPI++ weight (``correction_weight``);
     * targeted/unknown labeling or augmentation disabled: calibrated plug-in.
     """
     calibrated = np.asarray(calibrated_full, dtype=float)
@@ -980,15 +1018,23 @@ def compute_direct_point_estimate(
         "label_design": label_design.kind,
         "augmentation_requested": bool(use_augmented_estimator),
         "augmentation_effective": False,
+        "correction_weight_rule": correction_weight,
+        "correction_weights": [],
     }
+    if correction_weight not in ("one", "tuned"):
+        raise ValueError(
+            f"correction_weight must be 'one' or 'tuned', got {correction_weight!r}"
+        )
 
     for policy_index in range(eval_table.n_policies):
         rows = np.where(eval_table.policy_indices == policy_index)[0]
+        weight_used = 1.0
         if len(rows) == 0:
             diagnostics["routes"].append("no_data")
             diagnostics["plug_in_estimates"].append(float("nan"))
             diagnostics["residual_corrections"].append(0.0)
             diagnostics["oracle_fractions"].append(0.0)
+            diagnostics["correction_weights"].append(float("nan"))
             continue
         policy_weights = weights[rows]
         observed = eval_table.oracle_mask[rows]
@@ -1024,18 +1070,28 @@ def compute_direct_point_estimate(
                     raise ValueError(
                         "residual_predictions must align to evaluation rows"
                     )
-                residual = (
-                    eval_table.oracle_labels[rows][observed]
-                    - residual_predictions_array[rows][observed]
-                )
+                labelled_outcomes = eval_table.oracle_labels[rows][observed]
+                labelled_predictions = residual_predictions_array[rows][observed]
                 if label_design.kind == "representative":
+                    weight_used = resolve_correction_weight(
+                        correction_weight,
+                        labelled_outcomes,
+                        labelled_predictions,
+                        policy_weights[observed],
+                    )
+                    residual = labelled_outcomes - weight_used * labelled_predictions
                     correction = float(
                         np.average(residual, weights=policy_weights[observed])
                     )
                     propensity = oracle_fraction
-                    values += correction
+                    # Pseudo-outcome: w*f(S) + c + 1[labelled]*((Y - w*f(S)) - c)/p,
+                    # whose weighted mean is w*plug_in + c and whose variance is
+                    # the corrected estimator's.  Weight one recovers the plain
+                    # augmented estimator exactly.
+                    values = weight_used * values + correction
                     values[observed] += (residual - correction) / propensity
-                    estimate = plug_in + correction
+                    estimate = weight_used * plug_in + correction
+                    correction = estimate - plug_in
                 else:
                     prop = label_propensities[rows]
                     if np.any(~np.isfinite(prop[observed])) or np.any(
@@ -1045,6 +1101,14 @@ def compute_direct_point_estimate(
                             "Observed oracle rows require finite label propensities "
                             "in (0, 1]"
                         )
+                    weight_used = resolve_correction_weight(
+                        correction_weight,
+                        labelled_outcomes,
+                        labelled_predictions,
+                        policy_weights[observed] / prop[observed],
+                    )
+                    residual = labelled_outcomes - weight_used * labelled_predictions
+                    values = weight_used * values
                     values[observed] += residual / prop[observed]
                     estimate = float(np.average(values, weights=policy_weights))
                     correction = estimate - plug_in
@@ -1061,6 +1125,7 @@ def compute_direct_point_estimate(
         diagnostics["plug_in_estimates"].append(plug_in)
         diagnostics["residual_corrections"].append(float(correction))
         diagnostics["oracle_fractions"].append(oracle_fraction)
+        diagnostics["correction_weights"].append(float(weight_used))
 
     return DirectPointEstimate(estimates, pseudo_outcomes, diagnostics)
 
@@ -1070,6 +1135,7 @@ def direct_oracle_jackknife_estimates(
     eval_table: DirectEvalTable,
     label_design: LabelDesign,
     use_augmented_estimator: bool = True,
+    correction_weight: str = "one",
 ) -> Optional[np.ndarray]:
     """Recompute the Direct estimand under each leave-oracle-fold model."""
     fold_models = calibrator.get_fold_models_for_oua()
@@ -1094,6 +1160,7 @@ def direct_oracle_jackknife_estimates(
             predictions,
             label_design,
             use_augmented_estimator=use_augmented_estimator,
+            correction_weight=correction_weight,
         )
         jackknife.append(point.estimates)
 
@@ -1148,6 +1215,7 @@ def cluster_bootstrap_direct_with_refit(
     label_design: Optional[LabelDesign] = None,
     point_calibrator: Optional[Any] = None,
     n_folds: int = 5,
+    correction_weight: str = "one",
 ) -> Dict[str, Any]:
     """Positive prompt-cluster-weight bootstrap with calibrator refit.
 
@@ -1270,6 +1338,7 @@ def cluster_bootstrap_direct_with_refit(
         residual_point,
         label_design,
         use_augmented_estimator=effective_augmentation,
+        correction_weight=correction_weight,
     )
 
     # Exact key lookup couples evaluation-linked calibration rows to their
@@ -1407,6 +1476,7 @@ def cluster_bootstrap_direct_with_refit(
             residual_boot,
             label_design,
             use_augmented_estimator=effective_augmentation,
+            correction_weight=correction_weight,
             observation_weights=eval_weights,
         )
         if not np.all(np.isfinite(replicate_point.estimates)):

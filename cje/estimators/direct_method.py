@@ -99,6 +99,12 @@ class CalibratedDirectEstimator:
             Supplying this without ``inference_method`` has the same backward-
             compatibility behavior as ``n_bootstrap``.
         use_augmented_estimator: If True, use AIPW-style residual augmentation
+        correction_weight: Weight on the calibrated prediction inside the
+            residual correction: ``"one"`` (default, the plain augmented
+            estimator) or ``"tuned"`` (the power-tuned PPI++ weight, estimated
+            from the labelled rows and clipped to [0, 1]; never worse than the
+            labelled mean, and strictly better than weight one when the
+            prediction is binary or the calibration map transfers imperfectly)
 
     Example:
         >>> # Fresh draws from multiple policies
@@ -125,9 +131,15 @@ class CalibratedDirectEstimator:
         use_augmented_estimator: bool = True,
         calibration_provenance: Optional[CalibrationProvenance] = None,
         label_design: Optional[LabelDesign] = None,
+        correction_weight: str = "one",
     ):
         self.target_policies = list(target_policies)
         self.reward_calibrator = reward_calibrator
+        if correction_weight not in ("one", "tuned"):
+            raise ValueError(
+                f"correction_weight must be 'one' or 'tuned', got {correction_weight!r}"
+            )
+        self.correction_weight = correction_weight
         self.oua_jackknife = oua_jackknife
         self.paired_comparison = paired_comparison
         self._fitted = False
@@ -770,6 +782,7 @@ class CalibratedDirectEstimator:
             residual_predictions,
             self.label_design,
             use_augmented_estimator=self._effective_augmentation(),
+            correction_weight=self.correction_weight,
         )
         self._last_point = point
         return point
@@ -1299,6 +1312,7 @@ class CalibratedDirectEstimator:
                 table,
                 self.label_design,
                 use_augmented_estimator=self._effective_augmentation(),
+                correction_weight=self.correction_weight,
             )
         except Exception as exc:
             self._oracle_jackknife_unavailable_reason = (
@@ -1735,6 +1749,7 @@ class CalibratedDirectEstimator:
             calibration_provenance=self.calibration_provenance,
             label_design=self.label_design,
             point_calibrator=self.reward_calibrator,
+            correction_weight=self.correction_weight,
         )
 
         # ESTIMATOR CONSISTENCY: Use bootstrap's theta_hat as reported estimate.
@@ -1790,6 +1805,8 @@ class CalibratedDirectEstimator:
                 "bootstrap_reason": bootstrap_reason,
                 "label_design": self.label_design.kind,
                 "effective_estimator_routes": point.diagnostics["routes"],
+                "correction_weight_rule": self.correction_weight,
+                "correction_weights": point.diagnostics.get("correction_weights"),
                 "paired_comparison": self.paired_comparison,
                 "prompt_weight_coupling": (
                     "shared_by_prompt"

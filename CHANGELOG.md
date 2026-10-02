@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- `correction_weight="tuned"` on `CalibratedDirectEstimator`, and
+  `analyze_dataset(estimator_config={"correction_weight": "tuned"})`: the
+  residual correction's weight on the calibrated prediction is estimated from
+  the labelled rows as the power-tuned weight of PPI++ (the least-squares
+  slope of labelled outcomes on predictions, clipped to [0, 1]). The corrected
+  estimate is then never worse than the labelled mean, and it is strictly
+  better than weight one when the judge is binary or the calibration map
+  transfers imperfectly. The default, `"one"`, is unchanged. Per-policy
+  weights are reported in `metadata["point_estimator"]["correction_weights"]`
+  and the rule in `metadata["point_estimator"]["correction_weight_rule"]`;
+  the delete-one-oracle-fold jackknife and the cluster bootstrap re-estimate
+  the weight in every replicate.
+
 ## [0.8.1] - 2026-09-27
 
 Documentation maintenance release. Estimation and inference behavior is unchanged
