@@ -961,10 +961,11 @@ def correction_weight_decision(
     * fewer than ``TUNED_WEIGHT_MIN_LABELS`` distinct labelled clusters
       (prompts) exist (``cluster_ids``; rows when not given);
     * fewer than ``TUNED_WEIGHT_MIN_MINORITY`` labelled clusters have an
-      outcome other than the most common one.  With identical or nearly
-      identical labelled outcomes the slope is zero or unstable, and a weight
-      of zero would make every pseudo-outcome constant and the standard error
-      exactly zero;
+      outcome other than the most common one (the outcome held by the most
+      clusters; outcomes are compared after rounding to 1e-6).  With identical
+      or nearly identical labelled outcomes the slope is zero or unstable, and
+      a weight of zero would make every pseudo-outcome constant and the
+      standard error exactly zero;
     * the labelled predictions carry no variance.
     """
     if rule == "one":
@@ -981,10 +982,14 @@ def correction_weight_decision(
         raise ValueError("cluster_ids must align to the labelled outcomes")
     if len(np.unique(clusters)) < TUNED_WEIGHT_MIN_LABELS:
         return 1.0, "too_few_labelled_clusters"
+    # The most common outcome is the one carried by the most labelled
+    # clusters, not the most rows, so prompts with many rows cannot hide a
+    # rare outcome; a cluster with any other outcome counts as differing.
     rounded = np.round(outcomes, 6)
-    values, counts = np.unique(rounded, return_counts=True)
-    minority = rounded != values[np.argmax(counts)]
-    if len(np.unique(clusters[minority])) < TUNED_WEIGHT_MIN_MINORITY:
+    values = np.unique(rounded)
+    clusters_per_value = [len(np.unique(clusters[rounded == v])) for v in values]
+    modal = values[int(np.argmax(clusters_per_value))]
+    if len(np.unique(clusters[rounded != modal])) < TUNED_WEIGHT_MIN_MINORITY:
         return 1.0, "rare_outcome"
     mean_prediction = float(np.average(predictions, weights=weights))
     mean_outcome = float(np.average(outcomes, weights=weights))

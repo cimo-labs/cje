@@ -410,7 +410,8 @@ def calibrated_mean_ci(
             clipped to [0, 1]; falls back to one below 20 labeled prompts, when
             fewer than 5 labeled prompts differ from the most common outcome,
             or when the predictions are constant). Reported under
-            ``diagnostics["correction_weight"]`` on every inference path.
+            ``diagnostics["correction_weight"]`` on every inference path
+            (weight NaN and reason None when every row is labelled).
 
     Returns:
         CalibratedMeanResult with estimate, se, ci, and diagnostics. Partial
@@ -485,7 +486,7 @@ def calibrated_mean_ci(
     n_clusters = int(len(np.unique(cluster_codes)))
 
     if n_oracle == n:
-        return _direct_oracle_mean_ci(
+        full = _direct_oracle_mean_ci(
             judge,
             labels,
             cluster_codes,
@@ -495,6 +496,16 @@ def calibrated_mean_ci(
             n_bootstrap=resolved_n_bootstrap,
             seed=seed,
         )
+        # Every row is labelled, so no residual correction and no weight apply.
+        full.diagnostics["correction_weight"] = _correction_weight_summary(
+            correction_weight,
+            {
+                "routes": ["direct_oracle"],
+                "correction_weights": [float("nan")],
+                "correction_weight_reasons": [None],
+            },
+        )
+        return full
 
     # Fit the full-data calibrator (mask semantics: full-length scores/mask,
     # compact labels — fit_cv's boolean-mask contract).

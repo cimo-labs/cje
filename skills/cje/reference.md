@@ -303,8 +303,9 @@ alter estimates. To correct the current target estimate:
    `estimator_config={"correction_weight": "tuned"}` (or `correction_weight="tuned"` in
    `calibrated_mean_ci`) opts into the PPI++ power-tuned weight for representative designs;
    it falls back to one below 20 labeled prompts, for rare or constant labeled outcomes, and
-   for known propensities. Its gain is asymptotic: at 20 to 60 labels it was within about half
-   a percent of weight one on held-out benchmarks. Read the weight and its reason in
+   for known propensities. Its gain is asymptotic: at 20 to 60 labels its pooled realised error
+   was within about half a percent of weight one on held-out benchmarks, and its interval
+   covered about 1 point less at 20 to 30 labels. Read the weight and its reason in
    `metadata["point_estimator"]`.
 
 The [correction guide](https://github.com/cimo-labs/cje/blob/main/guides/audit-correction.md)

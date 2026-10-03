@@ -16,24 +16,32 @@
   one, because their Horvitz-Thompson form is uncentred and the slope is not
   its variance-optimal weight) and falls back to one below 20 labelled
   prompts per policy, when fewer than 5 labelled prompts differ from the most
-  common outcome (identical labels would otherwise give a weight of zero and
-  a standard error of exactly zero), or when the predictions are constant.
-  The oracle-fold jackknife and the cluster bootstrap re-estimate it in every
-  replicate; the analytic standard error treats it as fixed.
+  common outcome (with identical labels the tuned slope is zero, which made
+  every pseudo-outcome constant and the standard error exactly zero), or when
+  the predictions are constant. The cluster bootstrap re-estimates the weight
+  in every replicate. The oracle-fold jackknife recomputes it on each fold's
+  predictions, which are in-sample for most labelled rows, so its replicate
+  weights run higher than the point's (interval coverage was not affected in
+  simulations). The analytic standard error treats the weight as fixed.
 - **When to opt in.** The tuned weight's gain over weight one is asymptotic.
-  On 45 held-out settings from six public benchmarks its realised error was
-  within about half a percent of weight one at 20 to 60 labels per policy
-  (pooled RMSE ratio 1.004, 1.002 and 0.999 at 20, 30 and 60), ahead mainly
-  where weight one over-corrects: binary judges and calibration maps that
-  transfer poorly to the evaluated policy. It optimises each policy's level,
-  not paired differences.
+  On 45 held-out settings from five public benchmarks, its pooled realised
+  error was within about half a percent of weight one at 20 to 60 labels per
+  policy (pooled RMSE ratio 1.004, 1.002 and 0.999 at 20, 30 and 60). Single
+  settings ranged from about 3% worse in RMSE at 20 labels to clearly better
+  where weight one over-corrects, mostly a calibration map that transfers
+  poorly to the evaluated policy. Because the analytic interval does not
+  carry the weight's estimation noise, tuned coverage averaged about 1 point
+  below weight one at 20 to 30 labels (worst setting 19 points below at 20
+  labels, 7 at 60). It optimises each policy's level, not paired differences.
 - `metadata["point_estimator"]` reports, per policy, the weight
   (`correction_weights`, NaN where no residual correction applies), the reason
   (`correction_weight_reasons`), and the labelled rows and prompts it saw;
   `calibrated_mean_ci` reports the weight and reason in
-  `diagnostics["correction_weight"]` on every inference path. A warning is
-  logged when every labelled outcome of a policy is identical, under either
-  weight.
+  `diagnostics["correction_weight"]` on every inference path. When the
+  residual correction is applied and every labelled outcome of a policy is
+  identical, a warning is logged under either weight: if the calibration was
+  fitted on those same labels it is constant too, and the interval is then
+  not usable whatever the weight.
 - Planning measurements pin `correction_weight="one"`, so a planned budget
   does not depend on the library default.
 
