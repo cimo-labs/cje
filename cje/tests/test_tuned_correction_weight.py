@@ -1,9 +1,10 @@
 """The tuned correction weight: PPI++ power tuning inside the augmented estimator.
 
-Weight one (the default) must be unchanged.  The tuned weight must equal the
-least-squares slope of labelled outcomes on predictions, clipped to [0, 1];
-with uninformative predictions it must reduce the estimator to the labelled
-mean, and it must never raise the pseudo-outcome variance above weight one.
+Weight one (the 0.8.x estimator) must be reproducible by name.  The tuned
+weight, the default from 0.9.0, must equal the least-squares slope of labelled
+outcomes on predictions, clipped to [0, 1], fall back to one below the minimum
+label count, reduce the estimator to the labelled mean when the predictions
+are uninformative, and not raise the pseudo-outcome variance above weight one.
 """
 
 from __future__ import annotations
@@ -83,11 +84,61 @@ def test_weight_one_is_the_plain_augmented_estimator() -> None:
     assert point.estimates[0] == pytest.approx(plug_in + correction)
     assert point.diagnostics["correction_weights"] == [1.0]
     assert point.diagnostics["routes"] == ["augmented"]
+    # The default is the tuned weight; weight one remains available by name.
     default = compute_direct_point_estimate(
         predictions, table, predictions, LabelDesign()
     )
-    assert default.estimates[0] == point.estimates[0]
-    assert np.array_equal(default.pseudo_outcomes[0], point.pseudo_outcomes[0])
+    tuned = compute_direct_point_estimate(
+        predictions, table, predictions, LabelDesign(), correction_weight="tuned"
+    )
+    assert default.diagnostics["correction_weight_rule"] == "tuned"
+    assert default.estimates[0] == tuned.estimates[0]
+    assert np.array_equal(default.pseudo_outcomes[0], tuned.pseudo_outcomes[0])
+
+
+def test_tuned_weight_falls_back_to_one_below_the_minimum_labels() -> None:
+    from cje.diagnostics.robust_inference import TUNED_WEIGHT_MIN_LABELS
+
+    assert TUNED_WEIGHT_MIN_LABELS == 20
+    rng = np.random.default_rng(21)
+    predictions = rng.uniform(size=19)
+    outcomes = 0.5 * predictions + rng.normal(0, 0.05, size=19)
+    assert resolve_correction_weight("tuned", outcomes, predictions, np.ones(19)) == 1.0
+    predictions = rng.uniform(size=20)
+    outcomes = 0.5 * predictions + rng.normal(0, 0.05, size=20)
+    assert resolve_correction_weight("tuned", outcomes, predictions, np.ones(20)) < 1.0
+    table, predictions, outcomes, mask = _table(300, seed=22, noise=0.6, labelled=15)
+    point = compute_direct_point_estimate(
+        predictions, table, predictions, LabelDesign()
+    )
+    assert point.diagnostics["correction_weights"] == [1.0]
+    assert point.diagnostics["correction_weight_rule"] == "tuned"
+    assert point.diagnostics["correction_weight_min_labels"] == 20
+
+
+def test_array_api_exposes_the_weight(tmp_path: Path) -> None:
+    from cje import calibrated_mean_ci
+
+    rng = np.random.default_rng(31)
+    scores = rng.uniform(size=600)
+    truth = 0.2 + 0.6 * scores
+    labels = np.full(600, np.nan)
+    labelled = rng.choice(600, size=120, replace=False)
+    labels[labelled] = (rng.uniform(size=120) < truth[labelled]).astype(
+        float
+    )  # binary labels
+    tuned = calibrated_mean_ci(scores, labels)
+    one = calibrated_mean_ci(scores, labels, correction_weight="one")
+    assert tuned.diagnostics["correction_weight"]["rule"] == "tuned"
+    assert 0.0 <= tuned.diagnostics["correction_weight"]["weight"] <= 1.0
+    assert one.diagnostics["correction_weight"] == {
+        "rule": "one",
+        "weight": 1.0,
+        "route": "augmented",
+    }
+    assert tuned.se <= one.se * (1 + 1e-6)
+    with pytest.raises(ValueError, match="correction_weight"):
+        calibrated_mean_ci(scores, labels, correction_weight="half")
 
 
 def test_tuned_weight_reduces_to_labelled_mean_on_noise() -> None:

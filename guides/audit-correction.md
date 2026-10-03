@@ -35,7 +35,7 @@ corrected mean = w * mean calibrated prediction across evaluation rows
                + mean(human label - w * calibrated prediction) on the labeled slice
 ```
 
-With `w` tuned, the corrected estimate's variance is never above the labeled mean's, and it equals the weight-one variance when weight one was right. The per-policy weights are reported in `metadata["point_estimator"]["correction_weights"]`; the bootstrap and the oracle-fold jackknife re-estimate the weight in every replicate. The default stays `"one"` in this release. Across sixteen settings on five public corpora (371 policies), the tuned weight was never wider than weight one by more than 1%, was narrower in 177, and removed every case (70 of 371) where weight one had been worse than ignoring the judge.
+With `w` tuned, the corrected estimate's variance is never above the labeled mean's, and it equals the weight-one variance when weight one was right. The per-policy weights are reported in `metadata["point_estimator"]["correction_weights"]`; the bootstrap and the oracle-fold jackknife re-estimate the weight in every replicate. `"tuned"` is the default from 0.9.0; pass `correction_weight="one"` to reproduce 0.8.x results. Below 20 labels per policy the weight is not estimated and one is used, because its own estimation noise is not in the standard error and costs interval coverage at that size. The weight is the power-tuned weight of PPI++ (Angelopoulos, Duchi and Zrnic, 2023). Across sixteen settings on five public corpora (371 policies), the tuned weight was never wider than weight one by more than 1%, was narrower in 177, and removed every case (70 of 371) where weight one had been worse than ignoring the judge.
 
 ## Keep the statistical roles explicit
 

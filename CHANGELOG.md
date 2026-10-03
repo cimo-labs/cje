@@ -2,20 +2,31 @@
 
 ## [Unreleased]
 
-### Added
+### Changed
 
-- `correction_weight="tuned"` on `CalibratedDirectEstimator`, and
-  `analyze_dataset(estimator_config={"correction_weight": "tuned"})`: the
-  residual correction's weight on the calibrated prediction is estimated from
-  the labelled rows as the power-tuned weight of PPI++ (the least-squares
-  slope of labelled outcomes on predictions, clipped to [0, 1]). The corrected
-  estimate is then never worse than the labelled mean, and it is strictly
-  better than weight one when the judge is binary or the calibration map
-  transfers imperfectly. The default, `"one"`, is unchanged. Per-policy
-  weights are reported in `metadata["point_estimator"]["correction_weights"]`
-  and the rule in `metadata["point_estimator"]["correction_weight_rule"]`;
-  the delete-one-oracle-fold jackknife and the cluster bootstrap re-estimate
-  the weight in every replicate.
+- **The residual correction now weights the calibrated prediction with the
+  power-tuned weight of PPI++ by default** (`correction_weight="tuned"` on
+  `CalibratedDirectEstimator`, `calibrated_mean_ci`, and
+  `analyze_dataset(estimator_config=...)`). The weight is the least-squares
+  slope of labelled outcomes on predictions over the labelled rows, clipped to
+  [0, 1], so the corrected estimate is never less precise than the labelled
+  mean alone; weight one (the 0.8.x estimator) is less precise than the
+  labelled mean whenever the judge is binary or the calibration map transfers
+  imperfectly (70 of 371 policies across five public corpora). Below 20
+  labels per policy the weight is not estimated and one is used, because its
+  estimation noise is not in the standard error and costs interval coverage
+  there. Pass `correction_weight="one"` to reproduce 0.8.x results exactly.
+  Per-policy weights, the rule and the minimum are reported in
+  `metadata["point_estimator"]`; the oracle-fold jackknife and the cluster
+  bootstrap re-estimate the weight in every replicate. Credit: Angelopoulos,
+  Duchi and Zrnic (2023), "PPI++: Efficient Prediction-Powered Inference".
+
+**Upgrade note:** corrected estimates and intervals move slightly on upgrade
+(typically a standard-error ratio of 0.99, and much narrower where weight one
+was over-correcting). No calibrator migration is needed. Known and unchanged:
+with 10 or fewer labels per policy the augmented interval under-covers under
+either weight because its degrees of freedom count clusters rather than
+labelled rows; a fix is tracked separately.
 
 ## [0.8.1] - 2026-09-27
 
