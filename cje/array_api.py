@@ -339,6 +339,7 @@ def calibrated_mean_ci(
     inference: str = _DEFAULT_INFERENCE,
     n_bootstrap: int = _DEFAULT_N_BOOTSTRAP,
     seed: int = 42,
+    correction_weight: str = "tuned",
 ) -> CalibratedMeanResult:
     """Calibrated mean of judge scores against a partial oracle slice, with CI.
 
@@ -381,6 +382,13 @@ def calibrated_mean_ci(
             path). Supplying this without ``inference`` selects bootstrap for
             backward compatibility and emits a warning.
         seed: Seed for fold assignment and the bootstrap.
+        correction_weight: Weight on the calibrated prediction inside the
+            residual correction: ``"tuned"`` (default; the power-tuned PPI++
+            weight, estimated from the labeled rows and clipped to [0, 1], so
+            the corrected estimate is never less precise than the labeled
+            mean; falls back to one below 20 labels) or ``"one"`` (the plain
+            augmented estimator, the 0.8.x behaviour). Reported under
+            ``diagnostics["correction_weight"]``.
 
     Returns:
         CalibratedMeanResult with estimate, se, ci, and diagnostics. Partial
@@ -401,6 +409,10 @@ def calibrated_mean_ci(
         >>> result = calibrated_mean_ci(scores, labels)
         >>> print(result.summary())  # doctest: +SKIP
     """
+    if correction_weight not in ("one", "tuned"):
+        raise ValueError(
+            f"correction_weight must be 'one' or 'tuned', got {correction_weight!r}"
+        )
     inference_explicit = not isinstance(inference, _DefaultInference)
     n_bootstrap_explicit = not isinstance(n_bootstrap, _DefaultInt)
     if not inference_explicit and n_bootstrap_explicit:
@@ -550,6 +562,7 @@ def calibrated_mean_ci(
             seed=seed,
             point_calibrator=calibrator,
             n_folds=n_folds,
+            correction_weight=correction_weight,
         )
         estimate = float(boot["estimates"][0])
         se = float(boot["standard_errors"][0])
@@ -578,9 +591,15 @@ def calibrated_mean_ci(
             table,
             residual_predictions,
             LabelDesign("representative"),
+            correction_weight=correction_weight,
         )
         estimate = float(point.estimates[0])
         pseudo_outcomes = point.pseudo_outcomes[0]
+        diagnostics["correction_weight"] = {
+            "rule": correction_weight,
+            "weight": float(point.diagnostics["correction_weights"][0]),
+            "route": point.diagnostics["routes"][0],
+        }
         influence_values = pseudo_outcomes - estimate
         res = cluster_robust_se(
             data=influence_values,
@@ -598,6 +617,7 @@ def calibrated_mean_ci(
             calibrator,
             table,
             LabelDesign("representative"),
+            correction_weight=correction_weight,
         )
         if jackknife is not None:
             jack = jackknife[:, 0]

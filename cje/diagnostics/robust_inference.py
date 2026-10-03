@@ -924,6 +924,9 @@ def residual_predictions_for_evaluation(
     return cast(np.ndarray, np.clip(predictions, 0.0, 1.0))
 
 
+TUNED_WEIGHT_MIN_LABELS = 20
+
+
 def resolve_correction_weight(
     rule: str,
     outcomes: np.ndarray,
@@ -933,12 +936,16 @@ def resolve_correction_weight(
     """Weight on the calibrated prediction inside the residual correction.
 
     ``"one"`` is the plain augmented estimator (plug-in plus mean residual).
-    ``"tuned"`` is the power-tuned weight of PPI++: the weighted least-squares
-    slope of the labelled outcomes on their predictions, clipped to [0, 1].
+    ``"tuned"`` is the power-tuned weight of PPI++ (Angelopoulos, Duchi and
+    Zrnic, 2023, "PPI++: Efficient Prediction-Powered Inference"): the weighted
+    least-squares slope of the labelled outcomes on their predictions, clipped
+    to [0, 1].
     It minimises the variance of the corrected estimate, so the correction can
     never be worse than the labelled mean alone; weight one can be, when the
     prediction is binary or the calibration map transfers imperfectly.  The
-    rule falls back to one when fewer than two labels exist or the labelled
+    rule falls back to one when fewer than ``TUNED_WEIGHT_MIN_LABELS`` labels
+    exist (the weight's own estimation noise is not in the standard error, and
+    below about 20 labels it costs interval coverage) or when the labelled
     predictions carry no variance.
     """
     if rule == "one":
@@ -948,7 +955,7 @@ def resolve_correction_weight(
     outcomes = np.asarray(outcomes, dtype=float)
     predictions = np.asarray(predictions, dtype=float)
     weights = np.asarray(weights, dtype=float)
-    if len(outcomes) < 2:
+    if len(outcomes) < TUNED_WEIGHT_MIN_LABELS:
         return 1.0
     mean_prediction = float(np.average(predictions, weights=weights))
     mean_outcome = float(np.average(outcomes, weights=weights))
@@ -968,7 +975,7 @@ def compute_direct_point_estimate(
     use_augmented_estimator: bool = True,
     observation_weights: Optional[np.ndarray] = None,
     label_propensities: Optional[np.ndarray] = None,
-    correction_weight: str = "one",
+    correction_weight: str = "tuned",
 ) -> DirectPointEstimate:
     """Compute the Direct estimand on one (possibly weighted) data world.
 
@@ -1019,6 +1026,7 @@ def compute_direct_point_estimate(
         "augmentation_requested": bool(use_augmented_estimator),
         "augmentation_effective": False,
         "correction_weight_rule": correction_weight,
+        "correction_weight_min_labels": TUNED_WEIGHT_MIN_LABELS,
         "correction_weights": [],
     }
     if correction_weight not in ("one", "tuned"):
@@ -1135,7 +1143,7 @@ def direct_oracle_jackknife_estimates(
     eval_table: DirectEvalTable,
     label_design: LabelDesign,
     use_augmented_estimator: bool = True,
-    correction_weight: str = "one",
+    correction_weight: str = "tuned",
 ) -> Optional[np.ndarray]:
     """Recompute the Direct estimand under each leave-oracle-fold model."""
     fold_models = calibrator.get_fold_models_for_oua()
@@ -1215,7 +1223,7 @@ def cluster_bootstrap_direct_with_refit(
     label_design: Optional[LabelDesign] = None,
     point_calibrator: Optional[Any] = None,
     n_folds: int = 5,
-    correction_weight: str = "one",
+    correction_weight: str = "tuned",
 ) -> Dict[str, Any]:
     """Positive prompt-cluster-weight bootstrap with calibrator refit.
 

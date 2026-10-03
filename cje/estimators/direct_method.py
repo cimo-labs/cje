@@ -100,11 +100,13 @@ class CalibratedDirectEstimator:
             compatibility behavior as ``n_bootstrap``.
         use_augmented_estimator: If True, use AIPW-style residual augmentation
         correction_weight: Weight on the calibrated prediction inside the
-            residual correction: ``"one"`` (default, the plain augmented
-            estimator) or ``"tuned"`` (the power-tuned PPI++ weight, estimated
-            from the labelled rows and clipped to [0, 1]; never worse than the
-            labelled mean, and strictly better than weight one when the
-            prediction is binary or the calibration map transfers imperfectly)
+            residual correction: ``"tuned"`` (default; the power-tuned PPI++
+            weight, estimated from the labelled rows and clipped to [0, 1];
+            never worse than the labelled mean, and strictly better than
+            weight one when the prediction is binary or the calibration map
+            transfers imperfectly; falls back to one below 20 labels per
+            policy) or ``"one"`` (the plain augmented estimator, the 0.8.x
+            behaviour)
 
     Example:
         >>> # Fresh draws from multiple policies
@@ -131,7 +133,7 @@ class CalibratedDirectEstimator:
         use_augmented_estimator: bool = True,
         calibration_provenance: Optional[CalibrationProvenance] = None,
         label_design: Optional[LabelDesign] = None,
-        correction_weight: str = "one",
+        correction_weight: str = "tuned",
     ):
         self.target_policies = list(target_policies)
         self.reward_calibrator = reward_calibrator
