@@ -2,31 +2,45 @@
 
 ## [Unreleased]
 
-### Changed
+### Added
 
-- **The residual correction now weights the calibrated prediction with the
-  power-tuned weight of PPI++ by default** (`correction_weight="tuned"` on
-  `CalibratedDirectEstimator`, `calibrated_mean_ci`, and
-  `analyze_dataset(estimator_config=...)`). The weight is the least-squares
-  slope of labelled outcomes on predictions over the labelled rows, clipped to
-  [0, 1], so the corrected estimate is never less precise than the labelled
-  mean alone; weight one (the 0.8.x estimator) is less precise than the
-  labelled mean whenever the judge is binary or the calibration map transfers
-  imperfectly (70 of 371 policies across five public corpora). Below 20
-  labels per policy the weight is not estimated and one is used, because its
-  estimation noise is not in the standard error and costs interval coverage
-  there. Pass `correction_weight="one"` to reproduce 0.8.x results exactly.
-  Per-policy weights, the rule and the minimum are reported in
-  `metadata["point_estimator"]`; the oracle-fold jackknife and the cluster
-  bootstrap re-estimate the weight in every replicate. Credit: Angelopoulos,
-  Duchi and Zrnic (2023), "PPI++: Efficient Prediction-Powered Inference".
+- **Opt-in power-tuned weight for the residual correction**
+  (`correction_weight="tuned"` on `CalibratedDirectEstimator`,
+  `calibrated_mean_ci`, and `analyze_dataset(estimator_config=...)`). The
+  default stays `"one"`, the 0.8.x estimator, so estimates and intervals do
+  not change on upgrade. The tuned weight is the least-squares slope of
+  labelled outcomes on predictions over a policy's labelled rows, clipped to
+  [0, 1]: the power-tuned weight of PPI++ (Angelopoulos, Duchi and Zrnic,
+  2023, "PPI++: Efficient Prediction-Powered Inference"). It applies to
+  representative label designs only (known-propensity designs keep weight
+  one, because their Horvitz-Thompson form is uncentred and the slope is not
+  its variance-optimal weight) and falls back to one below 20 labelled
+  prompts per policy, when fewer than 5 labelled prompts differ from the most
+  common outcome (identical labels would otherwise give a weight of zero and
+  a standard error of exactly zero), or when the predictions are constant.
+  The oracle-fold jackknife and the cluster bootstrap re-estimate it in every
+  replicate; the analytic standard error treats it as fixed.
+- **When to opt in.** The tuned weight's gain over weight one is asymptotic.
+  On 45 held-out settings from six public benchmarks its realised error was
+  within about half a percent of weight one at 20 to 60 labels per policy
+  (pooled RMSE ratio 1.004, 1.002 and 0.999 at 20, 30 and 60), ahead mainly
+  where weight one over-corrects: binary judges and calibration maps that
+  transfer poorly to the evaluated policy. It optimises each policy's level,
+  not paired differences.
+- `metadata["point_estimator"]` reports, per policy, the weight
+  (`correction_weights`, NaN where no residual correction applies), the reason
+  (`correction_weight_reasons`), and the labelled rows and prompts it saw;
+  `calibrated_mean_ci` reports the weight and reason in
+  `diagnostics["correction_weight"]` on every inference path. A warning is
+  logged when every labelled outcome of a policy is identical, under either
+  weight.
+- Planning measurements pin `correction_weight="one"`, so a planned budget
+  does not depend on the library default.
 
-**Upgrade note:** corrected estimates and intervals move slightly on upgrade
-(typically a standard-error ratio of 0.99, and much narrower where weight one
-was over-correcting). No calibrator migration is needed. Known and unchanged:
-with 10 or fewer labels per policy the augmented interval under-covers under
-either weight because its degrees of freedom count clusters rather than
-labelled rows; a fix is tracked separately.
+**Known and unchanged:** with few labelled prompts per policy the augmented
+interval under-covers under either weight, because its degrees of freedom
+count all evaluation clusters rather than labelled ones (issue #60); a fix is
+planned for 0.9.1.
 
 ## [0.8.1] - 2026-09-27
 

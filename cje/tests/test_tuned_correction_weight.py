@@ -1,25 +1,32 @@
 """The tuned correction weight: PPI++ power tuning inside the augmented estimator.
 
-Weight one (the 0.8.x estimator) must be reproducible by name.  The tuned
-weight, the default from 0.9.0, must equal the least-squares slope of labelled
-outcomes on predictions, clipped to [0, 1], fall back to one below the minimum
-label count, reduce the estimator to the labelled mean when the predictions
-are uninformative, and not raise the pseudo-outcome variance above weight one.
+Weight one (the 0.8.x estimator) is the default.  The opt-in tuned weight must
+equal the least-squares slope of labelled outcomes on predictions, clipped to
+[0, 1]; fall back to one below the minimum count of labelled prompts, when too
+few labelled prompts differ from the most common outcome (identical labels
+would otherwise give a weight of zero and a standard error of exactly zero),
+and in the known-propensity design; reduce the estimator to the labelled mean
+when the predictions are uninformative; and not raise the pseudo-outcome
+variance above weight one.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pytest
 
 from cje import analyze_dataset
 from cje.diagnostics.robust_inference import (
+    TUNED_WEIGHT_MIN_LABELS,
+    TUNED_WEIGHT_MIN_MINORITY,
     DirectEvalTable,
     LabelDesign,
     compute_direct_point_estimate,
+    correction_weight_decision,
     resolve_correction_weight,
 )
 
@@ -84,21 +91,17 @@ def test_weight_one_is_the_plain_augmented_estimator() -> None:
     assert point.estimates[0] == pytest.approx(plug_in + correction)
     assert point.diagnostics["correction_weights"] == [1.0]
     assert point.diagnostics["routes"] == ["augmented"]
-    # The default is the tuned weight; weight one remains available by name.
+    assert point.diagnostics["correction_weight_reasons"] == ["rule_one"]
+    # The default is weight one; the tuned weight is opt-in.
     default = compute_direct_point_estimate(
         predictions, table, predictions, LabelDesign()
     )
-    tuned = compute_direct_point_estimate(
-        predictions, table, predictions, LabelDesign(), correction_weight="tuned"
-    )
-    assert default.diagnostics["correction_weight_rule"] == "tuned"
-    assert default.estimates[0] == tuned.estimates[0]
-    assert np.array_equal(default.pseudo_outcomes[0], tuned.pseudo_outcomes[0])
+    assert default.diagnostics["correction_weight_rule"] == "one"
+    assert default.estimates[0] == point.estimates[0]
+    assert np.array_equal(default.pseudo_outcomes[0], point.pseudo_outcomes[0])
 
 
 def test_tuned_weight_falls_back_to_one_below_the_minimum_labels() -> None:
-    from cje.diagnostics.robust_inference import TUNED_WEIGHT_MIN_LABELS
-
     assert TUNED_WEIGHT_MIN_LABELS == 20
     rng = np.random.default_rng(21)
     predictions = rng.uniform(size=19)
@@ -109,9 +112,12 @@ def test_tuned_weight_falls_back_to_one_below_the_minimum_labels() -> None:
     assert resolve_correction_weight("tuned", outcomes, predictions, np.ones(20)) < 1.0
     table, predictions, outcomes, mask = _table(300, seed=22, noise=0.6, labelled=15)
     point = compute_direct_point_estimate(
-        predictions, table, predictions, LabelDesign()
+        predictions, table, predictions, LabelDesign(), correction_weight="tuned"
     )
     assert point.diagnostics["correction_weights"] == [1.0]
+    assert point.diagnostics["correction_weight_reasons"] == [
+        "too_few_labelled_clusters"
+    ]
     assert point.diagnostics["correction_weight_rule"] == "tuned"
     assert point.diagnostics["correction_weight_min_labels"] == 20
 
@@ -127,13 +133,15 @@ def test_array_api_exposes_the_weight(tmp_path: Path) -> None:
     labels[labelled] = (rng.uniform(size=120) < truth[labelled]).astype(
         float
     )  # binary labels
-    tuned = calibrated_mean_ci(scores, labels)
-    one = calibrated_mean_ci(scores, labels, correction_weight="one")
+    tuned = calibrated_mean_ci(scores, labels, correction_weight="tuned")
+    one = calibrated_mean_ci(scores, labels)
     assert tuned.diagnostics["correction_weight"]["rule"] == "tuned"
+    assert tuned.diagnostics["correction_weight"]["reason"] == "tuned"
     assert 0.0 <= tuned.diagnostics["correction_weight"]["weight"] <= 1.0
     assert one.diagnostics["correction_weight"] == {
         "rule": "one",
         "weight": 1.0,
+        "reason": "rule_one",
         "route": "augmented",
     }
     assert tuned.se <= one.se * (1 + 1e-6)
@@ -201,7 +209,7 @@ def test_tuned_weight_does_not_raise_pseudo_outcome_variance() -> None:
         assert tuned.pseudo_outcomes[0].mean() == pytest.approx(tuned.estimates[0])
 
 
-def test_known_propensity_design_accepts_tuned_weight() -> None:
+def test_known_propensity_design_keeps_weight_one() -> None:
     table, predictions, outcomes, mask = _table(300, seed=7, noise=0.2, labelled=60)
     design = LabelDesign(
         kind="known_propensity", propensities={"policy": np.full(300, 0.2)}
@@ -216,8 +224,22 @@ def test_known_propensity_design_accepts_tuned_weight() -> None:
         label_propensities=propensities,
     )
     assert point.diagnostics["routes"] == ["augmented"]
-    assert 0.0 <= point.diagnostics["correction_weights"][0] <= 1.0
-    assert np.isfinite(point.estimates[0])
+    # The Horvitz-Thompson branch is uncentred, where the least-squares slope is
+    # not the variance-optimal weight, so the tuned rule keeps weight one there.
+    assert point.diagnostics["correction_weights"] == [1.0]
+    assert point.diagnostics["correction_weight_reasons"] == [
+        "known_propensity_fixed_one"
+    ]
+    one = compute_direct_point_estimate(
+        predictions,
+        table,
+        predictions,
+        design,
+        correction_weight="one",
+        label_propensities=propensities,
+    )
+    assert point.estimates[0] == one.estimates[0]
+    assert np.array_equal(point.pseudo_outcomes[0], one.pseudo_outcomes[0])
 
 
 def test_analyze_dataset_threads_the_weight_and_narrows_the_interval(
@@ -284,3 +306,188 @@ def test_analyze_dataset_threads_the_weight_and_narrows_the_interval(
             calibration_oracle_scale=(0.0, 1.0),
             estimator_config={"correction_weight": "half"},
         )
+
+
+def _table_with_prompts(
+    predictions: np.ndarray,
+    outcomes: np.ndarray,
+    mask: np.ndarray,
+    prompts: Optional[np.ndarray] = None,
+) -> DirectEvalTable:
+    n = len(predictions)
+    prompts = np.arange(n) if prompts is None else np.asarray(prompts)
+    return DirectEvalTable(
+        prompt_ids=prompts,
+        prompt_id_strings=[f"p{i}" for i in prompts],
+        policy_indices=np.zeros(n, dtype=np.int32),
+        judge_scores=predictions,
+        oracle_labels=np.where(mask, outcomes, np.nan),
+        oracle_mask=mask,
+        covariates=None,
+        covariate_names=None,
+        policy_names=["policy"],
+    )
+
+
+def test_identical_labelled_outcomes_never_give_a_zero_standard_error() -> None:
+    """Identical labels gave a tuned weight of zero, constant pseudo-outcomes
+    and a standard error of exactly zero; they now keep weight one."""
+    rng = np.random.default_rng(41)
+    n = 400
+    predictions = rng.uniform(0.7, 1.0, size=n)
+    outcomes = np.ones(n)
+    mask = np.zeros(n, dtype=bool)
+    mask[rng.choice(n, size=25, replace=False)] = True
+    table = _table_with_prompts(predictions, outcomes, mask)
+    point = compute_direct_point_estimate(
+        predictions, table, predictions, LabelDesign(), correction_weight="tuned"
+    )
+    assert point.diagnostics["correction_weights"] == [1.0]
+    assert point.diagnostics["correction_weight_reasons"] == ["rare_outcome"]
+    assert point.diagnostics["labelled_outcomes_constant"] == [True]
+    assert np.std(point.pseudo_outcomes[0]) > 0
+
+
+def test_rare_outcome_guard_boundary() -> None:
+    rng = np.random.default_rng(42)
+    n = 60
+    predictions = rng.uniform(size=n)
+    weights = np.ones(n)
+    for minority, expected in [
+        (TUNED_WEIGHT_MIN_MINORITY - 1, "rare_outcome"),
+        (TUNED_WEIGHT_MIN_MINORITY, "tuned"),
+    ]:
+        outcomes = np.ones(n)
+        outcomes[:minority] = 0.0
+        weight, reason = correction_weight_decision(
+            "tuned", outcomes, predictions, weights
+        )
+        assert reason == expected
+        if expected == "rare_outcome":
+            assert weight == 1.0
+    # Graded outcomes with no repeated value are never rare.
+    graded = rng.uniform(size=n)
+    assert correction_weight_decision("tuned", graded, predictions, weights)[1] == (
+        "tuned"
+    )
+
+
+def test_guard_counts_labelled_prompts_not_rows() -> None:
+    rng = np.random.default_rng(43)
+    n = 200
+    predictions = rng.uniform(size=n)
+    outcomes = np.clip(predictions * 0.5 + rng.normal(0, 0.1, size=n), 0, 1)
+    prompts = np.repeat(np.arange(n // 10), 10)  # ten rows per prompt
+    mask = np.zeros(n, dtype=bool)
+    mask[:30] = True  # 30 labelled rows from 3 prompts
+    table = _table_with_prompts(predictions, outcomes, mask, prompts)
+    point = compute_direct_point_estimate(
+        predictions, table, predictions, LabelDesign(), correction_weight="tuned"
+    )
+    assert point.diagnostics["labelled_rows"] == [30]
+    assert point.diagnostics["labelled_clusters"] == [3]
+    assert point.diagnostics["correction_weights"] == [1.0]
+    assert point.diagnostics["correction_weight_reasons"] == [
+        "too_few_labelled_clusters"
+    ]
+    # The same rows labelled one per prompt reach the threshold.
+    assert (
+        correction_weight_decision(
+            "tuned",
+            outcomes[:30],
+            predictions[:30],
+            np.ones(30),
+            cluster_ids=np.arange(30),
+        )[1]
+        == "tuned"
+    )
+
+
+def test_weights_are_nan_where_no_correction_applies() -> None:
+    rng = np.random.default_rng(44)
+    n = 100
+    predictions = rng.uniform(size=n)
+    outcomes = rng.uniform(size=n)
+    table = DirectEvalTable(
+        prompt_ids=np.concatenate([np.arange(50), np.arange(50)]),
+        prompt_id_strings=[f"p{i}" for i in range(50)] * 2,
+        policy_indices=np.repeat(np.array([0, 1], dtype=np.int32), 50),
+        judge_scores=predictions,
+        oracle_labels=np.concatenate([outcomes[:50], np.full(50, np.nan)]),
+        oracle_mask=np.concatenate([np.ones(50, bool), np.zeros(50, bool)]),
+        covariates=None,
+        covariate_names=None,
+        policy_names=["fully_labelled", "unlabelled"],
+    )
+    point = compute_direct_point_estimate(
+        predictions, table, predictions, LabelDesign(), correction_weight="tuned"
+    )
+    assert point.diagnostics["routes"] == ["direct_oracle", "plug_in"]
+    assert all(np.isnan(w) for w in point.diagnostics["correction_weights"])
+    assert point.diagnostics["correction_weight_reasons"] == [None, None]
+
+
+def test_defaults_are_weight_one() -> None:
+    import inspect
+
+    from cje import calibrated_mean_ci
+    from cje.diagnostics.planning import _PLANNING_MEASUREMENT_CONFIG
+    from cje.diagnostics.robust_inference import (
+        cluster_bootstrap_direct_with_refit,
+        direct_oracle_jackknife_estimates,
+    )
+    from cje.estimators.direct_method import CalibratedDirectEstimator
+
+    for function in (
+        compute_direct_point_estimate,
+        direct_oracle_jackknife_estimates,
+        cluster_bootstrap_direct_with_refit,
+        calibrated_mean_ci,
+        CalibratedDirectEstimator.__init__,
+    ):
+        default = inspect.signature(function).parameters["correction_weight"].default
+        assert default == "one", function
+    assert _PLANNING_MEASUREMENT_CONFIG["correction_weight"] == "one"
+
+
+def test_bootstrap_path_reports_the_weight() -> None:
+    from cje import calibrated_mean_ci
+
+    rng = np.random.default_rng(45)
+    scores = rng.uniform(size=300)
+    labels = np.full(300, np.nan)
+    labelled = rng.choice(300, size=60, replace=False)
+    labels[labelled] = np.clip(scores[labelled] + rng.normal(0, 0.2, 60), 0, 1)
+    result = calibrated_mean_ci(
+        scores,
+        labels,
+        inference="bootstrap",
+        n_bootstrap=50,
+        correction_weight="tuned",
+    )
+    summary = result.diagnostics["correction_weight"]
+    assert summary["rule"] == "tuned"
+    assert summary["reason"] == "tuned"
+    assert summary["route"] == "augmented"
+    assert 0.0 <= summary["weight"] <= 1.0
+
+
+def test_identical_labels_end_to_end_match_weight_one_and_warn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """With every label identical the calibration itself learns a constant, so
+    no weight can produce outcome variation; the tuned rule must match weight
+    one exactly and the user must be warned."""
+    from cje import calibrated_mean_ci
+
+    rng = np.random.default_rng(46)
+    scores = rng.uniform(0.6, 1.0, size=400)
+    labels = np.full(400, np.nan)
+    labels[rng.choice(400, size=40, replace=False)] = 1.0
+    with caplog.at_level("WARNING"):
+        tuned = calibrated_mean_ci(scores, labels, correction_weight="tuned")
+    one = calibrated_mean_ci(scores, labels)
+    assert tuned.diagnostics["correction_weight"]["reason"] == "rare_outcome"
+    assert tuned.diagnostics["correction_weight"]["weight"] == 1.0
+    assert tuned.estimate == one.estimate and tuned.se == one.se
+    assert "Every labelled outcome is identical" in caplog.text

@@ -346,13 +346,14 @@ class TestEmpiricalVarianceMeasurement:
 
         assert result["n_valid_replicates"] == 2
         assert captured_configs == [
-            {"inference_method": "cluster_robust"},
-            {"inference_method": "cluster_robust"},
+            {"inference_method": "cluster_robust", "correction_weight": "one"},
+            {"inference_method": "cluster_robust", "correction_weight": "one"},
         ]
         # The module-level constant is the single source of truth for the
         # measurement instrument (shared with simulate_variance_model).
         assert planning_module._PLANNING_MEASUREMENT_CONFIG == {
-            "inference_method": "cluster_robust"
+            "inference_method": "cluster_robust",
+            "correction_weight": "one",
         }
 
     def test_measure_variance_direct_basic(self) -> None:

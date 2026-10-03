@@ -121,5 +121,6 @@ def test_simulation_result_uses_plan_shares_and_records_scenario(
     assert result.scenario_fingerprint["seed"] == 123
     assert result.scenario_fingerprint["n_total"] == 750
     assert result.scenario_fingerprint["variance_measurement"] == {
-        "inference_method": "cluster_robust"
+        "inference_method": "cluster_robust",
+        "correction_weight": "one",
     }
