@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-04
+
+Opt-in power-tuned weight for the residual correction, with guards. The
+default estimator, its estimates and its intervals are unchanged from 0.8.1.
+
 ### Added
 
 - **Opt-in power-tuned weight for the residual correction**
