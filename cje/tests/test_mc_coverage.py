@@ -520,7 +520,8 @@ PAIR_SHIFT = 0.06
 
 
 def _binary_judge(rng: np.random.Generator, latent: np.ndarray) -> np.ndarray:
-    return (latent + rng.normal(0, 0.25, size=latent.shape) > 0.5).astype(float)
+    judged = latent + rng.normal(0, 0.25, size=latent.shape) > 0.5
+    return np.asarray(judged, dtype=float)
 
 
 def _external_binary_calibrator(rng: np.random.Generator) -> JudgeCalibrator:
