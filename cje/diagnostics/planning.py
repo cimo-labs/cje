@@ -56,7 +56,9 @@ logger = logging.getLogger(__name__)
 # draws, weight one) that runs the instrument about 6-10% above the realised
 # SD at 15-20 labels per policy (3-7% before, directional) and raises planned
 # budgets by about 5%: conservative drift, not an accuracy gain. MDEs still
-# use the normal quantile, not the interval's t degrees of freedom.
+# use the normal quantile, not the interval's t degrees of freedom (at most
+# m - 1 for a policy corrected by its m labels), so planned power is
+# optimistic at small m; see EvaluationPlan.
 # The correction weight is pinned so a planned budget never depends on a
 # library default changing underneath it.
 _PLANNING_MEASUREMENT_CONFIG: Dict[str, Any] = {
@@ -150,9 +152,13 @@ class EvaluationPlan:
     """Result of evaluation planning with MDE-centric outputs.
 
     MDE and power calculations use asymptotic normal critical values. The
-    shipped analytic interval uses a finite-sample t critical value with an
-    effective df determined from the realized variance shares, so callers
-    should confirm the achieved interval after collecting the planned data.
+    shipped analytic interval uses a t critical value. When the oracle labels
+    sit on the evaluated policy's rows (the augmented correction), its df is
+    at most ``m - 1`` per policy, so normal-theory power is optimistic at
+    small ``m``: a plan for 80% power has about 77% at ``m = 30`` and about
+    70% at ``m = 10`` when the realized SE equals the planned one. Otherwise
+    the df comes from the realized variance shares. Callers should confirm
+    the achieved interval after collecting the planned data.
 
     Attributes:
         n_samples: Number of evaluation samples (prompts) to collect.
@@ -305,9 +311,14 @@ def fit_variance_model(
         Variance components are measured from analytic cluster-robust (+ OUA)
         SEs, validated within ~5% of the realized SE of the production
         estimator across a pilot-scale grid (instrument experiment 2026-07-07,
-        R=400 replicates/cell). Versions before 0.5.1 used a bootstrap
-        instrument that ran 15-29% hot at pilot-sized oracle counts, so
-        budgets planned with them were inflated.
+        R=400 replicates/cell). Since the labelled-cluster interval (issue
+        #60) the measured SE also scales the labelled prompts' share of the
+        variance by m / (m - 1); in the coupled measurement design it runs
+        about 6-10% above the realized SD at 15-20 labels per policy (3-7%
+        before; directional checks), raising planned budgets by about 5%.
+        Versions before 0.5.1 used a bootstrap instrument that ran 15-29% hot
+        at pilot-sized oracle counts, so budgets planned with them were
+        inflated.
 
     Args:
         fresh_draws: Pilot data from the base policy where calibration will be
@@ -514,8 +525,11 @@ def plan_evaluation(
     Note:
         MDE assumes independent policies. With positive shared-prompt
         covariance, that pairing assumption is conservative.
-        MDE uses asymptotic normal critical values; the final analytic CI uses
-        a finite-sample t critical value based on realized variance shares.
+        MDE uses asymptotic normal critical values. The final analytic CI
+        uses a t critical value with at most m - 1 df when the m labels
+        correct the evaluated policy, so planned power is optimistic at small
+        m (about 77% instead of 80% at m = 30, 70% at m = 10); otherwise its
+        df comes from the realized variance shares.
         Planning on a model with fit_ok False logs a warning.
     """
     _warn_if_poor_fit(variance_model)
@@ -655,8 +669,11 @@ def plan_for_mde(
     Note:
         MDE assumes independent policies. With positive shared-prompt
         covariance, that pairing assumption is conservative.
-        MDE uses asymptotic normal critical values; the final analytic CI uses
-        a finite-sample t critical value based on realized variance shares.
+        MDE uses asymptotic normal critical values. The final analytic CI
+        uses a t critical value with at most m - 1 df when the m labels
+        correct the evaluated policy, so planned power is optimistic at small
+        m (about 77% instead of 80% at m = 30, 70% at m = 10); otherwise its
+        df comes from the realized variance shares.
         Planning on a model with fit_ok False logs a warning (once).
     """
     _warn_if_poor_fit(variance_model)
@@ -816,7 +833,10 @@ def _measure_variance_direct(
     production workflow, measured with the analytic cluster-robust SE (+ the
     default OUA jackknife), which matched realized production-estimator SEs
     within about 5% in the documented instrument experiment and is fast enough
-    that the repeated grid scan stays tractable.
+    that the repeated grid scan stays tractable. Since the labelled-cluster
+    interval (issue #60) it scales the labelled prompts' share of the variance
+    by m / (m - 1) and runs about 6-10% above the realized SD at 15-20 labels
+    per policy (directional), conservatively.
 
     Args:
         fresh_draws: Full pilot dataset

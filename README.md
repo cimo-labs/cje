@@ -169,7 +169,7 @@ Production outcomes can reduce **new annotation cost** when their meaning and re
 
 ## The array API
 
-`calibrated_mean_ci` is the library's bottom layer: a ppi_py-style primitive accepting NumPy arrays and returning a calibrated mean and confidence interval. Reach for it when you have one sample of judge scores with ground-truth labels on a random slice; use `analyze_dataset` for multi-policy comparisons. The interval accounts for both sampling noise and the finite label budget (prompt-cluster-robust variance plus a delete-one-oracle-fold jackknife; a t interval whose degrees of freedom come from the labeled prompts, `n_labeled − 1` with the default weight); `inference="bootstrap"` switches to refit-bootstrap percentile intervals, which lack that adjustment and under-cover with 10 to 20 labeled prompts.
+`calibrated_mean_ci` is the library's bottom layer: a ppi_py-style primitive accepting NumPy arrays and returning a calibrated mean and confidence interval. Reach for it when you have one sample of judge scores with ground-truth labels on a random slice; use `analyze_dataset` for multi-policy comparisons. The interval accounts for both sampling noise and the finite label budget (prompt-cluster-robust variance plus a delete-one-oracle-fold jackknife; a t interval whose degrees of freedom come from the labeled prompts: at most `n_labeled − 1` with the default weight, and lower when the jackknife term is large, as `diagnostics["cluster_robust"]["oracle_df_cap_applied"]` reports); `inference="bootstrap"` switches to refit-bootstrap percentile intervals, which lack that adjustment and under-cover with 10 to 20 labeled prompts.
 
 ```python
 import numpy as np

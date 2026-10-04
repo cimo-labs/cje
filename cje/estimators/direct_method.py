@@ -1166,6 +1166,8 @@ class CalibratedDirectEstimator:
             "v_labelled": float(split["v_labelled"]),
             "v_unlabelled": float(split["v_unlabelled"]),
             "sampling_variance": variance,
+            # The unadjusted interval's CRV1 df, which caps the labelled df.
+            "df_unadjusted": max(int(split["n_clusters"]) - 1, 1),
         }
 
     def _labels_coupled(self, labelled_rows: np.ndarray) -> Tuple[bool, float]:
@@ -1524,8 +1526,9 @@ class CalibratedDirectEstimator:
         two components use an approximate Welch--Satterthwaite effective df.
         Augmented policies under representative labels instead take
         ``n_L - q`` degrees of freedom from their labelled clusters, capped
-        by the Welch df of ``(n_L - q, K - 1)`` (``df_method``
-        ``"labelled_clusters"``; issue #60).
+        by the Welch df of ``(n_L - q, K - 1)`` and by the unadjusted Welch
+        df of ``(G - 1, K - 1)`` (``df_method`` ``"labelled_clusters"``;
+        issue #60).
 
         Args:
             result: EstimationResult with estimates and standard_errors already populated
@@ -1594,9 +1597,17 @@ class CalibratedDirectEstimator:
             df_cap_applied = False
             if labelled is not None:
                 # Issue #60: labelled-cluster df, never above the Welch df of
-                # the (inflated) sampling and oracle components.
+                # the (inflated) sampling and oracle components, nor above the
+                # unadjusted interval's df (so the interval never narrows).
                 df_final, df_cap_applied = labelled_cluster_df(
-                    se_sampling, labelled["df"], var_oracle, K
+                    se_sampling,
+                    labelled["df"],
+                    var_oracle,
+                    K,
+                    se_unadjusted=float(
+                        np.sqrt(labelled["v_labelled"] + labelled["v_unlabelled"])
+                    ),
+                    df_unadjusted=labelled["df_unadjusted"],
                 )
                 df_method = "labelled_clusters"
             else:
@@ -1743,8 +1754,9 @@ class CalibratedDirectEstimator:
         sampling variance is split into prompts labelled for any such policy
         and the rest; the labelled part is inflated by the largest of their
         ``n_L / (n_L - q)`` factors and the df is the smallest of their
-        ``n_L - q``, capped by the Welch df with the oracle term. Both choices
-        are conservative when the label sets differ in size.
+        ``n_L - q``, capped by the Welch df with the oracle term and by the
+        unadjusted pair's Welch df (so the pair's interval never narrows).
+        Both choices are conservative when the label sets differ in size.
         """
         policies = self.target_policies
         p1, p2 = policies[i], policies[j]
@@ -1766,6 +1778,10 @@ class CalibratedDirectEstimator:
             # compare_policies refuses it via inference_unavailable_policies.
             return None
         labelled_summary: Dict[str, Any] = {}
+        # The pair's SE and df before the labelled-cluster adjustment; they
+        # cap its df so the pair's interval never narrows.
+        se_unadjusted = float("nan")
+        df_unadjusted = 1
 
         # A policy with a single evaluation cluster has no estimable sampling
         # variance: its centered cluster contributions are identically zero,
@@ -1802,6 +1818,15 @@ class CalibratedDirectEstimator:
                         else float(sampling_ses[index]) ** 2
                     )
                 labelled_variance = sum(info["v_labelled"] for info in labelled)
+                se_unadjusted = float(np.sqrt(raw_variance))
+                df_unadjusted = min(
+                    (
+                        int(self._labelled_inference[policy]["df_unadjusted"])
+                        if policy in self._labelled_inference
+                        else int(getattr(self, "_df_cluster", {}).get(policy, 1))
+                    )
+                    for policy in (p1, p2)
+                )
                 labelled_summary = {
                     "n_labelled_clusters": sum(
                         int(info["n_labelled_clusters"]) for info in labelled
@@ -1871,6 +1896,8 @@ class CalibratedDirectEstimator:
                 se_sampling = float(np.sqrt(inflation * v_labelled + v_unlabelled))
                 df_pairs = min(int(info["df"]) for info in labelled)
                 raw_variance = v_labelled + v_unlabelled
+                se_unadjusted = float(np.sqrt(raw_variance))
+                df_unadjusted = G - 1
                 labelled_summary = {
                     "n_labelled_clusters": int(np.sum(is_labelled)),
                     "labelled_variance_inflation": inflation,
@@ -1927,7 +1954,12 @@ class CalibratedDirectEstimator:
         df_cap_applied = False
         if labelled:
             df_final, df_cap_applied = labelled_cluster_df(
-                se_sampling, df_pairs, var_oua_diff, n_folds
+                se_sampling,
+                df_pairs,
+                var_oua_diff,
+                n_folds,
+                se_unadjusted=se_unadjusted,
+                df_unadjusted=df_unadjusted,
             )
             df_method = "labelled_clusters"
 

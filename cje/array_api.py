@@ -383,7 +383,8 @@ def calibrated_mean_ci(
       residual, plus the slope for the tuned weight), so the labelled
       clusters' share of the CRV1 variance is scaled by ``n_L / (n_L - q)``
       and the interval takes ``n_L - q`` degrees of freedom, capped by the
-      approximate Welch--Satterthwaite df with the jackknife's ``K - 1``
+      approximate Welch--Satterthwaite df with the jackknife's ``K - 1`` and
+      by the unadjusted interval's Welch df, so it never narrows
       (``diagnostics["cluster_robust"]["df_method"] == "labelled_clusters"``;
       ``se_cluster`` is the adjusted sampling SE and ``se_cluster_unadjusted``
       the plain CRV1 SE).
@@ -656,7 +657,8 @@ def calibrated_mean_ci(
         )
         se_crv1 = float(res["se"])
         se_base = se_crv1
-        df = float(res["df"])
+        df_crv1 = float(res["df"])
+        df = df_crv1
 
         # The residual correction is a mean over the labelled clusters, which
         # fits q parameters on them: inflate the labelled clusters' CRV1 part
@@ -687,6 +689,7 @@ def calibrated_mean_ci(
                     float(split["v_labelled"] / crv1) if crv1 > 0 else float("nan")
                 ),
                 "labels_coupled": True,
+                "labels_coupled_fraction": 1.0,
             }
             if df_labelled is not None:
                 se_base = float(np.sqrt(var_sampling))
@@ -732,7 +735,12 @@ def calibrated_mean_ci(
             df_cap_applied = False
             if labelled:
                 df, df_cap_applied = labelled_cluster_df(
-                    se_base, df, var_oracle, n_jack
+                    se_base,
+                    df,
+                    var_oracle,
+                    n_jack,
+                    se_unadjusted=se_crv1,
+                    df_unadjusted=df_crv1,
                 )
             else:
                 df = df_welch

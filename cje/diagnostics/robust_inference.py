@@ -1830,16 +1830,32 @@ def labelled_cluster_df(
     df_labelled: float,
     oracle_variance: float,
     n_jackknife_folds: int,
+    *,
+    se_unadjusted: float,
+    df_unadjusted: float,
 ) -> Tuple[float, bool]:
     """Degrees of freedom of a labelled-cluster interval with oracle variance.
 
-    ``min(n_L - q, Welch(n_L - q, K - 1))``: the Welch--Satterthwaite df of
-    :func:`combine_cluster_and_oracle`, never above the labelled df.  Equals
-    ``df_labelled`` when the oracle variance is zero.  Returns the df and
-    whether the oracle component lowered it.
+    ``min(n_L - q, Welch(n_L - q, K - 1), Welch(G - 1, K - 1))``.  The first
+    Welch--Satterthwaite df (:func:`combine_cluster_and_oracle`) pairs the
+    scaled sampling SE ``se_sampling`` with the oracle variance; the second
+    is the df of the unadjusted interval, from the plain CRV1 SE
+    ``se_unadjusted`` and its ``df_unadjusted`` (``G - 1``).
+
+    The Welch df is not monotone in the sampling variance: when the oracle
+    variance dominates and ``K`` is small, scaling the sampling variance up
+    raises it, and the smaller t quantile can outweigh the larger SE.  The
+    second cap keeps the df at or below the unadjusted interval's; since
+    ``se_sampling >= se_unadjusted``, the interval is then never narrower
+    than the unadjusted one.  Equals ``df_labelled`` when the oracle variance
+    is zero.  Returns the df and whether the oracle component lowered it
+    below ``df_labelled``.
     """
     _, df_welch = combine_cluster_and_oracle(
         se_sampling, df_labelled, oracle_variance, n_jackknife_folds
     )
-    df = min(float(df_labelled), float(df_welch))
+    _, df_unadjusted_welch = combine_cluster_and_oracle(
+        se_unadjusted, df_unadjusted, oracle_variance, n_jackknife_folds
+    )
+    df = min(float(df_labelled), float(df_welch), float(df_unadjusted_welch))
     return df, df < float(df_labelled)

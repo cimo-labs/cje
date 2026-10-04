@@ -17,10 +17,13 @@
   clusters, scales the labelled part by `n_L / (n_L - q)` (`n_L` labelled
   clusters; `q` is 1 for weight one and 2 when the tuned slope is used), adds
   the oracle-jackknife variance once, and takes `min(n_L - q, Welch(n_L - q,
-  K - 1))` degrees of freedom. Point estimates do not change. Pairwise
+  K - 1), Welch(G - 1, K - 1))` degrees of freedom. The last term is the df
+  of the previous interval: the Welch df is not monotone in the sampling
+  variance, and without it a dominant oracle-jackknife term with few folds
+  could narrow the interval. Point estimates do not change. Pairwise
   comparisons inherit the rule: the paired variance is split by prompts
   labelled for either policy, the labelled part takes the larger of the two
-  scale factors, and the df is the smaller `n_L - q`.
+  scale factors, and the df is the smaller `n_L - q`, capped the same way.
 - **Evidence.** In simulations run under a protocol fixed in advance, with
   the calibration sample drawn separately from the evaluation rows, the
   per-policy interval covered 0.940 to 0.965 in every cell from 10 to 60
@@ -46,9 +49,15 @@
   `n_labelled_clusters`, `fitted_parameters`, `labelled_variance_inflation`,
   `labelled_variance_share` (before scaling), `labels_coupled` and
   `labels_coupled_fraction` (whether the labelled rows also fitted the
-  calibrator; diagnostic only) and `oracle_df_cap_applied`. Pairwise entries
-  carry the same df fields; `calibrated_mean_ci` reports them under
-  `diagnostics["cluster_robust"]`, where `se_cluster` is now the scaled
+  calibrator; diagnostic only) and `oracle_df_cap_applied` (true when the
+  oracle-jackknife term lowered the df below `n_L - q`). Pairwise entries in
+  `metadata["pairwise_inference"]` carry `df_method`,
+  `n_labelled_clusters`, `labelled_variance_inflation`,
+  `labelled_variance_share` and `oracle_df_cap_applied`, but not the
+  per-policy `fitted_parameters`, `labels_coupled` or
+  `labels_coupled_fraction`. `calibrated_mean_ci` reports all of these
+  fields under `diagnostics["cluster_robust"]` (`labels_coupled` is always
+  true there, with fraction 1.0), where `se_cluster` is now the scaled
   sampling SE and `se_cluster_unadjusted` the plain CRV1 SE. The reported SE
   of these policies is no longer the CRV1 SE of `influence_functions` plus
   the oracle variance.
@@ -73,7 +82,14 @@
   Saved results replay the intervals they were saved with.
 - **Planning.** Planner measurements use this standard error, so planned
   label budgets rise by about 5%. That is conservative drift in the measurement,
-  not a gain in accuracy.
+  not a gain in accuracy. Planned MDE and power still use normal critical
+  values, but a policy corrected by its `m` labels now gets an interval with
+  at most `m - 1` degrees of freedom, so planned power is optimistic at small
+  `m`: a plan for 80% power has about 77% at `m = 30` and about 70% at
+  `m = 10` when the realised SE equals the planned one. The higher budgets
+  follow the higher SE and leave no margin for the t quantile; only the
+  planner's independent-policies assumption offsets this, for paired designs
+  with positive covariance.
 
 ## [0.9.0] - 2026-10-04
 

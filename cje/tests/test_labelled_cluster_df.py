@@ -6,9 +6,10 @@ parameters on them (the mean residual, plus the slope for the tuned weight).
 The analytic interval therefore splits the CRV1 variance of the pseudo-outcome
 into labelled and unlabelled clusters, scales the labelled part by
 ``n_L / (n_L - q)``, adds the oracle-jackknife variance, and takes
-``min(n_L - q, Welch(n_L - q, K - 1))`` degrees of freedom. Pairs inherit the
-rule. Other routes, other label designs, the bootstrap and every point
-estimate are unchanged.
+``min(n_L - q, Welch(n_L - q, K - 1), Welch(G - 1, K - 1))`` degrees of
+freedom; the last term is the unadjusted interval's df, so the interval never
+narrows. Pairs inherit the rule. Other routes, other label designs, the
+bootstrap and every point estimate are unchanged.
 """
 
 from __future__ import annotations
@@ -56,6 +57,26 @@ def _welch(var_sampling: float, df_sampling: float, var_oracle: float, k: int) -
     return 1.0 / (
         (var_sampling / total) ** 2 / df_sampling + (var_oracle / total) ** 2 / (k - 1)
     )
+
+
+def _expected_df(
+    var_sampling: float,
+    df_labelled: float,
+    var_unadjusted: float,
+    df_unadjusted: float,
+    var_oracle: float,
+    k: int,
+) -> float:
+    """min(n_L - q, Welch(n_L - q, K - 1), Welch(G - 1, K - 1))."""
+    return min(
+        float(df_labelled),
+        _welch(var_sampling, df_labelled, var_oracle, k),
+        _welch(var_unadjusted, df_unadjusted, var_oracle, k),
+    )
+
+
+def _half_width(variance: float, df: float) -> float:
+    return float(stats.t.ppf(0.975, df) * np.sqrt(variance))
 
 
 def _influence(result: EstimationResult, policy: str) -> np.ndarray:
@@ -309,12 +330,70 @@ def test_fitted_parameters_follow_the_realised_reason() -> None:
 
 
 def test_oracle_cap_never_raises_the_labelled_df() -> None:
-    assert labelled_cluster_df(0.03, 9, 0.0, 0) == (9.0, False)
-    df, capped = labelled_cluster_df(0.01, 29, 0.0004, 5)
-    assert capped and df == pytest.approx(_welch(0.0001, 29, 0.0004, 5))
+    unadjusted = {"se_unadjusted": 0.0095, "df_unadjusted": 199}
+    assert labelled_cluster_df(0.03, 9, 0.0, 0, **unadjusted) == (9.0, False)
+    # Comparable sampling and oracle variances: the labelled Welch df binds.
+    df, capped = labelled_cluster_df(0.01, 29, 0.0001, 5, **unadjusted)
+    labelled_welch = _welch(0.0001, 29, 0.0001, 5)
+    assert labelled_welch < _welch(0.0095**2, 199, 0.0001, 5)
+    assert capped and df == pytest.approx(labelled_welch, rel=1e-12)
     # A small oracle share can give a Welch df above 9; the cap keeps 9.
-    df, capped = labelled_cluster_df(0.03, 9, 1e-6, 5)
+    df, capped = labelled_cluster_df(0.03, 9, 1e-6, 5, **unadjusted)
     assert (df, capped) == (9.0, False)
+
+
+def test_a_dominant_oracle_term_cannot_narrow_the_interval() -> None:
+    # G = 200, n_L = 5, q = 1, 90% of the CRV1 variance (1.0) in labelled
+    # clusters, oracle variance 5 over K = 2 folds. Inflating the sampling
+    # variance raises the labelled Welch df (1.527) above the unadjusted one
+    # (1.440); without the second cap the interval was 0.937x the unadjusted.
+    var_sampling, df_labelled = labelled_cluster_variance(0.9, 0.1, 5, 1)
+    assert (var_sampling, df_labelled) == (pytest.approx(1.225), 4)
+    labelled_welch = _welch(var_sampling, 4, 5.0, 2)
+    unadjusted_welch = _welch(1.0, 199, 5.0, 2)
+    assert labelled_welch == pytest.approx(1.5271, abs=1e-4)
+    assert unadjusted_welch == pytest.approx(1.4397, abs=1e-4)
+    assert _half_width(var_sampling + 5.0, labelled_welch) < 0.94 * _half_width(
+        6.0, unadjusted_welch
+    )
+    df, capped = labelled_cluster_df(
+        np.sqrt(var_sampling), 4, 5.0, 2, se_unadjusted=1.0, df_unadjusted=199
+    )
+    assert capped and df == pytest.approx(unadjusted_welch, rel=1e-12)
+    assert _half_width(var_sampling + 5.0, df) > _half_width(6.0, unadjusted_welch)
+
+
+def test_the_interval_never_narrows_across_a_parameter_grid() -> None:
+    checked = 0
+    for k in (2, 3, 5, 10):
+        for n_labelled in (2, 3, 5, 10, 20, 60):
+            for q in (1, 2):
+                if n_labelled - q < 1:
+                    continue
+                for share in (0.1, 0.5, 0.9, 1.0):
+                    for oracle_ratio in (0.0, 0.01, 0.3, 1.0, 5.0, 50.0):
+                        var_sampling, df_labelled = labelled_cluster_variance(
+                            share, 1.0 - share, n_labelled, q
+                        )
+                        assert df_labelled is not None
+                        var_oracle = oracle_ratio
+                        df, capped = labelled_cluster_df(
+                            np.sqrt(var_sampling),
+                            df_labelled,
+                            var_oracle,
+                            k,
+                            se_unadjusted=1.0,
+                            df_unadjusted=199,
+                        )
+                        assert df <= df_labelled
+                        assert capped is (df < df_labelled)
+                        unadjusted_df = _welch(1.0, 199, var_oracle, k)
+                        assert df <= unadjusted_df * (1 + 1e-12)
+                        assert _half_width(
+                            var_sampling + var_oracle, df
+                        ) >= _half_width(1.0 + var_oracle, unadjusted_df) * (1 - 1e-12)
+                        checked += 1
+    assert checked == 4 * 11 * 4 * 6
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +430,7 @@ def test_estimator_matches_the_hand_built_interval_on_clustered_draws() -> None:
     assert result.standard_errors[0] == pytest.approx(
         np.sqrt(var_sampling + v_oracle), rel=1e-12
     )
-    expected_df = min(15.0, _welch(var_sampling, 15, v_oracle, folds))
+    expected_df = _expected_df(var_sampling, 15, v_lab + v_unl, 149, v_oracle, folds)
     info = meta["degrees_of_freedom"]["policy"]
     assert info["df"] == pytest.approx(expected_df, rel=1e-12)
     assert info["df_method"] == "labelled_clusters"
@@ -691,8 +770,8 @@ def test_pairs_take_the_largest_inflation_and_the_smallest_df(
     assert entry["se_sampling"] ** 2 == pytest.approx(
         inflation * v_lab + v_unl, rel=1e-10
     )
-    expected_df = min(
-        df, _welch(entry["se_sampling"] ** 2, df, entry["var_oua_diff"], 5)
+    expected_df = _expected_df(
+        entry["se_sampling"] ** 2, df, v_lab + v_unl, 199, entry["var_oua_diff"], 5
     )
     assert entry["df"] == pytest.approx(expected_df, rel=1e-12)
     assert entry["oracle_df_cap_applied"] is bool(expected_df < df)
@@ -710,8 +789,13 @@ def test_unpaired_pairs_combine_the_adjusted_policy_ses() -> None:
     assert entry["se_sampling"] == pytest.approx(
         np.hypot(sampling["a"], sampling["b"]), rel=1e-12
     )
-    expected_df = min(
-        11, _welch(entry["se_sampling"] ** 2, 11, entry["var_oua_diff"], 5)
+    codes = np.unique(_prompts(data["a"]), return_inverse=True)[1]
+    unadjusted = sum(
+        cluster_robust_se(_influence(result, p), codes, np.mean, lambda x: x)["se"] ** 2
+        for p in ("a", "b")
+    )
+    expected_df = _expected_df(
+        entry["se_sampling"] ** 2, 11, unadjusted, 149, entry["var_oua_diff"], 5
     )
     assert entry["df"] == pytest.approx(expected_df, rel=1e-12)
     assert entry["df_method"] == "labelled_clusters"
@@ -720,36 +804,73 @@ def test_unpaired_pairs_combine_the_adjusted_policy_ses() -> None:
     assert 0 < entry["labelled_variance_share"] < 1
 
 
-def test_oracle_cap_binds_when_the_jackknife_dominates(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("oracle_ratio", [1.0, 500.0])
+def test_oracle_caps_bind_when_the_jackknife_is_large(
+    monkeypatch: pytest.MonkeyPatch, oracle_ratio: float
 ) -> None:
+    """Comparable oracle variance: the labelled Welch df binds. Dominant
+    oracle variance: the unadjusted Welch df binds (inflating the sampling
+    variance would otherwise raise the df and narrow the interval)."""
     data = _population(
         191, 120, 1, {"a": {"labelled": range(30)}, "b": {"labelled": range(30)}}
     )
     estimator = _estimator(data, _external_calibrator(192))
-    wide = {
-        "a": np.array([0.20, 0.80, 0.30, 0.70, 0.50]),
-        "b": np.zeros(5),
-    }
+    plain = estimator.fit_and_estimate()
+    assert plain.diagnostics is not None
+    var_a = plain.diagnostics.standard_errors["a"] ** 2
+    # The jackknife variance of c * [-2, -1, 0, 1, 2] is 8 c^2.
+    spread = np.sqrt(oracle_ratio * var_a / 8) * np.array([-2.0, -1, 0, 1, 2])
+    jackknife = {"a": 0.5 + spread, "b": np.zeros(5)}
     monkeypatch.setattr(
-        estimator, "get_oracle_jackknife", lambda policy: wide[policy].copy()
+        estimator, "get_oracle_jackknife", lambda policy: jackknife[policy].copy()
     )
-    result = estimator.fit_and_estimate()
+    result = estimator.estimate()
     assert result.diagnostics is not None
     sampling = result.diagnostics.standard_errors
-    v_oracle = oracle_jackknife_variance(wide["a"])
-    expected = _welch(sampling["a"] ** 2, 29, v_oracle, 5)
-    assert expected < 29
+    v_oracle = oracle_jackknife_variance(jackknife["a"])
+    assert v_oracle == pytest.approx(oracle_ratio * var_a, rel=1e-9)
+    rows = data["a"]
+    v_lab, v_unl, _ = _split_by_hand(
+        _influence(result, "a"), _prompts(rows), _labelled(rows)
+    )
+    labelled_welch = _welch(sampling["a"] ** 2, 29, v_oracle, 5)
+    unadjusted_welch = _welch(v_lab + v_unl, 119, v_oracle, 5)
+    if oracle_ratio == 1.0:
+        assert labelled_welch < unadjusted_welch
+    else:
+        assert unadjusted_welch < labelled_welch
     info = result.metadata["degrees_of_freedom"]
-    assert info["a"]["df"] == pytest.approx(expected, rel=1e-12)
+    assert info["a"]["df"] == pytest.approx(
+        min(labelled_welch, unadjusted_welch), rel=1e-12
+    )
+    assert info["a"]["df"] < 29
     assert info["a"]["oracle_df_cap_applied"] is True
+    assert _half_width(sampling["a"] ** 2 + v_oracle, info["a"]["df"]) > (
+        _half_width(v_lab + v_unl + v_oracle, unadjusted_welch)
+    )
     assert info["b"]["df"] == 29.0  # zero oracle variance: the labelled df
     assert info["b"]["oracle_df_cap_applied"] is False
+
     entry = result.metadata["pairwise_inference"]["0-1"]
-    expected_pair = _welch(entry["se_sampling"] ** 2, 29, entry["var_oua_diff"], 5)
-    assert expected_pair < 29
-    assert entry["df"] == pytest.approx(expected_pair, rel=1e-12)
+    assert entry["var_oua_diff"] == pytest.approx(v_oracle, rel=1e-12)
+    v_lab_pair, v_unl_pair = _pair_split_by_hand(
+        result,
+        {p: _prompts(data[p]) for p in ("a", "b")},
+        {row[0] for row in rows if row[3] is not None},
+    )
+    pair_labelled_welch = _welch(entry["se_sampling"] ** 2, 29, v_oracle, 5)
+    pair_unadjusted_welch = _welch(v_lab_pair + v_unl_pair, 119, v_oracle, 5)
+    if oracle_ratio == 1.0:
+        assert pair_labelled_welch < pair_unadjusted_welch
+    else:
+        assert pair_unadjusted_welch < pair_labelled_welch
+    assert entry["df"] == pytest.approx(
+        min(pair_labelled_welch, pair_unadjusted_welch), rel=1e-12
+    )
     assert entry["oracle_df_cap_applied"] is True
+    assert _half_width(entry["se"] ** 2, entry["df"]) > _half_width(
+        v_lab_pair + v_unl_pair + v_oracle, pair_unadjusted_welch
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -774,6 +895,17 @@ def test_array_api_reports_the_adjusted_and_raw_cluster_se() -> None:
     assert diag["n_labelled_clusters"] == 30
     assert diag["fitted_parameters"] == 1
     assert diag["labels_coupled"] is True
+    assert diag["labels_coupled_fraction"] == 1.0
+    assert {
+        "se_cluster_unadjusted",
+        "n_labelled_clusters",
+        "fitted_parameters",
+        "labelled_variance_inflation",
+        "labelled_variance_share",
+        "labels_coupled",
+        "labels_coupled_fraction",
+        "oracle_df_cap_applied",
+    } <= set(diag)
     inflation = diag["labelled_variance_inflation"]
     share = diag["labelled_variance_share"]
     assert inflation == pytest.approx(30 / 29)
@@ -785,14 +917,13 @@ def test_array_api_reports_the_adjusted_and_raw_cluster_se() -> None:
     assert result.se**2 == pytest.approx(
         diag["se_cluster"] ** 2 + diag["var_oracle"], rel=1e-12
     )
-    expected_df = min(
-        29.0,
-        _welch(
-            diag["se_cluster"] ** 2,
-            29,
-            diag["var_oracle"],
-            diag["oracle_jackknife_folds"],
-        ),
+    expected_df = _expected_df(
+        diag["se_cluster"] ** 2,
+        29,
+        diag["se_cluster_unadjusted"] ** 2,
+        399,
+        diag["var_oracle"],
+        diag["oracle_jackknife_folds"],
     )
     assert diag["df"] == pytest.approx(expected_df, rel=1e-12)
     assert diag["oracle_df_cap_applied"] is bool(expected_df < 29)
@@ -805,6 +936,51 @@ def test_array_api_reports_the_adjusted_and_raw_cluster_se() -> None:
     assert tuned.diagnostics["cluster_robust"]["fitted_parameters"] == 2
     assert tuned.diagnostics["cluster_robust"]["labelled_variance_inflation"] == (
         pytest.approx(30 / 28)
+    )
+
+
+@pytest.mark.parametrize(
+    "oracle_ratio, offsets",
+    [(1.0, [-2.0, -1.0, 0.0, 1.0, 2.0]), (20.0, [-1.0, 1.0])],
+)
+def test_array_api_oracle_caps_bind_when_the_jackknife_is_large(
+    monkeypatch: pytest.MonkeyPatch, oracle_ratio: float, offsets: List[float]
+) -> None:
+    """Comparable oracle variance (K = 5): the labelled Welch df binds.
+    Dominant oracle variance (K = 2): the unadjusted Welch df binds."""
+    import cje.array_api as array_api
+
+    scores, labels = _array_sample(201)
+    plain = calibrated_mean_ci(scores, labels).diagnostics["cluster_robust"]
+    shape = np.asarray(offsets)
+    scale = np.sqrt(
+        oracle_ratio * plain["se_cluster"] ** 2 / oracle_jackknife_variance(shape)
+    )
+    jackknife = (0.5 + scale * shape)[:, None]
+    monkeypatch.setattr(
+        array_api,
+        "direct_oracle_jackknife_estimates",
+        lambda *args, **kwargs: jackknife.copy(),
+    )
+    result = calibrated_mean_ci(scores, labels)
+    diag = result.diagnostics["cluster_robust"]
+    k = len(offsets)
+    assert diag["oracle_jackknife_folds"] == k
+    v_oracle = diag["var_oracle"]
+    assert v_oracle == pytest.approx(oracle_ratio * diag["se_cluster"] ** 2)
+    labelled_welch = _welch(diag["se_cluster"] ** 2, 29, v_oracle, k)
+    unadjusted_welch = _welch(diag["se_cluster_unadjusted"] ** 2, 399, v_oracle, k)
+    if oracle_ratio == 1.0:
+        assert labelled_welch < unadjusted_welch
+    else:
+        assert unadjusted_welch < labelled_welch
+    assert diag["df"] == pytest.approx(min(labelled_welch, unadjusted_welch), rel=1e-12)
+    assert diag["df"] < 29
+    assert diag["oracle_df_cap_applied"] is True
+    t_crit = stats.t.ppf(0.975, diag["df"])
+    assert result.ci[1] - result.estimate == pytest.approx(t_crit * result.se)
+    assert result.ci[1] - result.estimate > _half_width(
+        diag["se_cluster_unadjusted"] ** 2 + v_oracle, unadjusted_welch
     )
 
 
@@ -961,6 +1137,24 @@ def test_new_keys_are_scale_free_and_survive_a_round_trip() -> None:
         "oracle_df_cap_applied",
     ):
         assert tenfold_pair[key] == pytest.approx(unit_pair[key], rel=1e-9), key
+    # A pair carries these df fields only; fitted_parameters and
+    # labels_coupled(_fraction) stay per policy.
+    assert set(unit_pair) == {
+        "policy1",
+        "policy2",
+        "se",
+        "df",
+        "df_method",
+        "basis",
+        "se_sampling",
+        "var_oua_diff",
+        "n_pairs",
+        "oua_folds",
+        "n_labelled_clusters",
+        "labelled_variance_inflation",
+        "labelled_variance_share",
+        "oracle_df_cap_applied",
+    }
     assert tenfold_pair["se_sampling"] == pytest.approx(
         10 * unit_pair["se_sampling"], rel=1e-9
     )
