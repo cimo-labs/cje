@@ -299,6 +299,14 @@ alter estimates. To correct the current target estimate:
    by the correction. Retain the original audit as evidence about the unchanged map.
 5. Do not call reused correction labels independent validation of the corrected estimate.
    Correction targets the sampled population; a future cycle or new fit needs its own evidence.
+6. The correction weights the calibrated prediction at one by default (the 0.8.x estimator).
+   `estimator_config={"correction_weight": "tuned"}` (or `correction_weight="tuned"` in
+   `calibrated_mean_ci`) opts into the PPI++ power-tuned weight for representative designs;
+   it falls back to one below 20 labeled prompts, for rare or constant labeled outcomes, and
+   for known propensities. Its gain is asymptotic: at 20 to 60 labels its pooled realised error
+   was within about half a percent of weight one on held-out benchmarks, and its interval
+   covered about 1 point less at 20 to 30 labels. Read the weight and its reason in
+   `metadata["point_estimator"]`.
 
 The [correction guide](https://github.com/cimo-labs/cje/blob/main/guides/audit-correction.md)
 and [runnable example](https://github.com/cimo-labs/cje/blob/main/examples/audit_correction.py)

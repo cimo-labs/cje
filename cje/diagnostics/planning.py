@@ -50,7 +50,12 @@ logger = logging.getLogger(__name__)
 # instrument experiment (R=400 replicates/cell). The previous bootstrap
 # instrument (n_bootstrap=200) ran 17-23% hot at pilot-scale label counts,
 # inflating fitted variance components and planned budgets.
-_PLANNING_MEASUREMENT_CONFIG: Dict[str, Any] = {"inference_method": "cluster_robust"}
+# The correction weight is pinned so a planned budget never depends on a
+# library default changing underneath it.
+_PLANNING_MEASUREMENT_CONFIG: Dict[str, Any] = {
+    "inference_method": "cluster_robust",
+    "correction_weight": "one",
+}
 
 
 @dataclass

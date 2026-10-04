@@ -327,6 +327,27 @@ def _direct_oracle_mean_ci(
     )
 
 
+def _correction_weight_summary(
+    rule: str, point_diagnostics: Dict[str, Any]
+) -> Dict[str, Any]:
+    """The single policy's correction weight, its reason and route."""
+    weights = point_diagnostics.get("correction_weights") or [float("nan")]
+    reasons = point_diagnostics.get("correction_weight_reasons") or [None]
+    routes = point_diagnostics.get("routes") or [None]
+    if any(point_diagnostics.get("labelled_outcomes_constant") or []):
+        logger.warning(
+            "Every labelled outcome is identical: the residual correction and its "
+            "standard error rest on no outcome variation in the labels, so treat "
+            "the interval as provisional and label more rows if the outcome is rare."
+        )
+    return {
+        "rule": rule,
+        "weight": float(weights[0]),
+        "reason": reasons[0],
+        "route": routes[0],
+    }
+
+
 def calibrated_mean_ci(
     judge_scores: Any,
     oracle_labels: Any,
@@ -339,7 +360,7 @@ def calibrated_mean_ci(
     inference: str = _DEFAULT_INFERENCE,
     n_bootstrap: int = _DEFAULT_N_BOOTSTRAP,
     seed: int = 42,
-    correction_weight: str = "tuned",
+    correction_weight: str = "one",
 ) -> CalibratedMeanResult:
     """Calibrated mean of judge scores against a partial oracle slice, with CI.
 
@@ -383,12 +404,14 @@ def calibrated_mean_ci(
             backward compatibility and emits a warning.
         seed: Seed for fold assignment and the bootstrap.
         correction_weight: Weight on the calibrated prediction inside the
-            residual correction: ``"tuned"`` (default; the power-tuned PPI++
-            weight, estimated from the labeled rows and clipped to [0, 1], so
-            the corrected estimate is never less precise than the labeled
-            mean; falls back to one below 20 labels) or ``"one"`` (the plain
-            augmented estimator, the 0.8.x behaviour). Reported under
-            ``diagnostics["correction_weight"]``.
+            residual correction: ``"one"`` (default; the plain augmented
+            estimator, the 0.8.x behaviour) or ``"tuned"`` (opt-in; the
+            power-tuned PPI++ weight, estimated from the labeled rows and
+            clipped to [0, 1]; falls back to one below 20 labeled prompts, when
+            fewer than 5 labeled prompts differ from the most common outcome,
+            or when the predictions are constant). Reported under
+            ``diagnostics["correction_weight"]`` on every inference path
+            (weight NaN and reason None when every row is labelled).
 
     Returns:
         CalibratedMeanResult with estimate, se, ci, and diagnostics. Partial
@@ -463,7 +486,7 @@ def calibrated_mean_ci(
     n_clusters = int(len(np.unique(cluster_codes)))
 
     if n_oracle == n:
-        return _direct_oracle_mean_ci(
+        full = _direct_oracle_mean_ci(
             judge,
             labels,
             cluster_codes,
@@ -473,6 +496,16 @@ def calibrated_mean_ci(
             n_bootstrap=resolved_n_bootstrap,
             seed=seed,
         )
+        # Every row is labelled, so no residual correction and no weight apply.
+        full.diagnostics["correction_weight"] = _correction_weight_summary(
+            correction_weight,
+            {
+                "routes": ["direct_oracle"],
+                "correction_weights": [float("nan")],
+                "correction_weight_reasons": [None],
+            },
+        )
+        return full
 
     # Fit the full-data calibrator (mask semantics: full-length scores/mask,
     # compact labels — fit_cv's boolean-mask contract).
@@ -567,6 +600,10 @@ def calibrated_mean_ci(
         estimate = float(boot["estimates"][0])
         se = float(boot["standard_errors"][0])
         ci = (float(boot["ci_lower"][0]), float(boot["ci_upper"][0]))
+        boot_point = boot.get("augmentation_diagnostics") or {}
+        diagnostics["correction_weight"] = _correction_weight_summary(
+            correction_weight, boot_point
+        )
         diagnostics["bootstrap"] = {
             "refit_mode": boot_mode,
             "n_bootstrap_requested": resolved_n_bootstrap,
@@ -595,11 +632,9 @@ def calibrated_mean_ci(
         )
         estimate = float(point.estimates[0])
         pseudo_outcomes = point.pseudo_outcomes[0]
-        diagnostics["correction_weight"] = {
-            "rule": correction_weight,
-            "weight": float(point.diagnostics["correction_weights"][0]),
-            "route": point.diagnostics["routes"][0],
-        }
+        diagnostics["correction_weight"] = _correction_weight_summary(
+            correction_weight, point.diagnostics
+        )
         influence_values = pseudo_outcomes - estimate
         res = cluster_robust_se(
             data=influence_values,

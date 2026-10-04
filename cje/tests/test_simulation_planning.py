@@ -311,10 +311,14 @@ class TestSimulateMeasurementInstrument:
 
         assert len(captured_configs) > 0
         assert all(
-            cfg == {"inference_method": "cluster_robust"} for cfg in captured_configs
+            cfg == {"inference_method": "cluster_robust", "correction_weight": "one"}
+            for cfg in captured_configs
         )
         # Shared single source of truth with fit_variance_model's instrument
-        assert _PLANNING_MEASUREMENT_CONFIG == {"inference_method": "cluster_robust"}
+        assert _PLANNING_MEASUREMENT_CONFIG == {
+            "inference_method": "cluster_robust",
+            "correction_weight": "one",
+        }
 
 
 class TestSimulateVarianceModel:

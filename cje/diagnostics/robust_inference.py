@@ -925,6 +925,80 @@ def residual_predictions_for_evaluation(
 
 
 TUNED_WEIGHT_MIN_LABELS = 20
+TUNED_WEIGHT_MIN_MINORITY = 5
+
+# Why a policy's correction weight is what it is, recorded per policy in the
+# point-estimate diagnostics (``correction_weight_reasons``).
+CORRECTION_WEIGHT_REASONS = (
+    "rule_one",  # correction_weight="one"
+    "tuned",  # the clipped least-squares slope was used
+    "too_few_labelled_clusters",  # fewer than TUNED_WEIGHT_MIN_LABELS clusters
+    "rare_outcome",  # fewer than TUNED_WEIGHT_MIN_MINORITY minority clusters
+    "constant_predictions",  # the labelled predictions carry no variance
+    "known_propensity_fixed_one",  # Horvitz-Thompson branch keeps weight one
+)
+
+
+def correction_weight_decision(
+    rule: str,
+    outcomes: np.ndarray,
+    predictions: np.ndarray,
+    weights: np.ndarray,
+    cluster_ids: Optional[np.ndarray] = None,
+) -> Tuple[float, str]:
+    """Weight on the calibrated prediction inside the residual correction, and why.
+
+    ``"one"`` is the plain augmented estimator (plug-in plus mean residual),
+    the default.  ``"tuned"`` is the power-tuned weight of PPI++ (Angelopoulos,
+    Duchi and Zrnic, 2023, "PPI++: Efficient Prediction-Powered Inference"):
+    the weighted least-squares slope of the labelled outcomes on their
+    predictions, clipped to [0, 1].  In the representative design that slope
+    minimises the corrected estimator's variance asymptotically; with few
+    labels its own estimation noise, which the standard error does not carry,
+    can cost as much as it saves.  The tuned rule therefore falls back to one
+    when:
+
+    * fewer than ``TUNED_WEIGHT_MIN_LABELS`` distinct labelled clusters
+      (prompts) exist (``cluster_ids``; rows when not given);
+    * fewer than ``TUNED_WEIGHT_MIN_MINORITY`` labelled clusters have an
+      outcome other than the most common one (the outcome held by the most
+      clusters; outcomes are compared after rounding to 1e-6).  With identical
+      or nearly identical labelled outcomes the slope is zero or unstable, and
+      a weight of zero would make every pseudo-outcome constant and the
+      standard error exactly zero;
+    * the labelled predictions carry no variance.
+    """
+    if rule == "one":
+        return 1.0, "rule_one"
+    if rule != "tuned":
+        raise ValueError(f"correction_weight must be 'one' or 'tuned', got {rule!r}")
+    outcomes = np.asarray(outcomes, dtype=float)
+    predictions = np.asarray(predictions, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    clusters = (
+        np.arange(len(outcomes)) if cluster_ids is None else np.asarray(cluster_ids)
+    )
+    if len(clusters) != len(outcomes):
+        raise ValueError("cluster_ids must align to the labelled outcomes")
+    if len(np.unique(clusters)) < TUNED_WEIGHT_MIN_LABELS:
+        return 1.0, "too_few_labelled_clusters"
+    # The most common outcome is the one carried by the most labelled
+    # clusters, not the most rows, so prompts with many rows cannot hide a
+    # rare outcome; a cluster with any other outcome counts as differing.
+    rounded = np.round(outcomes, 6)
+    values = np.unique(rounded)
+    clusters_per_value = [len(np.unique(clusters[rounded == v])) for v in values]
+    modal = values[int(np.argmax(clusters_per_value))]
+    if len(np.unique(clusters[rounded != modal])) < TUNED_WEIGHT_MIN_MINORITY:
+        return 1.0, "rare_outcome"
+    mean_prediction = float(np.average(predictions, weights=weights))
+    mean_outcome = float(np.average(outcomes, weights=weights))
+    centred = predictions - mean_prediction
+    variance = float(np.average(centred**2, weights=weights))
+    if not np.isfinite(variance) or variance <= 1e-12:
+        return 1.0, "constant_predictions"
+    covariance = float(np.average(centred * (outcomes - mean_outcome), weights=weights))
+    return float(np.clip(covariance / variance, 0.0, 1.0)), "tuned"
 
 
 def resolve_correction_weight(
@@ -932,39 +1006,12 @@ def resolve_correction_weight(
     outcomes: np.ndarray,
     predictions: np.ndarray,
     weights: np.ndarray,
+    cluster_ids: Optional[np.ndarray] = None,
 ) -> float:
-    """Weight on the calibrated prediction inside the residual correction.
-
-    ``"one"`` is the plain augmented estimator (plug-in plus mean residual).
-    ``"tuned"`` is the power-tuned weight of PPI++ (Angelopoulos, Duchi and
-    Zrnic, 2023, "PPI++: Efficient Prediction-Powered Inference"): the weighted
-    least-squares slope of the labelled outcomes on their predictions, clipped
-    to [0, 1].
-    It minimises the variance of the corrected estimate, so the correction can
-    never be worse than the labelled mean alone; weight one can be, when the
-    prediction is binary or the calibration map transfers imperfectly.  The
-    rule falls back to one when fewer than ``TUNED_WEIGHT_MIN_LABELS`` labels
-    exist (the weight's own estimation noise is not in the standard error, and
-    below about 20 labels it costs interval coverage) or when the labelled
-    predictions carry no variance.
-    """
-    if rule == "one":
-        return 1.0
-    if rule != "tuned":
-        raise ValueError(f"correction_weight must be 'one' or 'tuned', got {rule!r}")
-    outcomes = np.asarray(outcomes, dtype=float)
-    predictions = np.asarray(predictions, dtype=float)
-    weights = np.asarray(weights, dtype=float)
-    if len(outcomes) < TUNED_WEIGHT_MIN_LABELS:
-        return 1.0
-    mean_prediction = float(np.average(predictions, weights=weights))
-    mean_outcome = float(np.average(outcomes, weights=weights))
-    centred = predictions - mean_prediction
-    variance = float(np.average(centred**2, weights=weights))
-    if not np.isfinite(variance) or variance <= 1e-12:
-        return 1.0
-    covariance = float(np.average(centred * (outcomes - mean_outcome), weights=weights))
-    return float(np.clip(covariance / variance, 0.0, 1.0))
+    """The weight from :func:`correction_weight_decision`, without the reason."""
+    return correction_weight_decision(
+        rule, outcomes, predictions, weights, cluster_ids
+    )[0]
 
 
 def compute_direct_point_estimate(
@@ -975,7 +1022,7 @@ def compute_direct_point_estimate(
     use_augmented_estimator: bool = True,
     observation_weights: Optional[np.ndarray] = None,
     label_propensities: Optional[np.ndarray] = None,
-    correction_weight: str = "tuned",
+    correction_weight: str = "one",
 ) -> DirectPointEstimate:
     """Compute the Direct estimand on one (possibly weighted) data world.
 
@@ -985,7 +1032,9 @@ def compute_direct_point_estimate(
     * complete evaluation oracle coverage: weighted raw-oracle mean;
     * partial coverage with a valid label design: calibrated plug-in plus a
       Horvitz-Thompson residual correction, with the prediction weighted by
-      one or by the tuned PPI++ weight (``correction_weight``);
+      one (default) or, in the representative design, by the tuned PPI++
+      weight (``correction_weight="tuned"``; see
+      :func:`correction_weight_decision`);
     * targeted/unknown labeling or augmentation disabled: calibrated plug-in.
     """
     calibrated = np.asarray(calibrated_full, dtype=float)
@@ -1027,7 +1076,14 @@ def compute_direct_point_estimate(
         "augmentation_effective": False,
         "correction_weight_rule": correction_weight,
         "correction_weight_min_labels": TUNED_WEIGHT_MIN_LABELS,
+        "correction_weight_min_minority": TUNED_WEIGHT_MIN_MINORITY,
+        # Per policy: the weight on the prediction (NaN where no residual
+        # correction applies), why, and the labelled rows and clusters it saw.
         "correction_weights": [],
+        "correction_weight_reasons": [],
+        "labelled_rows": [],
+        "labelled_clusters": [],
+        "labelled_outcomes_constant": [],
     }
     if correction_weight not in ("one", "tuned"):
         raise ValueError(
@@ -1036,19 +1092,28 @@ def compute_direct_point_estimate(
 
     for policy_index in range(eval_table.n_policies):
         rows = np.where(eval_table.policy_indices == policy_index)[0]
-        weight_used = 1.0
+        weight_used = float("nan")
+        weight_reason: Optional[str] = None
+        labelled_constant = False
         if len(rows) == 0:
             diagnostics["routes"].append("no_data")
             diagnostics["plug_in_estimates"].append(float("nan"))
             diagnostics["residual_corrections"].append(0.0)
             diagnostics["oracle_fractions"].append(0.0)
             diagnostics["correction_weights"].append(float("nan"))
+            diagnostics["correction_weight_reasons"].append(None)
+            diagnostics["labelled_rows"].append(0)
+            diagnostics["labelled_clusters"].append(0)
+            diagnostics["labelled_outcomes_constant"].append(False)
             continue
         policy_weights = weights[rows]
         observed = eval_table.oracle_mask[rows]
         oracle_fraction = float(
             np.sum(policy_weights[observed]) / np.sum(policy_weights)
         )
+        labelled_cluster_ids = eval_table.prompt_ids[rows][observed]
+        n_labelled_rows = int(np.sum(observed))
+        n_labelled_clusters = int(len(np.unique(labelled_cluster_ids)))
 
         if np.all(observed):
             values = eval_table.oracle_labels[rows].astype(float, copy=True)
@@ -1080,12 +1145,16 @@ def compute_direct_point_estimate(
                     )
                 labelled_outcomes = eval_table.oracle_labels[rows][observed]
                 labelled_predictions = residual_predictions_array[rows][observed]
+                labelled_constant = bool(
+                    len(np.unique(np.round(labelled_outcomes, 6))) == 1
+                )
                 if label_design.kind == "representative":
-                    weight_used = resolve_correction_weight(
+                    weight_used, weight_reason = correction_weight_decision(
                         correction_weight,
                         labelled_outcomes,
                         labelled_predictions,
                         policy_weights[observed],
+                        cluster_ids=labelled_cluster_ids,
                     )
                     residual = labelled_outcomes - weight_used * labelled_predictions
                     correction = float(
@@ -1109,11 +1178,14 @@ def compute_direct_point_estimate(
                             "Observed oracle rows require finite label propensities "
                             "in (0, 1]"
                         )
-                    weight_used = resolve_correction_weight(
-                        correction_weight,
-                        labelled_outcomes,
-                        labelled_predictions,
-                        policy_weights[observed] / prop[observed],
+                    # This Horvitz-Thompson form is uncentred: the centred
+                    # least-squares slope is not its variance-optimal weight and
+                    # can lose precision badly, so it always keeps weight one.
+                    weight_used = 1.0
+                    weight_reason = (
+                        "rule_one"
+                        if correction_weight == "one"
+                        else "known_propensity_fixed_one"
                     )
                     residual = labelled_outcomes - weight_used * labelled_predictions
                     values = weight_used * values
@@ -1134,6 +1206,10 @@ def compute_direct_point_estimate(
         diagnostics["residual_corrections"].append(float(correction))
         diagnostics["oracle_fractions"].append(oracle_fraction)
         diagnostics["correction_weights"].append(float(weight_used))
+        diagnostics["correction_weight_reasons"].append(weight_reason)
+        diagnostics["labelled_rows"].append(n_labelled_rows)
+        diagnostics["labelled_clusters"].append(n_labelled_clusters)
+        diagnostics["labelled_outcomes_constant"].append(labelled_constant)
 
     return DirectPointEstimate(estimates, pseudo_outcomes, diagnostics)
 
@@ -1143,7 +1219,7 @@ def direct_oracle_jackknife_estimates(
     eval_table: DirectEvalTable,
     label_design: LabelDesign,
     use_augmented_estimator: bool = True,
-    correction_weight: str = "tuned",
+    correction_weight: str = "one",
 ) -> Optional[np.ndarray]:
     """Recompute the Direct estimand under each leave-oracle-fold model."""
     fold_models = calibrator.get_fold_models_for_oua()
@@ -1223,7 +1299,7 @@ def cluster_bootstrap_direct_with_refit(
     label_design: Optional[LabelDesign] = None,
     point_calibrator: Optional[Any] = None,
     n_folds: int = 5,
-    correction_weight: str = "tuned",
+    correction_weight: str = "one",
 ) -> Dict[str, Any]:
     """Positive prompt-cluster-weight bootstrap with calibrator refit.
 

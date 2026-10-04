@@ -100,13 +100,18 @@ class CalibratedDirectEstimator:
             compatibility behavior as ``n_bootstrap``.
         use_augmented_estimator: If True, use AIPW-style residual augmentation
         correction_weight: Weight on the calibrated prediction inside the
-            residual correction: ``"tuned"`` (default; the power-tuned PPI++
-            weight, estimated from the labelled rows and clipped to [0, 1];
-            never worse than the labelled mean, and strictly better than
-            weight one when the prediction is binary or the calibration map
-            transfers imperfectly; falls back to one below 20 labels per
-            policy) or ``"one"`` (the plain augmented estimator, the 0.8.x
-            behaviour)
+            residual correction: ``"one"`` (default; the plain augmented
+            estimator, the 0.8.x behaviour) or ``"tuned"`` (opt-in; the
+            power-tuned PPI++ weight, the least-squares slope of the labelled
+            outcomes on the predictions clipped to [0, 1]).  The tuned weight
+            applies to representative label designs only; it falls back to one
+            below 20 labelled prompts per policy, when fewer than 5 labelled
+            prompts differ from the most common outcome, or when the
+            predictions are constant.  Its gain over weight one is asymptotic:
+            at 20 to 60 labels per policy it was within about half a percent of
+            weight one in realised error on held-out benchmarks, ahead mainly
+            where weight one over-corrects.  ``metadata["point_estimator"]``
+            reports the weight and the reason per policy.
 
     Example:
         >>> # Fresh draws from multiple policies
@@ -133,7 +138,7 @@ class CalibratedDirectEstimator:
         use_augmented_estimator: bool = True,
         calibration_provenance: Optional[CalibrationProvenance] = None,
         label_design: Optional[LabelDesign] = None,
-        correction_weight: str = "tuned",
+        correction_weight: str = "one",
     ):
         self.target_policies = list(target_policies)
         self.reward_calibrator = reward_calibrator
@@ -787,6 +792,22 @@ class CalibratedDirectEstimator:
             correction_weight=self.correction_weight,
         )
         self._last_point = point
+        constant = [
+            name
+            for name, flag in zip(
+                eval_table.policy_names,
+                point.diagnostics.get("labelled_outcomes_constant", []),
+            )
+            if flag
+        ]
+        if constant:
+            logger.warning(
+                "Every labelled outcome is identical for policy/policies %s: the "
+                "residual correction and its standard error rest on no outcome "
+                "variation in the labels, so treat these intervals as provisional "
+                "and label more rows if the outcome is rare.",
+                ", ".join(constant),
+            )
         return point
 
     def _assemble_result(

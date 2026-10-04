@@ -125,7 +125,8 @@ def analyze_dataset(
             automatically prepended to calibration_covariates. Convenient for handling length bias.
         estimator_config: Optional configuration dict for the estimator. Valid
             keys: oua_jackknife, inference_method, n_bootstrap, bootstrap_seed,
-            use_augmented_estimator, paired_comparison. Unknown keys raise a
+            use_augmented_estimator, paired_comparison, correction_weight
+            ("one", the default, or the opt-in "tuned"). Unknown keys raise a
             ValueError; reward_calibrator is managed by analyze_dataset and is
             rejected. For backward compatibility, supplying n_bootstrap or
             bootstrap_seed without inference_method selects bootstrap and logs
