@@ -55,7 +55,12 @@ Notes:
 - The default combines prompt-cluster-robust sampling variance with the
   delete-one-oracle-fold jackknife variance and a t-based interval. An
   approximate Welch–Satterthwaite df weights the two sources by their realized
-  variance shares.
+  variance shares. When representative labels on the evaluation rows correct
+  a policy's estimate, the correction is a mean over the labeled prompts, so
+  the interval takes its df from them (`n_labeled − 1` with the default
+  weight, `n_labeled − 2` with the tuned weight) and scales their share of
+  the sampling variance by `n_labeled / df`. With a handful of labeled prompts
+  that interval is very wide, and with one it is unavailable.
 - Refit bootstrap inference remains available explicitly with
   `estimator_config={"inference_method": "bootstrap", "n_bootstrap": 2000}`.
 

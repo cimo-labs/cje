@@ -116,8 +116,11 @@ fallback), never by this parameter; its only observable effect is which name lan
   `boundary_cards`, `normalization`, `oracle_sources`, `bootstrap_ci`, `pairwise_inference`
   (cluster-robust runs: per-pair difference SE/df with pairing basis), `inference` (SE basis,
   selection reason, coupling), `degrees_of_freedom` (per-policy df + `t_critical`;
-  Welch–Satterthwaite effective df when the oracle jackknife applies; cite these if asked how
-  a CI was computed)
+  Welch–Satterthwaite effective df when the oracle jackknife applies; `df_method:
+  "labelled_clusters"` for a policy corrected by representative labels, whose df is
+  `n_labelled_clusters − fitted_parameters` capped by that Welch df; cite these if asked how
+  a CI was computed), `inference_unavailable_policies` / `inference_unavailable_reasons`
+  (policies without an interval: one prompt cluster, or one labeled prompt under weight one)
 - `.diagnostics` (DirectDiagnostics): `overall_status` (GOOD/WARNING/CRITICAL), `status_per_policy`,
   `boundary_cards`, `refuse_level_policies`, `calibration_rmse`, `n_oracle_labels`, `.summary()`
 
@@ -304,9 +307,16 @@ alter estimates. To correct the current target estimate:
    `calibrated_mean_ci`) opts into the PPI++ power-tuned weight for representative designs;
    it falls back to one below 20 labeled prompts, for rare or constant labeled outcomes, and
    for known propensities. Its gain is asymptotic: at 20 to 60 labels its pooled realised error
-   was within about half a percent of weight one on held-out benchmarks, and its interval
-   covered about 1 point less at 20 to 30 labels. Read the weight and its reason in
+   was within about half a percent of weight one on held-out benchmarks. Its interval counts
+   the slope as a fitted parameter (df `n_labeled − 2`) but omits its delta-method variance;
+   in simulations with a separate calibration set it covered within about a quarter of a point
+   of weight one at 20 to 30 labels. Read the weight and its reason in
    `metadata["point_estimator"]`.
+7. The corrected interval takes its df from the labeled prompts (`n_labeled − 1` with weight
+   one), so a few labels give a wide interval and one label gives none (`compare_policies`
+   refuses its pairs; `compare_all_policies` raises). The adjustment applies to the default
+   analytic path only: bootstrap and `"auto"` percentile intervals still under-cover at about
+   10 to 20 labeled prompts.
 
 The [correction guide](https://github.com/cimo-labs/cje/blob/main/guides/audit-correction.md)
 and [runnable example](https://github.com/cimo-labs/cje/blob/main/examples/audit_correction.py)

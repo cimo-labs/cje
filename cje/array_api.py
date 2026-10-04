@@ -29,8 +29,12 @@ from .diagnostics.robust_inference import (
     cluster_robust_se,
     combine_cluster_and_oracle,
     compute_direct_point_estimate,
+    correction_fitted_parameters,
     direct_oracle_jackknife_estimates,
     get_oof_predictions,
+    labelled_cluster_crv1,
+    labelled_cluster_df,
+    labelled_cluster_variance,
     make_calibrator_factory,
     oracle_jackknife_variance,
 )
@@ -374,8 +378,15 @@ def calibrated_mean_ci(
 
     - "cluster_robust": CRV1 cluster-robust SE of the augmented
       pseudo-outcome mean, combined with the delete-one-oracle-fold jackknife
-      variance (t-based CI with approximate Welch--Satterthwaite effective df;
-      default).
+      variance (t-based CI; default). The residual correction is a mean over
+      the labelled clusters that fits ``q`` parameters on them (the mean
+      residual, plus the slope for the tuned weight), so the labelled
+      clusters' share of the CRV1 variance is scaled by ``n_L / (n_L - q)``
+      and the interval takes ``n_L - q`` degrees of freedom, capped by the
+      approximate Welch--Satterthwaite df with the jackknife's ``K - 1``
+      (``diagnostics["cluster_robust"]["df_method"] == "labelled_clusters"``;
+      ``se_cluster`` is the adjusted sampling SE and ``se_cluster_unadjusted``
+      the plain CRV1 SE).
     - "bootstrap": cluster bootstrap with per-replicate calibrator refit
       (AIPW-style augmented estimate; percentile CI). Captures calibrator
       uncertainty and the calibration/evaluation covariance.
@@ -643,33 +654,107 @@ def calibrated_mean_ci(
             influence_fn=lambda x: x,
             alpha=alpha,
         )
-        se_base = float(res["se"])
+        se_crv1 = float(res["se"])
+        se_base = se_crv1
         df = float(res["df"])
 
-        var_oracle = 0.0
-        n_jack = 0
-        jackknife = direct_oracle_jackknife_estimates(
-            calibrator,
-            table,
-            LabelDesign("representative"),
-            correction_weight=correction_weight,
-        )
-        if jackknife is not None:
-            jack = jackknife[:, 0]
-            n_jack = len(jack)
-            var_oracle = oracle_jackknife_variance(jack)
-        se, df = combine_cluster_and_oracle(se_base, df, var_oracle, n_jack)
-        t_crit = float(stats.t.ppf(1 - alpha / 2, df))
-        ci = (estimate - t_crit * se, estimate + t_crit * se)
-        diagnostics["cluster_robust"] = {
-            "se_cluster": se_base,
-            "df": df,
-            "df_method": ("welch_satterthwaite" if var_oracle > 0.0 else "cluster"),
-            "oracle_jackknife_folds": n_jack,
-            "var_oracle": float(var_oracle),
-            "oua_skipped_at_full_coverage": False,
-            "point_estimator": point.diagnostics,
-        }
+        # The residual correction is a mean over the labelled clusters, which
+        # fits q parameters on them: inflate the labelled clusters' CRV1 part
+        # by n_L / (n_L - q) and take n_L - q degrees of freedom (issue #60).
+        # The labels here also fitted the calibrator (always coupled).
+        labelled: Dict[str, Any] = {}
+        df_labelled: Optional[int] = None
+        if point.diagnostics["routes"][0] == "augmented":
+            q = correction_fitted_parameters(
+                point.diagnostics["correction_weight_reasons"][0]
+            )
+            split = labelled_cluster_crv1(influence_values, cluster_codes, mask)
+            n_labelled = int(split["n_labelled_clusters"])
+            var_sampling, df_labelled = labelled_cluster_variance(
+                split["v_labelled"], split["v_unlabelled"], n_labelled, q
+            )
+            crv1 = split["v_labelled"] + split["v_unlabelled"]
+            labelled = {
+                "df_method": "labelled_clusters",
+                "n_labelled_clusters": n_labelled,
+                "fitted_parameters": q,
+                "labelled_variance_inflation": (
+                    n_labelled / df_labelled
+                    if df_labelled is not None
+                    else float("nan")
+                ),
+                "labelled_variance_share": (
+                    float(split["v_labelled"] / crv1) if crv1 > 0 else float("nan")
+                ),
+                "labels_coupled": True,
+            }
+            if df_labelled is not None:
+                se_base = float(np.sqrt(var_sampling))
+                df = float(df_labelled)
+
+        if labelled and df_labelled is None:
+            # Defensive: fit_cv needs at least four labelled clusters and the
+            # tuned slope at least 20, so n_L - q >= 3 here.
+            logger.warning(
+                f"{labelled['n_labelled_clusters']} labelled cluster(s) leave no "
+                "degrees of freedom for a residual correction that fits "
+                f"{labelled['fitted_parameters']} parameter(s); returning the "
+                "point estimate with SE unavailable."
+            )
+            se = float("nan")
+            ci = (float("nan"), float("nan"))
+            diagnostics["inference_available"] = False
+            diagnostics["cluster_robust"] = {
+                "se_cluster": float("nan"),
+                "se_cluster_unadjusted": se_crv1,
+                "df": 0,
+                "unavailable_reason": "too_few_labelled_clusters",
+                **labelled,
+                "oracle_jackknife_folds": 0,
+                "var_oracle": 0.0,
+                "oua_skipped_at_full_coverage": False,
+                "point_estimator": point.diagnostics,
+            }
+        else:
+            var_oracle = 0.0
+            n_jack = 0
+            jackknife = direct_oracle_jackknife_estimates(
+                calibrator,
+                table,
+                LabelDesign("representative"),
+                correction_weight=correction_weight,
+            )
+            if jackknife is not None:
+                jack = jackknife[:, 0]
+                n_jack = len(jack)
+                var_oracle = oracle_jackknife_variance(jack)
+            se, df_welch = combine_cluster_and_oracle(se_base, df, var_oracle, n_jack)
+            df_cap_applied = False
+            if labelled:
+                df, df_cap_applied = labelled_cluster_df(
+                    se_base, df, var_oracle, n_jack
+                )
+            else:
+                df = df_welch
+            t_crit = float(stats.t.ppf(1 - alpha / 2, df))
+            ci = (estimate - t_crit * se, estimate + t_crit * se)
+            diagnostics["cluster_robust"] = {
+                "se_cluster": se_base,
+                "df": df,
+                "df_method": ("welch_satterthwaite" if var_oracle > 0.0 else "cluster"),
+                "oracle_jackknife_folds": n_jack,
+                "var_oracle": float(var_oracle),
+                "oua_skipped_at_full_coverage": False,
+                "point_estimator": point.diagnostics,
+            }
+            if labelled:
+                diagnostics["cluster_robust"].update(
+                    {
+                        "se_cluster_unadjusted": se_crv1,
+                        **labelled,
+                        "oracle_df_cap_applied": bool(df_cap_applied),
+                    }
+                )
         method = "cluster_robust"
 
     logger.info(

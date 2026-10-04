@@ -176,9 +176,18 @@ class EstimationResult(BaseModel):
     method: str = Field(..., description="Estimation method used")
 
     # First-class statistical artifact
+    # Raw pseudo-outcome deviations. For augmented policies under
+    # representative labels the analytic SE also scales the labelled
+    # clusters' CRV1 part by n_L / (n_L - q) (issue #60), so it no longer
+    # equals sqrt(CRV1(influence) + oracle variance) for those policies.
     influence_functions: Optional[Dict[str, np.ndarray]] = Field(
         None,
-        description="Influence functions for each policy (when store_influence=True)",
+        description=(
+            "Influence functions for each policy (when store_influence=True): "
+            "raw pseudo-outcome deviations. For augmented policies under "
+            "representative labels the analytic SE is not their CRV1 SE plus "
+            "the oracle variance; see metadata['degrees_of_freedom']."
+        ),
     )
 
     # Paired bootstrap replicates (written by the bootstrap inference path).
@@ -753,8 +762,8 @@ class EstimationResult(BaseModel):
         if blocked:
             raise InferenceUnavailableError(
                 "Pairwise inference is unavailable for "
-                + ", ".join(repr(policy) for policy in blocked)
-                + ": fewer than two independent evaluation clusters."
+                + "; ".join(self._inference_unavailable_detail(p) for p in blocked)
+                + "."
             )
 
         serialized_state = self.metadata.get("_serialized_pairwise_state")
@@ -818,6 +827,28 @@ class EstimationResult(BaseModel):
         if comparison is None:
             comparison = self._compare_legacy(policy1_idx, policy2_idx, alpha)
         return self._annotate_gate_flags(comparison, policy1_idx, policy2_idx)
+
+    def _inference_unavailable_detail(self, policy: str) -> str:
+        """Why a policy has no interval (``inference_unavailable_reasons``)."""
+        reasons = self.metadata.get("inference_unavailable_reasons")
+        reason = reasons.get(policy) if isinstance(reasons, dict) else None
+        if reason != "too_few_labelled_clusters":
+            return f"{policy!r}: fewer than two independent evaluation clusters"
+        df_info = self.metadata.get("degrees_of_freedom")
+        info = df_info.get(policy) if isinstance(df_info, dict) else None
+        info = info if isinstance(info, dict) else {}
+        n_labelled = info.get("n_labelled_clusters")
+        fitted = info.get("fitted_parameters")
+        if isinstance(n_labelled, int) and isinstance(fitted, int):
+            noun = "prompt" if n_labelled == 1 else "prompts"
+            return (
+                f"{policy!r}: its residual correction has {n_labelled} labelled "
+                f"{noun}; at least {fitted + 1} are needed for an interval"
+            )
+        return (
+            f"{policy!r}: its residual correction has too few labelled prompts "
+            "for an interval"
+        )
 
     def _annotate_gate_flags(
         self, result: Dict[str, Any], idx1: int, idx2: int

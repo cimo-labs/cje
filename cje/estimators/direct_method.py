@@ -36,7 +36,11 @@ from ..diagnostics.robust_inference import (
     build_direct_eval_table,
     combine_cluster_and_oracle,
     compute_direct_point_estimate,
+    correction_fitted_parameters,
     direct_oracle_jackknife_estimates,
+    labelled_cluster_crv1,
+    labelled_cluster_df,
+    labelled_cluster_variance,
     oracle_jackknife_variance,
     residual_predictions_for_evaluation,
     validate_calibration_provenance,
@@ -86,7 +90,11 @@ class CalibratedDirectEstimator:
         oua_jackknife: Whether to include calibration uncertainty via the oracle jackknife
         inference_method: How to compute standard errors. One of:
             - "cluster_robust": Cluster-robust SEs plus the calibration-aware
-              oracle jackknife (default)
+              oracle jackknife (default). A policy corrected by
+              representative labels takes ``n_L - q`` degrees of freedom
+              from its ``n_L`` labelled prompt clusters (``q`` = 1, or 2 for
+              the tuned slope) and scales their share of the sampling
+              variance by ``n_L / (n_L - q)``
             - "bootstrap": Cluster bootstrap with calibrator refit
             - "auto": Choose based on data characteristics
             The bootstrap remains available when refit-based percentile intervals
@@ -246,6 +254,9 @@ class CalibratedDirectEstimator:
         # Cache of the OUA leave-fold estimate matrix; invalidated whenever
         # the inputs it was computed from change (fit / add_fresh_draws).
         self._oracle_jackknife_matrix_cache: Optional[np.ndarray] = None
+        # Per-policy labelled-cluster inference state of the last analytic
+        # estimate (issue #60); reset by every estimate() call.
+        self._labelled_inference: Dict[str, Dict[str, Any]] = {}
 
     @property
     def is_fitted(self) -> bool:
@@ -908,6 +919,7 @@ class CalibratedDirectEstimator:
                 - metadata: Mode info and caveats
         """
         self._validate_fitted()
+        self._labelled_inference = {}
 
         # Check if bootstrap should be used — and whether it CAN run on
         # this data (zero eval-oracle rows would skip every replicate and
@@ -976,6 +988,19 @@ class CalibratedDirectEstimator:
                 se = float(res["se"])
                 n_clusters = int(res["n_clusters"])
                 df_cluster = int(res["df"])
+                # Augmented policies under representative labels take their
+                # df from labelled clusters (issue #60).
+                labelled = self._labelled_cluster_inference(
+                    policy, policy_index, point, if_values, cluster_ids
+                )
+                if labelled is not None:
+                    self._labelled_inference[policy] = labelled
+                    if labelled["df"] is None:
+                        se = float("nan")
+                        se_method = "unavailable_too_few_labelled_clusters"
+                    else:
+                        se = float(np.sqrt(labelled["sampling_variance"]))
+                        df_cluster = int(labelled["df"])
 
             # Store SE method and DF for this policy (used in metadata and CI computation later)
             if not hasattr(self, "_se_methods"):
@@ -996,6 +1021,13 @@ class CalibratedDirectEstimator:
             )
 
         coupled, coupling_overlap = self._calibration_overlaps_evaluation()
+        unavailable_reasons: Dict[str, str] = {}
+        for policy in self.target_policies:
+            policy_se_method = getattr(self, "_se_methods", {}).get(policy)
+            if policy_se_method == "unavailable_one_cluster":
+                unavailable_reasons[policy] = "one_cluster"
+            elif policy_se_method == "unavailable_too_few_labelled_clusters":
+                unavailable_reasons[policy] = "too_few_labelled_clusters"
         extra_metadata: Dict[str, Any] = {
             "inference": {
                 "method": "cluster_robust",
@@ -1017,15 +1049,16 @@ class CalibratedDirectEstimator:
             ),
             "calibration_provenance_explicit": self._provenance_explicit,
             # Mirror the bootstrap contract: policies whose SE is unavailable
-            # (fewer than two independent evaluation clusters) are listed so
-            # compare_policies refuses pairs involving them instead of
-            # returning an anti-conservative difference SE.
+            # (fewer than two independent evaluation clusters, or too few
+            # labelled clusters for the residual correction's interval) are
+            # listed so compare_policies refuses pairs involving them instead
+            # of returning an anti-conservative difference SE.
             "inference_unavailable_policies": [
                 policy
                 for policy in self.target_policies
-                if getattr(self, "_se_methods", {}).get(policy)
-                == "unavailable_one_cluster"
+                if policy in unavailable_reasons
             ],
+            "inference_unavailable_reasons": unavailable_reasons,
         }
 
         # Record a bootstrap-to-cluster-robust downgrade so the SE basis
@@ -1056,6 +1089,110 @@ class CalibratedDirectEstimator:
             self._store_pairwise_inference(result, sampling_ses=standard_errors)
 
         return result
+
+    def _labelled_cluster_inference(
+        self,
+        policy: str,
+        policy_index: int,
+        point: DirectPointEstimate,
+        if_values: np.ndarray,
+        cluster_ids: np.ndarray,
+    ) -> Optional[Dict[str, Any]]:
+        """Labelled-cluster sampling variance and df of an augmented policy.
+
+        Under representative labels the residual correction is a mean over
+        the policy's labelled prompt clusters, which carry most of the
+        pseudo-outcome variance at small label counts. Its interval therefore
+        takes ``n_L - q`` degrees of freedom (``n_L`` labelled clusters, ``q``
+        parameters the correction fits on them: the mean residual, plus the
+        slope for the tuned weight) and inflates the labelled clusters' part
+        of the CRV1 variance by ``n_L / (n_L - q)`` (issue #60). ``df`` is
+        None when ``n_L - q < 1``: no interval is available.
+
+        Returns None where this does not apply: routes other than
+        ``augmented`` and label designs other than ``representative`` (the
+        known-propensity pseudo-outcome is uncentred and fits no mean). The
+        caller handles fewer than two clusters first. The record is estimator
+        state; only its scale-free fields reach result metadata.
+        """
+        routes = point.diagnostics.get("routes") or []
+        route = routes[policy_index] if policy_index < len(routes) else None
+        if route != "augmented" or self.label_design.kind != "representative":
+            return None
+        table = self._eval_table
+        if table is None:
+            return None
+        rows = np.flatnonzero(table.policy_indices == policy_index)
+        labelled_mask = np.asarray(table.oracle_mask[rows], dtype=bool)
+        labelled_rows = rows[labelled_mask]
+        reasons = point.diagnostics.get("correction_weight_reasons") or []
+        q = correction_fitted_parameters(
+            reasons[policy_index] if policy_index < len(reasons) else None
+        )
+        split = labelled_cluster_crv1(if_values, cluster_ids, labelled_mask)
+        n_labelled = int(split["n_labelled_clusters"])
+        variance, df = labelled_cluster_variance(
+            split["v_labelled"], split["v_unlabelled"], n_labelled, q, inflate=True
+        )
+        crv1 = split["v_labelled"] + split["v_unlabelled"]
+        coupled, coupled_fraction = self._labels_coupled(labelled_rows)
+        if df is None:
+            logger.warning(
+                f"Policy '{policy}' has {n_labelled} labelled prompt cluster(s) "
+                f"and its residual correction fits {q} parameter(s) on them, "
+                "which leaves no degrees of freedom for an interval; returning "
+                "the point estimate with SE unavailable. Label at least "
+                f"{q + 1} prompts for this policy."
+            )
+        elif df < 5:
+            logger.warning(
+                f"Policy '{policy}': n_L-q = {df} ({n_labelled} labelled prompt "
+                f"cluster(s), {q} fitted parameter(s)): the interval uses t_{df} "
+                "and is very wide; label more prompts."
+            )
+        return {
+            "n_labelled_clusters": n_labelled,
+            "fitted_parameters": q,
+            "df": df,
+            "variance_inflation": (n_labelled / df if df is not None else float("nan")),
+            "labelled_variance_share": (
+                float(split["v_labelled"] / crv1) if crv1 > 0 else float("nan")
+            ),
+            "labels_coupled": coupled,
+            "labels_coupled_fraction": coupled_fraction,
+            "labelled_prompts": {
+                str(table.prompt_id_strings[row]) for row in labelled_rows
+            },
+            "v_labelled": float(split["v_labelled"]),
+            "v_unlabelled": float(split["v_unlabelled"]),
+            "sampling_variance": variance,
+        }
+
+    def _labels_coupled(self, labelled_rows: np.ndarray) -> Tuple[bool, float]:
+        """Whether a policy's labelled rows also fitted the calibrator.
+
+        True when calibration linkage is validated and every labelled row is
+        an evaluation-linked calibration fit row (its residual prediction is
+        then out-of-fold). Also returns the linked fraction of the labelled
+        rows. Diagnostic only: the interval does not depend on it.
+        """
+        table = self._eval_table
+        n_labelled = len(labelled_rows)
+        if n_labelled == 0 or table is None or table.row_keys is None:
+            return False, 0.0
+        provenance = self.calibration_provenance
+        linked: set = set()
+        if provenance is not None:
+            linked = {
+                key
+                for role, key in zip(
+                    provenance.row_roles or [], provenance.evaluation_keys or []
+                )
+                if role == "evaluation" and key is not None
+            }
+        n_linked = sum(1 for row in labelled_rows if table.row_keys[int(row)] in linked)
+        coupled = bool(self._provenance_linkage_validated and n_linked == n_labelled)
+        return coupled, float(n_linked / n_labelled)
 
     def _apply_oua_jackknife(self, result: EstimationResult) -> None:
         """Apply the oracle jackknife for calibration-aware inference.
@@ -1385,6 +1522,10 @@ class CalibratedDirectEstimator:
         Cluster-only intervals use the cluster degrees of freedom (typically
         ``n_clusters - 1``). When oracle-jackknife variance is present, the
         two components use an approximate Welch--Satterthwaite effective df.
+        Augmented policies under representative labels instead take
+        ``n_L - q`` degrees of freedom from their labelled clusters, capped
+        by the Welch df of ``(n_L - q, K - 1)`` (``df_method``
+        ``"labelled_clusters"``; issue #60).
 
         Args:
             result: EstimationResult with estimates and standard_errors already populated
@@ -1413,6 +1554,7 @@ class CalibratedDirectEstimator:
         oracle_variances = components.get("oracle_variance_per_policy", {})
 
         for i, policy in enumerate(self.target_policies):
+            labelled = self._labelled_inference.get(policy)
             if np.isnan(result.estimates[i]) or np.isnan(result.standard_errors[i]):
                 df_info[policy] = {
                     "available": False,
@@ -1423,6 +1565,14 @@ class CalibratedDirectEstimator:
                     "oracle_jackknife_status": jk_statuses.get(policy, "not_requested"),
                     "oracle_jackknife_folds": int(jk_counts.get(policy, 0)),
                 }
+                if labelled is not None and labelled["df"] is None:
+                    df_info[policy].update(
+                        {
+                            "reason": "too_few_labelled_clusters",
+                            "n_labelled_clusters": int(labelled["n_labelled_clusters"]),
+                            "fitted_parameters": int(labelled["fitted_parameters"]),
+                        }
+                    )
                 continue
 
             # Get cluster DF
@@ -1439,9 +1589,21 @@ class CalibratedDirectEstimator:
             var_oracle = (
                 float(oracle_variances.get(policy, 0.0)) if status == "applied" else 0.0
             )
-            _, df_final = combine_cluster_and_oracle(
-                se_sampling, df_cluster, var_oracle, K
-            )
+            if labelled is not None and labelled["df"] is None:
+                labelled = None  # defensive: such a policy's SE is NaN (above)
+            df_cap_applied = False
+            if labelled is not None:
+                # Issue #60: labelled-cluster df, never above the Welch df of
+                # the (inflated) sampling and oracle components.
+                df_final, df_cap_applied = labelled_cluster_df(
+                    se_sampling, labelled["df"], var_oracle, K
+                )
+                df_method = "labelled_clusters"
+            else:
+                _, df_final = combine_cluster_and_oracle(
+                    se_sampling, df_cluster, var_oracle, K
+                )
+                df_method = "welch_satterthwaite" if var_oracle > 0.0 else "cluster"
 
             # Compute t-critical value for logging
             t_crit = stats.t.ppf(1 - 0.05 / 2, df_final)
@@ -1449,13 +1611,31 @@ class CalibratedDirectEstimator:
             df_info[policy] = {
                 "available": True,
                 "df": float(df_final),
-                "df_method": ("welch_satterthwaite" if var_oracle > 0.0 else "cluster"),
+                "df_method": df_method,
                 "t_critical": float(t_crit),
                 "se_method": self._se_methods.get(policy, "standard"),
                 "n_clusters": self._n_clusters.get(policy, len(result.estimates)),
                 "oracle_jackknife_status": status,
                 "oracle_jackknife_folds": K,
             }
+            if labelled is not None:
+                df_info[policy].update(
+                    {
+                        "n_labelled_clusters": int(labelled["n_labelled_clusters"]),
+                        "fitted_parameters": int(labelled["fitted_parameters"]),
+                        "labelled_variance_inflation": float(
+                            labelled["variance_inflation"]
+                        ),
+                        "labelled_variance_share": float(
+                            labelled["labelled_variance_share"]
+                        ),
+                        "labels_coupled": bool(labelled["labels_coupled"]),
+                        "labels_coupled_fraction": float(
+                            labelled["labels_coupled_fraction"]
+                        ),
+                        "oracle_df_cap_applied": bool(df_cap_applied),
+                    }
+                )
 
             logger.debug(
                 f"Stored DF info for {policy}: df={df_final}, t_crit={t_crit:.3f}, "
@@ -1501,6 +1681,8 @@ class CalibratedDirectEstimator:
 
         as se = sqrt(se_sampling² + var_oua_diff), with an approximate
         Welch--Satterthwaite effective df via combine_cluster_and_oracle.
+        Pairs involving a policy with a labelled-cluster interval use that
+        rule instead (see ``_pairwise_entry``).
 
         Args:
             result: Assembled result (post-OUA standard errors).
@@ -1555,6 +1737,14 @@ class CalibratedDirectEstimator:
         (NaN estimates, missing data, or a degenerate SE) — the pair is
         then simply absent and compare_policies falls through to its
         legacy basis.
+
+        When either policy takes its df from labelled clusters (augmented,
+        representative labels; issue #60), the pair does too. The paired
+        sampling variance is split into prompts labelled for any such policy
+        and the rest; the labelled part is inflated by the largest of their
+        ``n_L / (n_L - q)`` factors and the df is the smallest of their
+        ``n_L - q``, capped by the Welch df with the oracle term. Both choices
+        are conservative when the label sets differ in size.
         """
         policies = self.target_policies
         p1, p2 = policies[i], policies[j]
@@ -1566,6 +1756,16 @@ class CalibratedDirectEstimator:
         pd2 = self._policy_data.get(p2)
         if pd1 is None or pd2 is None:
             return None
+        labelled = [
+            self._labelled_inference[policy]
+            for policy in (p1, p2)
+            if policy in self._labelled_inference
+        ]
+        if any(info["df"] is None for info in labelled):
+            # No interval for that policy, so none for the pair;
+            # compare_policies refuses it via inference_unavailable_policies.
+            return None
+        labelled_summary: Dict[str, Any] = {}
 
         # A policy with a single evaluation cluster has no estimable sampling
         # variance: its centered cluster contributions are identically zero,
@@ -1588,6 +1788,33 @@ class CalibratedDirectEstimator:
             )
             basis = "independent_requested"
             n_pairs = 0
+            if labelled:
+                # The per-policy sampling SEs are already inflated; their
+                # labelled share is reported before inflation. Unpaired
+                # policies' clusters are distinct units, so the labelled
+                # clusters add up.
+                raw_variance = 0.0
+                for index, policy in ((i, p1), (j, p2)):
+                    info = self._labelled_inference.get(policy)
+                    raw_variance += (
+                        info["v_labelled"] + info["v_unlabelled"]
+                        if info is not None
+                        else float(sampling_ses[index]) ** 2
+                    )
+                labelled_variance = sum(info["v_labelled"] for info in labelled)
+                labelled_summary = {
+                    "n_labelled_clusters": sum(
+                        int(info["n_labelled_clusters"]) for info in labelled
+                    ),
+                    "labelled_variance_inflation": max(
+                        float(info["variance_inflation"]) for info in labelled
+                    ),
+                    "labelled_variance_share": (
+                        float(labelled_variance / raw_variance)
+                        if raw_variance > 0
+                        else float("nan")
+                    ),
+                }
         else:
             if not result.influence_functions:
                 return None
@@ -1626,6 +1853,33 @@ class CalibratedDirectEstimator:
             cluster_differences -= np.mean(cluster_differences)
             se_sampling = float(np.sqrt((G / (G - 1)) * np.sum(cluster_differences**2)))
             df_pairs = G - 1
+            if labelled:
+                labelled_prompts = set().union(
+                    *(info["labelled_prompts"] for info in labelled)
+                )
+                is_labelled = np.asarray(
+                    [prompt_id in labelled_prompts for prompt_id in union_prompts],
+                    dtype=bool,
+                )
+                v_labelled = float(
+                    (G / (G - 1)) * np.sum(cluster_differences[is_labelled] ** 2)
+                )
+                v_unlabelled = float(
+                    (G / (G - 1)) * np.sum(cluster_differences[~is_labelled] ** 2)
+                )
+                inflation = max(float(info["variance_inflation"]) for info in labelled)
+                se_sampling = float(np.sqrt(inflation * v_labelled + v_unlabelled))
+                df_pairs = min(int(info["df"]) for info in labelled)
+                raw_variance = v_labelled + v_unlabelled
+                labelled_summary = {
+                    "n_labelled_clusters": int(np.sum(is_labelled)),
+                    "labelled_variance_inflation": inflation,
+                    "labelled_variance_share": (
+                        float(v_labelled / raw_variance)
+                        if raw_variance > 0
+                        else float("nan")
+                    ),
+                }
             overlap = set(contributions1) & set(contributions2)
             if len(overlap) == G:
                 basis = "prompt_cluster_paired"
@@ -1669,19 +1923,30 @@ class CalibratedDirectEstimator:
         )
         if not np.isfinite(se_total) or se_total <= 0:
             return None
+        df_method = "welch_satterthwaite" if var_oua_diff > 0.0 else "cluster"
+        df_cap_applied = False
+        if labelled:
+            df_final, df_cap_applied = labelled_cluster_df(
+                se_sampling, df_pairs, var_oua_diff, n_folds
+            )
+            df_method = "labelled_clusters"
 
-        return {
+        entry: Dict[str, Any] = {
             "policy1": p1,
             "policy2": p2,
             "se": float(se_total),
             "df": float(df_final),
-            "df_method": ("welch_satterthwaite" if var_oua_diff > 0.0 else "cluster"),
+            "df_method": df_method,
             "basis": basis,
             "se_sampling": float(se_sampling),
             "var_oua_diff": float(var_oua_diff),
             "n_pairs": int(n_pairs),
             "oua_folds": int(n_folds),
         }
+        if labelled:
+            entry.update(labelled_summary)
+            entry["oracle_df_cap_applied"] = bool(df_cap_applied)
+        return entry
 
     @staticmethod
     def _per_prompt_means(
@@ -1874,6 +2139,10 @@ class CalibratedDirectEstimator:
             "inference_unavailable_policies": bootstrap_result[
                 "inference_unavailable_policies"
             ],
+            "inference_unavailable_reasons": {
+                policy: "one_cluster"
+                for policy in bootstrap_result["inference_unavailable_policies"]
+            },
         }
 
         result = self._assemble_result(

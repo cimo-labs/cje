@@ -68,13 +68,13 @@ print(results.summary())
 ```text
 CJE Estimation Results (method: calibrated_direct)
   fable-5  0.824  95% CI [0.766, 0.882]
-  gpt-5.6  0.786  95% CI [0.706, 0.866]
+  gpt-5.6  0.786  95% CI [0.696, 0.876]
 Best by point estimate: fable-5
 Limitations: residual transport NOT_CHECKED
 Status: warning
 ```
 
-Both policies get a calibrated estimate and a confidence interval, including `fable-5`, which has no labels of its own. Its calibration reuse remains `NOT_CHECKED` until supported by a [held-out audit](#guardrails-claims-cje-refuses-to-make). This small synthetic example demonstrates the API, not adequate power for a real evaluation. The intervals account for evaluation sampling and the finite label budget; interpreting them still depends on the sampling design and shared-calibration assumptions.
+Both policies get a calibrated estimate and a confidence interval, including `fable-5`, which has no labels of its own. Its calibration reuse remains `NOT_CHECKED` until supported by a [held-out audit](#guardrails-claims-cje-refuses-to-make). This small synthetic example demonstrates the API, not adequate power for a real evaluation. The intervals account for evaluation sampling and the finite label budget (with 10 labeled prompts, gpt-5.6's interval has 9 degrees of freedom); interpreting them still depends on the sampling design and shared-calibration assumptions.
 
 → [Runnable Colab with real data](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb) · [Full docs](https://cimolabs.com/cje)
 
@@ -169,7 +169,7 @@ Production outcomes can reduce **new annotation cost** when their meaning and re
 
 ## The array API
 
-`calibrated_mean_ci` is the library's bottom layer: a ppi_py-style primitive accepting NumPy arrays and returning a calibrated mean and confidence interval. Reach for it when you have one sample of judge scores with ground-truth labels on a random slice; use `analyze_dataset` for multi-policy comparisons. The interval accounts for both sampling noise and the finite label budget (prompt-cluster-robust variance plus a delete-one-oracle-fold jackknife; t interval with Welch–Satterthwaite effective df); `inference="bootstrap"` switches to refit-bootstrap percentile intervals.
+`calibrated_mean_ci` is the library's bottom layer: a ppi_py-style primitive accepting NumPy arrays and returning a calibrated mean and confidence interval. Reach for it when you have one sample of judge scores with ground-truth labels on a random slice; use `analyze_dataset` for multi-policy comparisons. The interval accounts for both sampling noise and the finite label budget (prompt-cluster-robust variance plus a delete-one-oracle-fold jackknife; a t interval whose degrees of freedom come from the labeled prompts, `n_labeled − 1` with the default weight); `inference="bootstrap"` switches to refit-bootstrap percentile intervals, which lack that adjustment and under-cover with 10 to 20 labeled prompts.
 
 ```python
 import numpy as np
@@ -186,7 +186,7 @@ print(result.summary())
 ```
 
 ```text
-Calibrated mean: 0.5316 (SE 0.0174, CI [0.4974, 0.5659], n=400, n_oracle=100, cluster_robust)
+Calibrated mean: 0.5316 (SE 0.0174, CI [0.4970, 0.5663], n=400, n_oracle=100, cluster_robust)
 ```
 
 When partial oracle coverage requires calibration, `result.calibrator` predicts in the same public judge and oracle units supplied by the caller; complete oracle coverage returns the direct oracle mean with `result.calibrator is None`. Grade any fitted calibrator's reuse on an independent probe with `transport_audit(..., delta_max=<practical margin>)`; `result.diagnostics["boundary_card"]` carries the separate scalar score-support badge when calibration is fitted.

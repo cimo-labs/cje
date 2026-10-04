@@ -50,6 +50,13 @@ logger = logging.getLogger(__name__)
 # instrument experiment (R=400 replicates/cell). The previous bootstrap
 # instrument (n_bootstrap=200) ran 17-23% hot at pilot-scale label counts,
 # inflating fitted variance components and planned budgets.
+# Since the labelled-cluster interval (issue #60) the measured SE of an
+# augmented policy also scales its labelled clusters' CRV1 variance by
+# n_L / (n_L - 1). In the coupled measurement design (labels in the fresh
+# draws, weight one) that runs the instrument about 6-10% above the realised
+# SD at 15-20 labels per policy (3-7% before, directional) and raises planned
+# budgets by about 5%: conservative drift, not an accuracy gain. MDEs still
+# use the normal quantile, not the interval's t degrees of freedom.
 # The correction weight is pinned so a planned budget never depends on a
 # library default changing underneath it.
 _PLANNING_MEASUREMENT_CONFIG: Dict[str, Any] = {
