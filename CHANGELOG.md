@@ -24,16 +24,17 @@
   comparisons inherit the rule: the paired variance is split by prompts
   labelled for either policy, the labelled part takes the larger of the two
   scale factors, and the df is the smaller `n_L - q`, capped the same way.
-- **Evidence.** In simulations run under a protocol fixed in advance, with
-  the calibration sample drawn separately from the evaluation rows, the
-  per-policy interval covered 0.940 to 0.965 in every cell from 10 to 60
-  labelled prompts under either weight, and 0.946 to 0.966 where the labels
-  also fitted the calibration (`calibrated_mean_ci`) at 20 to 60. Not yet
-  validated: designs where the labels also fit the calibration below 20
-  labelled prompts (this includes the README quickstart and any
-  `calibrated_mean_ci` call with fewer than 20; directional checks there
-  over-cover mildly, up to about 0.97), pairwise intervals (directional
-  checks only), and fewer than 10 labelled prompts. Intervals widen by about
+- **Evidence.** In simulations through the public API (1,000 or more
+  replicates per cell; graded, weak, binary and shifted judges; 10, 20, 30
+  and 60 labelled prompts per policy), pooled coverage of the per-policy
+  interval rose from 0.884-0.946 to 0.948-0.962 with a separately sampled
+  calibration set (single rows and three rows per prompt), and from
+  0.907-0.951 to 0.952-0.966 where the labels also fit the calibration
+  (`calibrated_mean_ci`), which is mildly conservative at 10 to 30 labels.
+  Paired differences in `compare_policies` rose from 0.884-0.957 to
+  0.941-0.976 per cell; the highest cells are pairs whose two policies label
+  different prompts at 10 labels each. Point estimates are bit-identical.
+  Fewer than 10 labelled prompts were not simulated. Intervals widen by about
   21%, 9% and 3% at 10, 20 and 60 labelled prompts with weight one (31%, 13%
   and 4% with the tuned weight).
 - **Tuned weight.** The interval counts the tuned slope as a fitted
