@@ -23,7 +23,9 @@
   `metadata["calibration_info"]`. The fitted models, estimates and intervals
   are unchanged; bootstrap refits after a full-model fallback stay two-stage
   (each replicate falls back the same way) instead of refitting monotone with
-  covariates.
+  covariates. If a fallback fit collapses to a constant, the constant-fit
+  warning points to the label count and the judge orientation, not to
+  `calibration_mode='auto'`, which falls back the same way.
 - **`calibrated_mean_ci` warns when covariates are ignored at complete label
   coverage** (#66), where it returns the direct outcome mean and fits no
   calibrator.

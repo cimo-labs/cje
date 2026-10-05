@@ -25,7 +25,9 @@ import pytest
 from cje import analyze_dataset, calibrated_mean_ci
 from cje.calibration import JudgeCalibrator, calibrate_dataset
 from cje.calibration.flexible_calibrator import TWO_STAGE_MIN_ROWS, FlexibleCalibrator
+from cje.data.fresh_draws import FreshDrawDataset, FreshDrawSample
 from cje.data.models import Dataset, Sample
+from cje.estimators.direct_method import CalibratedDirectEstimator
 
 FALLBACK_MESSAGE = "Covariates were supplied but"
 
@@ -366,6 +368,118 @@ class TestCovariateFallbackReporting:
         assert result.diagnostics["bootstrap"]["refit_mode"] == "two_stage"
         assert np.isfinite(result.se)
 
+    def test_direct_estimator_bootstrap_refits_after_full_model_fallback(
+        self,
+    ) -> None:
+        """#67: without calibration_provenance the estimator's bootstrap reads
+        the calibrator's selected_mode; after a full-model fallback that is
+        "monotone", which cannot refit with covariates, so the bootstrap must
+        refit with the requested mode (each replicate falls back the same way)."""
+        rng = np.random.default_rng(3)
+        n = 300
+        x = rng.integers(0, 2, n).astype(float)
+        s = rng.uniform(size=n)
+        y = np.clip(0.2 + 0.5 * s + 0.2 * x + rng.normal(0, 0.1, n), 0, 1)
+        labelled = np.zeros(n, dtype=bool)
+        labelled[rng.choice(n, 18, replace=False)] = True
+        prompt_ids = [f"p{i}" for i in range(n)]
+
+        calibrator = JudgeCalibrator(
+            calibration_mode="two_stage", covariate_names=["platform"]
+        )
+        with pytest.warns(UserWarning, match=FALLBACK_MESSAGE):
+            calibrator.fit_cv(
+                s,
+                y[labelled],
+                labelled,
+                covariates=x[:, None],
+                prompt_ids=prompt_ids,
+                quiet=True,
+            )
+        assert calibrator.selected_mode == "monotone"
+
+        draws = FreshDrawDataset(
+            target_policy="a",
+            samples=[
+                FreshDrawSample(
+                    prompt_id=prompt_ids[i],
+                    target_policy="a",
+                    response="",
+                    judge_score=float(s[i]),
+                    oracle_label=float(y[i]) if labelled[i] else None,
+                    draw_idx=0,
+                    metadata={"platform": float(x[i])},
+                )
+                for i in range(n)
+            ],
+        )
+        estimator = CalibratedDirectEstimator(
+            target_policies=["a"],
+            reward_calibrator=calibrator,
+            inference_method="bootstrap",
+            n_bootstrap=20,
+        )
+        estimator.add_fresh_draws("a", draws)
+        estimator.fit()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            result = estimator.estimate()
+
+        assert result.metadata["calibration_provenance_explicit"] is False
+        assert result.metadata["inference"]["bootstrap_refit_mode"] == "two_stage"
+        assert np.isfinite(result.estimates[0])
+        assert np.isfinite(result.standard_errors[0])
+        assert result.standard_errors[0] > 0
+
+    def test_auto_fallback_does_not_claim_monotone_relationship(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """#67: an auto-mode fallback is monotone because there were too few
+        labelled rows, not because a monotone relationship was checked, so it
+        must not log "Monotone relationship confirmed"."""
+        scores, labels, x = _fallback_rows(18)
+        labelled = ~np.isnan(labels)
+        calibrator = JudgeCalibrator(calibration_mode="auto")
+        with caplog.at_level(logging.INFO, logger="cje"):
+            with pytest.warns(UserWarning, match=FALLBACK_MESSAGE):
+                calibrator.fit_cv(scores, labels[labelled], labelled, covariates=x)
+        messages = [r.getMessage() for r in caplog.records]
+        assert calibrator.selected_mode == "monotone"
+        # The auto-mode summary is still logged at INFO, so the capture works.
+        assert any("Auto-calibration selected: monotone" in m for m in messages)
+        assert not any("Monotone relationship confirmed" in m for m in messages)
+
+    @pytest.mark.parametrize("mode", ["auto", "two_stage"])
+    def test_constant_fit_after_fallback_names_the_label_count(
+        self, mode: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """#67: once a fallback reports "monotone", the constant-fit warning
+        can fire; the caller already asked for auto or two-stage, so the
+        remedy is more labels or the judge orientation, not auto mode."""
+        rng = np.random.default_rng(2)
+        n = 100
+        s = rng.uniform(size=n)
+        x = rng.normal(size=(n, 1))
+        y = np.clip(1 - s + rng.normal(0, 0.05, n), 0, 1)
+        labelled = np.zeros(n, dtype=bool)
+        labelled[:16] = True
+        calibrator = JudgeCalibrator(
+            calibration_mode=mode, covariate_names=["x"]  # type: ignore[arg-type]
+        )
+        with caplog.at_level(logging.WARNING, logger="cje"):
+            with pytest.warns(UserWarning, match=FALLBACK_MESSAGE):
+                calibrator.fit_cv(s, y[labelled], labelled, 4, covariates=x, quiet=True)
+        assert calibrator.selected_mode == "monotone"
+        constant = [
+            r.getMessage()
+            for r in caplog.records
+            if "collapsed to a constant" in r.getMessage()
+        ]
+        assert len(constant) == 1
+        assert "calibration_mode='auto'" not in constant[0]
+        assert "fewer than 20 labelled rows" in constant[0]
+        assert "orientation" in constant[0]
+
     @staticmethod
     def _fresh_draws(n_labelled: int) -> Dict[str, List[Dict[str, Any]]]:
         rng = np.random.default_rng(3)
@@ -403,8 +517,10 @@ class TestCovariateFallbackReporting:
         n_without: int,
         inference: str,
     ) -> None:
-        """#67: analyze_dataset reports the same fields, on both inference
-        paths (its bootstrap must not refit monotone with covariates)."""
+        """#67: analyze_dataset reports the same fields on both inference
+        paths. Its bootstrap refits with the requested calibration_mode from
+        the provenance, so the estimator's fallback branch is covered by
+        test_direct_estimator_bootstrap_refits_after_full_model_fallback."""
         config: Dict[str, Any] = {"inference_method": inference}
         if inference == "bootstrap":
             config["n_bootstrap"] = 20

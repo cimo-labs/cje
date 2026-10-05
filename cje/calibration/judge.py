@@ -275,6 +275,10 @@ class JudgeCalibrator:
         Isotonic regression on a judge that is anti-correlated with the
         oracle fits a single constant (the oracle mean): every calibrated
         reward becomes identical and all policy differences vanish silently.
+
+        A fit that dropped its covariates (too few labelled rows) already ran
+        in auto or two-stage mode, so the remedy names the label count rather
+        than ``calibration_mode='auto'``.
         """
         if self._flexible_calibrator is None:
             return
@@ -282,13 +286,29 @@ class JudgeCalibrator:
             self._flexible_calibrator.predict(np.asarray(oracle_scores), folds=None)
         )
         if len(np.unique(fitted)) == 1 and len(np.unique(np.asarray(oracle_y))) > 1:
+            if getattr(self._flexible_calibrator, "covariates_dropped", False):
+                from .flexible_calibrator import TWO_STAGE_MIN_ROWS
+
+                remedy = (
+                    f"The covariates were dropped because fewer than "
+                    f"{TWO_STAGE_MIN_ROWS} labelled rows are available, so "
+                    "this is a judge-score-only fit. Check the judge score "
+                    "orientation (the judge scale may be inverted, i.e. "
+                    "anti-correlated with the oracle), or collect at least "
+                    f"{TWO_STAGE_MIN_ROWS} labelled rows so the two-stage fit "
+                    "can use the covariates."
+                )
+            else:
+                remedy = (
+                    "The judge scale may be inverted (anti-correlated with "
+                    "the oracle) — check the judge score orientation or use "
+                    "calibration_mode='auto'."
+                )
             logger.warning(
                 f"Monotone calibration collapsed to a constant "
                 f"({fitted[0]:.3f}, the oracle mean) even though oracle labels "
                 f"vary. All calibrated rewards will be identical, erasing "
-                f"policy differences. The judge scale may be inverted "
-                f"(anti-correlated with the oracle) — check the judge score "
-                f"orientation or use calibration_mode='auto'."
+                f"policy differences. {remedy}"
             )
 
     def _monotone_without_covariates(self) -> bool:
