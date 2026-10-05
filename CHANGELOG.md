@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `JudgeCalibrator.fit_cv` and `FlexibleCalibrator.fit` now raise a clear
+  `ValueError` when oracle labels are non-finite or outside [0, 1], instead of
+  silently clipping them into a constant calibrator.
+- `fit_cv(..., quiet=True)` no longer emits the auto-mode covariate messages
+  at INFO/WARNING.
+
 ## [0.9.0] - 2026-10-04
 
 Opt-in power-tuned weight for the residual correction, with guards. The

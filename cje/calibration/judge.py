@@ -433,6 +433,10 @@ class JudgeCalibrator:
                 "Provide oracle labels for at least a subset of samples."
             )
 
+        from .flexible_calibrator import validate_oracle_labels
+
+        validate_oracle_labels(oracle_y)
+
         n_oracle = len(oracle_y)
         self.oracle_coverage = (
             n_oracle / n_total
@@ -549,6 +553,7 @@ class JudgeCalibrator:
             oracle_fold_ids,
             oracle_covariates,
             sample_weight=oracle_sample_weight,
+            log_level=fit_log_level,
         )
         self.selected_mode = self._flexible_calibrator.selected_mode
 
