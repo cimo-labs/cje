@@ -9,6 +9,29 @@
   silently clipping them into a constant calibrator.
 - `fit_cv(..., quiet=True)` no longer emits the auto-mode covariate messages
   at INFO/WARNING.
+- `calibrated_mean_ci` uses the same label check, so it gives the same
+  out-of-range message as `fit_cv` and also rejects non-finite labels inside
+  an explicit `oracle_mask` (#68).
+- **Dropped covariates are reported** (#67). Two-stage calibration needs at
+  least 20 labelled rows to use covariates, for the full model and for each
+  cross-fitting fold's training complement. Below that, the fit already ignored
+  them while `selected_mode` said `"two_stage"`. CJE now emits a `UserWarning`,
+  reports `selected_mode == "monotone"` when the full model fell back, and
+  records `covariates_used` and `n_folds_without_covariates` in
+  `calibrated_mean_ci`'s `diagnostics["calibration"]`, in `calibrate_dataset`'s
+  `calibration_info`, and in `analyze_dataset`'s new
+  `metadata["calibration_info"]`. The fitted models, estimates and intervals
+  are unchanged; bootstrap refits after a full-model fallback stay two-stage
+  (each replicate falls back the same way) instead of refitting monotone with
+  covariates.
+- **`calibrated_mean_ci` warns when covariates are ignored at complete label
+  coverage** (#66), where it returns the direct outcome mean and fits no
+  calibrator.
+- **`calibrated_mean_ci` documents that it assumes representative labels**
+  (#69). Stratified or oversampled labels bias it; until strata are supported,
+  call it once per stratum and combine with the population shares `W_h`:
+  `sum_h W_h mu_h`, standard error `sqrt(sum_h W_h^2 SE_h^2)`. The docstring
+  and `skills/cje/reference.md` describe the workaround.
 
 ## [0.9.0] - 2026-10-04
 

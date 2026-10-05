@@ -307,6 +307,10 @@ def calibrate_dataset(
         "oof_rmse": result.oof_rmse,
         "oof_coverage": result.oof_coverage_at_01,
         "calibration_mode": calibration_mode,
+        # Covariates can be dropped below 20 labelled rows (whole fit) or per
+        # fold; record what the fitted models actually use.
+        "covariates_used": bool(calibrator.covariates_used),
+        "n_folds_without_covariates": int(calibrator.n_folds_without_covariates or 0),
     }
 
     # Lightweight calibration-floor instrumentation
