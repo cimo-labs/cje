@@ -6,8 +6,9 @@ calibrator to all of them and detects their score scales jointly, and the
 #71). ``compare_judges`` instead fits one cross-fitted ``JudgeCalibrator`` per
 judge, on folds shared by every judge, and reports each judge's out-of-fold
 calibration quality and, against a reference judge, the label multiplier
-implied by the within-policy R². Intervals come from a paired prompt-cluster
-bootstrap that refits every judge in every replicate.
+implied by the prompt-clustered, within-policy variance of each judge's
+out-of-fold residual. Intervals come from a paired prompt-cluster bootstrap
+that refits every judge in every replicate.
 """
 
 import logging
@@ -32,8 +33,21 @@ Interval = Tuple[float, float]
 # warning (the same 20-cluster line calibrated_mean_ci's "auto" rule uses).
 _FEW_LABELLED_CLUSTERS = 20
 
+# With n_unlabeled, warn when the labelled rows of the most and least labelled
+# policies differ by more than this factor: the *_at_n fields use their mean.
+_UNEVEN_LABELS_RATIO = 1.5
+
 # Per-judge statistics, in the column order of the bootstrap arrays.
-_STATS = ("oof_rmse", "r2_pooled", "r2_within", "var_f", "var_residual")
+_STATS = (
+    "oof_rmse",
+    "r2_pooled",
+    "r2_within",
+    "var_f",
+    "var_residual",
+    "var_f_clustered",
+    "var_residual_clustered",
+    "cov_f_residual_clustered",
+)
 
 
 @dataclass(frozen=True)
@@ -57,13 +71,28 @@ class JudgeQuality:
         r2_pooled: ``1 - SS(r) / SS(y)`` over all labelled rows as one group,
             with ``r`` and ``y`` centred.
         r2_within: The same with ``r`` and ``y`` centred within each policy.
-            This is the R² that sets label savings. It equals ``r2_pooled``
-            when ``policy_ids`` is None.
+            This is the R² that sets label savings when every prompt has one
+            labelled row per policy. It equals ``r2_pooled`` when
+            ``policy_ids`` is None.
         var_f: Within-policy variance of the full-sample calibrated
             prediction over every row of the labelled policies (``Var(f)``).
         var_residual: Within-policy variance of the out-of-fold residual over
             the labelled rows, ``(1 - r2_within)`` times the within-policy
             variance of the labels (``Var(Y - f)``).
+        var_f_clustered: ``Var(f)`` per row with prompt clustering: the sum
+            over (policy, prompt) of the squared total of the within-policy
+            centred ``f``, divided by the rows. It equals ``var_f`` when every
+            prompt has one row per policy and grows when ``f`` is correlated
+            within prompts.
+        var_residual_clustered: The same for the out-of-fold residual over
+            the labelled rows, divided by the labelled rows. It equals
+            ``var_residual`` when every prompt has one labelled row per
+            policy. The multipliers use it.
+        cov_f_residual_clustered: Sum over (policy, prompt) of the ``f``
+            total (every row) times the residual total (labelled rows),
+            divided by the labelled rows: the covariance term of the
+            augmented estimator, which averages ``f`` over every row and the
+            residual over the labelled rows, which are among those rows.
     """
 
     judge: str
@@ -79,6 +108,9 @@ class JudgeQuality:
     r2_within_ci: Interval
     var_f: float
     var_residual: float
+    var_f_clustered: float
+    var_residual_clustered: float
+    cov_f_residual_clustered: float
 
 
 @dataclass(frozen=True)
@@ -94,20 +126,28 @@ class JudgePair:
         reference: The reference judge.
         r2_within_diff: ``r2_within[J] - r2_within[reference]``.
         oof_rmse_diff: ``oof_rmse[J] - oof_rmse[reference]``.
-        label_multiplier: ``(1 - R²_reference) / (1 - R²_J)`` with the
-            within-policy R²: the labels the reference judge needs per label
-            of ``J`` for an equal interval width on a policy mean, when
-            unlabelled rows are plentiful. Above 1, ``J`` saves labels. It
-            treats labelled rows as independent; NaN when ``J``'s
-            out-of-fold residuals have zero variance.
+        label_multiplier: ``var_residual_clustered[reference] /
+            var_residual_clustered[J]``: the labelled rows the reference
+            judge needs per labelled row of ``J`` for an equal interval width
+            on a policy mean, when unlabelled rows are plentiful and new
+            labels come in prompts labelled like the observed ones. Above 1,
+            ``J`` saves labels. With one labelled row per prompt and policy it
+            equals ``(1 - R²_reference) / (1 - R²_J)`` with the within-policy
+            R²; with several, judge errors shared within a prompt move it
+            away from that row-level ratio. NaN when ``J``'s out-of-fold
+            residuals have zero variance.
         variance_ratio_at_n: With ``n_unlabeled`` = U, the predicted variance
-            ratio ``V_reference / V_J`` of a policy mean, where ``V = Var(f) /
-            N + Var(Y - f) / n``, ``n`` is the observed labelled rows per
-            policy and ``N = n + U``. None without ``n_unlabeled``.
-        label_multiplier_at_n: The labels the reference needs per label of
-            ``J`` for ``V_reference = V_J`` at the same ``N``. It is capped at
-            ``N / n`` (every row labelled), and tends to ``label_multiplier``
-            as U grows. None without ``n_unlabeled``.
+            ratio ``V_reference / V_J`` of a policy mean, where ``V = max(
+            var_f_clustered + 2 cov_f_residual_clustered, 0) / N +
+            var_residual_clustered / n``, ``n`` is the mean labelled rows per
+            labelled policy and ``N = n + U``. With U = 0 every row is
+            labelled, the estimate is the label mean for any judge, and the
+            ratio is 1. None without ``n_unlabeled``.
+        label_multiplier_at_n: The labelled rows the reference needs per
+            labelled row of ``J`` for ``V_reference = V_J`` at the same
+            ``N``. It is capped at ``N / n`` (every row labelled), tends to
+            ``label_multiplier`` as U grows, and is 1 with U = 0. None without
+            ``n_unlabeled``.
         label_multiplier_at_n_capped: True when the point value hit that cap:
             under the model the reference cannot match ``J`` even with every
             row labelled. None without ``n_unlabeled``.
@@ -184,6 +224,15 @@ class JudgeComparison:
                 f"{_fmt(q.r2_pooled):<10} {_fmt(q.var_f, 4):<9} "
                 f"{_fmt(q.var_residual, 4):<9}"
             )
+        max_rows = self.diagnostics.get("max_rows_per_prompt", 1)
+        if max_rows > 1:
+            lines.append(
+                f"Prompts hold up to {max_rows} rows per policy "
+                f"({self.diagnostics['max_labelled_rows_per_prompt']} labelled): "
+                "the multipliers use the *_clustered components, not Var(f) and "
+                "Var(Y-f), and assume new labels come in prompts labelled like "
+                "these."
+            )
         planned = self.diagnostics.get("planned")
         for p in self.pairwise:
             lines.append(
@@ -257,11 +306,14 @@ def compare_judges(
     `analyze_dataset` as policies, which pools them into one calibrator.
 
     Per judge, ``table`` reports the out-of-fold RMSE, the out-of-fold R²
-    pooled and within policy, and the variance components ``Var(f)`` and
-    ``Var(Y - f)``. Against the reference, ``pairwise`` reports the
-    differences in within-policy R² and RMSE and the label multiplier
-    ``(1 - R²_reference) / (1 - R²_J)``, plus finite-N versions when
-    ``n_unlabeled`` is given. Every interval comes from a paired bootstrap:
+    pooled and within policy, the variance components ``Var(f)`` and
+    ``Var(Y - f)``, and their prompt-clustered versions with the covariance
+    term. Against the reference, ``pairwise`` reports the differences in
+    within-policy R² and RMSE and the label multiplier, the ratio of the
+    prompt-clustered residual variances (``(1 - R²_reference) / (1 - R²_J)``
+    when every prompt has one labelled row per policy), plus finite-N
+    versions when ``n_unlabeled`` is given. Every interval comes from a
+    paired bootstrap:
     each replicate draws one positive Exp(1) weight per prompt cluster (the
     library's refit-bootstrap scheme), shares it across judges and policies,
     and refits each judge's calibrator with the judge's full-sample mode held
@@ -273,10 +325,17 @@ def compare_judges(
       the same rows for every judge. Stratified, oversampled or targeted
       labels are not supported.
     - The multiplier concerns a policy mean (a level) corrected by labels at
-      weight one, with labelled rows treated as independent. With several
-      labelled rows per prompt and judge errors shared within a prompt, the
-      multiplier in labelled prompts can differ from this row-level ratio;
-      the intervals resample prompts but describe the row-level ratio.
+      weight one. Its variance model treats prompts as independent and
+      sums the rows within a prompt, so several labelled rows per prompt
+      and judge errors shared within a prompt are accounted for. Labels are
+      counted in rows and assumed to come, as in the planned run, in prompts
+      labelled like the observed ones (the same labelled rows per prompt).
+    - The finite-N fields describe a policy with ``n``, the mean labelled
+      rows per labelled policy, and the variance components pooled within
+      policy. With unequal labelling across policies (more than 1.5 times
+      between the most and least labelled) they fit no single policy, and
+      a warning says so; run ``compare_judges`` on one policy's rows for a
+      per-policy prediction.
     - One calibrator per judge is fitted across all policies, as
       `analyze_dataset` fits one.
     - Folds hash the cluster-id strings, so results move with the seed and
@@ -303,8 +362,8 @@ def compare_judges(
             changes no statistic and the calibrators keep the raw scale.
         reference: Reference judge; default the first key.
         n_unlabeled: Unlabelled rows per policy in a planned evaluation that
-            keeps the observed labelled rows per policy. Enables the
-            ``*_at_n`` fields.
+            keeps the observed labelled rows per policy (their mean over the
+            labelled policies). Enables the ``*_at_n`` fields.
         alpha: Significance level of every interval (default 0.05).
         n_folds: Cross-fitting folds (reduced when labelled clusters are
             scarce; the resolved count is in ``diagnostics["n_folds"]``).
@@ -385,6 +444,16 @@ def compare_judges(
     used_idx = np.flatnonzero(np.isin(policy_codes, labelled_policies))
     g_lab = np.asarray([group_of[p] for p in policy_codes[lab_idx]], dtype=np.int64)
     g_used = np.asarray([group_of[p] for p in policy_codes[used_idx]], dtype=np.int64)
+    # (policy, prompt) cells: the independent units of one policy's mean.
+    _, cell_used = np.unique(
+        g_used * n_clusters + cluster_codes[used_idx], return_inverse=True
+    )
+    cell_used = cell_used.reshape(-1).astype(np.int64)
+    n_cells = int(cell_used.max()) + 1
+    cell_of_row = np.full(n, -1, dtype=np.int64)
+    cell_of_row[used_idx] = cell_used
+    cell_lab = cell_of_row[lab_idx]
+    cells = (cell_used, cell_lab, n_cells)
     y_lab = labels[lab_idx]
     ones = np.ones(n)
     if _centred_ss(y_lab, ones[lab_idx], g_lab, n_groups) <= 0.0:
@@ -399,6 +468,21 @@ def compare_judges(
             "out-of-fold R², the multipliers and their bootstrap intervals are "
             f"noisy below {_FEW_LABELLED_CLUSTERS}. Label more prompts before "
             "choosing a judge.",
+            UserWarning,
+            stacklevel=2,
+        )
+    labelled_per_policy = np.bincount(g_lab, minlength=n_groups)
+    n_bar = len(lab_idx) / n_groups
+    if (
+        n_unlabeled is not None
+        and labelled_per_policy.max() > _UNEVEN_LABELS_RATIO * labelled_per_policy.min()
+    ):
+        warnings.warn(
+            f"Labelled rows per policy range from {labelled_per_policy.min()} to "
+            f"{labelled_per_policy.max()}: the *_at_n fields describe a policy "
+            f"with the mean, {n_bar:g} labelled rows, and variance components "
+            "pooled across policies, so they fit neither extreme. For a "
+            "per-policy prediction, run compare_judges on that policy's rows.",
             UserWarning,
             stacklevel=2,
         )
@@ -456,6 +540,7 @@ def compare_judges(
             ones[used_idx],
             g_used,
             n_groups,
+            cells,
         )
     assert point_folds is not None
     resolved_folds = calibrators[names[0]].n_folds
@@ -504,6 +589,7 @@ def compare_judges(
                     weights[used_idx],
                     g_used,
                     n_groups,
+                    cells,
                 )
             except Exception as exc:
                 raise RuntimeError(
@@ -536,10 +622,14 @@ def compare_judges(
                 r2_within_ci=ci(boot_stats[:, k, column["r2_within"]]),
                 var_f=float(point[column["var_f"]]),
                 var_residual=float(point[column["var_residual"]]),
+                var_f_clustered=float(point[column["var_f_clustered"]]),
+                var_residual_clustered=float(point[column["var_residual_clustered"]]),
+                cov_f_residual_clustered=float(
+                    point[column["cov_f_residual_clustered"]]
+                ),
             )
         )
 
-    n_bar = len(lab_idx) / n_groups
     big_n = None if n_unlabeled is None else n_bar + int(n_unlabeled)
     ref = names.index(reference)
     pairwise = []
@@ -571,7 +661,13 @@ def compare_judges(
         "policies": [policy_names[p] for p in labelled_policies],
         "policies_without_labels": unlabelled_policies,
         "judge_scales": {name: list(scale) for name, scale in scales.items()},
-        "multiplier_basis": "row_level_within_policy",
+        "multiplier_basis": "prompt_cluster_within_policy",
+        "labelled_rows_by_policy": {
+            policy_names[p]: int(labelled_per_policy[g])
+            for g, p in enumerate(labelled_policies)
+        },
+        "max_rows_per_prompt": int(np.bincount(cell_used).max()),
+        "max_labelled_rows_per_prompt": int(np.bincount(cell_lab).max()),
         "bootstrap": {
             "scheme": "positive_exponential_cluster_weights",
             "n_bootstrap": int(n_bootstrap),
@@ -618,6 +714,29 @@ def _centred_ss(
     return float(np.sum(w * (x - means[groups]) ** 2))
 
 
+def _cell_totals(
+    x: np.ndarray,
+    w: np.ndarray,
+    groups: np.ndarray,
+    n_groups: int,
+    cell: np.ndarray,
+    n_cells: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Per-cell totals of ``x`` centred at its weighted group means.
+
+    Returns the unweighted totals and the weighted totals. Weights are
+    constant within a cell (one weight per prompt cluster), so the weighted
+    total is the cell's weight times its unweighted total.
+    """
+    total = np.bincount(groups, weights=w, minlength=n_groups)
+    means = np.bincount(groups, weights=w * x, minlength=n_groups) / total
+    dev = x - means[groups]
+    return (
+        np.bincount(cell, weights=dev, minlength=n_cells),
+        np.bincount(cell, weights=w * dev, minlength=n_cells),
+    )
+
+
 def _judge_statistics(
     y: np.ndarray,
     oof: np.ndarray,
@@ -627,10 +746,18 @@ def _judge_statistics(
     w_used: np.ndarray,
     g_used: np.ndarray,
     n_groups: int,
-) -> Tuple[float, float, float, float, float]:
-    """One judge's weighted statistics, in the order of ``_STATS``."""
+    cells: Tuple[np.ndarray, np.ndarray, int],
+) -> Tuple[float, float, float, float, float, float, float, float]:
+    """One judge's weighted statistics, in the order of ``_STATS``.
+
+    ``cells`` holds the (policy, prompt) cell of every used row and of every
+    labelled row, and the number of cells. A replicate weight of ``w`` on a
+    prompt counts its cells ``w`` times, as the bootstrap resamples prompts.
+    """
+    cell_used, cell_lab, n_cells = cells
     resid = y - oof
     weight_lab = float(np.sum(w_lab))
+    weight_used = float(np.sum(w_used))
     single = np.zeros(len(y), dtype=np.int64)
     ss_r_within = _centred_ss(resid, w_lab, g_lab, n_groups)
     r2_within = 1.0 - ss_r_within / _centred_ss(y, w_lab, g_lab, n_groups)
@@ -640,12 +767,17 @@ def _judge_statistics(
         r2_pooled = 1.0 - _centred_ss(resid, w_lab, single, 1) / _centred_ss(
             y, w_lab, single, 1
         )
+    t_f, tw_f = _cell_totals(f_used, w_used, g_used, n_groups, cell_used, n_cells)
+    t_r, tw_r = _cell_totals(resid, w_lab, g_lab, n_groups, cell_lab, n_cells)
     return (
         float(np.sqrt(np.sum(w_lab * resid**2) / weight_lab)),
         float(r2_pooled),
         float(r2_within),
-        _centred_ss(f_used, w_used, g_used, n_groups) / float(np.sum(w_used)),
+        _centred_ss(f_used, w_used, g_used, n_groups) / weight_used,
         ss_r_within / weight_lab,
+        float(np.sum(tw_f * t_f)) / weight_used,
+        float(np.sum(tw_r * t_r)) / weight_lab,
+        float(np.sum(tw_r * t_f)) / weight_lab,
     )
 
 
@@ -658,17 +790,21 @@ def _pair_values(
         "r2_within_diff": judge[..., col["r2_within"]]
         - reference[..., col["r2_within"]],
         "oof_rmse_diff": judge[..., col["oof_rmse"]] - reference[..., col["oof_rmse"]],
+        # With one labelled row per (policy, prompt) this is
         # (1 - R²_ref) / (1 - R²_J): both R² share the labels' within-policy SS.
         "label_multiplier": _ratio(
-            reference[..., col["var_residual"]], judge[..., col["var_residual"]]
+            reference[..., col["var_residual_clustered"]],
+            judge[..., col["var_residual_clustered"]],
         ),
     }
     if big_n is not None:
         ratio, multiplier, capped = _finite_n(
-            reference[..., col["var_f"]],
-            reference[..., col["var_residual"]],
-            judge[..., col["var_f"]],
-            judge[..., col["var_residual"]],
+            reference[..., col["var_f_clustered"]],
+            reference[..., col["var_residual_clustered"]],
+            reference[..., col["cov_f_residual_clustered"]],
+            judge[..., col["var_f_clustered"]],
+            judge[..., col["var_residual_clustered"]],
+            judge[..., col["cov_f_residual_clustered"]],
             n_bar,
             big_n,
         )
@@ -689,20 +825,33 @@ def _ratio(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
 def _finite_n(
     var_f_ref: np.ndarray,
     var_res_ref: np.ndarray,
+    cov_ref: np.ndarray,
     var_f_j: np.ndarray,
     var_res_j: np.ndarray,
+    cov_j: np.ndarray,
     n_bar: float,
     big_n: float,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Variance ratio and label multiplier at ``N`` rows with ``n`` labelled.
 
-    ``V = Var(f) / N + Var(Y - f) / n``. The reference's labels ``m`` solve
-    ``Var_ref(f) / N + Var_ref(Y - f) / m = V_J``, capped at ``m = N``.
+    The augmented estimate averages ``f`` over the ``N`` rows and the residual
+    over the ``n`` labelled rows among them, so ``V = max(Var(f) + 2 Cov(f,
+    Y - f), 0) / N + Var(Y - f) / n`` (prompt-clustered components). The
+    reference's labels ``m`` solve ``max(Var_ref(f) + 2 Cov_ref, 0) / N +
+    Var_ref(Y - f) / m = V_J``, capped at ``m = N``. With ``N = n`` every row
+    is labelled and the estimate is the label mean for any judge (as
+    ``calibrated_mean_ci`` and ``analyze_dataset`` route it), so the ratio and
+    the multiplier are 1 and nothing is capped.
     """
-    v_ref = var_f_ref / big_n + var_res_ref / n_bar
-    v_j = var_f_j / big_n + var_res_j / n_bar
-    room = v_j - var_f_ref / big_n
-    capped = room <= var_res_ref / big_n
+    shape = np.broadcast(np.asarray(var_res_ref), np.asarray(var_res_j)).shape
+    if big_n <= n_bar:
+        return np.ones(shape), np.ones(shape), np.zeros(shape, dtype=bool)
+    f_ref = np.maximum(var_f_ref + 2.0 * cov_ref, 0.0)
+    f_j = np.maximum(var_f_j + 2.0 * cov_j, 0.0)
+    v_ref = f_ref / big_n + var_res_ref / n_bar
+    v_j = f_j / big_n + var_res_j / n_bar
+    room = v_j - f_ref / big_n
+    capped = np.asarray(room <= var_res_ref / big_n)
     safe_room = np.where(capped, 1.0, room)
     multiplier = np.where(capped, big_n / n_bar, var_res_ref / safe_room / n_bar)
     return _ratio(v_ref, v_j), np.asarray(multiplier, dtype=float), capped

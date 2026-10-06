@@ -2,9 +2,10 @@
 
 Each judge gets its own cross-fitted calibrator on folds shared by every judge;
 the table reports out-of-fold quality per judge, the pairwise rows the R² and
-RMSE differences and the label multiplier (1 - R²_ref) / (1 - R²_J) against a
-reference, and every interval comes from a paired prompt-cluster bootstrap
-that refits each judge.
+RMSE differences and the label multiplier against a reference (the ratio of
+prompt-clustered residual variances; (1 - R²_ref) / (1 - R²_J) with one labelled
+row per prompt), and every interval comes from a paired prompt-cluster
+bootstrap that refits each judge.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import warnings
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, cast
 
 import numpy as np
 import pytest
@@ -95,6 +96,69 @@ def cast_float(value: Any) -> float:
     return float(value)
 
 
+def _manual_components(
+    y: np.ndarray,
+    oof: np.ndarray,
+    f: np.ndarray,
+    mask: np.ndarray,
+    policy: np.ndarray,
+    prompt: np.ndarray,
+    w: np.ndarray,
+) -> Dict[str, float]:
+    """Within-policy statistics by explicit loops over policies and prompts.
+
+    ``oof`` is on the labelled rows (mask order), ``f`` and ``w`` on every
+    row; ``w`` is constant within a prompt.
+    """
+    r = np.full(len(y), np.nan)
+    r[mask] = y[mask] - oof
+    ss_r = ss_y = ss_f = a = b = c = 0.0
+    for p in np.unique(policy):
+        rows = policy == p
+        lab = rows & mask
+        r_bar = np.average(r[lab], weights=w[lab])
+        y_bar = np.average(y[lab], weights=w[lab])
+        f_bar = np.average(f[rows], weights=w[rows])
+        ss_r += float(np.sum(w[lab] * (r[lab] - r_bar) ** 2))
+        ss_y += float(np.sum(w[lab] * (y[lab] - y_bar) ** 2))
+        ss_f += float(np.sum(w[rows] * (f[rows] - f_bar) ** 2))
+        for g in np.unique(prompt[rows]):
+            cell = rows & (prompt == g)
+            w_g = float(w[cell][0])
+            t_f = float(np.sum(f[cell] - f_bar))
+            t_r = float(np.sum(r[cell & mask] - r_bar))
+            a += w_g * t_f**2
+            b += w_g * t_r**2
+            c += w_g * t_f * t_r
+    rl, yl, wl = r[mask], y[mask], w[mask]
+    pooled = np.sum(wl * (rl - np.average(rl, weights=wl)) ** 2) / np.sum(
+        wl * (yl - np.average(yl, weights=wl)) ** 2
+    )
+    return {
+        "r2_within": 1 - ss_r / ss_y,
+        "r2_pooled": float(1 - pooled),
+        "var_f": ss_f / float(np.sum(w)),
+        "var_residual": ss_r / float(np.sum(wl)),
+        "var_f_clustered": a / float(np.sum(w)),
+        "var_residual_clustered": b / float(np.sum(wl)),
+        "cov_f_residual_clustered": c / float(np.sum(wl)),
+    }
+
+
+def _manual_finite_n(
+    ref: Dict[str, float], judge: Dict[str, float], n: float, big_n: float
+) -> Tuple[float, float]:
+    """Variance ratio and label multiplier at N, written out from the model."""
+    f_ref = max(ref["var_f_clustered"] + 2 * ref["cov_f_residual_clustered"], 0.0)
+    f_j = max(judge["var_f_clustered"] + 2 * judge["cov_f_residual_clustered"], 0.0)
+    v_ref = f_ref / big_n + ref["var_residual_clustered"] / n
+    v_j = f_j / big_n + judge["var_residual_clustered"] / n
+    room = v_j - f_ref / big_n
+    if room <= ref["var_residual_clustered"] / big_n:
+        return v_ref / v_j, big_n / n
+    return v_ref / v_j, ref["var_residual_clustered"] / room / n
+
+
 @pytest.fixture(autouse=True)
 def _quiet_logs() -> Any:
     logging.disable(logging.INFO)
@@ -152,24 +216,54 @@ def test_issue71_finite_n_matches_closed_form() -> None:
     )
     v1, v2 = cmp.row("v1"), cmp.row("v2")
     # Var(f) is over every row; Var(Y - f) is the centred OOF residual variance.
-    _, oof1, f1 = _manual_oof(s1, labels, list(pid))
-    assert v1.var_f == pytest.approx(np.var(f1), abs=1e-12)
-    assert v1.var_residual == pytest.approx(np.var(y[lab] - oof1), abs=1e-12)
+    # One row per prompt: the clustered components are the row-level ones, and
+    # the covariance term is the labelled rows' Cov(f - mean f, r - mean r).
+    covs = []
+    for name, s, row in (("v1", s1, v1), ("v2", s2, v2)):
+        _, oof, f = _manual_oof(s, labels, list(pid))
+        r = y[lab] - oof
+        assert row.var_f == pytest.approx(np.var(f), abs=1e-12)
+        assert row.var_residual == pytest.approx(np.var(r), abs=1e-12)
+        assert row.var_f_clustered == pytest.approx(row.var_f, abs=1e-12)
+        assert row.var_residual_clustered == pytest.approx(row.var_residual, abs=1e-12)
+        cov = float(np.mean((f[lab] - f.mean()) * (r - r.mean())))
+        assert row.cov_f_residual_clustered == pytest.approx(cov, abs=1e-12)
+        covs.append(cov)
     n, big_n = 800.0, 4000.0
-    v_ref = v1.var_f / big_n + v1.var_residual / n
-    v_j = v2.var_f / big_n + v2.var_residual / n
+    f_ref = v1.var_f + 2 * covs[0]
+    v_ref = f_ref / big_n + v1.var_residual / n
+    v_j = (v2.var_f + 2 * covs[1]) / big_n + v2.var_residual / n
     pair = cmp.pair("v2")
-    assert pair.variance_ratio_at_n == pytest.approx(v_ref / v_j, rel=1e-12)
+    assert pair.variance_ratio_at_n == pytest.approx(v_ref / v_j, rel=1e-10)
     # The issue's finite-N prediction at N = 4000.
     assert round(cast_float(pair.variance_ratio_at_n), 2) == 1.16
-    m_ref = v1.var_residual / (v_j - v1.var_f / big_n)
-    assert pair.label_multiplier_at_n == pytest.approx(m_ref / n, rel=1e-12)
+    m_ref = v1.var_residual / (v_j - f_ref / big_n)
+    assert pair.label_multiplier_at_n == pytest.approx(m_ref / n, rel=1e-10)
     assert pair.label_multiplier_at_n_capped is False
     assert cmp.diagnostics["planned"] == {
         "n_unlabeled": 3200,
         "labelled_rows_per_policy": 800.0,
         "rows_per_policy": 4000.0,
     }
+    assert cmp.diagnostics["max_rows_per_prompt"] == 1
+    assert cmp.diagnostics["max_labelled_rows_per_prompt"] == 1
+    assert "Prompts hold up to" not in cmp.summary()
+
+
+def test_every_row_labelled_in_the_plan_gives_ratio_one() -> None:
+    """With n_unlabeled=0 every planned row is labelled, so calibrated_mean_ci
+    and analyze_dataset return the label mean for any judge: ratio 1."""
+    sharp, noisy, labels = _small()
+    cmp = compare_judges(
+        {"noisy": noisy, "sharp": sharp}, labels, None, n_unlabeled=0, n_bootstrap=4
+    )
+    pair = cmp.pair("sharp")
+    assert pair.variance_ratio_at_n == 1.0
+    assert pair.variance_ratio_at_n_ci == (1.0, 1.0)
+    assert pair.label_multiplier_at_n == 1.0
+    assert pair.label_multiplier_at_n_ci == (1.0, 1.0)
+    assert pair.label_multiplier_at_n_capped is False
+    assert pair.label_multiplier > 1  # the plentiful-row multiplier is unchanged
 
 
 def test_cluster_ids_none_matches_calibrated_mean_ci() -> None:
@@ -227,6 +321,14 @@ def test_affine_rescaling_and_judge_scales_change_nothing() -> None:
     with pytest.raises(ValueError, match=r"'ten' has \d+ score\(s\) outside"):
         compare_judges(
             {"ten": ten}, labels, None, judge_scales={"ten": (0, 1)}, n_bootstrap=2
+        )
+    # Scores below the declared lower bound raise too.
+    n_below = int(np.sum(ten < 5))
+    with pytest.raises(
+        ValueError, match=rf"'ten' has {n_below} score\(s\) outside its declared"
+    ):
+        compare_judges(
+            {"ten": ten}, labels, None, judge_scales={"ten": (5, 10)}, n_bootstrap=2
         )
     with pytest.raises(ValueError, match="not one of the judges"):
         compare_judges(
@@ -316,21 +418,45 @@ def test_policy_without_labels_is_excluded() -> None:
 
 def test_finite_n_helper_limits_and_cap() -> None:
     a = np.asarray
+    z = a(0.0)
     # Plentiful unlabelled rows: the finite-N multiplier tends to the ratio of
     # residual variances, i.e. (1 - R²_ref) / (1 - R²_J).
-    ratio, mult, capped = _finite_n(a(0.05), a(0.20), a(0.10), a(0.10), 100.0, 1e12)
+    ratio, mult, capped = _finite_n(
+        a(0.05), a(0.20), a(0.01), a(0.10), a(0.10), a(-0.01), 100.0, 1e12
+    )
     assert float(mult) == pytest.approx(2.0, rel=1e-8)
     assert float(ratio) == pytest.approx(2.0, rel=1e-8)
     assert not bool(capped)
     # Identical components: the reference needs exactly as many labels.
-    ratio, mult, capped = _finite_n(a(0.1), a(0.2), a(0.1), a(0.2), 100.0, 400.0)
+    ratio, mult, capped = _finite_n(a(0.1), a(0.2), z, a(0.1), a(0.2), z, 100.0, 400.0)
     assert float(ratio) == 1.0
     assert float(mult) == pytest.approx(1.0, rel=1e-12)
+    # The covariance term enters as Var(f) + 2 Cov(f, Y - f), floored at 0.
+    ratio, mult, capped = _finite_n(
+        a(0.1), a(0.2), a(-0.02), a(0.1), a(0.2), z, 100.0, 400.0
+    )
+    v_ref, v_j = 0.06 / 400 + 0.2 / 100, 0.1 / 400 + 0.2 / 100
+    assert float(ratio) == pytest.approx(v_ref / v_j, rel=1e-12)
+    assert float(mult) == pytest.approx(0.2 / (v_j - 0.06 / 400) / 100, rel=1e-12)
+    ratio, _, _ = _finite_n(a(0.1), a(0.2), a(-0.2), a(0.1), a(0.2), z, 100.0, 400.0)
+    assert float(ratio) == pytest.approx((0.2 / 100) / v_j, rel=1e-12)
     # A reference whose Var(f) term alone exceeds J's variance cannot match J
     # even with every row labelled: capped at N / n.
-    ratio, mult, capped = _finite_n(a(0.9), a(0.5), a(0.01), a(0.01), 100.0, 400.0)
+    ratio, mult, capped = _finite_n(
+        a(0.9), a(0.5), z, a(0.01), a(0.01), z, 100.0, 400.0
+    )
     assert bool(capped) and float(mult) == 4.0
     assert float(ratio) > 1
+    # The cap's boundary: 0 < room <= Var_ref(Y - f) / N still needs m > N.
+    # Uncapped the formula would give 0.2 / 0.0004 / 100 = 5 > N / n.
+    ratio, mult, capped = _finite_n(a(0.1), a(0.2), z, a(0.1), a(0.04), z, 100.0, 400.0)
+    assert bool(capped) and float(mult) == 4.0
+    # N = n: every row labelled, the label mean for any judge.
+    ratio, mult, capped = _finite_n(
+        a([0.9, 0.1]), a([0.5, 0.2]), z, a(0.01), a(0.0), z, 100.0, 100.0
+    )
+    assert ratio.tolist() == [1.0, 1.0] and mult.tolist() == [1.0, 1.0]
+    assert capped.tolist() == [False, False]
 
 
 # ---------------------------------------------------------------------------
@@ -362,12 +488,19 @@ def test_bootstrap_matches_manual_paired_refit() -> None:
     boot = np.random.default_rng(SEED)
     r2s: Dict[str, list] = {"s1": [], "s2": []}
     rmses: Dict[str, list] = {"s1": [], "s2": []}
+    vres: Dict[str, list] = {"s1": [], "s2": []}
+    one_policy = np.zeros(len(y))
     for _ in range(n_boot):
         # Clusters in first-appearance order: q0, q1, ... (prompt order here).
         w = boot.exponential(size=n_prompts)[prompt]
         for name, s in (("s1", s1), ("s2", s2)):
-            _, oof, _ = _manual_oof(s, labels, ids, weights=w, mode=str(modes[name]))
+            _, oof, f = _manual_oof(s, labels, ids, weights=w, mode=str(modes[name]))
             r2s[name].append(_r2(y[mask], oof, w[mask]))
+            vres[name].append(
+                _manual_components(y, oof, f, mask, one_policy, prompt, w)[
+                    "var_residual_clustered"
+                ]
+            )
             rmses[name].append(
                 float(np.sqrt(np.average((y[mask] - oof) ** 2, weights=w[mask])))
             )
@@ -382,9 +515,115 @@ def test_bootstrap_matches_manual_paired_refit() -> None:
     np.testing.assert_allclose(
         cmp.pair("s2").r2_within_diff_ci, np.percentile(diff, [10, 90]), atol=1e-10
     )
-    mult = (1 - np.asarray(r2s["s1"])) / (1 - np.asarray(r2s["s2"]))
+    # Two labelled draws per prompt: the multiplier is the ratio of the
+    # prompt-clustered residual variances, not (1 - R²_s1) / (1 - R²_s2).
+    mult = np.asarray(vres["s1"]) / np.asarray(vres["s2"])
     np.testing.assert_allclose(
         cmp.pair("s2").label_multiplier_ci, np.percentile(mult, [10, 90]), atol=1e-10
+    )
+
+
+def test_bootstrap_matches_manual_with_policies_and_planning() -> None:
+    """Two policies on shared prompts, two draws per prompt and policy, and
+    n_unlabeled: every interval equals the percentiles of a hand recomputation
+    with the replicate weights (within-policy centring, clustered components,
+    the finite-N model)."""
+    rng = np.random.default_rng(17)
+    n_prompts, draws = 120, 2
+    policy = np.repeat(["a", "b"], n_prompts * draws)
+    prompt = np.tile(np.repeat(np.arange(n_prompts), draws), 2)
+    draw = np.tile(np.arange(draws), 2 * n_prompts)
+    q = (
+        0.5 * (policy == "b")
+        + rng.normal(size=n_prompts)[prompt]
+        + rng.normal(0, 0.5, len(prompt))
+    )
+    y = np.clip(_sigmoid(q) + rng.normal(0, 0.1, len(q)), 0, 1)
+    # s1's error is shared within a prompt; s2's is per row.
+    s1 = q + rng.normal(0, 0.6, n_prompts)[prompt] + rng.normal(0, 0.1, len(q))
+    s2 = q + rng.normal(0, 0.8, len(q))
+    # Policy a: whole prompts labelled. Policy b: one draw of twice as many
+    # prompts, so its labelled cells also hold an unlabelled row.
+    order = rng.permutation(n_prompts)
+    lab = ((policy == "a") & np.isin(prompt, order[:30])) | (
+        (policy == "b") & np.isin(prompt, order[30:90]) & (draw == 0)
+    )
+    labels = np.where(lab, y, np.nan)
+    ids = [f"q{p}" for p in prompt]
+    n_boot, u = 5, 400
+    cmp = compare_judges(
+        {"s1": s1, "s2": s2},
+        labels,
+        ids,
+        policy_ids=policy,
+        n_unlabeled=u,
+        n_bootstrap=n_boot,
+        alpha=0.2,
+    )
+    mask = ~np.isnan(labels)
+    n_bar, big_n = mask.sum() / 2, mask.sum() / 2 + u
+    assert cmp.diagnostics["labelled_rows_by_policy"] == {"a": 60, "b": 60}
+    assert cmp.diagnostics["max_rows_per_prompt"] == 2
+    assert cmp.diagnostics["max_labelled_rows_per_prompt"] == 2
+    assert cmp.diagnostics["multiplier_basis"] == "prompt_cluster_within_policy"
+    modes = {name: str(cmp.calibrators[name].selected_mode) for name in ("s1", "s2")}
+
+    # Point values: weight one.
+    ones = np.ones(len(y))
+    point = {}
+    for name, s in (("s1", s1), ("s2", s2)):
+        _, oof, f = _manual_oof(s, labels, ids)
+        point[name] = _manual_components(y, oof, f, mask, policy, prompt, ones)
+        row = cmp.row(name)
+        for field, value in point[name].items():
+            assert getattr(row, field) == pytest.approx(value, abs=1e-12), field
+    pair = cmp.pair("s2")
+    ratio, mult = _manual_finite_n(point["s1"], point["s2"], n_bar, big_n)
+    assert pair.variance_ratio_at_n == pytest.approx(ratio, rel=1e-10)
+    assert pair.label_multiplier_at_n == pytest.approx(mult, rel=1e-10)
+    assert pair.label_multiplier == pytest.approx(
+        point["s1"]["var_residual_clustered"] / point["s2"]["var_residual_clustered"],
+        rel=1e-12,
+    )
+
+    # Replicates: one Exp(1) weight per prompt, shared by both policies.
+    boot = np.random.default_rng(SEED)
+    stats: Dict[str, Dict[str, list]] = {"s1": {}, "s2": {}}
+    paired: Dict[str, list] = {"ratio": [], "mult": [], "lm": [], "diff": []}
+    for _ in range(n_boot):
+        w = boot.exponential(size=n_prompts)[prompt]
+        rep = {}
+        for name, s in (("s1", s1), ("s2", s2)):
+            _, oof, f = _manual_oof(s, labels, ids, weights=w, mode=modes[name])
+            rep[name] = _manual_components(y, oof, f, mask, policy, prompt, w)
+            for field, value in rep[name].items():
+                stats[name].setdefault(field, []).append(value)
+        ratio, mult = _manual_finite_n(rep["s1"], rep["s2"], n_bar, big_n)
+        paired["ratio"].append(ratio)
+        paired["mult"].append(mult)
+        paired["lm"].append(
+            rep["s1"]["var_residual_clustered"] / rep["s2"]["var_residual_clustered"]
+        )
+        paired["diff"].append(rep["s2"]["r2_within"] - rep["s1"]["r2_within"])
+
+    def pct(values: list) -> np.ndarray:
+        return np.asarray(np.percentile(values, [10, 90]))
+
+    for name in ("s1", "s2"):
+        row = cmp.row(name)
+        np.testing.assert_allclose(
+            row.r2_within_ci, pct(stats[name]["r2_within"]), atol=1e-10
+        )
+        np.testing.assert_allclose(
+            row.r2_pooled_ci, pct(stats[name]["r2_pooled"]), atol=1e-10
+        )
+    np.testing.assert_allclose(pair.r2_within_diff_ci, pct(paired["diff"]), atol=1e-10)
+    np.testing.assert_allclose(pair.label_multiplier_ci, pct(paired["lm"]), atol=1e-10)
+    np.testing.assert_allclose(
+        cast(Any, pair.variance_ratio_at_n_ci), pct(paired["ratio"]), atol=1e-10
+    )
+    np.testing.assert_allclose(
+        cast(Any, pair.label_multiplier_at_n_ci), pct(paired["mult"]), atol=1e-10
     )
 
 
@@ -548,6 +787,16 @@ def test_warn_below_twenty_labelled_clusters() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         compare_judges({"a": sharp, "b": noisy}, labels, None, n_bootstrap=2)
+    # The line is 20 labelled prompt clusters: 19 warns, 20 does not.
+    idx = rng.choice(len(q), 20, replace=False)
+    for k, warns in ((19, True), (20, False)):
+        labels = np.full(len(q), np.nan)
+        labels[idx[:k]] = y[idx[:k]]
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            compare_judges({"a": sharp}, labels, None, n_folds=2, n_bootstrap=2)
+        hits = [w for w in caught if "labelled prompt clusters" in str(w.message)]
+        assert len(hits) == int(warns), k
 
 
 def test_single_judge_and_reference_choice() -> None:
@@ -590,6 +839,80 @@ def test_to_dict_json_safe_and_summary_wording() -> None:
     assert {"compare_judges", "JudgeComparison", "JudgeQuality", "JudgePair"} <= set(
         cje.__all__
     )
+
+
+def test_capped_multiplier_through_compare_judges() -> None:
+    """With few planned unlabelled rows and a much better J, the reference
+    cannot match J even labelling every row: capped at N / n and flagged."""
+    sharp, noisy, labels = _small()
+    cmp = compare_judges(
+        {"noisy": noisy, "sharp": sharp}, labels, None, n_unlabeled=5, n_bootstrap=4
+    )
+    pair = cmp.pair("sharp")
+    n = int(np.sum(~np.isnan(labels)))
+    assert pair.label_multiplier_at_n_capped is True
+    assert pair.label_multiplier_at_n == (n + 5) / n
+    assert "(capped: every row labelled)" in cmp.summary()
+    plenty = compare_judges(
+        {"noisy": noisy, "sharp": sharp}, labels, None, n_unlabeled=5000, n_bootstrap=4
+    )
+    assert plenty.pair("sharp").label_multiplier_at_n_capped is False
+    assert "(capped" not in plenty.summary()
+
+
+def test_zero_residual_variance_gives_nan_multiplier() -> None:
+    """A judge that separates a binary outcome perfectly has zero out-of-fold
+    residual variance: the multiplier is NaN, shown as nan, and None in JSON."""
+    rng = np.random.default_rng(0)
+    n = 400
+    q = rng.normal(size=n)
+    y = (rng.uniform(size=n) < _sigmoid(2 * q)).astype(float)
+    perfect = y + rng.uniform(0, 0.1, n)
+    noisy = q + rng.normal(0, 1, n)
+    labels = np.where(rng.uniform(size=n) < 0.5, y, np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        cmp = compare_judges(
+            {"noisy": noisy, "perfect": perfect}, labels, None, n_bootstrap=5
+        )
+    assert cmp.row("perfect").var_residual_clustered == 0.0
+    pair = cmp.pair("perfect")
+    assert np.isnan(pair.label_multiplier)
+    assert all(np.isnan(v) for v in pair.label_multiplier_ci)
+    assert "needs nan [nan, nan] labels per label of perfect" in cmp.summary()
+    payload = json.loads(json.dumps(cmp.to_dict(), allow_nan=False))
+    assert payload["pairwise"][0]["label_multiplier"] is None
+    assert payload["pairwise"][0]["label_multiplier_ci"] == [None, None]
+
+
+def test_uneven_labels_across_policies_warn_with_n_unlabeled() -> None:
+    sharp, noisy, _ = _small(n=1200)
+    rng = np.random.default_rng(6)
+    y = np.clip(_sigmoid(1.2 * sharp) + rng.normal(0, 0.1, len(sharp)), 0, 1)
+    policy = np.repeat(["a", "b"], 600)
+    labels = np.full(len(y), np.nan)
+    idx = np.concatenate(
+        [rng.choice(600, 300, replace=False), 600 + rng.choice(600, 100, replace=False)]
+    )
+    labels[idx] = y[idx]
+    judges = {"s": sharp, "n": noisy}
+    with pytest.warns(UserWarning, match="range from 100 to 300") as rec:
+        cmp = compare_judges(
+            judges, labels, None, policy_ids=policy, n_unlabeled=500, n_bootstrap=2
+        )
+    assert sum("*_at_n fields describe" in str(w.message) for w in rec) == 1
+    assert cmp.diagnostics["labelled_rows_by_policy"] == {"a": 300, "b": 100}
+    assert cmp.diagnostics["planned"]["labelled_rows_per_policy"] == 200.0
+    # No planning, no warning; and balanced labels do not warn.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        compare_judges(judges, labels, None, policy_ids=policy, n_bootstrap=2)
+        even = np.full(len(y), np.nan)
+        keep = np.concatenate([idx[:200], 600 + rng.choice(600, 150, replace=False)])
+        even[keep] = y[keep]  # 200 and 150: within 1.5 times
+        compare_judges(
+            judges, even, None, policy_ids=policy, n_unlabeled=500, n_bootstrap=2
+        )
 
 
 def test_calibrators_usable_for_transport_audit() -> None:
@@ -670,9 +993,17 @@ def test_end_to_end_clustered_policies_with_scales() -> None:
     assert pair.r2_within_diff_ci[0] > 0
     assert pair.oof_rmse_diff_ci[1] < 0
     assert pair.label_multiplier_ci[0] > 1
+    # Three labelled draws per prompt: the multiplier uses the prompt-clustered
+    # residual variances, which differ from the row-level ratio here.
     assert pair.label_multiplier == pytest.approx(
-        (1 - likert_row.r2_within) / (1 - sharp_row.r2_within), rel=1e-12
+        likert_row.var_residual_clustered / sharp_row.var_residual_clustered,
+        rel=1e-12,
     )
+    row_level = (1 - likert_row.r2_within) / (1 - sharp_row.r2_within)
+    assert abs(pair.label_multiplier - row_level) > 0.05
+    assert cmp.diagnostics["max_rows_per_prompt"] == 3
+    assert cmp.diagnostics["max_labelled_rows_per_prompt"] == 3
+    assert "Prompts hold up to 3 rows per policy (3 labelled)" in cmp.summary()
     assert pair.label_multiplier_at_n is not None
     assert 1 < pair.label_multiplier_at_n < pair.label_multiplier
     assert pair.variance_ratio_at_n_ci is not None
