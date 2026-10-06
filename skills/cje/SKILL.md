@@ -37,7 +37,9 @@ and refuses claims the data can't support.
 - Reusing a previously fitted calibrator on new data (new month/domain/policy family) →
   check fit/version provenance, then **Transport audit**.
 - A transport audit failed and representative target labels are available → **Correction**
-  in `reference.md`. Audit-only probes do not change the estimate.
+  in `reference.md`. Audit-only probes do not change the estimate. Before relying on a
+  corrected level, read `results.metadata["correction_checks"][policy]["failed"]`: an empty
+  list means the labels passed the design check; any code means the map gates still apply.
 - Existing production judge/outcome records → **Production outcomes** in `reference.md`;
   distinguish calibration data, observed evaluation responses, and counterfactual OPE.
 - Counterfactual estimates for unobserved policy outputs (IPS/DR) → not this library; `pip install "cje-eval==0.3.*"`
@@ -146,7 +148,7 @@ probes and a predeclared practical margin. For programmatic access use `results.
 
 ```python
 status = results.diagnostics.overall_status          # GOOD | WARNING | CRITICAL
-refused = results.diagnostics.refuse_level_policies  # policies with the REFUSE-LEVEL badge
+refused = results.diagnostics.refuse_level_policies  # REFUSE-LEVEL badges, minus residual-corrected exemptions
 gates = results.metadata["reliability_gates"]        # {policy: {"flagged": bool, ...}}
 verdict = results.compare_policies(0, 1)             # difference, CI, p-value for pairwise claims
 ```
@@ -181,7 +183,8 @@ time period, domain, or policy family, audit with held-out, probability-sampled 
 Without probes, retain `NOT_CHECKED` as an unresolved assumption, not an observed failure.
 Use at least 20 effective independent clusters and size the probe
 for the desired interval width. For high-level analyses, pass the probes with the run so the
-state is preserved in results and a `FAIL` augments the gate when the estimate depends on that map:
+state is preserved in results and a `FAIL` gates the estimate when its level depends on that map
+(plug-in routes, or a correction that fails `metadata['correction_checks']`):
 
 ```python
 from cje import TransportAuditConfig
@@ -242,13 +245,17 @@ above; do not treat this starter batch as a sufficient variance-fitting pilot.
   get past the floor; run the labeling loop.
 - **REFUSE-LEVEL badge on a policy**: never state an absolute quality number for that policy.
   The scalar badge does not establish ranking validity; use the paired comparison and separate
-  residual/covariate evidence for any ranking claim.
+  residual/covariate evidence for any ranking claim. Exception: a card with
+  `applies_to_current_estimate: false` describes the calibration map, not the reported level
+  (a complete-oracle mean, or a residual correction that passed its design check).
 - **Flagged diagnostic evidence**: still surface the highest point estimate, with its limitation
   adjacent. Do not silently substitute a different policy estimand.
 - **Transport FAIL**: keep the requested point estimate visible with the failed assumption;
   do not base a decision on the unchanged calibration map. Consider representative target-label
   correction (reference §Correction). A failed level audit alone does not disprove a ranking;
-  a ranking claim needs evidence about the difference in policy mean residuals.
+  a ranking claim needs evidence about the difference in policy mean residuals. A corrected
+  policy whose design check passes is not flagged (`gate_exemption: "residual_corrected"`);
+  report the FAIL as evidence about the map, not about its corrected estimate.
 - Surface gate/diagnostic status alongside every estimate. Never bypass, suppress, or explain
   away a gate to give the user a cleaner answer.
 

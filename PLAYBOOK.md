@@ -80,7 +80,7 @@ p-values).
 
 ## 2) Run a Transport Audit (Probe Protocol)
 
-Use oracle-labeled probes that were not used to fit the calibrator. Sample them according to a documented probability design on each deployment-relevant policy/group. At least 20 effective independent clusters are required for `PASS`; a decisive interval can still grade `FAIL` below that floor; the needed sample size is otherwise determined by the desired CI width and practical margin. Pass `TransportAuditConfig` to `analyze_dataset` to store every policy's state and merge an observed `FAIL` into the result gate:
+Use oracle-labeled probes that were not used to fit the calibrator. Sample them according to a documented probability design on each deployment-relevant policy/group. At least 20 effective independent clusters are required for `PASS`; a decisive interval can still grade `FAIL` below that floor; the needed sample size is otherwise determined by the desired CI width and practical margin. Pass `TransportAuditConfig` to `analyze_dataset` to store every policy's state and merge an observed `FAIL` into the result gate when that policy's level depends on the map. A complete-oracle policy, or a residual-corrected policy whose correction design check passes (`metadata["correction_checks"]`; thresholds `CORRECTION_EXEMPT_MIN_LABELLED_PROMPTS` and `CORRECTION_DESIGN_BALANCE_T` in `cje.diagnostics.gates`), records the `FAIL` with `gate_exemption: "residual_corrected"` and a gate note instead:
 
 ```python
 import json

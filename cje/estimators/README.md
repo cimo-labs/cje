@@ -105,6 +105,7 @@ When multiple policies are evaluated on the same prompts (`paired_comparison=Tru
 
 - Cards are attached to `result.diagnostics.boundary_cards` and `result.metadata["boundary_cards"]`.
 - At ≥ 5% out-of-range mass (`OUT_OF_RANGE_REFUSE_THRESHOLD` in `cje.diagnostics.gates`), the card's status is **REFUSE-LEVEL**: the estimator warns loudly, sets that policy's status to CRITICAL, and flags it in `result.metadata["reliability_gates"]` (`flagged`, `refuse_level_claims`, `reasons`). The `cje analyze` CLI keeps the point winner visible and attaches the limitation.
+- The gate applies only when the policy's level depends on the calibrator. A `direct_oracle` route never does; an `augmented` route does not when its correction design check passes (`result.metadata["correction_checks"]`; `CORRECTION_EXEMPT_MIN_LABELLED_PROMPTS` and `CORRECTION_DESIGN_BALANCE_T` in `cje.diagnostics.gates`). Such an augmented card records `applies_to_current_estimate=False` and `gate_exemption="residual_corrected"`, logs at INFO instead of WARNING, and does not change the policy's status; its gate carries `exemption` and a note. A failed check keeps the gate exactly as before; a failure on balance, known-propensity design size, or an unlabelled row declared at propensity 1 also logs a WARNING.
 - Fix: collect oracle labels covering the missing score range.
 
 ```python

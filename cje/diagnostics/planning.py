@@ -846,6 +846,7 @@ def _measure_variance_direct(
         seed: Random seed
     """
     from ..interface.analysis import analyze_dataset
+    from .gates import _quiet_correction_caution
 
     # Separate prompts with and without oracle labels
     oracle_prompt_ids = sorted(
@@ -908,11 +909,14 @@ def _measure_variance_direct(
 
         try:
             policy_name = fresh_draws.target_policy
-            result = analyze_dataset(
-                fresh_draws_data={policy_name: subsampled_records},
-                verbose=False,
-                estimator_config=_PLANNING_MEASUREMENT_CONFIG,
-            )
+            # The replicate only measures an SE; label imbalance is reported
+            # once by _check_labeling_score_balance, not per replicate.
+            with _quiet_correction_caution():
+                result = analyze_dataset(
+                    fresh_draws_data={policy_name: subsampled_records},
+                    verbose=False,
+                    estimator_config=_PLANNING_MEASUREMENT_CONFIG,
+                )
 
             if (
                 result.standard_errors is not None
