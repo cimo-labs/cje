@@ -359,11 +359,13 @@ class TestCovariateFallbackReporting:
         """#67: a monotone refit cannot take covariates, so the bootstrap keeps
         refitting two-stage (each replicate falls back the same way)."""
         scores, labels, x = _fallback_rows(18)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
             result = calibrated_mean_ci(
                 scores, labels, covariates=x, inference="bootstrap", n_bootstrap=20
             )
+        # One warning from the full fit; the quiet replicate refits log at DEBUG.
+        assert len(_fallback_warnings(caught)) == 1
         assert result.diagnostics["calibration"]["selected_mode"] == "monotone"
         assert result.diagnostics["bootstrap"]["refit_mode"] == "two_stage"
         assert np.isfinite(result.se)
@@ -394,7 +396,6 @@ class TestCovariateFallbackReporting:
                 labelled,
                 covariates=x[:, None],
                 prompt_ids=prompt_ids,
-                quiet=True,
             )
         assert calibrator.selected_mode == "monotone"
 
@@ -421,9 +422,11 @@ class TestCovariateFallbackReporting:
         )
         estimator.add_fresh_draws("a", draws)
         estimator.fit()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
             result = estimator.estimate()
+        # The bootstrap's quiet refits must not repeat the fallback warning.
+        assert len(_fallback_warnings(caught)) == 0
 
         assert result.metadata["calibration_provenance_explicit"] is False
         assert result.metadata["inference"]["bootstrap_refit_mode"] == "two_stage"
@@ -468,7 +471,7 @@ class TestCovariateFallbackReporting:
         )
         with caplog.at_level(logging.WARNING, logger="cje"):
             with pytest.warns(UserWarning, match=FALLBACK_MESSAGE):
-                calibrator.fit_cv(s, y[labelled], labelled, 4, covariates=x, quiet=True)
+                calibrator.fit_cv(s, y[labelled], labelled, 4, covariates=x)
         assert calibrator.selected_mode == "monotone"
         constant = [
             r.getMessage()
@@ -590,3 +593,34 @@ class TestCompleteCoverageCovariates:
             warnings.simplefilter("always")
             calibrated_mean_ci(scores, outcome)
         assert not any("every row is labelled" in str(w.message) for w in caught)
+
+
+def test_bootstrap_with_fold_fallback_warns_once() -> None:
+    """#67: at 22 labels the full model uses the covariates but every fold falls
+    back; a bootstrap call warns once (from the full fit), not once per
+    replicate, even though scikit-learn resets the warnings registry."""
+    scores, labels, x = _fallback_rows(22)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("default")
+        result = calibrated_mean_ci(
+            scores, labels, covariates=x, inference="bootstrap", n_bootstrap=30
+        )
+    assert len(_fallback_warnings(caught)) == 1
+    assert result.diagnostics["calibration"]["n_folds_without_covariates"] > 0
+
+
+def test_quiet_fit_records_fallback_without_warning() -> None:
+    """#67/#68: fit_cv(quiet=True) records a dropped-covariate fallback in its
+    attributes and logs it at DEBUG instead of warning."""
+    from cje.calibration import JudgeCalibrator
+
+    scores, labels, x = _fallback_rows(18)
+    mask = ~np.isnan(labels)
+    calibrator = JudgeCalibrator(
+        calibration_mode="two_stage", covariate_names=["platform"]
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        calibrator.fit_cv(scores, labels[mask], mask, covariates=x, quiet=True)
+    assert len(_fallback_warnings(caught)) == 0
+    assert calibrator.covariates_used is False

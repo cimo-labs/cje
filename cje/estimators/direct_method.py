@@ -1746,10 +1746,9 @@ class CalibratedDirectEstimator:
                 ):
                     # Too few labelled rows made a covariate fit fall back to
                     # monotone; a monotone refit cannot take covariates, so
-                    # refit as requested and let each replicate fall back too.
-                    mode_str = getattr(
-                        self.reward_calibrator, "calibration_mode", "two_stage"
-                    )
+                    # refit as two-stage (as calibrated_mean_ci does) and let
+                    # each replicate fall back too.
+                    mode_str = "two_stage"
             if mode_str not in ("monotone", "two_stage", "auto"):
                 mode_str = "monotone"
         else:

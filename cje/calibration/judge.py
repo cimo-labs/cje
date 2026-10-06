@@ -394,8 +394,10 @@ class JudgeCalibrator:
                 them: below that the fit falls back to judge-score-only
                 monotone calibration (`selected_mode == "monotone"`), and any
                 cross-fitting fold with fewer than 20 labelled training rows
-                ignores them. Both cases emit a UserWarning and are recorded
-                in `covariates_used` and `n_folds_without_covariates`.
+                ignores them. Both cases are recorded in `covariates_used` and
+                `n_folds_without_covariates`, and emit a UserWarning unless
+                `quiet=True` (then they are logged at DEBUG, so bootstrap
+                refits do not repeat the warning once per replicate).
             quiet: Log fit progress and routine mode-selection messages at
                 DEBUG instead of INFO. Used by the per-replicate bootstrap
                 refits, which would otherwise emit thousands of identical

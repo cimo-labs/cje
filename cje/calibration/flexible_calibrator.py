@@ -105,6 +105,21 @@ def _rows_needed_hint(n_folds: int) -> str:
     )
 
 
+def _warn_or_log_fallback(log_level: int, message: str) -> None:
+    """Warn once per user-facing fit that covariates were dropped.
+
+    Quiet fits (``JudgeCalibrator.fit_cv(quiet=True)``, which every bootstrap
+    replicate and planning refit uses) log at DEBUG instead: the fallback is
+    already recorded in ``covariates_used`` and ``n_folds_without_covariates``,
+    and scikit-learn resets the warnings registry during each fit, so a warning
+    per replicate would otherwise repeat thousands of times.
+    """
+    if log_level <= logging.DEBUG:
+        logger.debug(message)
+    else:
+        warnings.warn(message, UserWarning, stacklevel=3)
+
+
 class FlexibleCalibrator:
     """Flexible calibration supporting monotone and non-monotone relationships.
 
@@ -258,7 +273,8 @@ class FlexibleCalibrator:
             self.selected_mode = "monotone"
             self.covariates_dropped = True
             self.n_folds_without_covariates = int(len(unique_folds))
-            warnings.warn(
+            _warn_or_log_fallback(
+                log_level,
                 f"Covariates were supplied but only {n_samples} labelled rows "
                 f"are available; two-stage calibration needs at least "
                 f"{TWO_STAGE_MIN_ROWS} to use them. Falling back to "
@@ -266,8 +282,6 @@ class FlexibleCalibrator:
                 "'monotone'): the covariates are ignored by the full model and "
                 f"by all {len(unique_folds)} cross-fitting folds. "
                 f"{_rows_needed_hint(len(unique_folds))}",
-                UserWarning,
-                stacklevel=2,
             )
         elif self.mode == "auto":
             # If covariates provided, force two_stage
@@ -337,7 +351,8 @@ class FlexibleCalibrator:
                 sum(self._g_models.get(k) is None for k in unique_folds)
             )
             if self.n_folds_without_covariates > 0:
-                warnings.warn(
+                _warn_or_log_fallback(
+                    log_level,
                     f"Covariates were supplied but {self.n_folds_without_covariates} "
                     f"of {len(unique_folds)} cross-fitting folds have fewer than "
                     f"{TWO_STAGE_MIN_ROWS} labelled training rows; those folds fall "
@@ -345,8 +360,6 @@ class FlexibleCalibrator:
                     "Their out-of-fold predictions feed the residual correction "
                     "and the oracle jackknife; the full calibrator still uses "
                     f"the covariates. {_rows_needed_hint(len(unique_folds))}",
-                    UserWarning,
-                    stacklevel=2,
                 )
 
         # Also fit full models for inference (no folds)

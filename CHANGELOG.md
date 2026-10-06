@@ -9,13 +9,13 @@
   silently clipping them into a constant calibrator.
 - `fit_cv(..., quiet=True)` no longer emits the auto-mode covariate messages
   at INFO/WARNING.
-- `calibrated_mean_ci` uses the same label check, so it gives the same
-  out-of-range message as `fit_cv` and also rejects non-finite labels inside
-  an explicit `oracle_mask` (#68).
+- `calibrated_mean_ci` uses the same label check as `fit_cv`, so both give
+  the same messages for out-of-range and non-finite labels (#68).
 - **Dropped covariates are reported** (#67). Two-stage calibration needs at
   least 20 labelled rows to use covariates, for the full model and for each
   cross-fitting fold's training complement. Below that, the fit already ignored
-  them while `selected_mode` said `"two_stage"`. CJE now emits a `UserWarning`,
+  them while `selected_mode` said `"two_stage"`. CJE now emits a `UserWarning`
+  (once per call: bootstrap refits and `fit_cv(quiet=True)` log it at DEBUG),
   reports `selected_mode == "monotone"` when the full model fell back, and
   records `covariates_used` and `n_folds_without_covariates` in
   `calibrated_mean_ci`'s `diagnostics["calibration"]`, in `calibrate_dataset`'s
