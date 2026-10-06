@@ -6,6 +6,8 @@ for each check is the unit call on exactly that internal normalisation, so the
 mapped results must match it exactly, leaf by leaf.
 """
 
+import copy
+import dataclasses
 import warnings
 from typing import Any, Dict, Iterator, List, Set, Tuple
 
@@ -288,7 +290,16 @@ def test_values_outside_declared_scale_raise(bad: float) -> None:
 
 @pytest.mark.parametrize(
     "declaration",
-    [(1.0, 1.0), (2.0, 1.0), (0.0, np.inf), (np.nan, 1.0), (0.0, 1.0, 2.0), "ab", 5],
+    [
+        (1.0, 1.0),
+        (2.0, 1.0),
+        (0.0, np.inf),
+        (np.nan, 1.0),
+        (-1e308, 1e308),  # finite bounds whose span overflows to inf
+        (0.0, 1.0, 2.0),
+        "ab",
+        5,
+    ],
 )
 def test_invalid_declarations(declaration: Any) -> None:
     judge, unit_labels, clusters, _ = _data()
@@ -432,6 +443,135 @@ def test_transport_audit_in_caller_units() -> None:
             assert scaled_end == pytest.approx(unit_end * SPAN, rel=1e-9, abs=1e-12)
 
 
+# Checks below do not consult the _ORACLE_SCALE_* registries: each identity
+# holds in caller units only if the diagnostics it uses were mapped correctly.
+
+
+@pytest.mark.parametrize("weight", ["one", "tuned"])
+def test_cluster_robust_identities_in_caller_units(weight: str) -> None:
+    judge, unit_labels, clusters, _ = _data()
+    scaled, unit = _pair(
+        _partial(unit_labels, clusters),
+        judge,
+        cluster_ids=clusters,
+        correction_weight=weight,
+        seed=4,
+    )
+    robust = scaled.diagnostics["cluster_robust"]
+    point = robust["point_estimator"]
+    assert point["routes"] == ["augmented"]
+    assert LO < scaled.estimate < HI
+    # A level plus a spread: plug-in mean and residual correction.
+    assert scaled.estimate == pytest.approx(
+        point["plug_in_estimates"][0] + point["residual_corrections"][0],
+        rel=1e-12,
+    )
+    # Total variance: sampling variance plus the oracle-jackknife variance.
+    assert robust["var_oracle"] > 0.0
+    assert scaled.se**2 == pytest.approx(
+        robust["se_cluster"] ** 2 + robust["var_oracle"], rel=1e-10
+    )
+    # Labelled-cluster inflation of the plain CRV1 variance (unitless factors).
+    share = robust["labelled_variance_share"]
+    inflation = robust["labelled_variance_inflation"]
+    assert 0.0 < share < 1.0 and inflation > 1.0
+    assert robust["se_cluster"] ** 2 == pytest.approx(
+        robust["se_cluster_unadjusted"] ** 2 * (1.0 + share * (inflation - 1.0)),
+        rel=1e-10,
+    )
+    # The correction weight is unitless.
+    weight_used = scaled.diagnostics["correction_weight"]["weight"]
+    assert weight_used == unit.diagnostics["correction_weight"]["weight"]
+    assert weight_used == point["correction_weights"][0]
+    if weight == "one":
+        assert weight_used == 1.0
+    else:
+        assert 0.0 < weight_used < 1.0
+
+
+@pytest.mark.parametrize("coverage", ["partial", "complete"])
+def test_oof_rmse_and_judge_range_in_caller_units(coverage: str) -> None:
+    judge, unit_labels, clusters, covariates = _data()
+    caller = SCALE.inverse_array(unit_labels)
+    if coverage == "partial":
+        caller = _partial(caller, clusters)
+    mask = np.isfinite(caller)
+    result = _call(
+        judge,
+        caller,
+        cluster_ids=clusters,
+        covariates=covariates,
+        oracle_scale=(LO, HI),
+        fit_calibrator=True,
+    )
+    calibrator = result.calibrator
+    folds = calibrator.raw_calibrator._fold_ids
+    oof = calibrator.predict_oof(judge, folds, covariates=covariates)[mask]
+    oof_rmse = float(np.sqrt(np.mean((caller[mask] - oof) ** 2)))
+    assert result.diagnostics["calibration"]["oof_rmse"] == pytest.approx(
+        oof_rmse, rel=1e-9
+    )
+    if coverage == "partial":
+        # Judge scores are never rescaled, so the support range stays in them.
+        s_range = result.diagnostics["boundary_card"]["oracle_s_range"]
+        assert tuple(s_range) == (
+            float(np.min(judge[mask])),
+            float(np.max(judge[mask])),
+        )
+
+
+def test_partial_id_width_in_caller_units() -> None:
+    judge, unit_labels, clusters, _ = _data()
+    mid = np.where((judge > 0.25) & (judge < 0.75), unit_labels, np.nan)
+    result = _call(
+        judge, SCALE.inverse_array(mid), cluster_ids=clusters, oracle_scale=(LO, HI)
+    )
+    card = result.diagnostics["boundary_card"]
+    s_low, s_high = card["oracle_s_range"]
+    below = float(np.mean(judge < s_low))
+    above = float(np.mean(judge > s_high))
+    assert below > 0.0 and above > 0.0
+    assert card["out_of_range"] == pytest.approx(below + above, rel=1e-12)
+    # Uncovered mass times the distance from the fitted reward range to the
+    # declared bounds, in caller units.
+    r_low, r_high = result.calibrator.oracle_reward_range
+    assert card["partial_id_width"] == pytest.approx(
+        below * (r_low - LO) + above * (HI - r_high), rel=1e-9
+    )
+
+
+@pytest.mark.parametrize("coverage", ["partial", "complete"])
+def test_scaled_result_deepcopy_and_asdict(coverage: str) -> None:
+    judge, unit_labels, clusters, _ = _data()
+    caller = SCALE.inverse_array(unit_labels)
+    if coverage == "partial":
+        caller = _partial(caller, clusters)
+    result = _call(
+        judge, caller, cluster_ids=clusters, oracle_scale=(LO, HI), fit_calibrator=True
+    )
+    assert isinstance(result.calibrator, ScaledCalibrator)
+    grid = np.linspace(0.0, 1.0, 11)
+    copied = copy.deepcopy(result)
+    assert isinstance(copied.calibrator, ScaledCalibrator)
+    assert copied.calibrator is not result.calibrator
+    np.testing.assert_array_equal(
+        copied.calibrator.predict(grid), result.calibrator.predict(grid)
+    )
+    assert copied.calibrator.oracle_reward_range == (
+        result.calibrator.oracle_reward_range
+    )
+    assert (copied.estimate, copied.se, copied.ci) == (
+        result.estimate,
+        result.se,
+        result.ci,
+    )
+    as_dict = dataclasses.asdict(result)
+    assert isinstance(as_dict["calibrator"], ScaledCalibrator)
+    np.testing.assert_array_equal(
+        as_dict["calibrator"].predict(grid), result.calibrator.predict(grid)
+    )
+
+
 class TestScaledCalibratorFacade:
     """`ScaledCalibrator(judge_scale=None)` and its `predict_oof`."""
 
@@ -482,3 +622,26 @@ class TestScaledCalibratorFacade:
         assert facade.get_calibration_info()["judge_input_scale"] == (
             judge_scale.to_dict()
         )
+        assert raw.oracle_s_range is not None
+        assert facade.oracle_s_range == tuple(
+            float(v) for v in judge_scale.inverse_array(np.asarray(raw.oracle_s_range))
+        )
+
+    def test_copy_reconstruction_does_not_recurse(self) -> None:
+        """Copy builds the facade before restoring its ``__dict__``."""
+        raw, judge, _ = self._fitted()
+        judge_scale = ScaleInfo(0.0, 10.0)  # the analyze_dataset facade
+        facade = ScaledCalibrator(raw, judge_scale=judge_scale, output_scale=SCALE)
+        bare = ScaledCalibrator.__new__(ScaledCalibrator)
+        assert not hasattr(bare, "__setstate__")
+        with pytest.raises(AttributeError, match="raw_calibrator"):
+            bare.raw_calibrator
+        copied = copy.deepcopy(facade)
+        assert copied.raw_calibrator is not raw
+        public = judge_scale.inverse_array(judge)
+        np.testing.assert_array_equal(copied.predict(public), facade.predict(public))
+        assert copied.oracle_s_range == facade.oracle_s_range
+        # Ordinary names still forward to the raw calibrator.
+        assert copied.n_folds == raw.n_folds
+        with pytest.raises(AttributeError):
+            facade.no_such_attribute

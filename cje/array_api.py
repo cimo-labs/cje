@@ -86,7 +86,10 @@ class CalibratedMeanResult:
             `ScaledCalibrator` that predicts in the declared oracle units.
         diagnostics: Dict with calibration quality, the coverage badge
             (`boundary_card`), and inference details. With ``oracle_scale``
-            every value is in the declared oracle units.
+            levels, spreads and variances are in the declared oracle units;
+            fractions, weights, R^2, correlations, df, counts and judge-score
+            ranges (such as ``boundary_card["oracle_s_range"]``) are
+            unchanged.
     """
 
     estimate: float

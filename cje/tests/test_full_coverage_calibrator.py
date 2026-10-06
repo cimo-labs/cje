@@ -136,6 +136,34 @@ def test_two_stage_with_covariates() -> None:
     assert result.calibrator.covariate_names == ["cov_0", "cov_1"]
 
 
+def test_fit_calibrator_reports_reduced_folds() -> None:
+    # Four labelled clusters: fit_cv reduces the requested five folds.
+    judge, labels, clusters, _ = _data(n_prompts=4, draws=10)
+    result = _call(judge, labels, cluster_ids=clusters, fit_calibrator=True)
+    assert isinstance(result.calibrator, JudgeCalibrator)
+    calibration = result.diagnostics["calibration"]
+    assert calibration["n_folds"] == result.calibrator.n_folds
+    assert calibration["n_folds"] < 5
+
+
+def test_fit_calibrator_reports_dropped_covariates() -> None:
+    # Fifteen labelled rows are too few for two-stage: monotone fallback.
+    judge, labels, clusters, covariates = _data(n_prompts=15, draws=1)
+    with pytest.warns(UserWarning, match="only 15 labelled rows"):
+        result = calibrated_mean_ci(
+            judge,
+            labels,
+            cluster_ids=clusters,
+            covariates=covariates,
+            fit_calibrator=True,
+        )
+    calibration = result.diagnostics["calibration"]
+    assert calibration["mode"] == "two_stage"
+    assert calibration["selected_mode"] == "monotone"
+    assert calibration["covariates_used"] is False
+    assert calibration["n_folds_without_covariates"] == calibration["n_folds"]
+
+
 def test_auto_mode_without_covariates() -> None:
     judge, labels, clusters, _ = _data()
     result = calibrated_mean_ci(

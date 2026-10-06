@@ -114,8 +114,9 @@ def coerce_scale(
     """Validate a public ``(minimum, maximum)`` scale declaration.
 
     ``None`` means that the caller did not declare a scale. A declared scale
-    must be finite and non-degenerate; observed-range inference remains a
-    separate compatibility behavior in the fresh-draw loader.
+    must be finite and non-degenerate, with a finite span; observed-range
+    inference remains a separate compatibility behavior in the fresh-draw
+    loader.
     """
     if value is None:
         return None
@@ -141,6 +142,10 @@ def coerce_scale(
     if scale.max_val <= scale.min_val:
         raise ValueError(
             f"{field_name} maximum must be greater than its minimum, got {value!r}"
+        )
+    if not np.isfinite(scale.span):
+        raise ValueError(
+            f"{field_name} span (maximum - minimum) must be finite, got {value!r}"
         )
     return scale
 
@@ -263,6 +268,11 @@ class ScaledCalibrator:
         return info
 
     def __getattr__(self, name: str) -> Any:
+        # Only reached for names the facade lacks. Copy and unpickle build the
+        # object before restoring ``__dict__`` and probe special methods, so
+        # forwarding ``raw_calibrator`` or a dunder here would recurse forever.
+        if name == "raw_calibrator" or (name.startswith("__") and name.endswith("__")):
+            raise AttributeError(name)
         return getattr(self.raw_calibrator, name)
 
 
