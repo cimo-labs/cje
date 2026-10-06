@@ -20,6 +20,7 @@ import warnings
 import numpy as np
 from scipy import stats
 
+from .calibration.flexible_calibrator import validate_oracle_labels
 from .calibration.judge import JudgeCalibrator
 from .diagnostics.reward_boundary import boundary_card_dict
 from .diagnostics.robust_inference import (
@@ -178,12 +179,8 @@ def _validate_inputs(
             "oracle_mask is all-False). Calibration needs a labeled slice — "
             "provide oracle labels for at least a subset of samples."
         )
-    labeled = labels[mask]
-    if np.any((labeled < 0.0) | (labeled > 1.0)):
-        raise ValueError(
-            "oracle_labels must lie in [0, 1] (calibrated rewards are clipped "
-            "to that range). Rescale your labels before calling."
-        )
+    # Same check and message as JudgeCalibrator.fit_cv.
+    validate_oracle_labels(labels[mask])
 
     cov: Optional[np.ndarray] = None
     if covariates is not None:
@@ -239,6 +236,8 @@ def _direct_oracle_mean_ci(
             "n_oracle": n,
             "oracle_coverage": 1.0,
             "calibrator_available": False,
+            "covariates_used": False,
+            "n_folds_without_covariates": 0,
         },
     }
 
@@ -396,9 +395,26 @@ def calibrated_mean_ci(
       is coupled and resolves to bootstrap; complete coverage needs no
       calibrator and uses cluster-robust inference once there are >=20 clusters.
 
+    Representative labels are assumed: the labelled rows must be an
+    equal-probability sample of the n rows, because the calibrator is fitted
+    on them and the residual correction averages over them unweighted.
+    Stratified or oversampled labels (equal quotas per bucket, rare buckets
+    oversampled) bias the estimate, and nothing here undoes that tilt; there
+    is no strata or weights argument. For a stratified design defined before
+    labelling, call this function once per stratum h on that stratum's rows
+    and combine with the population shares W_h = N_h / N: estimate
+    ``sum_h W_h * mu_h`` and standard error ``sqrt(sum_h W_h**2 * SE_h**2)``,
+    with a normal interval. Each stratum then needs its own labelled slice
+    (at least four labelled clusters). For known unequal inclusion
+    probabilities, use ``analyze_dataset(label_design="known_propensity")``.
+
     Args:
         judge_scores: (n,) raw judge scores for every evaluation sample.
         oracle_labels: (n,) oracle labels in [0, 1]; NaN for unlabeled samples.
+            Labels on another bounded scale raise ValueError: rescale with
+            ``(y - lo) / (hi - lo)`` and map results back (estimate and CI
+            with ``lo + (hi - lo) * value``, SE times ``hi - lo``), or use
+            `analyze_dataset`, which accepts declared oracle scales.
         oracle_mask: Optional (n,) boolean mask marking labeled samples.
             Default: ``~np.isnan(oracle_labels)``. When provided, labels
             outside the mask are ignored entirely.
@@ -406,6 +422,15 @@ def calibrated_mean_ci(
             dependent draws. Default: each row is its own cluster.
         covariates: Optional (n, d) covariate matrix; triggers two-stage
             calibration (passed through to the calibrator and the bootstrap).
+            Two-stage needs at least 20 labelled rows to use them. Below that
+            the calibrator falls back to judge-score-only monotone calibration
+            (``selected_mode`` "monotone"), and cross-fitting folds whose
+            training complement has fewer than 20 labelled rows ignore them
+            (about 25 labels with 5 folds avoids both). Either case warns and
+            is reported in ``diagnostics["calibration"]["covariates_used"]``
+            and ``["n_folds_without_covariates"]``. With every row labelled
+            no calibrator is fitted and the covariates are ignored, with a
+            warning.
         alpha: Significance level for the CI (default 0.05).
         n_folds: CV folds for the full-data calibrator, bootstrap refits, and
             oracle jackknife. Fold count is reduced when cluster support is
@@ -498,6 +523,14 @@ def calibrated_mean_ci(
     n_clusters = int(len(np.unique(cluster_codes)))
 
     if n_oracle == n:
+        if cov is not None:
+            warnings.warn(
+                "covariates were passed but every row is labelled, so "
+                "calibrated_mean_ci returns the direct outcome mean, fits no "
+                "calibrator and ignores the covariates.",
+                UserWarning,
+                stacklevel=2,
+            )
         full = _direct_oracle_mean_ci(
             judge,
             labels,
@@ -570,6 +603,10 @@ def calibrated_mean_ci(
             "n_oracle": n_oracle,
             "oracle_coverage": calibrator.oracle_coverage,
             "calibrator_available": True,
+            "covariates_used": bool(calibrator.covariates_used),
+            "n_folds_without_covariates": int(
+                calibrator.n_folds_without_covariates or 0
+            ),
         },
     }
     boundary = boundary_card_dict(calibrator, judge, rewards)
@@ -591,7 +628,14 @@ def calibrated_mean_ci(
 
     if resolved == "bootstrap":
         # Fix the bootstrap refit mode to the full-data selection (never "auto").
-        boot_mode = calibrator.selected_mode or "monotone"
+        # With covariates the requested fit is two-stage even when too few
+        # labelled rows made the full-data fit fall back to monotone: a
+        # monotone refit cannot accept covariates, and each replicate falls
+        # back in the same way.
+        if cov is not None:
+            boot_mode = "two_stage"
+        else:
+            boot_mode = calibrator.selected_mode or "monotone"
         if boot_mode not in ("monotone", "two_stage"):
             boot_mode = "monotone"
         factory = make_calibrator_factory(

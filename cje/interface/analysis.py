@@ -734,6 +734,20 @@ def analyze_dataset(
             # Only set oracle_coverage for fresh-draws-only calibration
             results.metadata["oracle_coverage"] = oracle_coverage
 
+    fitted_calibrator = calibration_result.calibrator if calibration_result else None
+    if fitted_calibrator is not None:
+        # What the fitted calibrator actually uses: covariates are dropped
+        # below 20 labelled rows, for the whole fit or for small folds.
+        results.metadata["calibration_info"] = {
+            "selected_mode": fitted_calibrator.selected_mode,
+            "covariates": list(fitted_calibrator.covariate_names),
+            "covariates_used": bool(fitted_calibrator.covariates_used),
+            "n_folds": int(fitted_calibrator.n_folds),
+            "n_folds_without_covariates": int(
+                fitted_calibrator.n_folds_without_covariates or 0
+            ),
+        }
+
     if estimator_config:
         # Preserve the user's request for backward-compatible provenance, and
         # record the normalized config actually forwarded to the estimator so

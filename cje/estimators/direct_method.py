@@ -2038,6 +2038,14 @@ class CalibratedDirectEstimator:
                 mode_str = getattr(
                     self.reward_calibrator, "selected_mode", None
                 ) or getattr(self.reward_calibrator, "calibration_mode", "monotone")
+                if mode_str == "monotone" and getattr(
+                    self.reward_calibrator, "covariate_names", None
+                ):
+                    # Too few labelled rows made a covariate fit fall back to
+                    # monotone; a monotone refit cannot take covariates, so
+                    # refit as two-stage (as calibrated_mean_ci does) and let
+                    # each replicate fall back too.
+                    mode_str = "two_stage"
             if mode_str not in ("monotone", "two_stage", "auto"):
                 mode_str = "monotone"
         else:

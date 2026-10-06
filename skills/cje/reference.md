@@ -121,7 +121,9 @@ fallback), never by this parameter; its only observable effect is which name lan
   `n_labelled_clusters − fitted_parameters` capped by that Welch df and by the unadjusted
   interval's Welch df, so it never narrows; cite these if asked how
   a CI was computed), `inference_unavailable_policies` / `inference_unavailable_reasons`
-  (policies without an interval: one prompt cluster, or one labeled prompt under weight one)
+  (policies without an interval: one prompt cluster, or one labeled prompt under weight one),
+  `calibration_info` when a calibrator was fitted (`selected_mode`,
+  `covariates`, `covariates_used`, `n_folds`, `n_folds_without_covariates`)
 - `.diagnostics` (DirectDiagnostics): `overall_status` (GOOD/WARNING/CRITICAL), `status_per_policy`,
   `boundary_cards`, `refuse_level_policies`, `calibration_rmse`, `n_oracle_labels`, `.summary()`
 
@@ -149,6 +151,25 @@ Complete oracle coverage uses the direct oracle mean without a calibrator, so th
 calibration floor does not apply. With one independent cluster, inference remains unavailable.
 For refit-bootstrap intervals, set `inference="bootstrap", n_bootstrap=2000` instead.
 Supplying `n_bootstrap` without an inference choice selects bootstrap with a compatibility warning.
+
+- **Labels must be finite and in [0, 1]** (here and in `JudgeCalibrator.fit_cv`); anything else
+  raises `ValueError`. Rescale a bounded scale with `(y - lo) / (hi - lo)` and map results back
+  (estimate and CI with `lo + (hi - lo) * value`, SE times `hi - lo`), or use `analyze_dataset`
+  with a declared oracle scale.
+- **Covariates need at least 20 labelled rows.** Below that the calibrator falls back to
+  judge-score-only monotone calibration (`diagnostics["calibration"]["selected_mode"] ==
+  "monotone"`); a cross-fitting fold whose training complement has fewer than 20 labelled rows
+  ignores them too (about 25 labels with 5 folds avoids both). Both emit a `UserWarning`; read
+  `diagnostics["calibration"]["covariates_used"]` and `["n_folds_without_covariates"]`. With
+  every row labelled no calibrator is fitted and covariates are ignored, with a warning.
+- **Representative labels are assumed.** The calibrator is fitted on the labelled rows and the
+  residual correction averages them unweighted, so stratified or oversampled labels (equal
+  quotas per bucket, rare buckets oversampled) bias the estimate; there is no strata or weights
+  argument. For strata defined before labelling, call `calibrated_mean_ci` once per stratum h
+  and combine with population shares `W_h = N_h / N`: estimate `sum_h W_h * mu_h`, standard
+  error `sqrt(sum_h W_h**2 * SE_h**2)`, normal interval. Each stratum then needs its own labelled
+  slice (at least four labelled clusters). For known unequal inclusion probabilities use
+  `analyze_dataset(label_design="known_propensity", label_propensities=...)`.
 
 **Transport audit:** before reusing `result.calibrator` (or `results.calibrator`) on new
 data (check it is not `None` first; complete oracle coverage fits no calibrator):
@@ -401,6 +422,8 @@ directories.
 | `reducing calibration folds from 5 to K` warning | 4–9 independent labeled clusters: valid but noisier. Recommend ≥10 independent labeled clusters to the user. |
 | `ImportError: ... pip install "cje-eval[viz]"` | Plotting needs the viz extra; estimates work without it. |
 | Scores on 0–100 / Likert | Pass as-is; auto-normalized, results returned in the original scale. |
+| `ValueError: oracle_labels must lie in [0, 1] ...` (`calibrated_mean_ci`, `JudgeCalibrator.fit_cv`) | Array-level labels are not rescaled for you (they used to be clipped silently in `fit_cv`). Rescale with `(y - lo) / (hi - lo)` and map results back, or use `analyze_dataset` with a declared scale. |
+| `UserWarning: Covariates were supplied but ...` | Fewer than 20 labelled rows for the full model or for some folds' training complements; those fits ignore the covariates. Label about 25+ rows (5 folds) or drop the covariates; see `covariates_used` / `n_folds_without_covariates`. |
 | `... outside [0, 1]` error on a calibration file | `calibration_data_path` defaults to [0, 1]. Declare `calibration_judge_scale`/`calibration_oracle_scale`, rescale the file, or pass the data via `fresh_draws_data` (auto-normalizes). |
 | `TypeError: ... 'logged_data_path'` / `calibrated-ips` errors | `analyze_dataset` has no `logged_data_path` parameter and no IPS/DR estimators. Logged judge+oracle data works via `calibration_data_path`. For IPS/DR pin `pip install "cje-eval==0.3.*"` (Python ≤3.12). |
 | `UserWarning: ... audits without delta_max are NOT_GRADED` | Declare a practical margin (`delta_max=`); no-margin audits can never PASS or FAIL. |

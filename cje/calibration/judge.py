@@ -208,6 +208,12 @@ class JudgeCalibrator:
         self.selected_mode: Optional[str] = (
             None if self.calibration_mode == "auto" else self.calibration_mode
         )
+        # Whether the fitted full model uses the covariates passed to fit_cv
+        # (False when none were passed, or when too few labelled rows forced a
+        # judge-score-only fit), and how many cross-fitting folds ignore
+        # supplied covariates. None until fit_cv runs.
+        self.covariates_used: Optional[bool] = None
+        self.n_folds_without_covariates: Optional[int] = None
         # The single cross-fitted implementation for every mode
         self._flexible_calibrator: Optional["FlexibleCalibrator"] = None
         self._fold_ids: Optional[np.ndarray] = None
@@ -269,6 +275,10 @@ class JudgeCalibrator:
         Isotonic regression on a judge that is anti-correlated with the
         oracle fits a single constant (the oracle mean): every calibrated
         reward becomes identical and all policy differences vanish silently.
+
+        A fit that dropped its covariates (too few labelled rows) already ran
+        in auto or two-stage mode, so the remedy names the label count rather
+        than ``calibration_mode='auto'``.
         """
         if self._flexible_calibrator is None:
             return
@@ -276,14 +286,42 @@ class JudgeCalibrator:
             self._flexible_calibrator.predict(np.asarray(oracle_scores), folds=None)
         )
         if len(np.unique(fitted)) == 1 and len(np.unique(np.asarray(oracle_y))) > 1:
+            if getattr(self._flexible_calibrator, "covariates_dropped", False):
+                from .flexible_calibrator import TWO_STAGE_MIN_ROWS
+
+                remedy = (
+                    f"The covariates were dropped because fewer than "
+                    f"{TWO_STAGE_MIN_ROWS} labelled rows are available, so "
+                    "this is a judge-score-only fit. Check the judge score "
+                    "orientation (the judge scale may be inverted, i.e. "
+                    "anti-correlated with the oracle), or collect at least "
+                    f"{TWO_STAGE_MIN_ROWS} labelled rows so the two-stage fit "
+                    "can use the covariates."
+                )
+            else:
+                remedy = (
+                    "The judge scale may be inverted (anti-correlated with "
+                    "the oracle) — check the judge score orientation or use "
+                    "calibration_mode='auto'."
+                )
             logger.warning(
                 f"Monotone calibration collapsed to a constant "
                 f"({fitted[0]:.3f}, the oracle mean) even though oracle labels "
                 f"vary. All calibrated rewards will be identical, erasing "
-                f"policy differences. The judge scale may be inverted "
-                f"(anti-correlated with the oracle) — check the judge score "
-                f"orientation or use calibration_mode='auto'."
+                f"policy differences. {remedy}"
             )
+
+    def _monotone_without_covariates(self) -> bool:
+        """True when the fitted monotone model must refuse covariates.
+
+        A calibrator that was given covariates but had too few labelled rows
+        to use them falls back to a monotone fit; it accepts and ignores the
+        covariates at prediction, as the fit did, so callers that always pass
+        the fitted covariates keep working.
+        """
+        if (self.selected_mode or self.calibration_mode) != "monotone":
+            return False
+        return not getattr(self._flexible_calibrator, "covariates_dropped", False)
 
     def predict(
         self, judge_scores: np.ndarray, covariates: Optional[np.ndarray] = None
@@ -300,10 +338,7 @@ class JudgeCalibrator:
         if self._flexible_calibrator is None:
             raise RuntimeError("Calibrator must be fitted before prediction")
 
-        if (
-            covariates is not None
-            and (self.selected_mode or self.calibration_mode) == "monotone"
-        ):
+        if covariates is not None and self._monotone_without_covariates():
             raise ValueError(
                 "Covariates provided but calibrator was fitted in monotone mode without covariate support"
             )
@@ -345,17 +380,29 @@ class JudgeCalibrator:
 
         Args:
             judge_scores: Raw judge scores for all data
-            oracle_labels: True labels for oracle subset
+            oracle_labels: True labels for oracle subset, finite and in
+                [0, 1]. Rescale bounded labels with (y - lo) / (hi - lo)
+                first; anything else raises ValueError.
             oracle_mask: Boolean mask indicating which samples have oracle labels
             n_folds: Number of CV folds (auto-reduced when labels are scarce;
                 see `resolve_n_folds`)
             prompt_ids: Optional prompt IDs defining the fold clusters. When
                 None, stable row-index ids are synthesized so every caller
                 shares the same cluster-fold path.
-            covariates: Optional covariate matrix (n_samples, n_covariates)
-            quiet: Log fit progress at DEBUG instead of INFO. Used by the
-                per-replicate bootstrap refits, which would otherwise emit
-                thousands of identical "CV Calibration complete" lines.
+            covariates: Optional covariate matrix (n_samples, n_covariates).
+                Two-stage calibration needs at least 20 labelled rows to use
+                them: below that the fit falls back to judge-score-only
+                monotone calibration (`selected_mode == "monotone"`), and any
+                cross-fitting fold with fewer than 20 labelled training rows
+                ignores them. Both cases are recorded in `covariates_used` and
+                `n_folds_without_covariates`, and emit a UserWarning unless
+                `quiet=True` (then they are logged at DEBUG, so bootstrap
+                refits do not repeat the warning once per replicate).
+            quiet: Log fit progress and routine mode-selection messages at
+                DEBUG instead of INFO. Used by the per-replicate bootstrap
+                refits, which would otherwise emit thousands of identical
+                "CV Calibration complete" lines. Warnings about genuine
+                problems are still emitted.
             sample_weight: Optional positive per-label fit weights. Length
                 must match either judge_scores (aligned with all rows) or
                 oracle_labels (compact, in the caller's label order — kept
@@ -364,6 +411,10 @@ class JudgeCalibrator:
 
         Returns:
             CalibrationResult with both global and CV calibration
+
+        Raises:
+            ValueError: If any labelled oracle value is non-finite or outside
+                [0, 1], among other input-contract violations.
         """
         fit_log_level = logging.DEBUG if quiet else logging.INFO
         judge_scores = np.asarray(judge_scores)
@@ -556,6 +607,10 @@ class JudgeCalibrator:
             log_level=fit_log_level,
         )
         self.selected_mode = self._flexible_calibrator.selected_mode
+        self.covariates_used = self._flexible_calibrator.covariates_used
+        self.n_folds_without_covariates = (
+            self._flexible_calibrator.n_folds_without_covariates
+        )
 
         # Log selected mode if auto was used
         if self.calibration_mode == "auto":
@@ -567,7 +622,7 @@ class JudgeCalibrator:
                     fit_log_level,
                     "  → Non-monotone relationship detected, using flexible calibration",
                 )
-            else:
+            elif covariates is None:
                 logger.log(
                     fit_log_level,
                     "  → Monotone relationship confirmed, using standard calibration",
@@ -715,10 +770,7 @@ class JudgeCalibrator:
         if self._flexible_calibrator is None:
             raise RuntimeError("Must call fit_cv before predict_oof")
 
-        if (
-            covariates is not None
-            and (self.selected_mode or self.calibration_mode) == "monotone"
-        ):
+        if covariates is not None and self._monotone_without_covariates():
             raise ValueError(
                 "Covariates provided but calibrator was fitted in monotone mode without covariate support"
             )

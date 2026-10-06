@@ -11,8 +11,14 @@ from sklearn.preprocessing import SplineTransformer
 from sklearn.linear_model import RidgeCV
 from sklearn.pipeline import Pipeline, make_pipeline
 import logging
+import warnings
 
 logger = logging.getLogger(__name__)
+
+# Fewest labelled rows a two-stage fit (the full model, or one fold's training
+# complement) needs to fit the spline index g(S, X). Below it the fit falls
+# back to a judge-score-only monotone map that ignores any covariates.
+TWO_STAGE_MIN_ROWS = 20
 
 
 def validate_oracle_labels(labels: np.ndarray) -> None:
@@ -89,6 +95,31 @@ def _fit_ecdf(
     return F
 
 
+def _rows_needed_hint(n_folds: int) -> str:
+    """How many labelled rows let every fold use the covariates."""
+    needed = -(-TWO_STAGE_MIN_ROWS * n_folds // max(n_folds - 1, 1))
+    return (
+        f"Every fold uses the covariates once each fold's training complement "
+        f"has {TWO_STAGE_MIN_ROWS} labelled rows (about {needed} labelled rows "
+        f"with {n_folds} evenly sized folds)."
+    )
+
+
+def _warn_or_log_fallback(log_level: int, message: str) -> None:
+    """Warn once per user-facing fit that covariates were dropped.
+
+    Quiet fits (``JudgeCalibrator.fit_cv(quiet=True)``, which every bootstrap
+    replicate and planning refit uses) log at DEBUG instead: the fallback is
+    already recorded in ``covariates_used`` and ``n_folds_without_covariates``,
+    and scikit-learn resets the warnings registry during each fit, so a warning
+    per replicate would otherwise repeat thousands of times.
+    """
+    if log_level <= logging.DEBUG:
+        logger.debug(message)
+    else:
+        warnings.warn(message, UserWarning, stacklevel=3)
+
+
 class FlexibleCalibrator:
     """Flexible calibration supporting monotone and non-monotone relationships.
 
@@ -123,6 +154,14 @@ class FlexibleCalibrator:
         self.selected_mode: Optional[Literal["monotone", "two_stage"]] = (
             None  # For auto mode
         )
+        # Set by fit(). covariates_used: the full model uses the supplied
+        # covariates. covariates_dropped: covariates were supplied but the
+        # full model had too few labelled rows to use them, so the fit is
+        # judge-score-only monotone. n_folds_without_covariates: folds whose
+        # model ignores supplied covariates (0 when none were supplied).
+        self.covariates_used: Optional[bool] = None
+        self.covariates_dropped: bool = False
+        self.n_folds_without_covariates: Optional[int] = None
 
         # Validate: covariates only work with two_stage
         if self.covariate_names and mode == "monotone":
@@ -159,11 +198,15 @@ class FlexibleCalibrator:
 
         Args:
             S: Judge scores (n_samples,)
-            Y: Oracle labels (n_samples,)
+            Y: Oracle labels (n_samples,), finite and in [0, 1]
             folds: Fold assignments for cross-fitting (n_samples,)
             covariates: Optional covariate matrix (n_samples, n_covariates)
                 Only used in two_stage mode. Each column corresponds to a covariate
-                specified in covariate_names.
+                specified in covariate_names. With fewer than
+                TWO_STAGE_MIN_ROWS labelled rows the fit falls back to
+                judge-score-only monotone calibration (selected_mode
+                "monotone"), and folds whose training complement is that
+                small ignore the covariates; both emit a UserWarning.
             sample_weight: Optional positive per-sample fit weights.
             log_level: Level for routine progress messages (mode forcing and
                 mode selection). ``JudgeCalibrator.fit_cv(quiet=True)`` passes
@@ -171,6 +214,9 @@ class FlexibleCalibrator:
 
         Returns:
             Self for chaining
+
+        Raises:
+            ValueError: If any label is non-finite or outside [0, 1].
         """
         validate_oracle_labels(Y)
         self._log_level = log_level
@@ -211,7 +257,33 @@ class FlexibleCalibrator:
             f"mode={self.mode}, covariates={covariates.shape if covariates is not None else None}"
         )
 
-        if self.mode == "auto":
+        self.covariates_used = False
+        self.covariates_dropped = False
+        self.n_folds_without_covariates = 0
+        if (
+            covariates is not None
+            and self.mode in ("auto", "two_stage")
+            and n_samples < TWO_STAGE_MIN_ROWS
+        ):
+            # Too few rows for the spline index: the full model and every
+            # fold (each training complement is smaller still) fall back to
+            # judge-score-only isotonic fits, exactly as before. The fit is
+            # unchanged; it is now reported as monotone, not two_stage.
+            self._fit_two_stage(S, Y, folds, None, weights)
+            self.selected_mode = "monotone"
+            self.covariates_dropped = True
+            self.n_folds_without_covariates = int(len(unique_folds))
+            _warn_or_log_fallback(
+                log_level,
+                f"Covariates were supplied but only {n_samples} labelled rows "
+                f"are available; two-stage calibration needs at least "
+                f"{TWO_STAGE_MIN_ROWS} to use them. Falling back to "
+                "judge-score-only monotone calibration (selected_mode "
+                "'monotone'): the covariates are ignored by the full model and "
+                f"by all {len(unique_folds)} cross-fitting folds. "
+                f"{_rows_needed_hint(len(unique_folds))}",
+            )
+        elif self.mode == "auto":
             # If covariates provided, force two_stage
             if covariates is not None:
                 logger.log(
@@ -268,6 +340,27 @@ class FlexibleCalibrator:
             self.selected_mode = "two_stage"
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
+
+        if covariates is not None and self.selected_mode == "two_stage":
+            # The full model has enough rows to use the covariates, but a fold
+            # whose training complement is too small fell back to a
+            # judge-score-only fit. Those fold models produce the out-of-fold
+            # predictions behind the residual correction and the jackknife.
+            self.covariates_used = True
+            self.n_folds_without_covariates = int(
+                sum(self._g_models.get(k) is None for k in unique_folds)
+            )
+            if self.n_folds_without_covariates > 0:
+                _warn_or_log_fallback(
+                    log_level,
+                    f"Covariates were supplied but {self.n_folds_without_covariates} "
+                    f"of {len(unique_folds)} cross-fitting folds have fewer than "
+                    f"{TWO_STAGE_MIN_ROWS} labelled training rows; those folds fall "
+                    "back to a judge-score-only fit that ignores the covariates. "
+                    "Their out-of-fold predictions feed the residual correction "
+                    "and the oracle jackknife; the full calibrator still uses "
+                    f"the covariates. {_rows_needed_hint(len(unique_folds))}",
+                )
 
         # Also fit full models for inference (no folds)
         logger.debug("Fitting full models for inference")
@@ -333,7 +426,7 @@ class FlexibleCalibrator:
             )
 
             # Skip if too few training samples
-            if len(S_train) < 20:
+            if len(S_train) < TWO_STAGE_MIN_ROWS:
                 # Fallback to monotone for small folds
                 iso = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
                 iso.fit(S_train, Y_train, sample_weight=weight_train)
@@ -428,7 +521,7 @@ class FlexibleCalibrator:
             or self.mode == "auto"
         ):
             # Fit full two-stage model
-            if len(S) >= 20:
+            if len(S) >= TWO_STAGE_MIN_ROWS:
                 # Build feature matrix: [S, covariates]
                 if covariates is not None:
                     X_full = np.column_stack([S, covariates])
@@ -485,6 +578,11 @@ class FlexibleCalibrator:
         mode = self.selected_mode or self.mode
 
         if mode == "monotone":
+            if getattr(self, "covariates_dropped", False):
+                # Covariates were supplied with too few labelled rows to use
+                # them: the models are the judge-score-only two-stage
+                # fallbacks. Accept and ignore the covariates, as the fit did.
+                return self._predict_two_stage(S, folds, None)
             if covariates is not None:
                 raise ValueError("Covariates not supported in monotone mode")
             return self._predict_monotone(S, folds)
@@ -760,6 +858,8 @@ class FlexibleCalibrator:
         Returns:
             Dict of fold_id -> fitted isotonic model (may be empty pre-fit).
         """
-        if (self.selected_mode or self.mode) == "two_stage":
+        if (self.selected_mode or self.mode) == "two_stage" or getattr(
+            self, "covariates_dropped", False
+        ):
             return dict(self._iso_models)
         return dict(self._monotone_models)

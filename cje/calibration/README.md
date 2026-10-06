@@ -134,6 +134,14 @@ which takes full-length labels with NaN for unlabeled rows. Covariates must be n
 encode categorical metadata such as domains into explicit indicator columns before fitting,
 and retain the same encoding for evaluation and probes.
 
+Oracle labels must be finite and in [0, 1]: `fit_cv` raises `ValueError` otherwise (labels in
+original units were once clipped silently into a near-constant calibrator). Rescale a bounded
+scale with `(y - lo) / (hi - lo)` first. Two-stage calibration uses covariates only with at
+least 20 labelled rows: below that the fit falls back to judge-score-only monotone calibration
+(`selected_mode == "monotone"`), and folds whose training complement is smaller ignore them.
+Both warn, and `calibrator.covariates_used` / `calibrator.n_folds_without_covariates` record it.
+`quiet=True` moves routine progress and mode-selection messages to DEBUG.
+
 (For a one-call version of this — calibrated mean with a CI from plain arrays — use `cje.calibrated_mean_ci`.)
 
 ## Key Design Decisions
