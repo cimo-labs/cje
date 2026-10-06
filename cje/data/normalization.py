@@ -114,8 +114,9 @@ def coerce_scale(
     """Validate a public ``(minimum, maximum)`` scale declaration.
 
     ``None`` means that the caller did not declare a scale. A declared scale
-    must be finite and non-degenerate; observed-range inference remains a
-    separate compatibility behavior in the fresh-draw loader.
+    must be finite and non-degenerate, with a finite span; observed-range
+    inference remains a separate compatibility behavior in the fresh-draw
+    loader.
     """
     if value is None:
         return None
@@ -141,6 +142,10 @@ def coerce_scale(
     if scale.max_val <= scale.min_val:
         raise ValueError(
             f"{field_name} maximum must be greater than its minimum, got {value!r}"
+        )
+    if not np.isfinite(scale.span):
+        raise ValueError(
+            f"{field_name} span (maximum - minimum) must be finite, got {value!r}"
         )
     return scale
 
@@ -178,27 +183,51 @@ class ScaledCalibrator:
     Estimation continues to use the raw calibrator on ``[0, 1]``. Results
     expose this facade so documented reuse and transport checks accept the
     same judge units as evaluation input and return the result's oracle units.
+    ``judge_scale=None`` means judge scores were never rescaled: they pass to
+    the raw calibrator unchanged and unvalidated (``calibrated_mean_ci`` with
+    ``oracle_scale``).
     """
 
     def __init__(
         self,
         calibrator: Any,
         *,
-        judge_scale: ScaleInfo,
+        judge_scale: Optional[ScaleInfo],
         output_scale: ScaleInfo,
     ) -> None:
         self.raw_calibrator = calibrator
         self.judge_scale = judge_scale
         self.output_scale = output_scale
 
+    def _internal_scores(self, judge_scores: Any) -> np.ndarray:
+        scores = np.asarray(judge_scores, dtype=float)
+        if self.judge_scale is None:
+            return scores
+        validate_values_on_scale(scores, self.judge_scale, field_name="judge_scores")
+        return self.judge_scale.normalize_array(scores)
+
     def predict(
         self, judge_scores: Any, covariates: Optional[Any] = None
     ) -> np.ndarray:
-        scores = np.asarray(judge_scores, dtype=float)
-        validate_values_on_scale(scores, self.judge_scale, field_name="judge_scores")
-        internal_scores = self.judge_scale.normalize_array(scores)
+        internal_scores = self._internal_scores(judge_scores)
         predictions = np.asarray(
             self.raw_calibrator.predict(internal_scores, covariates=covariates),
+            dtype=float,
+        )
+        return self.output_scale.inverse_array(predictions)
+
+    def predict_oof(
+        self,
+        judge_scores: Any,
+        fold_ids: Any,
+        covariates: Optional[Any] = None,
+    ) -> np.ndarray:
+        """Cross-fitted predictions in the result's oracle units."""
+        internal_scores = self._internal_scores(judge_scores)
+        predictions = np.asarray(
+            self.raw_calibrator.predict_oof(
+                internal_scores, fold_ids, covariates=covariates
+            ),
             dtype=float,
         )
         return self.output_scale.inverse_array(predictions)
@@ -208,7 +237,9 @@ class ScaledCalibrator:
         internal = getattr(self.raw_calibrator, "oracle_s_range", None)
         if internal is None:
             return None
-        converted = self.judge_scale.inverse_array(np.asarray(internal, dtype=float))
+        converted = np.asarray(internal, dtype=float)
+        if self.judge_scale is not None:
+            converted = self.judge_scale.inverse_array(converted)
         return (float(converted[0]), float(converted[1]))
 
     @property
@@ -230,11 +261,18 @@ class ScaledCalibrator:
             if value is not None:
                 info[key] = float(value) * self.output_scale.span
         info["coverage_tolerance"] = 0.1 * self.output_scale.span
-        info["judge_input_scale"] = self.judge_scale.to_dict()
+        info["judge_input_scale"] = (
+            None if self.judge_scale is None else self.judge_scale.to_dict()
+        )
         info["oracle_output_scale"] = self.output_scale.to_dict()
         return info
 
     def __getattr__(self, name: str) -> Any:
+        # Only reached for names the facade lacks. Copy and unpickle build the
+        # object before restoring ``__dict__`` and probe special methods, so
+        # forwarding ``raw_calibrator`` or a dunder here would recurse forever.
+        if name == "raw_calibrator" or (name.startswith("__") and name.endswith("__")):
+            raise AttributeError(name)
         return getattr(self.raw_calibrator, name)
 
 

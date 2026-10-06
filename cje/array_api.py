@@ -14,14 +14,20 @@ or `CalibratedDirectEstimator` directly.
 import logging
 from dataclasses import dataclass
 from numbers import Integral
-from typing import Any, Dict, List, Literal, Optional, Tuple, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 import warnings
 
 import numpy as np
 from scipy import stats
 
 from .calibration.flexible_calibrator import validate_oracle_labels
-from .calibration.judge import JudgeCalibrator
+from .calibration.judge import CalibrationResult, JudgeCalibrator
+from .data.normalization import (
+    ScaledCalibrator,
+    ScaleInfo,
+    coerce_scale,
+    validate_values_on_scale,
+)
 from .diagnostics.reward_boundary import boundary_card_dict
 from .diagnostics.robust_inference import (
     DirectEvalTable,
@@ -74,10 +80,16 @@ class CalibratedMeanResult:
         method: Inference method actually used ("bootstrap" or "cluster_robust").
         calibrator: The fitted `JudgeCalibrator` (reusable, e.g. for
             `transport_audit` on a new sample). This is explicitly None when
-            complete oracle coverage makes calibration unnecessary; check it
-            before requesting calibrator-dependent capabilities.
+            complete oracle coverage makes calibration unnecessary and
+            ``fit_calibrator`` was not requested; check it before requesting
+            calibrator-dependent capabilities. With ``oracle_scale`` it is a
+            `ScaledCalibrator` that predicts in the declared oracle units.
         diagnostics: Dict with calibration quality, the coverage badge
-            (`boundary_card`), and inference details.
+            (`boundary_card`), and inference details. With ``oracle_scale``
+            levels, spreads and variances are in the declared oracle units;
+            fractions, weights, R^2, correlations, df, counts and judge-score
+            ranges (such as ``boundary_card["oracle_s_range"]``) are
+            unchanged.
     """
 
     estimate: float
@@ -130,8 +142,15 @@ def _validate_inputs(
     oracle_labels: Any,
     oracle_mask: Optional[Any],
     covariates: Optional[Any],
+    scale: Optional[ScaleInfo] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray]]:
-    """Validate and canonicalize arrays. Fails loudly; never fabricates data."""
+    """Validate and canonicalize arrays. Fails loudly; never fabricates data.
+
+    With a declared ``scale`` the labelled values must lie in it exactly; they
+    are mapped to [0, 1] with ``scale.normalize_array`` (unlabelled entries are
+    left untouched) and then pass the same unit-interval check, which also
+    rejects infinite labels. Nothing is clipped.
+    """
     judge = np.asarray(judge_scores, dtype=float)
     if judge.ndim != 1 or len(judge) == 0:
         raise ValueError("judge_scores must be a non-empty 1-D array.")
@@ -179,6 +198,15 @@ def _validate_inputs(
             "oracle_mask is all-False). Calibration needs a labeled slice — "
             "provide oracle labels for at least a subset of samples."
         )
+    if scale is not None:
+        # Exact bounds (no tolerance), so every in-scale label maps into
+        # [0, 1] without clipping; infinite labels pass this finite-only check
+        # unchanged and are rejected below.
+        validate_values_on_scale(
+            labels[mask], scale, field_name="oracle_labels", tolerance=0.0
+        )
+        labels = labels.copy()
+        labels[mask] = scale.normalize_array(labels[mask])
     # Same check and message as JudgeCalibrator.fit_cv.
     validate_oracle_labels(labels[mask])
 
@@ -351,6 +379,215 @@ def _correction_weight_summary(
     }
 
 
+def _fit_judge_calibrator(
+    judge: np.ndarray,
+    labels: np.ndarray,
+    mask: np.ndarray,
+    cov: Optional[np.ndarray],
+    cluster_strings: List[str],
+    *,
+    n_folds: int,
+    seed: int,
+) -> Tuple[JudgeCalibrator, CalibrationResult, str, Optional[List[str]]]:
+    """Fit the cross-fitted judge calibrator on unit-scale labels.
+
+    Two-stage when covariates are given, otherwise auto-selected. Shared by the
+    partial-coverage estimate and the descriptive complete-coverage fit, so
+    both fit the same model on the same folds.
+    """
+    cov_names = [f"cov_{j}" for j in range(cov.shape[1])] if cov is not None else None
+    mode: str = "two_stage" if cov is not None else "auto"
+    calibrator = JudgeCalibrator(
+        random_seed=seed,
+        calibration_mode=cast(Literal["monotone", "two_stage", "auto"], mode),
+        covariate_names=cov_names,
+    )
+    # Mask semantics: full-length scores/mask, compact labels (fit_cv's
+    # boolean-mask contract).
+    cal_result = calibrator.fit_cv(
+        judge_scores=judge,
+        oracle_labels=labels[mask],
+        oracle_mask=mask,
+        n_folds=n_folds,
+        prompt_ids=cluster_strings,
+        covariates=cov,
+    )
+    return calibrator, cal_result, mode, cov_names
+
+
+def _oof_fit_statistics(
+    calibrator: JudgeCalibrator,
+    cal_result: CalibrationResult,
+    judge: np.ndarray,
+    labels: np.ndarray,
+    mask: np.ndarray,
+    cov: Optional[np.ndarray],
+) -> Dict[str, Optional[float]]:
+    """Out-of-fold R^2 and correlation of the calibrator on the labelled rows.
+
+    ``oof_r2 = 1 - sum((Y - f_oof)^2) / sum((Y - mean(Y))^2)`` (may be
+    negative; None when the labels are constant) and ``oof_correlation`` is
+    the Pearson correlation of ``f_oof`` and ``Y`` (None when either side is
+    constant). ``f_oof`` is each row's prediction from the fold model that did
+    not see its cluster. Both are invariant to an affine rescaling of the
+    labels.
+    """
+    oof = get_oof_predictions(
+        calibrator,
+        judge,
+        mask,
+        covariates=cov,
+        oracle_fold_ids=cal_result.fold_ids,
+    )[mask]
+    y = labels[mask]
+    oof_r2: Optional[float] = None
+    oof_correlation: Optional[float] = None
+    # Exact-constant checks: the mean of identical floats need not equal them,
+    # so a sum of squares cannot detect constant labels.
+    if np.ptp(y) > 0.0:
+        total = float(np.sum((y - np.mean(y)) ** 2))
+        oof_r2 = 1.0 - float(np.sum((y - oof) ** 2)) / total
+        if np.ptp(oof) > 0.0:
+            oof_correlation = float(np.corrcoef(oof, y)[0, 1])
+    return {"oof_r2": oof_r2, "oof_correlation": oof_correlation}
+
+
+# Units of every numeric leaf of `CalibratedMeanResult.diagnostics` under
+# `oracle_scale=(lo, hi)`. Paths are key tuples below `diagnostics`; "*" is any
+# list position. Levels map to lo + span * x, spreads to span * x and
+# variances to span**2 * x. Unchanged leaves are unitless (fractions, weights,
+# R^2, correlations, df), counts, seeds, judge-score units (judge scores are
+# never rescaled) or the scale declaration itself. A numeric leaf that is not
+# listed raises instead of being reported on the wrong scale; the tests walk
+# every path to keep this list complete.
+_ORACLE_SCALE_LEVEL_PATHS = frozenset(
+    {
+        ("cluster_robust", "point_estimator", "plug_in_estimates", "*"),
+    }
+)
+_ORACLE_SCALE_SPREAD_PATHS = frozenset(
+    {
+        ("calibration", "rmse"),
+        ("calibration", "oof_rmse"),
+        ("calibration", "coverage_tolerance"),
+        ("boundary_card", "partial_id_width"),
+        ("cluster_robust", "se_cluster"),
+        ("cluster_robust", "se_cluster_unadjusted"),
+        ("cluster_robust", "point_estimator", "residual_corrections", "*"),
+    }
+)
+_ORACLE_SCALE_VARIANCE_PATHS = frozenset(
+    {
+        ("cluster_robust", "var_oracle"),
+    }
+)
+_ORACLE_SCALE_UNCHANGED_PATHS = frozenset(
+    {
+        ("alpha",),
+        ("n_clusters",),
+        ("oracle_scale", "min"),
+        ("oracle_scale", "max"),
+        ("calibration", "coverage_at_01"),
+        ("calibration", "oof_coverage_at_01"),
+        ("calibration", "oof_r2"),
+        ("calibration", "oof_correlation"),
+        ("calibration", "n_oracle"),
+        ("calibration", "oracle_coverage"),
+        ("calibration", "n_folds"),
+        ("calibration", "n_folds_without_covariates"),
+        ("boundary_card", "out_of_range"),
+        ("boundary_card", "saturation"),
+        ("boundary_card", "oracle_s_range", "*"),
+        ("correction_weight", "weight"),
+        ("bootstrap", "n_bootstrap_requested"),
+        ("bootstrap", "n_valid_replicates"),
+        ("bootstrap", "n_attempts"),
+        ("bootstrap", "skip_rate"),
+        ("bootstrap", "seed"),
+        ("bootstrap", "oracle_count_summary", "min"),
+        ("bootstrap", "oracle_count_summary", "p10"),
+        ("bootstrap", "oracle_count_summary", "median"),
+        ("cluster_robust", "df"),
+        ("cluster_robust", "oracle_jackknife_folds"),
+        ("cluster_robust", "n_labelled_clusters"),
+        ("cluster_robust", "fitted_parameters"),
+        ("cluster_robust", "labelled_variance_inflation"),
+        ("cluster_robust", "labelled_variance_share"),
+        ("cluster_robust", "labels_coupled_fraction"),
+        ("cluster_robust", "point_estimator", "oracle_fractions", "*"),
+        ("cluster_robust", "point_estimator", "correction_weight_min_labels"),
+        ("cluster_robust", "point_estimator", "correction_weight_min_minority"),
+        ("cluster_robust", "point_estimator", "correction_weights", "*"),
+        ("cluster_robust", "point_estimator", "labelled_rows", "*"),
+        ("cluster_robust", "point_estimator", "labelled_clusters", "*"),
+    }
+)
+
+
+def _is_numeric_leaf(value: Any) -> bool:
+    return isinstance(value, (Integral, float, np.floating)) and not isinstance(
+        value, (bool, np.bool_)
+    )
+
+
+def _diagnostics_to_oracle_units(
+    node: Any, scale: ScaleInfo, path: Tuple[str, ...] = ()
+) -> Any:
+    """Copy of a diagnostics tree with each numeric leaf in oracle units."""
+    if isinstance(node, dict):
+        return {
+            key: _diagnostics_to_oracle_units(value, scale, path + (str(key),))
+            for key, value in node.items()
+        }
+    if isinstance(node, (list, tuple)):
+        mapped = [_diagnostics_to_oracle_units(v, scale, path + ("*",)) for v in node]
+        return tuple(mapped) if isinstance(node, tuple) else mapped
+    if not _is_numeric_leaf(node):
+        return node
+    if path in _ORACLE_SCALE_LEVEL_PATHS:
+        return float(scale.inverse(float(node)))
+    if path in _ORACLE_SCALE_SPREAD_PATHS:
+        return float(node) * scale.span
+    if path in _ORACLE_SCALE_VARIANCE_PATHS:
+        return float(node) * scale.span**2
+    if path in _ORACLE_SCALE_UNCHANGED_PATHS:
+        return node
+    raise RuntimeError(
+        f"calibrated_mean_ci has no oracle_scale unit for diagnostics path "
+        f"{'/'.join(path)!r}; refusing to report it on the wrong scale. "
+        "Please report this as a CJE bug."
+    )
+
+
+def _result_to_oracle_units(
+    result: CalibratedMeanResult, scale: ScaleInfo
+) -> CalibratedMeanResult:
+    """Map a unit-scale result, its diagnostics and calibrator to oracle units."""
+    diagnostics = dict(result.diagnostics)
+    calibration = diagnostics.get("calibration")
+    if isinstance(calibration, dict) and "coverage_at_01" in calibration:
+        # coverage_at_01 counts |prediction - label| <= 0.1 on the unit scale.
+        diagnostics["calibration"] = {**calibration, "coverage_tolerance": 0.1}
+    diagnostics = _diagnostics_to_oracle_units(diagnostics, scale)
+    diagnostics["oracle_scale"] = scale.to_dict()
+    calibrator = result.calibrator
+    if calibrator is not None:
+        calibrator = ScaledCalibrator(calibrator, judge_scale=None, output_scale=scale)
+    return CalibratedMeanResult(
+        estimate=float(scale.inverse(result.estimate)),
+        se=float(result.se) * scale.span,
+        ci=(
+            float(scale.inverse(result.ci[0])),
+            float(scale.inverse(result.ci[1])),
+        ),
+        n=result.n,
+        n_oracle=result.n_oracle,
+        method=result.method,
+        calibrator=calibrator,
+        diagnostics=diagnostics,
+    )
+
+
 def calibrated_mean_ci(
     judge_scores: Any,
     oracle_labels: Any,
@@ -364,12 +601,15 @@ def calibrated_mean_ci(
     n_bootstrap: int = _DEFAULT_N_BOOTSTRAP,
     seed: int = 42,
     correction_weight: str = "one",
+    oracle_scale: Optional[Tuple[float, float]] = None,
+    fit_calibrator: Union[bool, np.bool_] = False,
 ) -> CalibratedMeanResult:
     """Calibrated mean of judge scores against a partial oracle slice, with CI.
 
     With complete oracle coverage, estimates the oracle mean directly without
-    fitting a calibrator. Otherwise fits a judge→oracle calibrator on the
-    labeled subset (cross-fitted `JudgeCalibrator.fit_cv`; two-stage when
+    fitting a calibrator (``fit_calibrator=True`` also fits a descriptive one
+    that never enters the estimate). Otherwise fits a judge→oracle calibrator
+    on the labeled subset (cross-fitted `JudgeCalibrator.fit_cv`; two-stage when
     covariates are given, otherwise auto-selected between monotone and
     two-stage) and estimates the mean calibrated reward over ALL samples.
     Inference matches
@@ -410,11 +650,9 @@ def calibrated_mean_ci(
 
     Args:
         judge_scores: (n,) raw judge scores for every evaluation sample.
-        oracle_labels: (n,) oracle labels in [0, 1]; NaN for unlabeled samples.
-            Labels on another bounded scale raise ValueError: rescale with
-            ``(y - lo) / (hi - lo)`` and map results back (estimate and CI
-            with ``lo + (hi - lo) * value``, SE times ``hi - lo``), or use
-            `analyze_dataset`, which accepts declared oracle scales.
+        oracle_labels: (n,) oracle labels in [0, 1], or in ``oracle_scale``
+            when one is declared; NaN for unlabeled samples. Labels outside
+            that range, or infinite, raise ValueError.
         oracle_mask: Optional (n,) boolean mask marking labeled samples.
             Default: ``~np.isnan(oracle_labels)``. When provided, labels
             outside the mask are ignored entirely.
@@ -430,7 +668,7 @@ def calibrated_mean_ci(
             is reported in ``diagnostics["calibration"]["covariates_used"]``
             and ``["n_folds_without_covariates"]``. With every row labelled
             no calibrator is fitted and the covariates are ignored, with a
-            warning.
+            warning, unless ``fit_calibrator=True``.
         alpha: Significance level for the CI (default 0.05).
         n_folds: CV folds for the full-data calibrator, bootstrap refits, and
             oracle jackknife. Fold count is reduced when cluster support is
@@ -449,12 +687,46 @@ def calibrated_mean_ci(
             or when the predictions are constant). Reported under
             ``diagnostics["correction_weight"]`` on every inference path
             (weight NaN and reason None when every row is labelled).
+        oracle_scale: Optional ``(lo, hi)`` declaring the bounded scale of
+            ``oracle_labels`` (default None: labels must be in [0, 1]).
+            Labelled values must lie in ``[lo, hi]``; they are mapped to
+            ``(y - lo) / (hi - lo)`` internally and nothing is clipped.
+            ``estimate`` and ``ci`` come back as ``lo + (hi - lo) * value``
+            and ``se`` times ``hi - lo``; every diagnostic is mapped by its
+            units (levels like the estimate, spreads such as RMSE and SEs
+            times ``hi - lo``, ``var_oracle`` times ``(hi - lo) ** 2``;
+            fractions, weights, R^2, correlations, df, counts and judge-score
+            ranges unchanged), and ``diagnostics["oracle_scale"]`` records the
+            declaration. ``coverage_at_01`` then counts predictions within
+            ``diagnostics["calibration"]["coverage_tolerance"]`` (``0.1 * (hi
+            - lo)``). Any returned calibrator is a `ScaledCalibrator` whose
+            ``predict``/``predict_oof`` return these units, so a
+            `transport_audit` with it takes probe labels and ``delta_max`` in
+            them too. Judge scores are never rescaled.
+        fit_calibrator: With every row labelled, also fit the cross-fitted
+            calibrator (two-stage when covariates are given, otherwise
+            auto-selected, as at partial coverage) and return it in
+            ``result.calibrator`` for reuse, e.g. in `transport_audit`. It is
+            descriptive only: ``estimate``, ``se``, ``ci``, ``method`` and
+            ``diagnostics["estimator_route"] == "direct_oracle"`` are those of
+            the default call, no boundary card is attached, and the
+            ignored-covariates warning is not issued.
+            ``diagnostics["calibration"]`` reports ``rmse``, ``oof_rmse``,
+            ``coverage_at_01``, ``oof_coverage_at_01``, ``oof_r2`` (``1 -
+            SSE/SST`` of the out-of-fold predictions, may be negative) and
+            ``oof_correlation``, with ``used_for_estimate`` False. They
+            describe how well judge (plus covariates) predict the label on
+            this sample; they are not a label-savings estimate for another
+            sample or policy. Needs at least four independent clusters
+            (ValueError naming ``fit_calibrator`` otherwise). No effect at
+            partial coverage, where the calibrator is always fitted.
 
     Returns:
         CalibratedMeanResult with estimate, se, ci, and diagnostics. Partial
         coverage also includes a reusable calibrator and its score-support
         badge; complete coverage returns ``calibrator=None`` because the
-        direct oracle mean does not require a calibration model.
+        direct oracle mean does not require a calibration model, unless
+        ``fit_calibrator=True``.
 
     Example (matches the README's array-API section):
         >>> import numpy as np
@@ -513,9 +785,15 @@ def calibrated_mean_ci(
             raise ValueError("n_bootstrap must be at least 2")
     if not 0.0 < alpha < 1.0:
         raise ValueError(f"alpha must be in (0, 1), got {alpha}.")
+    if not isinstance(fit_calibrator, (bool, np.bool_)):
+        raise TypeError(
+            f"fit_calibrator must be True or False, got {fit_calibrator!r}."
+        )
+    fit_calibrator = bool(fit_calibrator)
+    scale = coerce_scale(oracle_scale, field_name="oracle_scale")
 
     judge, labels, mask, cov = _validate_inputs(
-        judge_scores, oracle_labels, oracle_mask, covariates
+        judge_scores, oracle_labels, oracle_mask, covariates, scale=scale
     )
     n = len(judge)
     n_oracle = int(np.sum(mask))
@@ -523,7 +801,7 @@ def calibrated_mean_ci(
     n_clusters = int(len(np.unique(cluster_codes)))
 
     if n_oracle == n:
-        if cov is not None:
+        if cov is not None and not fit_calibrator:
             warnings.warn(
                 "covariates were passed but every row is labelled, so "
                 "calibrated_mean_ci returns the direct outcome mean, fits no "
@@ -550,24 +828,51 @@ def calibrated_mean_ci(
                 "correction_weight_reasons": [None],
             },
         )
+        if fit_calibrator:
+            # Descriptive only, fitted after the direct estimate is final: it
+            # never enters estimate, se, ci or route, and no boundary card is
+            # attached because nothing here depends on calibrated rewards.
+            try:
+                full_calibrator, full_fit, full_mode, _ = _fit_judge_calibrator(
+                    judge,
+                    labels,
+                    mask,
+                    cov,
+                    cluster_strings,
+                    n_folds=n_folds,
+                    seed=seed,
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"fit_calibrator=True could not fit a calibrator: {exc}"
+                ) from exc
+            full.calibrator = full_calibrator
+            full.diagnostics["calibration"] = {
+                "mode": full_mode,
+                "selected_mode": full_calibrator.selected_mode,
+                "rmse": float(full_fit.calibration_rmse),
+                "oof_rmse": full_fit.oof_rmse,
+                "coverage_at_01": float(full_fit.coverage_at_01),
+                "oof_coverage_at_01": full_fit.oof_coverage_at_01,
+                **_oof_fit_statistics(
+                    full_calibrator, full_fit, judge, labels, mask, cov
+                ),
+                "n_oracle": n,
+                "oracle_coverage": 1.0,
+                "n_folds": int(full_calibrator.n_folds),
+                "calibrator_available": True,
+                "used_for_estimate": False,
+                "covariates_used": bool(full_calibrator.covariates_used),
+                "n_folds_without_covariates": int(
+                    full_calibrator.n_folds_without_covariates or 0
+                ),
+            }
+        if scale is not None:
+            full = _result_to_oracle_units(full, scale)
         return full
 
-    # Fit the full-data calibrator (mask semantics: full-length scores/mask,
-    # compact labels — fit_cv's boolean-mask contract).
-    cov_names = [f"cov_{j}" for j in range(cov.shape[1])] if cov is not None else None
-    mode: str = "two_stage" if cov is not None else "auto"
-    calibrator = JudgeCalibrator(
-        random_seed=seed,
-        calibration_mode=cast(Literal["monotone", "two_stage", "auto"], mode),
-        covariate_names=cov_names,
-    )
-    cal_result = calibrator.fit_cv(
-        judge_scores=judge,
-        oracle_labels=labels[mask],
-        oracle_mask=mask,
-        n_folds=n_folds,
-        prompt_ids=cluster_strings,
-        covariates=cov,
+    calibrator, cal_result, mode, cov_names = _fit_judge_calibrator(
+        judge, labels, mask, cov, cluster_strings, n_folds=n_folds, seed=seed
     )
     rewards = np.clip(calibrator.predict(judge, covariates=cov), 0.0, 1.0)
 
@@ -809,11 +1114,7 @@ def calibrated_mean_ci(
                 )
         method = "cluster_robust"
 
-    logger.info(
-        f"calibrated_mean_ci [{method}]: {estimate:.4f} ± {se:.4f} "
-        f"(CI [{ci[0]:.4f}, {ci[1]:.4f}], n={n}, n_oracle={n_oracle})"
-    )
-    return CalibratedMeanResult(
+    result = CalibratedMeanResult(
         estimate=estimate,
         se=se,
         ci=ci,
@@ -823,6 +1124,13 @@ def calibrated_mean_ci(
         calibrator=calibrator,
         diagnostics=diagnostics,
     )
+    if scale is not None:
+        result = _result_to_oracle_units(result, scale)
+    logger.info(
+        f"calibrated_mean_ci [{method}]: {result.estimate:.4f} ± {result.se:.4f} "
+        f"(CI [{result.ci[0]:.4f}, {result.ci[1]:.4f}], n={n}, n_oracle={n_oracle})"
+    )
+    return result
 
 
 def transport_audit(
