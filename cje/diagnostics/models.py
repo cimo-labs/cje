@@ -44,6 +44,10 @@ class DirectDiagnostics:
 
     # ========== Estimation Results (always present) ==========
     estimates: Dict[str, float]
+    # Analytic path: sampling SEs before the oracle-jackknife term (bootstrap
+    # path: the bootstrap SDs). For augmented policies under representative
+    # labels the labelled clusters' CRV1 part is scaled by n_L / (n_L - q)
+    # (issue #60), so these are not the CRV1 SEs of the influence functions.
     standard_errors: Dict[str, float]
     n_samples_used: Dict[str, int]
 

@@ -30,15 +30,22 @@ Two layers:
 
 - SLOW (@pytest.mark.slow, excluded from CI): R=300 replicates; asserts 95%
   CI coverage in [88%, 99%] for the direct estimator at 25% oracle coverage.
+  Plus the small-label regression for issue #60: with external calibration
+  and 10 representative labels per policy, R=600 fixed-seed replicates of the
+  augmented interval (one policy, and a shared-label pair) must cover in
+  [92.5%, 97.5%]; on the same seeds the interval that counted all evaluation
+  clusters covered 89.5% and 91.3%.
 """
 
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pytest
+from scipy import integrate, stats
 
 from cje.array_api import calibrated_mean_ci
 from cje.calibration import calibrate_dataset
+from cje.calibration.judge import JudgeCalibrator
 from cje.data.fresh_draws import FreshDrawDataset, FreshDrawSample
 from cje.data.models import Dataset, Sample
 from cje.diagnostics.robust_inference import CalibrationProvenance
@@ -489,4 +496,146 @@ def test_slow_array_api_same_row_ci_coverage(
     assert 0.88 <= covered <= 0.99, (
         f"array API: 95% CI coverage {covered:.1%} over {len(lo)} replicates "
         "outside [88%, 99%]"
+    )
+
+
+# ---------------------------------------------------------------------------
+# SLOW layer: small-label coverage of the augmented interval (issue #60)
+# ---------------------------------------------------------------------------
+#
+# Design A of the issue-#60 simulation (E1): 1,500 prompts with truth
+# t ~ U(.15, .85), outcome Y = clip(t + N(0, .15), 0, 1), a binary judge
+# 1[t + N(0, .25) > .5], a separately sampled calibration set of 300 rows
+# (monotone calibration here, for speed) and 10 representative labels on the
+# evaluation rows. E[Y] = 0.5 exactly by symmetry. The pair uses 600 shared
+# prompts, two policies shifted by +/-0.06 around the prompt effect, and the
+# same 10 labelled prompts for both. On these seeds the interval that took its
+# df from all evaluation clusters covered 0.895 (policy) and 0.913 (pair); the
+# labelled-cluster interval covers 0.945 and 0.958. A coupled design would not
+# catch the regression: there the old interval already covered 0.92-0.95.
+
+SMALL_LABEL_N_L = 10
+SMALL_LABEL_REPLICATES = 600
+PAIR_SHIFT = 0.06
+
+
+def _binary_judge(rng: np.random.Generator, latent: np.ndarray) -> np.ndarray:
+    judged = latent + rng.normal(0, 0.25, size=latent.shape) > 0.5
+    return np.asarray(judged, dtype=float)
+
+
+def _external_binary_calibrator(rng: np.random.Generator) -> JudgeCalibrator:
+    truth = rng.uniform(0.15, 0.85, size=300)
+    outcome = np.clip(truth + rng.normal(0, 0.15, size=300), 0, 1)
+    calibrator = JudgeCalibrator(random_seed=42, calibration_mode="monotone")
+    calibrator.fit_cv(
+        _binary_judge(rng, truth),
+        outcome,
+        n_folds=5,
+        prompt_ids=[f"c{i}" for i in range(300)],
+        quiet=True,
+    )
+    return calibrator
+
+
+def _augmented_result(
+    calibrator: JudgeCalibrator,
+    draws: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    labelled: np.ndarray,
+) -> Any:
+    """Weight-one augmented estimate with the calibration frame external."""
+    estimator = CalibratedDirectEstimator(
+        target_policies=list(draws),
+        reward_calibrator=calibrator,
+        calibration_provenance=CalibrationProvenance.from_fitted_calibrator(calibrator),
+    )
+    for policy, (scores, outcomes) in draws.items():
+        estimator.add_fresh_draws(
+            policy,
+            FreshDrawDataset(
+                target_policy=policy,
+                samples=[
+                    FreshDrawSample(
+                        prompt_id=f"q{i}",
+                        target_policy=policy,
+                        judge_score=float(scores[i]),
+                        oracle_label=float(outcomes[i]) if labelled[i] else None,
+                        response=None,
+                        draw_idx=0,
+                    )
+                    for i in range(len(scores))
+                ],
+            ),
+        )
+    result = estimator.fit_and_estimate()
+    assert result.metadata["point_estimator"]["routes"] == ["augmented"] * len(draws)
+    assert result.metadata["inference"]["coupled"] is False
+    return result
+
+
+def _clipped_mean(shift: float) -> float:
+    """E[clip(t + shift + e, 0, 1)], t ~ U(.15, .85), e ~ N(0, .1^2 + .15^2)."""
+    sd = float(np.sqrt(0.1**2 + 0.15**2))
+
+    def antiderivative(x: float) -> float:
+        return float(x * stats.norm.cdf(x) + stats.norm.pdf(x))
+
+    def inner(t: float) -> float:
+        mean = t + shift
+        return sd * (antiderivative(mean / sd) - antiderivative((mean - 1) / sd))
+
+    value, _ = integrate.quad(inner, 0.15, 0.85, epsabs=1e-12, epsrel=1e-12)
+    return float(value / 0.7)
+
+
+@pytest.mark.slow
+def test_slow_small_label_augmented_interval_coverage() -> None:
+    n = 1500
+    covered = []
+    for replicate in range(SMALL_LABEL_REPLICATES):
+        rng = np.random.default_rng([60, replicate])
+        calibrator = _external_binary_calibrator(rng)
+        truth = rng.uniform(0.15, 0.85, size=n)
+        outcomes = np.clip(truth + rng.normal(0, 0.15, size=n), 0, 1)
+        scores = _binary_judge(rng, truth)
+        labelled = np.zeros(n, dtype=bool)
+        labelled[rng.choice(n, size=SMALL_LABEL_N_L, replace=False)] = True
+        result = _augmented_result(calibrator, {"policy": (scores, outcomes)}, labelled)
+        assert result.metadata["degrees_of_freedom"]["policy"]["df"] <= 9.0
+        lower, upper = result.confidence_interval()
+        covered.append(lower[0] <= 0.5 <= upper[0])
+    coverage = float(np.mean(covered))
+    assert 0.925 <= coverage <= 0.975, (
+        f"augmented interval at {SMALL_LABEL_N_L} labels covered {coverage:.1%} "
+        f"over {SMALL_LABEL_REPLICATES} replicates, outside [92.5%, 97.5%]"
+    )
+
+
+@pytest.mark.slow
+def test_slow_small_label_shared_pair_coverage() -> None:
+    n = 600
+    true_difference = _clipped_mean(PAIR_SHIFT) - _clipped_mean(-PAIR_SHIFT)
+    covered = []
+    for replicate in range(SMALL_LABEL_REPLICATES):
+        rng = np.random.default_rng([61, replicate])
+        calibrator = _external_binary_calibrator(rng)
+        prompt_effect = rng.uniform(0.15, 0.85, size=n)
+        labelled = np.zeros(n, dtype=bool)
+        labelled[rng.choice(n, size=SMALL_LABEL_N_L, replace=False)] = True
+        draws = {}
+        for policy, shift in (("a", PAIR_SHIFT), ("b", -PAIR_SHIFT)):
+            latent = prompt_effect + shift + rng.normal(0, 0.10, size=n)
+            outcomes = np.clip(latent + rng.normal(0, 0.15, size=n), 0, 1)
+            draws[policy] = (_binary_judge(rng, latent), outcomes)
+        result = _augmented_result(calibrator, draws, labelled)
+        comparison = result.compare_policies(0, 1)
+        assert comparison["method"] == "paired_if_oua"
+        assert comparison["df"] <= 9.0
+        covered.append(
+            comparison["ci_lower"] <= true_difference <= comparison["ci_upper"]
+        )
+    coverage = float(np.mean(covered))
+    assert 0.925 <= coverage <= 0.975, (
+        f"shared-label pair at {SMALL_LABEL_N_L} labels covered {coverage:.1%} "
+        f"over {SMALL_LABEL_REPLICATES} replicates, outside [92.5%, 97.5%]"
     )
