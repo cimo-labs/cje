@@ -91,6 +91,11 @@
   follow the higher SE and leave no margin for the t quantile; only the
   planner's independent-policies assumption offsets this, for paired designs
   with positive covariance.
+- `JudgeCalibrator.fit_cv` and `FlexibleCalibrator.fit` now raise a clear
+  `ValueError` when oracle labels are non-finite or outside [0, 1], instead of
+  silently clipping them into a constant calibrator.
+- `fit_cv(..., quiet=True)` no longer emits the auto-mode covariate messages
+  at INFO/WARNING.
 
 ## [0.9.0] - 2026-10-04
 
