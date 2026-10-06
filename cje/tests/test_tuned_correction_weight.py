@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 import pytest
@@ -640,7 +640,7 @@ def test_fully_labelled_array_api_reports_no_weight() -> None:
     scores = rng.uniform(size=60)
     labels = rng.uniform(size=60)
     for inference in ("cluster_robust", "bootstrap"):
-        extra = {"n_bootstrap": 30} if inference == "bootstrap" else {}
+        extra: Dict[str, Any] = {"n_bootstrap": 30} if inference == "bootstrap" else {}
         result = calibrated_mean_ci(
             scores, labels, correction_weight="tuned", inference=inference, **extra
         )

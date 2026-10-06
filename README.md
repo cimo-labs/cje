@@ -189,7 +189,9 @@ print(result.summary())
 Calibrated mean: 0.5316 (SE 0.0174, CI [0.4970, 0.5663], n=400, n_oracle=100, cluster_robust)
 ```
 
-When partial oracle coverage requires calibration, `result.calibrator` predicts in the same public judge and oracle units supplied by the caller; complete oracle coverage returns the direct oracle mean with `result.calibrator is None`. Grade any fitted calibrator's reuse on an independent probe with `transport_audit(..., delta_max=<practical margin>)`; `result.diagnostics["boundary_card"]` carries the separate scalar score-support badge when calibration is fitted.
+Labels must lie in [0, 1] unless you declare their scale: with `oracle_scale=(0, 25)`, labels in [0, 25] are mapped to the unit interval internally (nothing is clipped; judge scores are never rescaled) and the estimate, SE, CI, every diagnostic and any returned calibrator come back in 0–25 units.
+
+When partial oracle coverage requires calibration, `result.calibrator` predicts in the same public judge and oracle units supplied by the caller; complete oracle coverage returns the direct oracle mean with `result.calibrator is None`. On a fully labelled sample, `fit_calibrator=True` also fits the cross-fitted calibrator (two-stage when covariates are given) for reuse and reports its out-of-fold fit in `result.diagnostics["calibration"]` (`oof_rmse`, `oof_r2`, `oof_correlation`). That calibrator is descriptive: the estimate, interval and `estimator_route` stay the direct mean's, and its out-of-fold fit describes this sample, not the labels a future run would save. Grade any fitted calibrator's reuse on an independent probe with `transport_audit(..., delta_max=<practical margin>)`; `result.diagnostics["boundary_card"]` carries the separate scalar score-support badge when the estimate uses calibration.
 
 ## Documentation
 

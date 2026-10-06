@@ -141,6 +141,8 @@ result = calibrated_mean_ci(
     n_folds=5,             # calibration needs >=4 independent labeled clusters; folds auto-reduce
     inference="cluster_robust",  # default jackknife path | "bootstrap" | "auto"
     seed=42,
+    oracle_scale=None,     # (lo, hi) when labels are on another bounded scale
+    fit_calibrator=False,  # every row labelled: also fit a descriptive calibrator
 )
 # result: estimate, se, ci, n, n_oracle, method, calibrator, diagnostics, .summary()
 ```
@@ -148,20 +150,60 @@ result = calibrated_mean_ci(
 This is the ppi-style bottom layer for ONE sample of judge scores. Multi-policy comparisons
 belong in `analyze_dataset` (paired, gate-aware).
 Complete oracle coverage uses the direct oracle mean without a calibrator, so the four-cluster
-calibration floor does not apply. With one independent cluster, inference remains unavailable.
+calibration floor does not apply (unless `fit_calibrator=True`). With one independent cluster,
+inference remains unavailable.
 For refit-bootstrap intervals, set `inference="bootstrap", n_bootstrap=2000` instead.
 Supplying `n_bootstrap` without an inference choice selects bootstrap with a compatibility warning.
 
-- **Labels must be finite and in [0, 1]** (here and in `JudgeCalibrator.fit_cv`); anything else
-  raises `ValueError`. Rescale a bounded scale with `(y - lo) / (hi - lo)` and map results back
-  (estimate and CI with `lo + (hi - lo) * value`, SE times `hi - lo`), or use `analyze_dataset`
-  with a declared oracle scale.
+- **Labels must be finite and in [0, 1]** (here and in `JudgeCalibrator.fit_cv`), or in a
+  declared `oracle_scale=(lo, hi)` here; anything else raises `ValueError`. Nothing is clipped.
+  With a scale, labels are mapped to `(y - lo) / (hi - lo)` internally and everything comes back
+  in `[lo, hi]` units: estimate and CI (`lo + (hi - lo) * value`), SE, RMSEs and other spreads
+  (times `hi - lo`), `var_oracle` (times `(hi - lo) ** 2`), with fractions, weights, R²,
+  correlations, df, counts and judge-score ranges unchanged; `diagnostics["oracle_scale"]`
+  records it. The calibrator is then a `ScaledCalibrator` whose `predict`/`predict_oof` return
+  those units, so `transport_audit` with it takes probe labels and `delta_max` in them too. Judge
+  scores are never rescaled.
 - **Covariates need at least 20 labelled rows.** Below that the calibrator falls back to
   judge-score-only monotone calibration (`diagnostics["calibration"]["selected_mode"] ==
   "monotone"`); a cross-fitting fold whose training complement has fewer than 20 labelled rows
   ignores them too (about 25 labels with 5 folds avoids both). Both emit a `UserWarning`; read
   `diagnostics["calibration"]["covariates_used"]` and `["n_folds_without_covariates"]`. With
-  every row labelled no calibrator is fitted and covariates are ignored, with a warning.
+  every row labelled no calibrator is fitted and covariates are ignored, with a warning, unless
+  `fit_calibrator=True`.
+- **Fully labelled pilot: `fit_calibrator=True`.** The estimate, SE, CI, `method` and
+  `estimator_route == "direct_oracle"` are exactly the default call's; the calibrator (two-stage
+  with covariates, otherwise auto) is fitted afterwards on the same clusters, folds and seed as a
+  partial-coverage fit, returned in `result.calibrator`, never gates or changes the estimate,
+  and gets no boundary card. `diagnostics["calibration"]` adds `rmse`, `oof_rmse`,
+  `coverage_at_01`, `oof_coverage_at_01`, `oof_r2` (`1 - SSE/SST` of the out-of-fold
+  predictions; can be negative), `oof_correlation`, `n_folds` and `used_for_estimate: False`;
+  `oof_r2`/`oof_correlation` are `None` for constant labels or predictions. They describe how
+  well judge (plus covariates) predicts the label on this sample; do not quote them as label
+  savings for another policy or sample. Needs at least four independent clusters (`ValueError`
+  naming `fit_calibrator`). No effect at partial coverage.
+
+```python
+import numpy as np
+from cje import calibrated_mean_ci
+
+rng = np.random.default_rng(0)
+prompt = np.repeat(np.arange(300), 2)  # two draws per prompt
+score = rng.uniform(size=600)
+log_turns = np.log1p(rng.poisson(6, size=300))[prompt]
+outcome = np.clip(25 * (0.1 + 0.6 * score) + rng.normal(0, 3, 600), 0, 25)  # all labelled
+
+pilot = calibrated_mean_ci(
+    score,
+    outcome,
+    cluster_ids=prompt,
+    covariates=log_turns[:, None],
+    oracle_scale=(0, 25),
+    fit_calibrator=True,
+)
+print(pilot.summary())  # the direct outcome mean, in 0-25 units
+print(pilot.diagnostics["calibration"]["oof_r2"])  # descriptive out-of-fold fit
+```
 - **Representative labels are assumed.** The calibrator is fitted on the labelled rows and the
   residual correction averages them unweighted, so stratified or oversampled labels (equal
   quotas per bucket, rare buckets oversampled) bias the estimate; there is no strata or weights
@@ -172,7 +214,8 @@ Supplying `n_bootstrap` without an inference choice selects bootstrap with a com
   `analyze_dataset(label_design="known_propensity", label_propensities=...)`.
 
 **Transport audit:** before reusing `result.calibrator` (or `results.calibrator`) on new
-data (check it is not `None` first; complete oracle coverage fits no calibrator):
+data (check it is not `None` first; complete oracle coverage fits no calibrator unless
+`fit_calibrator=True`):
 
 ```python
 diag = transport_audit(
@@ -422,11 +465,12 @@ directories.
 | `reducing calibration folds from 5 to K` warning | 4–9 independent labeled clusters: valid but noisier. Recommend ≥10 independent labeled clusters to the user. |
 | `ImportError: ... pip install "cje-eval[viz]"` | Plotting needs the viz extra; estimates work without it. |
 | Scores on 0–100 / Likert | Pass as-is; auto-normalized, results returned in the original scale. |
-| `ValueError: oracle_labels must lie in [0, 1] ...` (`calibrated_mean_ci`, `JudgeCalibrator.fit_cv`) | Array-level labels are not rescaled for you (they used to be clipped silently in `fit_cv`). Rescale with `(y - lo) / (hi - lo)` and map results back, or use `analyze_dataset` with a declared scale. |
+| `ValueError: oracle_labels must lie in [0, 1] ...` (`calibrated_mean_ci`, `JudgeCalibrator.fit_cv`) | Array-level labels are not rescaled for you (they used to be clipped silently in `fit_cv`). Pass `calibrated_mean_ci(..., oracle_scale=(lo, hi))`, rescale with `(y - lo) / (hi - lo)` and map results back, or use `analyze_dataset` with a declared scale. |
+| `ValueError: oracle_labels values fall outside declared scale ...` (`calibrated_mean_ci` with `oracle_scale`) | A labelled value lies outside `[lo, hi]`, even by float noise; nothing is clipped. Fix the labels or the declared bounds. |
 | `UserWarning: Covariates were supplied but ...` | Fewer than 20 labelled rows for the full model or for some folds' training complements; those fits ignore the covariates. Label about 25+ rows (5 folds) or drop the covariates; see `covariates_used` / `n_folds_without_covariates`. |
 | `... outside [0, 1]` error on a calibration file | `calibration_data_path` defaults to [0, 1]. Declare `calibration_judge_scale`/`calibration_oracle_scale`, rescale the file, or pass the data via `fresh_draws_data` (auto-normalizes). |
 | `TypeError: ... 'logged_data_path'` / `calibrated-ips` errors | `analyze_dataset` has no `logged_data_path` parameter and no IPS/DR estimators. Logged judge+oracle data works via `calibration_data_path`. For IPS/DR pin `pip install "cje-eval==0.3.*"` (Python ≤3.12). |
 | `UserWarning: ... audits without delta_max are NOT_GRADED` | Declare a practical margin (`delta_max=`); no-margin audits can never PASS or FAIL. |
-| `results.calibrator is None` | Complete oracle coverage: the estimate is the direct oracle mean; no calibrator was fit. Check for `None` before a transport audit. |
+| `results.calibrator is None` | Complete oracle coverage: the estimate is the direct oracle mean; no calibrator was fit. Check for `None` before a transport audit. With `calibrated_mean_ci`, pass `fit_calibrator=True` to fit a descriptive one for reuse. |
 | `ImportError`/`ValueError` naming a replacement (e.g. `BaseCJEEstimator`, `calibrate_from_raw_data`) | Consolidated API: the error message names the current entry point; use it. |
 | Python version | CJE requires Python 3.10–3.13. |
