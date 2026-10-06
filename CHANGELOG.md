@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-06
+
+Fixes. The augmented interval now takes its degrees of freedom from the
+labelled prompts (wider, correctly covering intervals at small label counts);
+calibration labels outside [0, 1] are rejected instead of silently clipped
+(thanks to @cestercian, #72); dropped covariates are reported. Point
+estimates are unchanged.
+
 ### Fixed
 
 - **The augmented interval takes its degrees of freedom from the labelled
