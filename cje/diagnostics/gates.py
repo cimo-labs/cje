@@ -17,7 +17,9 @@ Diagnostic summary:
   (``correction_design_check``).
 """
 
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+import contextlib
+import contextvars
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
 import numpy as np
 
@@ -107,18 +109,28 @@ def worst_status(*statuses: Optional[Status]) -> Status:
 #   stratum at p=0.005, p=0.08 elsewhere) labelled prompts had median 29 but
 #   the design effective n was 12.8 and the interval covered 0.167 of the time.
 # * Balance threshold (design-check simulations): under random representative
-#   labels (discrete and continuous judges, 1-2 draws per prompt, 20/30/60
-#   labelled prompts) P(max |t| >= 3) was 0.1-0.65%. Under correctly declared
-#   known propensities (constant or score-dependent; each row or each whole
-#   prompt sampled; 1/2/4 draws per prompt; 20/30/60 expected labelled
-#   prompts; 2,000 seeds per cell) it was 0.1-2.0%, median 0.55%, highest at
-#   20 labelled prompts with 4 draws each; a row-level Poisson variance alone
+#   labels P(max |t| >= 3) was 0-0.5% in every cell (continuous, Likert and
+#   binary judges, including pass/fail scores with 3-10% failures; 1/2/4
+#   draws per prompt; rows, whole prompts or one draw per prompt sampled;
+#   20/30/60 labels; 1,000 seeds per cell). The realised cluster variance
+#   alone gave up to 55% for rare binary scores, because a draw with no
+#   labelled row on the rare value has almost no estimated variance; the
+#   design-variance floors remove that. Under correctly declared known
+#   propensities (constant or score-dependent; each row or each whole prompt
+#   sampled; 1/2/4 draws per prompt; 20/30/60 expected labelled prompts;
+#   2,000 seeds per cell) it was 0.1-2.0%, median 0.55%, highest at 20
+#   labelled prompts with 4 draws each; a row-level Poisson variance alone
 #   gave 7% at 2 and 27% at 4 draws when whole prompts were sampled (p=0.25,
-#   150 prompts, 400 seeds). Labels on the top, bottom, middle band or tails
-#   by score were caught in every run at 20+ labelled prompts under both
-#   designs. The check is a falsification test only: it cannot see selection
-#   unrelated to the judge score, and a mild exp(0.5 z) score tilt is caught
-#   only 11-14/28-34/74-77% of the time at 20/30/60 labels.
+#   150 prompts, 400 seeds), and the cluster variance alone 1.7% instead of
+#   0.4% for rows sampled at p=0.08 (300 rows). Labels on the top, bottom,
+#   middle band or tails by score were caught in every run at 20+ labelled
+#   prompts under both designs. The check is a falsification test only: it
+#   cannot see selection unrelated to the judge score, and under
+#   representative labels a mild exp(0.5 z) score tilt is caught only
+#   6-12/18-31/55-75% of the time at 20/30/60 labelled rows (rows, or one draw
+#   of each 2- or 4-draw prompt, sampled). It is lowest in the second design,
+#   where the row-level floor costs up to 8 points; elsewhere the floors cost
+#   at most 2.5 points.
 CORRECTION_EXEMPT_MIN_LABELLED_PROMPTS = 20
 CORRECTION_DESIGN_BALANCE_T = 3.0
 
@@ -161,10 +173,15 @@ def correction_design_check(
     balance: the Horvitz-Thompson weighted labelled rows must reproduce the
     mean and spread of the judge score over all rows (and, under known
     propensities, the row count) within ``CORRECTION_DESIGN_BALANCE_T``
-    design standard errors. The standard errors are prompt-cluster ones (under
-    known propensities, at least the declared row-level Poisson one), so
+    design standard errors. The standard errors are prompt-cluster ones, so
     labels drawn by prompt (every draw of a sampled prompt) are graded
-    correctly.
+    correctly, floored by the variance the declared design implies for the
+    judge score, which is known on every row: the row-level Poisson variance
+    (at the declared propensities, or for representative labels at the
+    labelled-row fraction) and, for representative labels, the variance of
+    sampling whole prompts at the labelled-prompt fraction. The floor keeps a
+    rare score value that no labelled row happens to have (a pass/fail judge
+    with few failures) from failing random labels.
 
     It is a falsification check, not proof: it catches labels selected by
     judge score, but not selection unrelated to the score, and it does not
@@ -192,7 +209,7 @@ def correction_design_check(
         raise ValueError("correction_design_check needs at least one row")
     if not np.all(np.isfinite(scores)):
         raise ValueError("judge_scores must be finite")
-    _, cluster_index = np.unique(clusters, return_inverse=True)
+    unique_clusters, cluster_index = np.unique(clusters, return_inverse=True)
     cluster_index = np.asarray(cluster_index).reshape(-1)
     n_labelled = int(np.sum(mask))
 
@@ -213,6 +230,7 @@ def correction_design_check(
     weights = np.zeros(n_rows, dtype=float)
     weights[mask] = 1.0 / inclusion[mask]
     labelled_clusters = np.unique(cluster_index[mask])
+    prompt_fraction = len(labelled_clusters) / len(unique_clusters)
     if n_labelled:
         cluster_weights = np.bincount(cluster_index, weights=weights)[labelled_clusters]
         # Scaled by the largest weight so tiny propensities cannot overflow.
@@ -256,15 +274,27 @@ def correction_design_check(
         # Prompt-cluster variance over all clusters, for both designs. Labels
         # are often drawn by prompt (every draw of a sampled prompt), and a
         # row-level variance then understates the variance by about the draws
-        # per prompt. Under known propensities the declared row-level Poisson
-        # variance is exact for row-level sampling and steadier than the
-        # cluster estimate at small label counts, so the larger of the two is
-        # used. An overflow is handled below as an unusable variance.
+        # per prompt. The cluster estimate uses only the realised labels, so
+        # it can be near zero when a score value is rare and no labelled row
+        # has it (a pass/fail judge with 3% failures). The judge score is
+        # known on every row, so the variance the declared design implies is
+        # computed from all rows and used as a floor: the row-level Poisson variance
+        # at the declared (known) or realised (representative) row
+        # propensity, and for representative labels also the variance from
+        # sampling whole prompts at the realised labelled-prompt fraction.
+        # An overflow is handled below as an unusable variance.
         with np.errstate(over="ignore", invalid="ignore"):
             variance = float(np.sum(np.bincount(cluster_index, weights=deviation) ** 2))
-            if known:
+            if known or n_labelled:
                 poisson = float(np.sum((1.0 - inclusion) / inclusion * x**2))
                 variance = max(variance, poisson)
+            if not known and n_labelled:
+                variance = max(
+                    variance,
+                    (1.0 - prompt_fraction)
+                    / prompt_fraction
+                    * float(np.sum(np.bincount(cluster_index, weights=x) ** 2)),
+                )
         tolerance = 1e-9 * max(1.0, float(np.sum(np.abs(deviation))))
         if variance > 0 and np.isfinite(variance) and np.isfinite(numerator):
             balance_t[name] = float(numerator / np.sqrt(variance))
@@ -330,19 +360,25 @@ def _certain_text(check: Mapping[str, Any]) -> str:
     )
 
 
-def corrected_gate_note(finding: str, check: Optional[Mapping[str, Any]]) -> str:
-    """Why a map finding does not gate a residual-corrected policy."""
+def corrected_gate_note(
+    finding: str, check: Optional[Mapping[str, Any]], subject: str = "this policy"
+) -> str:
+    """Why a map finding does not gate a residual-corrected policy.
+
+    ``subject`` is what is not gated: ``calibrated_mean_ci``, which has no
+    policies, passes ``"this estimate"``.
+    """
     effective = float((check or {}).get("effective_labelled_prompts", 0.0))
     return (
         f"{finding} describes the calibration map, not this estimate: the "
         f"estimate is residual-corrected with {effective:.0f} effective "
         f"labelled prompts ({_design_words(check)} design; labelled rows passed "
-        "the design balance check), so it does not gate this policy"
+        f"the design balance check), so it does not gate {subject}"
     )
 
 
 def correction_caution(
-    policy: str, check: Optional[Mapping[str, Any]]
+    policy: Optional[str], check: Optional[Mapping[str, Any]]
 ) -> Optional[str]:
     """WARNING text for a failed correction design check, or None.
 
@@ -352,10 +388,16 @@ def correction_caution(
     sample size (``low_design_effective_n``), and unlabelled rows declared at
     propensity 1 (``unlabelled_rows_declared_certain``). Too few labelled
     prompts shows in the interval, and constant labelled outcomes already warn.
+
+    ``policy`` names the estimator's policy, whose calibration-map gates still
+    apply. ``None`` gives the wording for ``calibrated_mean_ci``, which has a
+    single estimate and no policies or reliability gates; there the coverage
+    badge is what still applies.
     """
     if check is None:
         return None
     failed = list(check.get("failed") or [])
+    its = "its" if policy is not None else "the"
     sentences: List[str] = []
     if "unlabelled_rows_declared_certain" in failed:
         sentences.append(
@@ -369,7 +411,7 @@ def correction_caution(
     if "labelled_rows_unbalanced" in failed:
         design = _design_words(check)
         text = (
-            f"its labelled rows do not look like a {design} sample of its "
+            f"{its} labelled rows do not look like a {design} sample of {its} "
             f"evaluation rows ({_balance_text(check)}). The corrected estimate "
             "assumes they are; labels chosen by score, availability or "
             "difficulty can bias it in either direction."
@@ -386,11 +428,40 @@ def correction_caution(
         sentences.append(text if not sentences else "Also, " + text)
     if not sentences:
         return None
+    if policy is None:
+        return (
+            "Residual correction: "
+            + " ".join(sentences)
+            + " The coverage badge still applies to this estimate."
+        )
     return (
         f"Residual correction for policy {policy!r}: "
         + " ".join(sentences)
         + " Calibration-map gates still apply to this policy."
     )
+
+
+# Planning re-runs the estimator on many subsamples only to measure standard
+# errors, so a per-replicate caution would only repeat (fit_variance_model
+# checks the pilot's label balance once itself). Context-local, so other
+# threads and callers still warn.
+_CORRECTION_CAUTION_QUIET: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "cje_correction_caution_quiet", default=False
+)
+
+
+@contextlib.contextmanager
+def _quiet_correction_caution() -> Iterator[None]:
+    """Do not log ``correction_caution`` WARNINGs inside this block."""
+    token = _CORRECTION_CAUTION_QUIET.set(True)
+    try:
+        yield
+    finally:
+        _CORRECTION_CAUTION_QUIET.reset(token)
+
+
+def _correction_caution_quiet() -> bool:
+    return _CORRECTION_CAUTION_QUIET.get()
 
 
 def residual_corrected_suffix(record: Optional[Mapping[str, Any]]) -> str:

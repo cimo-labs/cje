@@ -34,6 +34,7 @@ from cje.interface.cli import best_policy_lines
 
 DELTA = 0.03
 DESIGN_WARNING = "Residual correction for policy"
+ARRAY_DESIGN_WARNING = "Residual correction: "
 EXEMPT_SUFFIX = "  [corrected: map gates not applied]"
 CORRECTED_TRANSPORT = (
     "residual transport FAIL (calibration map only; estimate residual-corrected)"
@@ -945,6 +946,121 @@ def test_design_check_false_positive_rate() -> None:
     assert failures <= 6
 
 
+def test_known_propensity_row_floor_false_fail_rate() -> None:
+    """Row-level sampling near the floor: the declared Poisson variance binds.
+
+    About 24 expected labels (300 rows at p = 0.08). With the cluster
+    estimate alone, 16 of these 1,000 seeds fail balance; with the floor, 4.
+    """
+    n, propensity = 300, 0.08
+    failures = 0
+    for seed in range(1000):
+        rng = np.random.default_rng([seed, 300])
+        scores = rng.uniform(size=n)
+        observed = rng.uniform(size=n) < propensity
+        check = correction_design_check(
+            scores,
+            observed,
+            np.arange(n),
+            "known_propensity",
+            propensities=np.full(n, propensity),
+        )
+        failures += "labelled_rows_unbalanced" in check["failed"]
+    assert failures <= 10
+
+
+@pytest.mark.parametrize("design", ["representative", "known_propensity"])
+def test_design_check_rare_score_uses_design_variance(design: str) -> None:
+    """A rare score that no labelled row happens to have is not imbalance.
+
+    A pass/fail judge: 18 of 600 rows score 1, and the 20 labelled rows all
+    score 0. Every labelled deviation is -0.03, so the realised cluster
+    variance (about 32.6) misses the unlabelled 1s and gives t = -3.15. The
+    design's own variance, (1 - p) / p * sum(x^2) with p = 1/30, gives -0.80.
+    """
+    n = 600
+    scores = np.zeros(n)
+    scores[:18] = 1.0
+    observed = np.zeros(n, dtype=bool)
+    observed[100:120] = True
+    options: Dict[str, Any] = {}
+    if design == "known_propensity":
+        options["propensities"] = np.full(n, 1 / 30)
+    check = correction_design_check(scores, observed, np.arange(n), design, **options)
+
+    x = scores - 0.03
+    expected = -18.0 / np.sqrt(29.0 * np.sum(x**2))
+    assert expected == pytest.approx(-0.80, abs=0.01)
+    cluster_only = -18.0 / np.sqrt(
+        np.sum(((np.where(observed, 30.0, 0.0) - 1) * x) ** 2)
+    )
+    assert cluster_only < -CORRECTION_DESIGN_BALANCE_T
+    assert check["balance_t"]["judge_level"] == pytest.approx(expected)
+    assert check["balance_t"]["judge_spread"] == pytest.approx(expected)
+    assert check["passed"] is True
+
+
+def _rare_binary_case(rng: np.random.Generator, layout: str) -> Dict[str, Any]:
+    """A rare pass/fail judge score with labels drawn at random."""
+    observed: np.ndarray
+    if layout == "rows":
+        # 600 prompts, one draw each, 3% failures, 20 random rows.
+        scores = (rng.uniform(size=600) < 0.03).astype(float)
+        clusters = np.arange(600)
+        observed = np.zeros(600, dtype=bool)
+        observed[rng.choice(600, 20, replace=False)] = True
+        return {"scores": scores, "observed": observed, "clusters": clusters}
+    clusters = np.repeat(np.arange(300), 4)
+    chosen = rng.choice(300, 20, replace=False)
+    if layout == "whole_prompts":
+        # Four draws share the prompt's verdict; every draw of 20 prompts.
+        scores = np.repeat((rng.uniform(size=300) < 0.1).astype(float), 4)
+        observed = np.isin(clusters, chosen)
+    else:
+        # Independent verdicts per draw; one draw from each of 20 prompts.
+        scores = (rng.uniform(size=1200) < 0.1).astype(float)
+        observed = np.zeros(1200, dtype=bool)
+        observed[4 * chosen + rng.integers(4, size=20)] = True
+    return {"scores": scores, "observed": observed, "clusters": clusters}
+
+
+@pytest.mark.parametrize("layout", ["rows", "whole_prompts", "one_draw_per_prompt"])
+def test_design_check_rare_binary_judge_random_labels(layout: str) -> None:
+    """Random labels with a rare-binary judge rarely fail balance.
+
+    The realised cluster variance alone failed 40% of the "rows" seeds. The
+    row-level floor alone left 6% in "whole_prompts" and the prompt-level
+    floor alone 7.5% in "one_draw_per_prompt"; together they give 0.
+    """
+    failures = 0
+    for seed in range(400):
+        case = _rare_binary_case(np.random.default_rng([seed, 11]), layout)
+        check = correction_design_check(
+            case["scores"], case["observed"], case["clusters"], "representative"
+        )
+        failures += "labelled_rows_unbalanced" in check["failed"]
+    assert failures <= 4
+
+
+def test_balance_threshold_is_three() -> None:
+    """The documented threshold: |t| = 3.21 fails balance, |t| = 2.81 passes."""
+    assert CORRECTION_DESIGN_BALANCE_T == 3.0
+    assert CORRECTION_EXEMPT_MIN_LABELLED_PROMPTS == 20
+    for seed, low, high, unbalanced in ((16, 3.0, 3.5, True), (12, 2.5, 3.0, False)):
+        rng = np.random.default_rng(seed)
+        scores = rng.uniform(size=300)
+        z = (scores - scores.mean()) / scores.std()
+        tilt = np.exp(0.8 * z) / np.sum(np.exp(0.8 * z))
+        observed = np.zeros(300, dtype=bool)
+        observed[rng.choice(300, 40, replace=False, p=tilt)] = True
+        check = correction_design_check(
+            scores, observed, np.arange(300), "representative"
+        )
+        largest = max(abs(t) for t in check["balance_t"].values())
+        assert low < largest < high
+        assert ("labelled_rows_unbalanced" in check["failed"]) is unbalanced
+
+
 def test_design_check_is_json_safe_and_deterministic() -> None:
     scores = np.linspace(0.2, 0.6, 30)
     observed = np.r_[np.ones(20), np.zeros(10)].astype(bool)
@@ -1200,6 +1316,72 @@ def test_refuse_level_listing_skips_only_exempt_cards(tmp_path: Path) -> None:
     }
 
 
+def test_badge_and_transport_notes_on_one_gate() -> None:
+    """An exempt policy with a REFUSE-LEVEL badge and a transport FAIL keeps
+    both notes, badge first, and summary() prints both."""
+    rng = np.random.default_rng(5)
+    result = analyze_dataset(
+        fresh_draws_data=_badge_data("even"),
+        transport=_transport(
+            {"corrected": _probes(rng, "corrected", shift=0.2, lo=0.1, hi=0.9)}
+        ),
+        estimator_config={"inference_method": "cluster_robust"},
+    )
+    assert result.diagnostics is not None
+    assert result.diagnostics.boundary_cards is not None
+    assert result.diagnostics.boundary_cards["corrected"]["status"] == "REFUSE-LEVEL"
+    audit = result.metadata["transport_audits"]["corrected"]
+    assert audit["status"] == "FAIL"
+    assert audit["gate_exemption"] == "residual_corrected"
+
+    gate = _gate(result, "corrected")
+    assert gate["flagged"] is False
+    assert gate["exemption"] == "residual_corrected"
+    assert len(gate["notes"]) == 2
+    assert gate["notes"][0].startswith("boundary REFUSE-LEVEL (")
+    assert gate["notes"][1].startswith("residual transport FAIL (simultaneous CI [")
+    lines = result.summary().splitlines()
+    first, second = (lines.index(f"    note: {note}") for note in gate["notes"])
+    assert first < second
+
+
+def test_design_check_error_keeps_091_gates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A design check that raises leaves the estimate and 0.9.1 gating intact."""
+    config = {"inference_method": "cluster_robust"}
+    reference = analyze_dataset(
+        fresh_draws_data=_badge_data("even"), estimator_config=config
+    )
+    assert "corrected" in reference.metadata["correction_checks"]
+
+    def broken(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+        raise ValueError("forced design-check failure")
+
+    monkeypatch.setattr("cje.estimators.direct_method.correction_design_check", broken)
+    result = analyze_dataset(
+        fresh_draws_data=_badge_data("even"), estimator_config=config
+    )
+
+    assert "correction_checks" not in result.metadata
+    np.testing.assert_array_equal(result.estimates, reference.estimates)
+    np.testing.assert_array_equal(result.standard_errors, reference.standard_errors)
+    assert result.diagnostics is not None
+    assert result.diagnostics.boundary_cards is not None
+    card = result.diagnostics.boundary_cards["corrected"]
+    assert card["status"] == "REFUSE-LEVEL"
+    assert card["applies_to_current_estimate"] is True
+    assert "gate_exemption" not in card
+    assert _gate(result, "corrected") == {
+        "flagged": True,
+        "refused": False,
+        "refuse_level_claims": True,
+        "reasons": [
+            f"boundary: {card['out_of_range']:.1%} of judge scores outside the "
+            "oracle calibration range"
+        ],
+    }
+    assert _status(result, "corrected") == Status.CRITICAL
+
+
 # ---------------------------------------------------------------------------
 # calibrated_mean_ci
 # ---------------------------------------------------------------------------
@@ -1210,8 +1392,10 @@ def _array_case(case: str) -> Dict[str, Any]:
     scores = rng.uniform(0, 1, 400)
     outcomes = np.clip(0.1 + 0.6 * scores + rng.normal(0, 0.03, 400), 0, 1)
     mask = np.zeros(400, dtype=bool)
-    if case == "random_30":
+    if case in ("random_30", "constant_30"):
         mask[rng.choice(400, 30, replace=False)] = True
+        if case == "constant_30":
+            outcomes = np.ones(400)
     elif case == "top_30":
         mask[np.argsort(scores)[-30:]] = True
     else:
@@ -1220,7 +1404,8 @@ def _array_case(case: str) -> Dict[str, Any]:
 
 
 @pytest.mark.parametrize(
-    "case, applies", [("random_30", False), ("top_30", True), ("few_12", True)]
+    "case, applies",
+    [("random_30", False), ("top_30", True), ("few_12", True), ("constant_30", True)],
 )
 def test_calibrated_mean_ci_badge_scope(
     monkeypatch: pytest.MonkeyPatch,
@@ -1238,24 +1423,45 @@ def test_calibrated_mean_ci_badge_scope(
     assert check["passed"] is (not applies)
     warnings_logged = _messages(caplog, logging.WARNING)
     refuse_warned = any("REFUSE-LEVEL" in m for m in warnings_logged)
-    design_warned = any(m.startswith(DESIGN_WARNING) for m in warnings_logged)
+    design_warnings = [
+        m for m in warnings_logged if m.startswith("Residual correction")
+    ]
+    # The array API has no policies and no reliability gates.
+    assert not any(m.startswith(DESIGN_WARNING) for m in warnings_logged)
     if case == "random_30":
         assert card["status"] == "REFUSE-LEVEL" and card["out_of_range"] >= 0.05
         assert card["gate_exemption"] == "residual_corrected"
-        assert not refuse_warned and not design_warned
-        assert any(
-            m.startswith("boundary REFUSE-LEVEL")
+        assert not refuse_warned and not design_warnings
+        notes = [
+            m
             for m in _messages(caplog, logging.INFO)
-        )
+            if m.startswith("boundary REFUSE-LEVEL")
+        ]
+        assert len(notes) == 1 and notes[0].endswith("does not gate this estimate")
     elif case == "top_30":
         assert card["status"] == "REFUSE-LEVEL"
         assert "gate_exemption" not in card
-        assert refuse_warned and design_warned
+        assert refuse_warned and len(design_warnings) == 1
         assert "labelled_rows_unbalanced" in check["failed"]
-    else:
+        assert design_warnings[0].startswith(
+            f"{ARRAY_DESIGN_WARNING}the labelled rows do not look like a "
+            "representative sample of the evaluation rows (judge_level t=+"
+        )
+        assert design_warnings[0].endswith(
+            "The coverage badge still applies to this estimate."
+        )
+        assert "policy" not in design_warnings[0]
+        assert "Calibration-map gates" not in design_warnings[0]
+    elif case == "few_12":
         assert "gate_exemption" not in card
         assert check["failed"] == ["too_few_effective_labelled_prompts"]
-        assert not design_warned
+        assert not design_warnings
+    else:
+        # Labels with no outcome variation cannot scope the badge away.
+        assert check["failed"] == ["labelled_outcomes_constant"]
+        assert card["applies_to_current_estimate"] is True
+        assert "gate_exemption" not in card
+        assert not design_warnings
 
     # The check never moves the numbers: forcing the opposite verdict leaves
     # the estimate and interval intact.
@@ -1270,6 +1476,59 @@ def test_calibrated_mean_ci_badge_scope(
     assert forced.estimate == result.estimate
     assert forced.ci == result.ci
     assert forced.se == result.se
+
+
+# ---------------------------------------------------------------------------
+# Planning
+# ---------------------------------------------------------------------------
+
+
+def test_planning_replicates_do_not_repeat_design_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """fit_variance_model re-runs the estimator per subsample only to measure
+    SEs; a convenience-labelled pilot must not log the design warning once per
+    replicate (0.9.1 logged none). A normal analysis still warns once."""
+    from cje.data.fresh_draws import FreshDrawDataset, FreshDrawSample
+    from cje.diagnostics.planning import fit_variance_model
+
+    rng = np.random.default_rng(3)
+    n = 400
+    scores = rng.uniform(size=n)
+    outcomes = np.clip(scores + rng.normal(0, 0.1, n), 0, 1)
+    lowest = set(np.argsort(scores)[:160].tolist())
+    samples = [
+        FreshDrawSample(
+            prompt_id=f"p{i}",
+            target_policy="base",
+            judge_score=float(scores[i]),
+            oracle_label=float(outcomes[i]) if i in lowest else None,
+            response=None,
+            draw_idx=0,
+        )
+        for i in range(n)
+    ]
+    pilot = FreshDrawDataset(target_policy="base", samples=samples)
+    with caplog.at_level(logging.WARNING):
+        fit_variance_model(pilot, n_replicates=2, verbose=False)
+    assert not any(
+        m.startswith(DESIGN_WARNING) for m in _messages(caplog, logging.WARNING)
+    )
+
+    caplog.clear()
+    rows = _rows(scores, [i in lowest for i in range(n)], lambda s: 0.0, prefix="p")
+    for i, row in enumerate(rows):
+        if i in lowest:
+            row["oracle_label"] = float(outcomes[i])
+    with caplog.at_level(logging.WARNING):
+        analyze_dataset(
+            fresh_draws_data={"base": rows},
+            estimator_config={"inference_method": "cluster_robust"},
+        )
+    assert (
+        sum(m.startswith(DESIGN_WARNING) for m in _messages(caplog, logging.WARNING))
+        == 1
+    )
 
 
 # ---------------------------------------------------------------------------

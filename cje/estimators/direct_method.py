@@ -29,6 +29,7 @@ from ..data.models import CIInfo, EstimationResult
 from ..diagnostics.models import DirectDiagnostics, Status
 from ..diagnostics.gates import (
     BOUNDARY_CARD_STATUS_TO_STATUS,
+    _correction_caution_quiet,
     correction_caution,
     correction_design_check,
     corrected_gate_note,
@@ -1301,7 +1302,8 @@ class CalibratedDirectEstimator:
         bootstrap replicate). A passing check lets the residual-corrected
         level escape calibration-map gates (``level_gate_scope``); a failing
         check keeps the 0.9.1 gates and, for the failures in
-        ``correction_caution``, logs one WARNING.
+        ``correction_caution``, logs one WARNING (not inside planning's
+        measurement loop, ``_quiet_correction_caution``).
         """
         checks: Dict[str, Dict[str, Any]] = {}
         if self._last_point is None or self._eval_table is None:
@@ -1343,7 +1345,7 @@ class CalibratedDirectEstimator:
                 continue
             checks[policy] = check
             caution = correction_caution(policy, check)
-            if caution:
+            if caution and not _correction_caution_quiet():
                 logger.warning(caution)
         return checks
 

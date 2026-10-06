@@ -630,7 +630,7 @@ def calibrated_mean_ci(
         labelled_outcomes_constant=len(np.unique(np.round(labels[mask], 6))) == 1,
     )
     diagnostics["correction_check"] = check
-    caution = correction_caution("policy", check)
+    caution = correction_caution(None, check)
     if caution:
         logger.warning(caution)
     applies, scope = level_gate_scope("augmented", check)
@@ -646,6 +646,7 @@ def calibrated_mean_ci(
                         f"({boundary.get('out_of_range', 0.0):.1%} of judge "
                         "scores outside the oracle calibration range)",
                         check,
+                        subject="this estimate",
                     )
                 )
         diagnostics["boundary_card"] = boundary

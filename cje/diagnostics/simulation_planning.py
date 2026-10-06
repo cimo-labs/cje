@@ -357,6 +357,7 @@ def simulate_variance_model(
         >>> print(f"MDE: {plan.mde:.1%}")
     """
     from ..interface.analysis import analyze_dataset
+    from .gates import _quiet_correction_caution
 
     if not 0 <= r2 <= 1:
         raise ValueError(f"r2 must be in [0, 1], got {r2}")
@@ -438,11 +439,13 @@ def simulate_variance_model(
                 continue
 
             try:
-                result = analyze_dataset(
-                    fresh_draws_data={"synthetic": subsample},
-                    verbose=False,
-                    estimator_config=_PLANNING_MEASUREMENT_CONFIG,
-                )
+                # The replicate only measures an SE (no design caution).
+                with _quiet_correction_caution():
+                    result = analyze_dataset(
+                        fresh_draws_data={"synthetic": subsample},
+                        verbose=False,
+                        estimator_config=_PLANNING_MEASUREMENT_CONFIG,
+                    )
                 if (
                     result.standard_errors is not None
                     and len(result.standard_errors) > 0
