@@ -58,6 +58,14 @@ from .diagnostics.transport import TransportAuditConfig
 from .weighted_audit import WeightedPairedAuditResult, weighted_paired_audit
 from .diagnostics.stratified_planning import BinaryReviewPlan, plan_binary_reviews
 
+# Several judges against one oracle on the same labelled rows
+from .judge_comparison import (
+    JudgeComparison,
+    JudgePair,
+    JudgeQuality,
+    compare_judges,
+)
+
 # Budget planning
 from .diagnostics.planning import (
     CostModel,
@@ -105,6 +113,11 @@ __all__ = [
     "calibrated_mean_ci",
     "transport_audit",
     "TransportAuditConfig",
+    # Judge comparison
+    "compare_judges",
+    "JudgeComparison",
+    "JudgeQuality",
+    "JudgePair",
     # Budget planning
     "CostModel",
     "FittedVarianceModel",
