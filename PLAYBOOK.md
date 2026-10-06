@@ -55,7 +55,14 @@ Notes:
 - The default combines prompt-cluster-robust sampling variance with the
   delete-one-oracle-fold jackknife variance and a t-based interval. An
   approximate Welch–Satterthwaite df weights the two sources by their realized
-  variance shares.
+  variance shares. When representative labels on the evaluation rows correct
+  a policy's estimate, the correction is a mean over the labeled prompts, so
+  the interval takes its df from them (at most `n_labeled − q`, with `q = 1`
+  for the default weight and 2 for the tuned weight; lower when the
+  oracle-jackknife term is large, as `oracle_df_cap_applied` reports) and
+  scales their share of the sampling variance by `n_labeled / (n_labeled − q)`.
+  With a handful of labeled prompts that interval is very wide, and with one
+  it is unavailable.
 - Refit bootstrap inference remains available explicitly with
   `estimator_config={"inference_method": "bootstrap", "n_bootstrap": 2000}`.
 
@@ -258,10 +265,10 @@ print(plan_target.total_cost)
   covariance, paired evaluation typically detects smaller differences, so that
   pairing assumption is conservative; negative covariance can reverse the
   direction.
-- MDE and power use asymptotic-normal critical values. The final analytic CI uses a finite-sample t critical value based on the realized evaluation/calibration variance shares, so confirm the achieved interval after collection.
+- MDE and power use asymptotic-normal critical values. The final analytic CI uses a t critical value. When the oracle labels sit on the evaluated policy's rows (the augmented correction), its df is at most `m − 1` per policy (`n_labeled − 1` with the default weight), so planned power is optimistic at small `m`: about 77% instead of 80% at `m = 30` and about 70% at `m = 10`, when the realized SE equals the planned one. Otherwise the df comes from the realized evaluation/calibration variance shares. Confirm the achieved interval after collection.
 - Reported variance shares are specific to the returned allocation: `(sigma2_eval/n) / V` and `(sigma2_cal/m) / V`. Raw fitted coefficients are not variance shares.
 - Simulation planning is specific to its synthetic data-generating process. Keep the `scenario_fingerprint` returned by `simulate_planning(...)` (the simulation-planning entry point, which bundles the plan with its fingerprint — `simulate_variance_model` alone returns only the fitted variance model), vary plausible inputs, and do not present a single simulated budget as an empirical guarantee.
-- Variance components are measured with the analytic cluster-robust + OUA instrument, which tracked the realized SE of the production estimator within ~5% at every allocation in a pilot-scale validation grid (instrument experiment 2026-07-07, R=400 replicates/cell).
+- Variance components are measured with the analytic cluster-robust + OUA instrument, which tracked the realized SE of the production estimator within ~5% at every allocation in a pilot-scale validation grid (instrument experiment 2026-07-07, R=400 replicates/cell). Since the labeled-cluster interval (issue #60) the instrument also scales the labeled prompts' share of the variance by `m / (m − 1)`; in its coupled measurement design it runs about 6–10% above the realized SD at 15–20 labels per policy (3–7% before; directional checks), which raises planned budgets by about 5%.
 
 ---
 

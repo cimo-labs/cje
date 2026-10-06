@@ -16,6 +16,7 @@ from cje import calibrated_mean_ci, transport_audit, CalibratedMeanResult
 from cje.calibration.judge import JudgeCalibrator
 from cje.data.fresh_draws import FreshDrawDataset, FreshDrawSample
 from cje.data.models import Dataset
+from cje.diagnostics.robust_inference import cluster_robust_se
 from cje.estimators.direct_method import CalibratedDirectEstimator
 
 # Small but real bootstrap; both sides use the same seed so equivalence is
@@ -130,13 +131,34 @@ class TestEstimatorEquivalence:
         # OUA jackknife term is computed with the same recipe on the same
         # calibrator. Only float-op ordering differs.
         assert res.se == pytest.approx(float(ref.standard_errors[0]), rel=1e-9)
-        # CI: same Welch--Satterthwaite effective df on both paths.
+        # CI: same labelled-cluster df (issue #60), capped by the same
+        # Welch--Satterthwaite df, on both paths. The legacy linkage succeeds
+        # here, so the estimator's labels are coupled like the array API's.
         assert res.ci[0] == pytest.approx(float(ref_lo[0]), rel=1e-9)
         assert res.ci[1] == pytest.approx(float(ref_hi[0]), rel=1e-9)
         array_df = res.diagnostics["cluster_robust"]["df"]
-        direct_df = ref.metadata["degrees_of_freedom"][policy]["df"]
-        assert array_df == pytest.approx(direct_df, rel=1e-12)
-        assert res.diagnostics["cluster_robust"]["df_method"] == ("welch_satterthwaite")
+        direct_df_info = ref.metadata["degrees_of_freedom"][policy]
+        assert array_df == pytest.approx(direct_df_info["df"], rel=1e-12)
+        assert res.diagnostics["cluster_robust"]["df_method"] == "labelled_clusters"
+        assert direct_df_info["df_method"] == "labelled_clusters"
+        assert res.diagnostics["cluster_robust"]["labels_coupled"] is True
+        assert direct_df_info["labels_coupled"] is True
+        # The unadjusted cluster SE is the plain CRV1 SE of the pseudo-outcome
+        # deviations; the adjusted one scales only their labelled part.
+        assert ref.influence_functions is not None
+        crv1 = cluster_robust_se(
+            np.asarray(ref.influence_functions[policy]),
+            np.unique(prompts, return_inverse=True)[1],
+            np.mean,
+            lambda x: x,
+        )
+        assert res.diagnostics["cluster_robust"][
+            "se_cluster_unadjusted"
+        ] == pytest.approx(crv1["se"], rel=1e-9)
+        assert (
+            res.diagnostics["cluster_robust"]["se_cluster"]
+            > res.diagnostics["cluster_robust"]["se_cluster_unadjusted"]
+        )
         assert res.method == "cluster_robust"
         assert res.n == len(judge)
         assert res.n_oracle == int(np.sum(~np.isnan(labels)))

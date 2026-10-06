@@ -954,8 +954,9 @@ def correction_weight_decision(
     the weighted least-squares slope of the labelled outcomes on their
     predictions, clipped to [0, 1].  In the representative design that slope
     minimises the corrected estimator's variance asymptotically; with few
-    labels its own estimation noise, which the standard error does not carry,
-    can cost as much as it saves.  The tuned rule therefore falls back to one
+    labels its own estimation noise can cost as much as it saves (the analytic
+    interval counts the slope as a fitted parameter but omits its
+    delta-method variance).  The tuned rule therefore falls back to one
     when:
 
     * fewer than ``TUNED_WEIGHT_MIN_LABELS`` distinct labelled clusters
@@ -1725,3 +1726,136 @@ def cluster_robust_se(
         "n_clusters": int(G),
         "df": int(df),
     }
+
+
+# ========== Labelled-Cluster Inference for the Augmented Mean (issue #60) ==========
+
+
+def correction_fitted_parameters(weight_reason: Optional[str]) -> int:
+    """Number of parameters a policy's residual correction fits on its labels.
+
+    The mean residual (the intercept) is always fitted; the tuned weight adds
+    the slope.  Keyed on the realised reason in
+    ``point_estimator["correction_weight_reasons"]``, so a guard fallback to
+    weight one (``too_few_labelled_clusters``, ``rare_outcome``,
+    ``constant_predictions``) counts one parameter and a clipped slope still
+    counts two.
+    """
+    return 2 if weight_reason == "tuned" else 1
+
+
+def labelled_cluster_crv1(
+    influence_values: np.ndarray,
+    cluster_ids: np.ndarray,
+    labelled_rows: np.ndarray,
+) -> Dict[str, Any]:
+    """Split the CRV1 variance of a mean into labelled and unlabelled clusters.
+
+    Uses the centring and ``G/(G-1)/n^2`` scaling of :func:`cluster_robust_se`,
+    so ``v_labelled + v_unlabelled`` equals that function's squared SE.  A
+    cluster is labelled when any of its rows carries an oracle label.
+
+    Args:
+        influence_values: (n,) per-row influence values of the mean.
+        cluster_ids: (n,) cluster labels (any hashable dtype).
+        labelled_rows: (n,) boolean mask of oracle-labelled rows.
+
+    Returns:
+        Dict with ``v_labelled``, ``v_unlabelled``, ``n_labelled_clusters``
+        and ``n_clusters``.
+
+    Raises:
+        ValueError: when the inputs are misaligned or there are fewer than two
+            clusters.
+    """
+    values = np.asarray(influence_values, dtype=float)
+    clusters = np.asarray(cluster_ids)
+    labelled = np.asarray(labelled_rows, dtype=bool)
+    n = len(values)
+    if values.ndim != 1 or clusters.shape != (n,) or labelled.shape != (n,):
+        raise ValueError(
+            "influence_values, cluster_ids and labelled_rows must be aligned 1-D "
+            "arrays"
+        )
+    _, codes = np.unique(clusters, return_inverse=True)
+    codes = np.asarray(codes).reshape(-1)
+    n_clusters = int(codes.max()) + 1 if n else 0
+    if n_clusters < 2:
+        raise ValueError(
+            "Cluster-robust inference requires at least two independent "
+            "clusters; row-level IID SE is not a valid fallback."
+        )
+    totals = np.bincount(codes, weights=values - np.mean(values), minlength=n_clusters)
+    totals = totals - totals.mean()
+    labelled_cluster = (
+        np.bincount(codes, weights=labelled.astype(float), minlength=n_clusters) > 0
+    )
+    scale = (n_clusters / (n_clusters - 1)) / n**2
+    return {
+        "v_labelled": float(scale * np.sum(totals[labelled_cluster] ** 2)),
+        "v_unlabelled": float(scale * np.sum(totals[~labelled_cluster] ** 2)),
+        "n_labelled_clusters": int(np.sum(labelled_cluster)),
+        "n_clusters": n_clusters,
+    }
+
+
+def labelled_cluster_variance(
+    v_labelled: float,
+    v_unlabelled: float,
+    n_labelled_clusters: int,
+    fitted_parameters: int,
+    inflate: bool = True,
+) -> Tuple[float, Optional[int]]:
+    """Sampling variance and degrees of freedom of an augmented mean.
+
+    The residual correction is a mean over the ``n_L`` labelled clusters that
+    fits ``q`` parameters on them (:func:`correction_fitted_parameters`), so
+    the labelled part of the CRV1 variance is small-sample corrected by
+    ``n_L / (n_L - q)`` and the interval takes ``n_L - q`` degrees of freedom:
+
+        variance = v_labelled * n_L / (n_L - q) + v_unlabelled,  df = n_L - q
+
+    ``inflate=False`` keeps the CRV1 variance and only sets the df.  Returns
+    ``(nan, None)`` when ``n_L - q < 1``: no interval is available.
+    """
+    df = int(n_labelled_clusters) - int(fitted_parameters)
+    if df < 1:
+        return float("nan"), None
+    factor = int(n_labelled_clusters) / df if inflate else 1.0
+    return float(v_labelled * factor + v_unlabelled), df
+
+
+def labelled_cluster_df(
+    se_sampling: float,
+    df_labelled: float,
+    oracle_variance: float,
+    n_jackknife_folds: int,
+    *,
+    se_unadjusted: float,
+    df_unadjusted: float,
+) -> Tuple[float, bool]:
+    """Degrees of freedom of a labelled-cluster interval with oracle variance.
+
+    ``min(n_L - q, Welch(n_L - q, K - 1), Welch(G - 1, K - 1))``.  The first
+    Welch--Satterthwaite df (:func:`combine_cluster_and_oracle`) pairs the
+    scaled sampling SE ``se_sampling`` with the oracle variance; the second
+    is the df of the unadjusted interval, from the plain CRV1 SE
+    ``se_unadjusted`` and its ``df_unadjusted`` (``G - 1``).
+
+    The Welch df is not monotone in the sampling variance: when the oracle
+    variance dominates and ``K`` is small, scaling the sampling variance up
+    raises it, and the smaller t quantile can outweigh the larger SE.  The
+    second cap keeps the df at or below the unadjusted interval's; since
+    ``se_sampling >= se_unadjusted``, the interval is then never narrower
+    than the unadjusted one.  Equals ``df_labelled`` when the oracle variance
+    is zero.  Returns the df and whether the oracle component lowered it
+    below ``df_labelled``.
+    """
+    _, df_welch = combine_cluster_and_oracle(
+        se_sampling, df_labelled, oracle_variance, n_jackknife_folds
+    )
+    _, df_unadjusted_welch = combine_cluster_and_oracle(
+        se_unadjusted, df_unadjusted, oracle_variance, n_jackknife_folds
+    )
+    df = min(float(df_labelled), float(df_welch), float(df_unadjusted_welch))
+    return df, df < float(df_labelled)

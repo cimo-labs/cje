@@ -4,6 +4,93 @@
 
 ### Fixed
 
+- **The augmented interval takes its degrees of freedom from the labelled
+  prompts (issue #60).** On the default analytic path (`cluster_robust` in
+  `CalibratedDirectEstimator` and `analyze_dataset`, and in
+  `calibrated_mean_ci`), a policy whose estimate is corrected by
+  representative labels took its interval's degrees of freedom from all of
+  its evaluation prompt clusters, although the residual correction is a mean
+  over the labelled ones, which carry most of the variance at small label
+  counts. Its 95% interval covered 0.88 to 0.92 at 10 labelled prompts per
+  policy and 0.91 to 0.935 at 20. The interval now splits the cluster-robust
+  variance of the pseudo-outcome into labelled and unlabelled prompt
+  clusters, scales the labelled part by `n_L / (n_L - q)` (`n_L` labelled
+  clusters; `q` is 1 for weight one and 2 when the tuned slope is used), adds
+  the oracle-jackknife variance once, and takes `min(n_L - q, Welch(n_L - q,
+  K - 1), Welch(G - 1, K - 1))` degrees of freedom. The last term is the df
+  of the previous interval: the Welch df is not monotone in the sampling
+  variance, and without it a dominant oracle-jackknife term with few folds
+  could narrow the interval. Point estimates do not change. Pairwise
+  comparisons inherit the rule: the paired variance is split by prompts
+  labelled for either policy, the labelled part takes the larger of the two
+  scale factors, and the df is the smaller `n_L - q`, capped the same way.
+- **Evidence.** In simulations through the public API (1,000 or more
+  replicates per cell; graded, weak, binary and shifted judges; 10, 20, 30
+  and 60 labelled prompts per policy), pooled coverage of the per-policy
+  interval rose from 0.884-0.946 to 0.948-0.962 with a separately sampled
+  calibration set (single rows and three rows per prompt), and from
+  0.907-0.951 to 0.952-0.966 where the labels also fit the calibration
+  (`calibrated_mean_ci`), which is mildly conservative at 10 to 30 labels.
+  Paired differences in `compare_policies` rose from 0.884-0.957 to
+  0.941-0.976 per cell; the highest cells are pairs whose two policies label
+  different prompts at 10 labels each. Point estimates are bit-identical.
+  Fewer than 10 labelled prompts were not simulated. Intervals widen by about
+  21%, 9% and 3% at 10, 20 and 60 labelled prompts with weight one (31%, 13%
+  and 4% with the tuned weight).
+- **Tuned weight.** The interval counts the tuned slope as a fitted
+  parameter but omits its delta-method variance. In the same simulations the
+  tuned interval's coverage matched weight one's to within about a quarter of
+  a point at 20 to 30 labels (pooled gaps 0.00, -0.26 and -0.22 points at 20,
+  25 and 30), where 0.9.0 noted about 1 point below. The 20-label minimum for
+  the tuned weight was calibrated under this interval. The 0.9.0 note's worst
+  real-data setting (19 points below at 20 labels) was mostly transport bias,
+  which no interval change addresses; it has not been re-measured.
+- **New metadata.** `metadata["degrees_of_freedom"][policy]` has
+  `df_method: "labelled_clusters"` for these policies, with
+  `n_labelled_clusters`, `fitted_parameters`, `labelled_variance_inflation`,
+  `labelled_variance_share` (before scaling), `labels_coupled` and
+  `labels_coupled_fraction` (whether the labelled rows also fitted the
+  calibrator; diagnostic only) and `oracle_df_cap_applied` (true when the
+  oracle-jackknife term lowered the df below `n_L - q`). Pairwise entries in
+  `metadata["pairwise_inference"]` carry `df_method`,
+  `n_labelled_clusters`, `labelled_variance_inflation`,
+  `labelled_variance_share` and `oracle_df_cap_applied`, but not the
+  per-policy `fitted_parameters`, `labels_coupled` or
+  `labels_coupled_fraction`. `calibrated_mean_ci` reports all of these
+  fields under `diagnostics["cluster_robust"]` (`labels_coupled` is always
+  true there, with fraction 1.0), where `se_cluster` is now the scaled
+  sampling SE and `se_cluster_unadjusted` the plain CRV1 SE. The reported SE
+  of these policies is no longer the CRV1 SE of `influence_functions` plus
+  the oracle variance.
+- **Very few labelled prompts.** With 2 to 5 labelled prompts (weight one)
+  the interval has 1 to 4 degrees of freedom, is very wide, and a warning is
+  logged. With one labelled prompt the policy has no interval: SE NaN,
+  `se_method: "unavailable_too_few_labelled_clusters"`, listed in
+  `inference_unavailable_policies`, with the new
+  `metadata["inference_unavailable_reasons"]` (`"one_cluster"` or
+  `"too_few_labelled_clusters"`, also filled on the bootstrap path).
+  `compare_policies` refuses its pairs, and `compare_all_policies` raises
+  `InferenceUnavailableError` for the whole table, as it already did for
+  one-cluster policies; `to_dict(detail="portable")` skips the refused pairs.
+- **Unchanged.** Bootstrap and `"auto"` intervals (`"auto"` resolves to the
+  bootstrap in `calibrated_mean_ci` with partial labels, and in the
+  estimator below 20 prompts or when calibration and evaluation share
+  prompts) keep their percentile intervals, which still under-cover at small
+  label counts (about 0.89 at 10 labels and 0.91 at 20 for a binary judge).
+  Plug-in, oracle-only and known-propensity routes keep the cluster interval;
+  the known-propensity pseudo-outcome is uncentred, which keeps that interval
+  conservative at small label counts even with near-normal critical values.
+  Saved results replay the intervals they were saved with.
+- **Planning.** Planner measurements use this standard error, so planned
+  label budgets rise by about 5%. That is conservative drift in the measurement,
+  not a gain in accuracy. Planned MDE and power still use normal critical
+  values, but a policy corrected by its `m` labels now gets an interval with
+  at most `m - 1` degrees of freedom, so planned power is optimistic at small
+  `m`: a plan for 80% power has about 77% at `m = 30` and about 70% at
+  `m = 10` when the realised SE equals the planned one. The higher budgets
+  follow the higher SE and leave no margin for the t quantile; only the
+  planner's independent-policies assumption offsets this, for paired designs
+  with positive covariance.
 - `JudgeCalibrator.fit_cv` and `FlexibleCalibrator.fit` now raise a clear
   `ValueError` when oracle labels are non-finite or outside [0, 1], instead of
   silently clipping them into a constant calibrator.
