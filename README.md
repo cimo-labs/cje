@@ -117,6 +117,8 @@ Confidence intervals include finite-label calibration uncertainty on supported i
 
 **How many labels will a judge save you?** When representative labels correct a policy's estimate, the judge acts as a control variate: at equal precision it saves about the share of the outcome's variance it explains *within* a policy (its squared within-policy correlation with the label), not its overall agreement rate. Agreement on easy, lopsided comparisons does not reduce audit labels. Before planning around savings, label a pilot slice of a few hundred responses with the outcome you will actually report and measure that share; when it is below about 0.10, budget labels as if there were no judge and use the judge for triage and for ordering clear differences.
 
+**Comparing candidate judges?** Score the same responses with each judge, label one shared random slice, and call `compare_judges`. It fits one calibrator per judge on shared folds and reports each judge's out-of-fold R² and RMSE and the labels the reference judge needs per label of each other judge, with paired prompt-bootstrap intervals. Do not pass judges to `analyze_dataset` as policies: that fits one calibrator to all of them. See the [judge-comparison guide](https://github.com/cimo-labs/cje/blob/main/guides/comparing-judges.md).
+
 ## Guardrails: claims CJE refuses to make
 
 Diagnostics never act silently; every estimate ships with its limitations attached.

@@ -200,6 +200,56 @@ print(diag.summary())
   sampling probabilities and `family_size` for all groups used in the decision.
 - `decile_residuals` and probe-bin occupancy are display-only; never gate on them.
 
+## Comparing judges
+
+Several judges scoring the same responses, one outcome labelled on a shared random slice:
+use `cje.compare_judges`. **Never pass judges to `analyze_dataset` as policies**: it fits one
+calibrator to every policy and detects score scales jointly, and `compare_policies` then
+reports a difference of about zero by construction.
+
+```python
+def compare_judges(
+    scores_by_judge,       # {"name": (n,) scores}; each judge keeps its own scale
+    oracle_labels,         # (n,) shared outcome in [0, 1]; NaN = unlabelled
+    cluster_ids,           # REQUIRED: (n,) prompt ids (fold + resampling unit); None = independent rows
+    *,
+    policy_ids=None,       # R² and variance components computed within policy
+    covariates=None,       # (n, d) numeric; every judge then fits two_stage
+    judge_scales=None,     # {"name": (lo, hi)}: scores outside raise; changes no statistic
+    reference=None,        # default: first judge
+    n_unlabeled=None,      # unlabelled rows per policy in a planned run -> *_at_n fields
+    alpha=0.05, n_folds=5, n_bootstrap=2000, seed=42,
+) -> "JudgeComparison": ...
+```
+
+- `cmp.table` (`JudgeQuality` per judge): `n_labelled_rows`, `n_labelled_clusters`,
+  `selected_mode`, `covariates_used`, `oof_rmse`, `r2_pooled`, `r2_within` (each with `_ci`),
+  `var_f` (within-policy variance of the calibrated prediction over all rows) and
+  `var_residual` (within-policy variance of the out-of-fold residual, `(1 - r2_within)` times
+  the labels' within-policy variance). R² is `1 - SS(r)/SS(y)` with `r = y - OOF prediction`,
+  both centred; `r2_within` sets label savings, `r2_pooled` also credits tracking the policy.
+- `cmp.pairwise` (`JudgePair` per non-reference judge J): `r2_within_diff` and `oof_rmse_diff`
+  (J minus reference), `label_multiplier = (1 - R²_ref) / (1 - R²_J)` = labels the
+  **reference** needs per label of **J** for equal interval width on a policy mean with
+  plentiful unlabelled rows (above 1: J saves labels). With `n_unlabeled`:
+  `variance_ratio_at_n` = `V_ref / V_J` with `V = Var(f)/N + Var(Y-f)/n` (`n` = observed
+  labelled rows per policy, `N = n + n_unlabeled`), `label_multiplier_at_n` (capped at `N/n`,
+  flagged by `label_multiplier_at_n_capped`); otherwise these are None.
+- Intervals: paired prompt-cluster bootstrap, one positive Exp(1) weight per cluster per
+  replicate shared by every judge, each judge refitted with its selected mode
+  (`n_bootstrap` fits per judge). A judge's row does not depend on the other judges.
+- `cmp.calibrators[name]` is the full-sample fit on that judge's raw scale (usable with
+  `transport_audit`); `cmp.summary()`, `cmp.to_dict()` (JSON-safe), `cmp.row(name)`,
+  `cmp.pair(name)`; `cmp.diagnostics` has `n_folds`, `policies`, `policies_without_labels`,
+  `bootstrap`, `planned`.
+- Limits: representative labels only, the same rows for every judge; policy levels at weight
+  one (not differences); labelled rows treated as independent (several labelled rows per
+  prompt with shared judge errors can move the true multiplier); folds hash the cluster-id
+  strings, so pass identical `cluster_ids` to reproduce a row with `calibrated_mean_ci`; picking
+  the best of many judges on the same labels flatters the winner. Warns below 20 labelled
+  prompt clusters and when a policy has no labels (excluded). Guide:
+  [comparing judges](https://github.com/cimo-labs/cje/blob/main/guides/comparing-judges.md).
+
 ## Planning: "how many labels do I need?"
 
 Use this for a future evaluation, not as a requirement for analyzing existing data.

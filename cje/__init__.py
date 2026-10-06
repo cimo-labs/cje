@@ -48,6 +48,14 @@ from .data import load_dataset_from_jsonl
 from .array_api import CalibratedMeanResult, calibrated_mean_ci, transport_audit
 from .diagnostics.transport import TransportAuditConfig
 
+# Several judges against one oracle on the same labelled rows
+from .judge_comparison import (
+    JudgeComparison,
+    JudgePair,
+    JudgeQuality,
+    compare_judges,
+)
+
 # Budget planning
 from .diagnostics.planning import (
     CostModel,
@@ -91,6 +99,11 @@ __all__ = [
     "calibrated_mean_ci",
     "transport_audit",
     "TransportAuditConfig",
+    # Judge comparison
+    "compare_judges",
+    "JudgeComparison",
+    "JudgeQuality",
+    "JudgePair",
     # Budget planning
     "CostModel",
     "FittedVarianceModel",

@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`compare_judges` compares several judges against one oracle on the same
+  labelled rows (issue #71).** Each judge gets its own cross-fitted
+  `JudgeCalibrator` on folds shared by every judge. `table` reports per judge
+  the labelled rows and prompt clusters, the selected mode, out-of-fold RMSE,
+  out-of-fold R² pooled and within policy, and `Var(f)` and `Var(Y - f)`.
+  `pairwise` reports each judge against a reference: the differences in
+  within-policy R² and RMSE, the label multiplier
+  `(1 - R²_ref) / (1 - R²_J)` (plentiful unlabelled rows), and, with
+  `n_unlabeled`, the finite-N variance ratio and multiplier. Intervals come
+  from a paired prompt-cluster bootstrap (positive Exp(1) weights shared by
+  every judge) that refits each judge in every replicate. Representative
+  labels only; judges keep their own score scales (`judge_scales` checks a
+  declared range). Additive: no existing default or output changes. See
+  `guides/comparing-judges.md`.
+
 ## [0.9.1] - 2026-10-06
 
 Fixes. The augmented interval now takes its degrees of freedom from the
