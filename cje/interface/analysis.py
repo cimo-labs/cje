@@ -163,6 +163,14 @@ def analyze_dataset(
             use the same public judge/oracle units and field names as this
             call. Policies without probes are recorded as ``NOT_CHECKED``;
             probes without a declared per-policy margin are ``NOT_GRADED``.
+            A FAIL flags a policy, sets CRITICAL and drops it from
+            ``best_policy()`` only when its level depends on the calibration
+            map: complete-oracle policies are exempt, and augmented policies
+            are exempt when ``metadata["correction_checks"][policy]["passed"]``
+            holds (at least 20 effective labelled prompts, a known-propensity
+            design effective sample size of at least 20 with no unlabelled
+            row declared at propensity 1, non-constant labelled outcomes, and
+            judge-score balance under the declared design).
 
     Returns:
         EstimationResult with estimates, standard errors, and metadata.
@@ -871,9 +879,16 @@ def _attach_transport_audits(
     oracle_input_scale: Any,
     output_scale: Any,
 ) -> None:
-    """Run configured held-out probes and record every policy's audit state."""
+    """Run configured held-out probes and record every policy's audit state.
+
+    A FAIL gates a policy only when its level depends on the calibration map
+    (``level_gate_scope``). For an augmented policy whose correction design
+    check passed (``metadata["correction_checks"]``), the audit is recorded
+    with ``gate_exemption`` and a FAIL leaves an unflagged gate with a note.
+    """
     from ..data.ingest import canonicalize_record
     from ..diagnostics import Status
+    from ..diagnostics.gates import corrected_gate_note, level_gate_scope
     from ..diagnostics.transport import TransportAuditConfig, audit_transportability
 
     if config is not None and not isinstance(config, TransportAuditConfig):
@@ -917,6 +932,7 @@ def _attach_transport_audits(
         policy: (point_routes[index] if index < len(point_routes) else "unknown")
         for index, policy in enumerate(target_policies)
     }
+    correction_checks = results.metadata.get("correction_checks") or {}
     for policy in target_policies:
         raw_probes = (
             list(config.probes_by_policy.get(policy, ())) if config is not None else []
@@ -1061,14 +1077,44 @@ def _attach_transport_audits(
                 family_size=config.resolved_family_size,
                 min_effective_clusters=config.min_effective_clusters,
             )
+        applies, scope = level_gate_scope(
+            route_by_policy[policy], correction_checks.get(policy)
+        )
         audits[policy] = {
             **diagnostic.to_dict(),
             "performed": True,
             "graded": diagnostic.status in {"PASS", "FAIL", "INCONCLUSIVE"},
-            "applies_to_current_estimate": route_by_policy[policy] != "direct_oracle",
+            "applies_to_current_estimate": applies,
         }
+        if scope == "residual_corrected":
+            audits[policy]["gate_exemption"] = scope
 
-        if diagnostic.status == "FAIL" and route_by_policy[policy] != "direct_oracle":
+        if diagnostic.status == "FAIL" and scope == "residual_corrected":
+            # The FAIL describes the calibration map; the reported level is
+            # residual-corrected by labels that passed the design check, so it
+            # does not depend on that map. Record the finding without a flag.
+            gates = results.metadata.setdefault("reliability_gates", {})
+            gate = gates.setdefault(
+                policy,
+                {
+                    "flagged": False,
+                    "refused": False,
+                    "refuse_level_claims": False,
+                    "reasons": [],
+                },
+            )
+            gate["exemption"] = scope
+            notes = list(gate.get("notes") or [])
+            note = corrected_gate_note(
+                "residual transport FAIL (simultaneous CI "
+                f"[{diagnostic.delta_ci[0]:+.3f}, {diagnostic.delta_ci[1]:+.3f}] "
+                f"outside margin +/-{diagnostic.delta_max:.3f})",
+                correction_checks.get(policy),
+            )
+            if note not in notes:
+                notes.append(note)
+            gate["notes"] = notes
+        elif diagnostic.status == "FAIL" and applies:
             gates = results.metadata.setdefault("reliability_gates", {})
             gate = gates.setdefault(
                 policy,

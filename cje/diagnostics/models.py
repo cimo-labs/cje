@@ -100,13 +100,19 @@ class DirectDiagnostics:
 
     @property
     def refuse_level_policies(self) -> List[str]:
-        """Policies whose coverage badge refuses level claims."""
+        """Policies whose coverage badge refuses level claims.
+
+        A card with ``gate_exemption`` ``"residual_corrected"`` is left out:
+        it describes the calibration map, and the policy's reported level is
+        residual-corrected by labels that passed the correction design check.
+        """
         if not self.boundary_cards:
             return []
         return sorted(
             policy
             for policy, card in self.boundary_cards.items()
             if card.get("status") == "REFUSE-LEVEL"
+            and card.get("gate_exemption") != "residual_corrected"
         )
 
     @property
@@ -137,7 +143,10 @@ class DirectDiagnostics:
         # Check coverage badges (level-claim identification risk)
         if self.boundary_cards:
             for policy, card in self.boundary_cards.items():
-                if card.get("status") == "REFUSE-LEVEL":
+                if (
+                    card.get("status") == "REFUSE-LEVEL"
+                    and card.get("gate_exemption") != "residual_corrected"
+                ):
                     issues.append(
                         f"REFUSE-LEVEL for {policy}: "
                         f"{card.get('out_of_range', 0.0):.1%} of judge scores "

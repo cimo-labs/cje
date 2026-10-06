@@ -2,6 +2,72 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Calibration-map gates spare residual-corrected estimates whose labels
+  pass a design check.** A residual-transport `FAIL` and the score-support
+  badge (`REFUSE-LEVEL`, boundary card) describe the calibration map, but
+  0.9.1 applied them to every policy whose route was not `direct_oracle`. An
+  augmented policy, whose level is already residual-corrected by its own
+  labels, was marked `CRITICAL`, had `refuse_level_claims` set and was dropped
+  from `best_policy()`, contrary to `guides/audit-correction.md` and the
+  skill. In one reproduction (on 0.9.0, whose gating 0.9.1 keeps) the
+  corrected estimate 0.635 [0.616, 0.655] covered the truth 0.641, yet
+  `best_policy()` returned the base policy at 0.490. An `augmented` policy is
+  now exempt from these two gates when its correction design check passes:
+  at least 20 *effective* labelled prompts (Kish count over prompts of the
+  inverse-propensity weights), under known propensities a design effective
+  sample size `N^2 / sum(1/p)` of at least 20 and no unlabelled row declared
+  at propensity 1, labelled outcomes that are not all identical, and
+  judge-score balance under the declared design (the Horvitz-Thompson
+  weighted labelled rows reproduce the policy's judge-score mean and spread,
+  and under known propensities its row count, within 3 prompt-cluster
+  standard errors). An exempt policy keeps its audit record and badge, with
+  `applies_to_current_estimate: false` and `gate_exemption:
+  "residual_corrected"`. Its gate is not flagged and carries `exemption` and
+  a note; `summary()` marks it `[corrected: map gates not applied]` and prints
+  the note; the winner's limitation (`summary()` and the CLI) reads `residual
+  transport FAIL (calibration map only; estimate residual-corrected)`; a
+  `REFUSE-LEVEL` badge logs at INFO instead of WARNING, and its `CAUTION` or
+  `INCONCLUSIVE` badge no longer sets WARNING, as for `direct_oracle`.
+  `DirectDiagnostics.refuse_level_policies` and `validate()` leave exempt
+  cards out. `metadata["transport_status"]` still reports the worst audit
+  state, including a lifted `FAIL`. `calibrated_mean_ci` scopes its badge
+  warning the same way; its estimate and interval are unchanged.
+- **Every other policy is unchanged.** Plug-in routes (`plug_in`,
+  `plug_in_targeted_unknown`), `direct_oracle`, `no_data`, and augmented
+  policies whose design check fails keep 0.9.1's gates, statuses, reasons,
+  summary text and estimates exactly. The check is a falsification test: it
+  catches labels selected by judge score (the top, bottom, a band or the
+  tails were caught in every simulated run at 20 or more labels) and
+  propensities declared constant when selection depended on the score. It
+  cannot see selection unrelated to the score, misses mild score tilts, and
+  does not balance calibrator covariates. Under random representative labels
+  it fails about 0.5% of the time per policy, and under correctly declared
+  known propensities 0.1-2% (median 0.55%); a false failure only keeps 0.9.1
+  gating for that policy. Transport probes are handled as in 0.9.1, including
+  the `ValueError` for a probe that carries a calibration row's
+  `(source_id, row_id)` or `observation_id`. Saved results replay the gates
+  they were saved with: corrected policies saved by 0.9.1 stay flagged until
+  re-run.
+
+### Added
+
+- `metadata["correction_checks"][policy]` for every augmented policy
+  (`design`, `labelled_prompts`, `effective_labelled_prompts`,
+  `design_effective_n`, `unlabelled_certain_rows`, `balance_t`, `passed`,
+  `failed`), and under partial coverage `diagnostics["correction_check"]` in
+  `calibrated_mean_ci`, whose badge now records `applies_to_current_estimate`.
+- A WARNING when a correction's labelled rows do not match the declared
+  design (`labelled_rows_unbalanced`), its known-propensity design effective
+  sample size is below 20 (`low_design_effective_n`), or unlabelled rows are
+  declared at propensity 1 (`unlabelled_rows_declared_certain`; propensity 1
+  means "always labelled", not "no reweighting"). It is logged with or
+  without a map finding and changes no gate, status or summary.
+- `cje.diagnostics.gates.correction_design_check` and `level_gate_scope`, with
+  the thresholds `CORRECTION_EXEMPT_MIN_LABELLED_PROMPTS` (20) and
+  `CORRECTION_DESIGN_BALANCE_T` (3.0).
+
 ## [0.9.1] - 2026-10-06
 
 Fixes. The augmented interval now takes its degrees of freedom from the

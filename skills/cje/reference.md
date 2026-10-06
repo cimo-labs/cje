@@ -109,7 +109,7 @@ fallback), never by this parameter; its only observable effect is which name lan
   raw argmax with `flagged=True`. If everything is flagged, the argmax returns with
   `all_flagged=True`; do not crown it
 - `.calibrator` → fitted calibrator when calibration is required; complete oracle coverage may return `None`
-- `.metadata["transport_audits"]` → per-policy PASS / FAIL / INCONCLUSIVE / NOT_GRADED / NOT_CHECKED records when using `TransportAuditConfig`; FAIL adds a hard result gate only when the current estimate depends on that calibrator
+- `.metadata["transport_audits"]` → per-policy PASS / FAIL / INCONCLUSIVE / NOT_GRADED / NOT_CHECKED records when using `TransportAuditConfig`; FAIL adds a hard result gate only when the current estimate depends on that calibrator: plug-in routes, or an augmented route whose `metadata["correction_checks"][policy]` did not pass (complete-oracle policies and corrections that pass are exempt). An exempt augmented record carries `applies_to_current_estimate: false` and `gate_exemption: "residual_corrected"`, and its gate `exemption` and a note
 - `.summary()` → compact text report (per-policy estimate + 95% CI + gate flags, best-policy line)
 - `.gates` → `Dict[str, GateResult]` (typed view of `metadata["reliability_gates"]`); `.target_policies`
 - `.metadata` keys: `target_policies`, `reliability_gates` (`{policy: {"flagged": bool, ...}}`),
@@ -408,8 +408,10 @@ directories.
 | Signal | Values | What to tell the user |
 |---|---|---|
 | `overall_status` | GOOD / WARNING / CRITICAL | CRITICAL: results shipped with explicit caveats only |
-| Boundary card | OK / CAUTION / REFUSE-LEVEL | Scalar score-range support only. REFUSE-LEVEL: no absolute level claim from this fit; it does not establish ranking validity |
+| Boundary card | OK / CAUTION / REFUSE-LEVEL | Scalar score-range support only. REFUSE-LEVEL: no absolute level claim from this fit; it does not establish ranking validity. A card with `applies_to_current_estimate: false` describes the map, not the reported (complete-oracle or residual-corrected) level |
 | `reliability_gates[p]["flagged"]` | bool | Surface the point estimate with the limitation; do not substitute another policy silently |
+| `reliability_gates[p]["notes"]` / `["exemption"]` | list / `"residual_corrected"` | A map finding that did not gate the corrected level. Report it as evidence about the map, not about the corrected estimate |
+| `correction_checks[p]` | `passed`, `failed`, `effective_labelled_prompts`, `design_effective_n`, `unlabelled_certain_rows`, `balance_t` | Whether the correction's labels can lift map gates. A failure keeps the gates unchanged; `labelled_rows_unbalanced` means the labels do not look like the declared design's sample |
 | Transport `status` | PASS / FAIL / INCONCLUSIVE / NOT_GRADED / NOT_CHECKED | Equivalence verdict for the declared residual margin; interpret only for the audited population and family. NOT_CHECKED = no probe was supplied for that policy; never treat it as a pass |
 
 ## Troubleshooting

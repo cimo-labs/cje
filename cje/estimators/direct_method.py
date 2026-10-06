@@ -27,7 +27,14 @@ from numbers import Integral
 
 from ..data.models import CIInfo, EstimationResult
 from ..diagnostics.models import DirectDiagnostics, Status
-from ..diagnostics.gates import BOUNDARY_CARD_STATUS_TO_STATUS, worst_status
+from ..diagnostics.gates import (
+    BOUNDARY_CARD_STATUS_TO_STATUS,
+    correction_caution,
+    correction_design_check,
+    corrected_gate_note,
+    level_gate_scope,
+    worst_status,
+)
 from ..diagnostics.robust_inference import (
     CalibrationProvenance,
     DirectEvalTable,
@@ -371,6 +378,11 @@ class CalibratedDirectEstimator:
             return None
         routes = self._point_routes()
         return routes[index] if index < len(routes) else None
+
+    def _level_gate_scope(self, policy: str) -> Tuple[bool, Optional[str]]:
+        """Whether calibration-map gates apply to this policy's reported level."""
+        checks: Dict[str, Dict[str, Any]] = getattr(self, "_correction_checks", {})
+        return level_gate_scope(self._route_for_policy(policy), checks.get(policy))
 
     def _all_policies_have_complete_oracle_coverage(self) -> bool:
         return bool(self.target_policies) and all(
@@ -1282,13 +1294,75 @@ class CalibratedDirectEstimator:
                         "oracle jackknife unavailable"
                     )
 
+    def _compute_correction_checks(self) -> Dict[str, Dict[str, Any]]:
+        """Correction design check for every augmented policy.
+
+        Computed once from the full-data evaluation table (never per
+        bootstrap replicate). A passing check lets the residual-corrected
+        level escape calibration-map gates (``level_gate_scope``); a failing
+        check keeps the 0.9.1 gates and, for the failures in
+        ``correction_caution``, logs one WARNING.
+        """
+        checks: Dict[str, Dict[str, Any]] = {}
+        if self._last_point is None or self._eval_table is None:
+            return checks
+        constant_flags = list(
+            self._last_point.diagnostics.get("labelled_outcomes_constant", [])
+        )
+        for index, policy in enumerate(self.target_policies):
+            if self._route_for_policy(policy) != "augmented":
+                continue
+            rows = self._eval_table.policy_indices == index
+            propensities = None
+            if (
+                self.label_design.kind == "known_propensity"
+                and self.label_design.propensities is not None
+            ):
+                propensities = np.asarray(
+                    self.label_design.propensities[policy], dtype=float
+                )
+            try:
+                check = correction_design_check(
+                    self._eval_table.judge_scores[rows],
+                    self._eval_table.oracle_mask[rows],
+                    self._eval_table.prompt_ids[rows],
+                    self.label_design.kind,
+                    propensities=propensities,
+                    labelled_outcomes_constant=(
+                        bool(constant_flags[index])
+                        if index < len(constant_flags)
+                        else False
+                    ),
+                )
+            except ValueError as error:
+                # No check recorded: the policy keeps the gates.
+                logger.debug(
+                    f"Correction design check unavailable for policy "
+                    f"'{policy}': {error}"
+                )
+                continue
+            checks[policy] = check
+            caution = correction_caution(policy, check)
+            if caution:
+                logger.warning(caution)
+        return checks
+
+    def _boundary_note(self, policy: str, card: Dict[str, Any]) -> str:
+        checks: Dict[str, Dict[str, Any]] = getattr(self, "_correction_checks", {})
+        return corrected_gate_note(
+            f"boundary REFUSE-LEVEL ({card.get('out_of_range', 0.0):.1%} of judge "
+            "scores outside the oracle calibration range)",
+            checks.get(policy),
+        )
+
     def _compute_policy_boundary_card(self, policy: str) -> Optional[Dict[str, Any]]:
         """Coverage badge (paper REFUSE-LEVEL gate) for one policy.
 
         Compares the policy's fresh-draw judge scores against the oracle
         calibration S-range the reward calibrator stored at fit time;
         >= 5% out-of-range mass refuses level claims (threshold canonical
-        in gates.py). The shared helper emits the REFUSE-LEVEL warning.
+        in gates.py). The shared helper emits the REFUSE-LEVEL warning when
+        the badge gates this policy's level (``level_gate_scope``).
         """
         if self.reward_calibrator is None:
             return None
@@ -1304,7 +1378,7 @@ class CalibratedDirectEstimator:
                 S_policy=pdata.judge_scores,
                 R_policy=pdata.calibrated_rewards,
                 warn_label=policy,
-                emit_warning=self._route_for_policy(policy) != "direct_oracle",
+                emit_warning=self._level_gate_scope(policy)[0],
             )
         except Exception as e:
             logger.debug(f"Could not compute boundary card for policy '{policy}': {e}")
@@ -1322,8 +1396,11 @@ class CalibratedDirectEstimator:
         The identification risk that matters here is coverage: each
         policy's boundary card (the paper's coverage badge) is computed
         against the calibrator's oracle S-range, and a REFUSE-LEVEL badge
-        sets that policy's status to CRITICAL (the shared boundary helper
-        emits the loud warning).
+        sets CRITICAL when the policy's level depends on the calibrator
+        (level_gate_scope; the shared boundary helper emits the loud
+        warning). Complete-oracle policies, and residual-corrected policies
+        whose correction design check passes, keep the card as a record of
+        the map without a status.
         """
         policies = list(self.target_policies)
 
@@ -1359,15 +1436,20 @@ class CalibratedDirectEstimator:
         # The card-status -> Status ladder is canonical in gates.py.
         boundary_cards: Dict[str, Dict[str, Any]] = {}
         status_per_policy: Dict[str, Status] = {p: Status.GOOD for p in policies}
+        self._correction_checks: Dict[str, Dict[str, Any]] = (
+            self._compute_correction_checks()
+        )
         for policy in policies:
             card = self._compute_policy_boundary_card(policy)
             if card is None:
                 continue
             card = dict(card)
-            applies_to_current_estimate = (
-                self._route_for_policy(policy) != "direct_oracle"
-            )
+            applies_to_current_estimate, scope = self._level_gate_scope(policy)
             card["applies_to_current_estimate"] = applies_to_current_estimate
+            if scope == "residual_corrected":
+                card["gate_exemption"] = scope
+                if card.get("status") == "REFUSE-LEVEL":
+                    logger.info(self._boundary_note(policy, card))
             boundary_cards[policy] = card
             if not applies_to_current_estimate:
                 continue
@@ -1412,8 +1494,17 @@ class CalibratedDirectEstimator:
 
         The CLI's best-policy announcement reads
         ``metadata["reliability_gates"][policy]["flagged"]``: a REFUSE-LEVEL
-        coverage badge qualifies the policy's point-winner announcement.
+        coverage badge qualifies the policy's point-winner announcement when
+        the policy's level depends on the calibrator. Augmented policies'
+        correction design checks go to ``metadata["correction_checks"]``; an
+        exempt REFUSE-LEVEL badge leaves an unflagged gate with
+        ``exemption`` and a note.
         """
+        checks: Dict[str, Dict[str, Any]] = dict(
+            getattr(self, "_correction_checks", {}) or {}
+        )
+        if checks:
+            metadata["correction_checks"] = checks
         if not diagnostics.boundary_cards:
             return
         metadata["boundary_cards"] = diagnostics.boundary_cards
@@ -1431,12 +1522,19 @@ class CalibratedDirectEstimator:
                     f"boundary: {card.get('out_of_range', 0.0):.1%} of judge "
                     f"scores outside the oracle calibration range"
                 )
-            gates[policy] = {
+            gate: Dict[str, Any] = {
                 "flagged": refuse_level,
                 "refused": False,  # estimates are still reported
                 "refuse_level_claims": refuse_level,
                 "reasons": reasons,
             }
+            if (
+                card.get("status") == "REFUSE-LEVEL"
+                and card.get("gate_exemption") == "residual_corrected"
+            ):
+                gate["exemption"] = "residual_corrected"
+                gate["notes"] = [self._boundary_note(policy, card)]
+            gates[policy] = gate
         metadata["reliability_gates"] = gates
 
     def _oracle_jackknife_matrix(self) -> Optional[np.ndarray]:

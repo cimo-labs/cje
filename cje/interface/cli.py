@@ -310,11 +310,16 @@ def best_policy_lines(results: "EstimationResult") -> list:
         )
     if metadata and metadata.get("calibration_status") == "UNCALIBRATED":
         limitations.append("UNCALIBRATED raw judge-score mean")
+    from ..diagnostics.gates import residual_corrected_suffix
+
     transport_audits = metadata.get("transport_audits", {}) if metadata else {}
     winner_audit = transport_audits.get(display, {})
     transport_status = winner_audit.get("status", "NOT_CHECKED")
     if transport_status != "PASS":
-        limitations.append(f"residual transport {transport_status}")
+        limitations.append(
+            f"residual transport {transport_status}"
+            + residual_corrected_suffix(winner_audit)
+        )
 
     lines = [f"Best by point estimate: {display}"]
     if limitations:
@@ -375,6 +380,7 @@ def _dir_has_logprob_fields(directory: Path) -> bool:
 
 def run_analysis(args: argparse.Namespace) -> int:
     """Run the analysis command."""
+    from ..diagnostics.gates import residual_corrected_suffix
     from .analysis import LOGGED_DATA_PATH_REMOVED_MESSAGE, analyze_dataset
 
     # Set logging level
@@ -541,7 +547,9 @@ def run_analysis(args: argparse.Namespace) -> int:
                 )
                 audit = results.metadata.get("transport_audits", {}).get(policy, {})
                 print(
-                    "    residual transport: " f"{audit.get('status', 'NOT_CHECKED')}"
+                    "    residual transport: "
+                    f"{audit.get('status', 'NOT_CHECKED')}"
+                    + residual_corrected_suffix(audit)
                 )
 
             # Best policy (reliability-aware: an argmax that failed the

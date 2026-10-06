@@ -620,18 +620,33 @@ class EstimationResult(BaseModel):
 
         ci_lower, ci_upper = self.confidence_interval()
         gates = self.gates
+        raw_gates = self.metadata.get("reliability_gates") or {}
         width = max(len(p) for p in policies)
 
         lines = [f"CJE Estimation Results (method: {self.method})"]
         for i, policy in enumerate(policies):
             gate = gates.get(policy)
+            # A map finding that did not gate a residual-corrected level is
+            # kept in the gate record as ``exemption`` plus ``notes``.
+            raw_gate = raw_gates.get(policy) if isinstance(raw_gates, dict) else None
+            exempt = (
+                gate is not None
+                and not gate.flagged
+                and isinstance(raw_gate, dict)
+                and raw_gate.get("exemption") == "residual_corrected"
+            )
             flag = ""
             if gate is not None and gate.flagged:
                 flag = "  [gate: FLAGGED]"
+            elif exempt:
+                flag = "  [corrected: map gates not applied]"
             lines.append(
                 f"  {policy:<{width}s}  {self.estimates[i]:.3f}  "
                 f"95% CI [{ci_lower[i]:.3f}, {ci_upper[i]:.3f}]{flag}"
             )
+            if exempt and isinstance(raw_gate, dict):
+                for note in raw_gate.get("notes") or []:
+                    lines.append(f"    note: {note}")
 
         try:
             verdict = self.best_policy()
@@ -653,8 +668,11 @@ class EstimationResult(BaseModel):
                 limitations.append("UNCALIBRATED raw judge-score mean")
             audit = (self.metadata.get("transport_audits") or {}).get(display, {})
             if audit and audit.get("status") != "PASS":
+                from ..diagnostics.gates import residual_corrected_suffix
+
                 limitations.append(
                     f"residual transport {audit.get('status', 'NOT_CHECKED')}"
+                    + residual_corrected_suffix(audit)
                 )
             lines.append(f"Best by point estimate: {display}")
             if limitations:
