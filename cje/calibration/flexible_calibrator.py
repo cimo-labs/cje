@@ -15,6 +15,25 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def validate_oracle_labels(labels: np.ndarray) -> None:
+    """Raise ``ValueError`` unless every oracle label is finite and in [0, 1].
+
+    The isotonic fits are bounded to [0, 1] and clip their outputs, so labels
+    in original units (a 0-500 amount, a 1-5 rating) or centred on 0 would be
+    silently collapsed instead of calibrated.
+    """
+    y = np.asarray(labels, dtype=float)
+    if not np.all(np.isfinite(y)):
+        raise ValueError("oracle_labels must be finite (found NaN or inf).")
+    if np.any((y < 0.0) | (y > 1.0)):
+        raise ValueError(
+            f"oracle_labels must lie in [0, 1] (calibrated rewards are clipped "
+            f"to that range); got values in [{y.min():g}, {y.max():g}]. "
+            "Use analyze_dataset, which normalises arbitrary bounded scales, or "
+            "rescale with (y - lo) / (hi - lo) and map results back."
+        )
+
+
 def _predict_spline_ridge(model: Pipeline, X: np.ndarray) -> np.ndarray:
     """Evaluate the fitted smooth map in a fixed order for every row.
 
@@ -113,6 +132,8 @@ class FlexibleCalibrator:
                 f"Got mode='{mode}' with covariates={covariate_names}"
             )
 
+        self._log_level: int = logging.INFO
+
         # Storage for fitted models
         self._monotone_models: Dict[int, Any] = {}
         self._g_models: Dict[int, Any] = {}
@@ -132,6 +153,7 @@ class FlexibleCalibrator:
         folds: np.ndarray,
         covariates: Optional[np.ndarray] = None,
         sample_weight: Optional[np.ndarray] = None,
+        log_level: int = logging.INFO,
     ) -> "FlexibleCalibrator":
         """Fit the calibrator with cross-fitting.
 
@@ -142,10 +164,16 @@ class FlexibleCalibrator:
             covariates: Optional covariate matrix (n_samples, n_covariates)
                 Only used in two_stage mode. Each column corresponds to a covariate
                 specified in covariate_names.
+            sample_weight: Optional positive per-sample fit weights.
+            log_level: Level for routine progress messages (mode forcing and
+                mode selection). ``JudgeCalibrator.fit_cv(quiet=True)`` passes
+                DEBUG so per-replicate refits stay silent.
 
         Returns:
             Self for chaining
         """
+        validate_oracle_labels(Y)
+        self._log_level = log_level
         unique_folds = np.unique(folds)
         n_samples = len(S)
         weights: Optional[np.ndarray] = None
@@ -173,7 +201,7 @@ class FlexibleCalibrator:
                     f"{len(self.covariate_names)} covariate names were specified"
                 )
             if not self.covariate_names:
-                logger.warning(
+                logger.debug(
                     "Covariates provided but no covariate_names specified. "
                     "Covariates will be used but not labeled."
                 )
@@ -186,9 +214,10 @@ class FlexibleCalibrator:
         if self.mode == "auto":
             # If covariates provided, force two_stage
             if covariates is not None:
-                logger.info(
+                logger.log(
+                    log_level,
                     "Auto mode with covariates: forcing two_stage mode "
-                    "(covariates not supported in monotone)"
+                    "(covariates not supported in monotone)",
                 )
                 self._fit_two_stage(S, Y, folds, covariates, weights)
                 self.selected_mode = "two_stage"
@@ -693,12 +722,15 @@ class FlexibleCalibrator:
             se_mse = np.sqrt(weighted_var / max(effective_n, 1.0))
         se_rmse = se_mse / (2.0 * max(rmse_mono, 1e-12))
 
-        logger.info("Calibration mode selection:")
-        logger.info(
-            f"  Overall RMSE - Monotone: {rmse_mono:.4f}, Two-stage: {rmse_two_stage:.4f}"
+        level = self._log_level
+        logger.log(level, "Calibration mode selection:")
+        logger.log(
+            level,
+            f"  Overall RMSE - Monotone: {rmse_mono:.4f}, Two-stage: {rmse_two_stage:.4f}",
         )
-        logger.info(
-            f"  Regional performance - Two-stage better in {better_count}/3 regions"
+        logger.log(
+            level,
+            f"  Regional performance - Two-stage better in {better_count}/3 regions",
         )
         logger.debug(f"    Low S: Mono={rmse_mono_low:.4f}, Flex={rmse_flex_low:.4f}")
         logger.debug(f"    Mid S: Mono={rmse_mono_mid:.4f}, Flex={rmse_flex_mid:.4f}")
@@ -710,10 +742,12 @@ class FlexibleCalibrator:
         # 1. It's significantly better overall (1-SE rule), OR
         # 2. It's better in at least 2/3 regions (indicates non-monotonicity)
         if rmse_two_stage < rmse_mono - se_rmse or better_count >= 2:
-            logger.info(f"  → Selected: two_stage (better in {better_count}/3 regions)")
+            logger.log(
+                level, f"  → Selected: two_stage (better in {better_count}/3 regions)"
+            )
             return "two_stage"
         else:
-            logger.info("  → Selected: monotone (simpler model preferred)")
+            logger.log(level, "  → Selected: monotone (simpler model preferred)")
             return "monotone"
 
     def fold_models(self) -> Dict[int, Any]:
