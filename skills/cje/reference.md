@@ -224,30 +224,40 @@ def compare_judges(
 
 - `cmp.table` (`JudgeQuality` per judge): `n_labelled_rows`, `n_labelled_clusters`,
   `selected_mode`, `covariates_used`, `oof_rmse`, `r2_pooled`, `r2_within` (each with `_ci`),
-  `var_f` (within-policy variance of the calibrated prediction over all rows) and
+  `var_f` (within-policy variance of the calibrated prediction over all rows),
   `var_residual` (within-policy variance of the out-of-fold residual, `(1 - r2_within)` times
-  the labels' within-policy variance). R² is `1 - SS(r)/SS(y)` with `r = y - OOF prediction`,
-  both centred; `r2_within` sets label savings, `r2_pooled` also credits tracking the policy.
+  the labels' within-policy variance), and the prompt-clustered `var_f_clustered`,
+  `var_residual_clustered`, `cov_f_residual_clustered` (rows of a prompt summed within policy
+  before squaring; equal to the row-level ones with one row per prompt and policy). R² is
+  `1 - SS(r)/SS(y)` with `r = y - OOF prediction`, both centred; `r2_within` sets label
+  savings (with one labelled row per prompt and policy), `r2_pooled` also credits tracking the
+  policy.
 - `cmp.pairwise` (`JudgePair` per non-reference judge J): `r2_within_diff` and `oof_rmse_diff`
-  (J minus reference), `label_multiplier = (1 - R²_ref) / (1 - R²_J)` = labels the
-  **reference** needs per label of **J** for equal interval width on a policy mean with
-  plentiful unlabelled rows (above 1: J saves labels). With `n_unlabeled`:
-  `variance_ratio_at_n` = `V_ref / V_J` with `V = Var(f)/N + Var(Y-f)/n` (`n` = observed
-  labelled rows per policy, `N = n + n_unlabeled`), `label_multiplier_at_n` (capped at `N/n`,
-  flagged by `label_multiplier_at_n_capped`); otherwise these are None.
+  (J minus reference), `label_multiplier = var_residual_clustered[ref] /
+  var_residual_clustered[J]` = labelled rows the **reference** needs per labelled row of
+  **J** for equal interval width on a policy mean with plentiful unlabelled rows (above 1:
+  J saves labels; `(1 - R²_ref) / (1 - R²_J)` with one labelled row per prompt and policy).
+  With `n_unlabeled`: `variance_ratio_at_n` = `V_ref / V_J` with
+  `V = max(Var(f) + 2 Cov(f, Y-f), 0)/N + Var(Y-f)/n` (clustered components; `n` = mean
+  labelled rows per labelled policy, `N = n + n_unlabeled`; 1 when `n_unlabeled=0`),
+  `label_multiplier_at_n` (capped at `N/n`, flagged by `label_multiplier_at_n_capped`);
+  otherwise these are None.
 - Intervals: paired prompt-cluster bootstrap, one positive Exp(1) weight per cluster per
   replicate shared by every judge, each judge refitted with its selected mode
   (`n_bootstrap` fits per judge). A judge's row does not depend on the other judges.
 - `cmp.calibrators[name]` is the full-sample fit on that judge's raw scale (usable with
   `transport_audit`); `cmp.summary()`, `cmp.to_dict()` (JSON-safe), `cmp.row(name)`,
   `cmp.pair(name)`; `cmp.diagnostics` has `n_folds`, `policies`, `policies_without_labels`,
+  `labelled_rows_by_policy`, `max_rows_per_prompt`, `max_labelled_rows_per_prompt`,
   `bootstrap`, `planned`.
 - Limits: representative labels only, the same rows for every judge; policy levels at weight
-  one (not differences); labelled rows treated as independent (several labelled rows per
-  prompt with shared judge errors can move the true multiplier); folds hash the cluster-id
-  strings, so pass identical `cluster_ids` to reproduce a row with `calibrated_mean_ci`; picking
-  the best of many judges on the same labels flatters the winner. Warns below 20 labelled
-  prompt clusters and when a policy has no labels (excluded). Guide:
+  one (not differences); prompts are the independent units, and added labels are assumed to
+  come in prompts labelled like the observed ones (`diagnostics["max_labelled_rows_per_prompt"]`);
+  finite-N fields use the mean labelled rows per policy and pooled components; folds hash the
+  cluster-id strings, so pass identical `cluster_ids` to reproduce a row with
+  `calibrated_mean_ci`; picking the best of many judges on the same labels flatters the
+  winner. Warns below 20 labelled prompt clusters, when a policy has no labels (excluded), and,
+  with `n_unlabeled`, when labelled rows per policy differ by more than 1.5 times. Guide:
   [comparing judges](https://github.com/cimo-labs/cje/blob/main/guides/comparing-judges.md).
 
 ## Planning: "how many labels do I need?"

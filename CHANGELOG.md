@@ -8,11 +8,19 @@
   labelled rows (issue #71).** Each judge gets its own cross-fitted
   `JudgeCalibrator` on folds shared by every judge. `table` reports per judge
   the labelled rows and prompt clusters, the selected mode, out-of-fold RMSE,
-  out-of-fold R² pooled and within policy, and `Var(f)` and `Var(Y - f)`.
-  `pairwise` reports each judge against a reference: the differences in
-  within-policy R² and RMSE, the label multiplier
-  `(1 - R²_ref) / (1 - R²_J)` (plentiful unlabelled rows), and, with
-  `n_unlabeled`, the finite-N variance ratio and multiplier. Intervals come
+  out-of-fold R² pooled and within policy, `Var(f)` and `Var(Y - f)`, and
+  their prompt-clustered versions with the covariance term. `pairwise`
+  reports each judge against a reference: the differences in within-policy
+  R² and RMSE, the label multiplier (labelled rows the reference needs per
+  labelled row of the judge, plentiful unlabelled rows), and, with
+  `n_unlabeled`, the finite-N variance ratio and multiplier. The multipliers
+  treat prompts, not rows, as independent: with one labelled row per prompt
+  the plentiful-row multiplier is `(1 - R²_ref) / (1 - R²_J)`, and with
+  several labelled draws per prompt it accounts for judge errors shared
+  within a prompt (the row-level ratio understated the reference's label
+  need by 20-40% in a simulation with four labelled draws per prompt). With
+  `n_unlabeled`, a warning fires when labelled rows per policy differ by more
+  than 1.5 times, since the finite-N fields use their mean. Intervals come
   from a paired prompt-cluster bootstrap (positive Exp(1) weights shared by
   every judge) that refits each judge in every replicate. Representative
   labels only; judges keep their own score scales (`judge_scales` checks a
