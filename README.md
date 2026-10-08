@@ -4,7 +4,7 @@
 
 # CJE: Causal Judge Evaluation
 
-**Reuse an informative judge and available outcome labels to reduce the labeling needed for policy evaluation.** CJE calibrates judge scores against ground-truth labels, estimates policy means and paired differences, and reports uncertainty under explicit sampling and transport assumptions. The savings come from applying that calibration to many responses and, where supported, across policies or evaluation cycles.
+**Reuse an informative judge and available outcome labels to reduce the labeling needed for policy evaluation.** Because raw judge scores can be biased, CJE calibrates them against ground-truth labels, estimates policy means and paired differences, and reports uncertainty under explicit sampling and calibration-reuse assumptions. The savings come from applying that calibration to many responses and, where supported, across policies or evaluation cycles.
 
 [![arXiv](https://img.shields.io/badge/arXiv-2512.11150-b31b1b.svg)](https://arxiv.org/abs/2512.11150)
 [![Dataset](https://img.shields.io/badge/HF-Dataset-yellow)](https://huggingface.co/datasets/elandy/cje-chatbot-arena)
@@ -18,23 +18,19 @@
 ## 60 seconds
 
 ```bash
-pip install cje-eval
+pip install cje-eval   # Python 3.10–3.13
 ```
 
 **Upgrading?** Read the [CHANGELOG](https://github.com/cimo-labs/cje/blob/main/CHANGELOG.md) first. Two-stage calibrators saved before 0.8.0 need refitting from retained inputs.
 
-**Using a coding agent?** The [bundled skill](#use-cje-from-your-ai-agent) covers data reshaping, calibration, comparisons, and diagnostics.
-
-You need responses from each policy on a shared prompt set, a score for every response from **one fixed LLM judge**, and ground-truth labels (`oracle_label`) on a probability-sampled slice. Labels can be human ratings, expert reviews, or observed outcomes. Stratification can improve score-range coverage; record inclusion probabilities if sampling rates differ.
-
-Each record is one judged response: `{"prompt_id", "judge_score", "oracle_label" (optional)}`. The API calls evaluation responses *fresh draws*. They can be newly generated or observed responses retained in logs, provided the sampling design supports the policies and population you are evaluating. Historical judge/outcome pairs can also supply separate calibration data. Neither use estimates an unseen policy's outputs from another policy's logs. Any bounded judge and oracle scales work (0–1, 0–100, Likert); they need not match.
+You need, for each **policy** (model, system prompt, or agent version) you compare: its responses to a shared set of prompts, one `judge_score` per response from **one fixed LLM judge** (same rubric for every policy), and ground-truth labels (`oracle_label`: human ratings, expert reviews, or observed outcomes) on a **randomly sampled** subset of responses. Each record is one judged response: `{"prompt_id", "judge_score", "oracle_label" (optional)}`; the API calls these records *fresh draws*. Responses that share a `prompt_id` are paired across policies and treated as one cluster for uncertainty, so reuse the same IDs. Judge and label scales may differ (0–1, 0–100, Likert); calibrated estimates come back on the label scale.
 
 ```python
 from cje import analyze_dataset
 
-# Two policies, gpt-5.6 vs fable-5, each answered the same 20 prompts.
-# A separate fixed judge model scored all 40 responses; human raters
-# labeled a random half of gpt-5.6's (None = not labeled).
+# Synthetic data: two policies, gpt-5.6 vs fable-5, each answered the same
+# 20 prompts. A separate fixed judge model scored all 40 responses; human
+# raters labeled 10 of gpt-5.6's (None = not labeled).
 judge_scores = {
     "gpt-5.6": [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
                 0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94],
@@ -44,9 +40,6 @@ judge_scores = {
 human_labels = [0.55, 0.60, 0.70, 0.74, 0.75, 0.80, 0.90, 0.92, 0.88, 0.97,
                 None, None, None, None, None, None, None, None, None, None]
 
-# gpt-5.6's labeled slice calibrates the judge for BOTH policies. Reusing
-# that map for fable-5 is an assumption; the output flags it as
-# "residual transport NOT_CHECKED" until a held-out probe audit grades it.
 draws = {
     "gpt-5.6": [
         {"prompt_id": f"q{i:02d}", "judge_score": s, "oracle_label": y}
@@ -59,6 +52,12 @@ draws = {
 }
 results = analyze_dataset(fresh_draws_data=draws)
 print(results.summary())
+
+# Is fable-5 better? Test the paired difference on the shared prompts;
+# don't compare the two intervals by eye.
+for c in results.compare_all_policies():
+    print(f"{c['policy1']} - {c['policy2']}: {c['difference']:+.3f}  "
+          f"95% CI [{c['ci_lower']:+.3f}, {c['ci_upper']:+.3f}]  p={c['p_value']:.2f}")
 ```
 
 ```text
@@ -68,11 +67,39 @@ CJE Estimation Results (method: calibrated_direct)
 Best by point estimate: fable-5
 Limitations: residual transport NOT_CHECKED
 Status: warning
+fable-5 - gpt-5.6: +0.038  95% CI [-0.027, +0.102]  p=0.22
 ```
 
-Both policies get a calibrated estimate and a confidence interval, including `fable-5`, which has no labels of its own. Its calibration reuse remains `NOT_CHECKED` until supported by a [held-out audit](#guardrails-claims-cje-refuses-to-make). This small synthetic example demonstrates the API, not adequate power for a real evaluation. The intervals account for evaluation sampling and the finite label budget (with 10 labeled prompts, gpt-5.6's interval has 9 degrees of freedom); interpreting them still depends on the sampling design and shared-calibration assumptions.
+`Best by point estimate` ranks point estimates; it is not a test. The paired interval includes 0 (p = 0.22), so these 20 synthetic prompts do not show that fable-5 is better. `compare_all_policies()` names each pair (`difference` = `policy1` − `policy2`; for many pairs add `adjust="bh"` and read `p_adjusted`; `p_value`, `significant` and the CIs stay unadjusted); `results.compare_policies(i, j)` takes integer indices into `results.target_policies`, which is sorted by name, not your dict's order.
 
-→ [Runnable Colab with real data](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb) · [Full docs](https://cimolabs.com/cje)
+`fable-5` has no labels of its own, so it borrows gpt-5.6's calibration. Its interval covers prompt sampling and calibration-fit uncertainty, but not the chance that the calibration is off for fable-5's responses; that is why it is narrower than gpt-5.6's, which its own 10 labels correct. This unaudited reuse, which the difference inherits, is what `NOT_CHECKED` marks: a [held-out audit](#guardrails-claims-cje-refuses-to-make) grades it, and labeling a random slice of fable-5's own responses removes the reliance ([Your own data](#your-own-data)).
+
+→ [Colab tutorial](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb) on Chatbot Arena prompts (GPT-5 labels stand in for human ratings) · [API reference](https://github.com/cimo-labs/cje/blob/main/cje/interface/README.md#api-reference) · [Overview](https://cimolabs.com/cje)
+
+### Your own data
+
+Mark an unlabeled row with `oracle_label: None` or leave the field out. Records reject `NaN`; only the array API below uses `NaN` for unlabeled. From a CSV or DataFrame:
+
+```python
+import csv
+from collections import defaultdict
+from cje import analyze_dataset
+
+draws = defaultdict(list)
+with open("evals.csv") as f:  # prompt_id, variant, judge_score, human_rating (blank = unlabeled)
+    for row in csv.DictReader(f):
+        draws[row["variant"]].append({
+            "prompt_id": row["prompt_id"],
+            "judge_score": float(row["judge_score"]),
+            "oracle_label": float(row["human_rating"]) if row["human_rating"] else None,
+        })
+results = analyze_dataset(fresh_draws_data=dict(draws))
+```
+
+With pandas, convert blanks before building records: `df = df.astype(object).where(df.notna(), None)`.
+
+- **Where to put labels.** Comparing a few variants whose responses you can all rate? Label a random sample of each (start with 20 or more per variant, ideally on the same randomly chosen prompts). Each estimate is then corrected by its own labels (`metadata["point_estimator"]["routes"]` shows `augmented`), so a judge that favors one variant's style does not carry into the difference; the intervals are wider than with every label on one policy. Put all labels on one policy only when labeling the others is impractical.
+- **Unequal sampling.** The default `label_design="representative"` treats each policy's labeled rows as a simple random sample of that policy. If sampling rates differ (for example, you oversampled some score ranges), pass `label_design="known_propensity", label_propensities={policy: probs, ...}`: for every policy in the call, an inclusion probability in (0, 1] for every row in input order, labeled or not. Otherwise the estimate and its interval can be biased, with no warning. Never hand-pick responses to label; CJE cannot detect it.
 
 ## Use CJE from your AI agent
 
@@ -80,7 +107,8 @@ You don't have to learn the API yourself. [`skills/cje/`](https://github.com/cim
 
 ```text
 Read https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/SKILL.md,
-then use CJE to compare the policies in my eval data.
+then use CJE to compare the policies in my eval data. When it points to reference.md,
+fetch https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/reference.md.
 ```
 
 ## Is CJE the right tool?
@@ -88,37 +116,38 @@ then use CJE to compare the policies in my eval data.
 | Your situation | Use |
 |---|---|
 | Rank/compare policies using an LLM judge, with some ground-truth labels | **CJE** |
-| Estimate how a new model or prompt would do before shipping it, without an A/B test | **CJE**, when the outcome can be labelled offline (raters, experts). Generate its responses on prompts sampled from real traffic and score them with the calibrated judge. Labels on a held-out, probability-sampled slice of its own responses check that the calibration carries over; without them the estimate is marked `NOT_CHECKED` |
-| One dataset, labels sampled from it, want a CI on its mean | CJE's `calibrated_mean_ci` provides a prediction-powered mean estimate with diagnostics |
-| Evaluate **many** policies without labeling under each | **CJE**. Labels pool across policies; audit that reuse with held-out probes before relying on it |
+| Estimate how a new model or prompt would score before shipping it (ahead of, not instead of, an A/B test) | **CJE**, when the outcome can be labelled offline (raters, experts): score its responses on prompts sampled from real traffic. This measures offline quality on those prompts, not online effects such as changes in user behavior. Its estimate stays `NOT_CHECKED` until held-out labels on its own responses grade the calibration reuse |
+| One dataset, labels sampled from it, want a CI on its mean | `calibrated_mean_ci`, a prediction-powered mean ([array API](#the-array-api)) |
+| Evaluate **many** policies without labeling under each | **CJE**. Labels pool across policies; audit that reuse with held-out probes. With only a few policies, label a random slice of each instead ([Your own data](#your-own-data)) |
+| No ground-truth labels yet (or labels on fewer than 4 prompts) | **Label a random slice first.** CJE still runs, but returns only the raw judge mean, marked `naive_direct` / `UNCALIBRATED` and gate-`FLAGGED` |
 | Predict how a *specific response* will score | Per-item prediction (e.g. conformal methods) |
-| Estimate a policy by reweighting another policy's logged responses (importance sampling, or doubly robust OPE on top of target-policy fresh draws) | The frozen `cje-eval==0.3.*` OPE line. Current CJE is Direct-mode only (see [Why Direct mode only?](#why-direct-mode-only-no-ipsdr)) |
+| Estimate a policy by reweighting another policy's logged responses (importance sampling or doubly robust OPE) | The frozen `cje-eval==0.3.*` line ([why](#why-direct-mode-only-no-ipsdr)) |
 
 ## How it works
 
-1. **Calibrate**: learn the judge → oracle mapping on the labeled slice (isotonic, two-stage when needed; mean-preserving by construction; cross-fitted).
-2. **Evaluate**: score every policy's fresh responses through the calibrated judge and compare policies on the same prompts.
-3. **Diagnose**: automatically report scalar score-range support, and optionally run a held-out residual equivalence audit with a predeclared practical margin. These answer different questions and are reported separately.
+1. **Calibrate**: learn the judge → oracle mapping on the labeled slice (isotonic regression, unless the default auto mode's cross-validation prefers a two-stage variant that is isotonic in a learned index of the score, so it need not be monotone in the raw score; two-stage whenever covariates are used; cross-fitted by prompt).
+2. **Evaluate**: average each policy's calibrated scores; when a policy has random labels of its own, correct that average by their mean residual (label minus calibrated score; the `augmented` route). Compare policies on the same prompts.
+3. **Diagnose**: automatically report scalar score-range support, and optionally run a held-out residual equivalence audit with a predeclared practical margin.
 
-Confidence intervals include finite-label calibration uncertainty on supported inference paths. Their interpretation still depends on the oracle sampling design, shared-calibration assumptions, and any transport claims being made.
+Confidence intervals include finite-label calibration uncertainty on supported inference paths. Each estimate targets the policy's mean oracle label over the prompt population your prompts were sampled from, assuming (1) labels are a probability sample of the responses they describe, (2) the judge and rubric stay fixed, and (3) for a policy without labels of its own, the reused calibration has zero mean error on its responses (transport). CJE cannot check (1) or (2); it reports (3) as `NOT_CHECKED` until a held-out audit grades it. [Estimator details](https://github.com/cimo-labs/cje/blob/main/cje/estimators/README.md).
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/cimo-labs/cje/main/images/forest_plot_n1000_oracle25.png" alt="CJE forest plot showing calibrated policy estimates with confidence intervals" width="80%">
   <br><em>Calibrated estimates with 95% CIs under the experiment's stated sampling and calibration assumptions</em>
 </div>
 
-## Validation on real ground truth
+## Validation against reference labels
 
-- **HealthBench Consensus (29,511 response–criterion records)**: a custom confidence-augmented regrade found judge overconfidence of 24.5 and 13.0 percentage points against strict positive physician majority, with ties coded not met (14.4 and 3.0 points against mean physician agreement). One seeded retrospective replay exposed 5% of aggregate labels (1,454 endpoints, each based on 2–5 physician grades); calibrated estimates were within 1.4–2.1 points of the full aggregate endpoint. This was not prospective annotation or repeated-split validation. [Read the full audit →](https://cimolabs.com/research/healthbench-judge-audit)
-- **Chatbot Arena (4,961 prompts, 5 policies)**: 99% pairwise ranking accuracy in the headline 5%-oracle configuration, with 94% average accuracy across configurations, against a stronger model's ratings standing in for human labels (a model-reference study, not human validation). The arXiv v3 cost model gives a 14× reduction against full labeling under that reference. In this benchmark, calibration-aware intervals achieved ~95% coverage versus 0% for naive judge-score intervals. An adversarial policy that fools the judge is correctly flagged by the transport audit. [Paper →](https://arxiv.org/abs/2512.11150)
+- **HealthBench Consensus (29,511 response–criterion records)**: a custom confidence-augmented regrade found judge overconfidence of 24.5 (gpt-4o-mini) and 13.0 (Claude Haiku 4.5) percentage points against strict positive physician majority, with ties coded not met (14.4 and 3.0 points, respectively, against mean physician agreement). One seeded retrospective replay exposed 5% of aggregate labels (1,454 endpoints, each based on 2–5 physician grades); calibrated estimates were within 1.4–2.1 points of the full aggregate endpoint. This was not prospective annotation or repeated-split validation. [Read the full audit →](https://cimolabs.com/research/healthbench-judge-audit)
+- **Chatbot Arena (4,961 prompts, 5 policies; GPT-5 ratings stand in for human labels, so this is a model-reference study, not human validation)**: 99% pairwise ranking accuracy in the headline 5%-oracle configuration, and 94% averaged across configurations with a response-length covariate (92% without it, the `analyze_dataset` default). The arXiv v3 cost model gives a 14× reduction against full labeling under that reference. Nominal 95% intervals on raw judge means covered the reference mean 0% of the time; the calibration-aware intervals the library uses by default covered about 95% (93.9% Direct, 95.6% with the covariate) in a [corrected rerun](https://github.com/cimo-labs/cje-arena-experiments/blob/main/erratum_rerun/DELTAS.md) of the paper's experiments. A deliberately unhelpful policy, which the judge already ranks last but whose level the base-policy calibration overstates, fails the residual transport audit and is flagged. [Paper →](https://arxiv.org/abs/2512.11150)
 
-**How many labels will a judge save you?** When representative labels correct a policy's estimate, the judge acts as a control variate: at equal precision it saves about the share of the outcome's variance it explains *within* a policy (its squared within-policy correlation with the label), not its overall agreement rate. Agreement on easy, lopsided comparisons does not reduce audit labels. Before planning around savings, label a pilot slice of a few hundred responses with the outcome you will actually report and measure that share; when it is below about 0.10, budget labels as if there were no judge and use the judge for triage and for ordering clear differences.
+**How many labels will a judge save you?** The 14× above comes from reusing one calibration across policies, which holds only if the calibration carries over. Labels that correct a policy's own estimate save less: the calibrated judge acts as a control variate, cutting the labels needed at equal precision by about 1 − Var(label − calibrated prediction) / Var(label) within that policy. That is at most the squared within-policy correlation between label and calibrated prediction, and at the default weight a calibration that fits the policy poorly can save nothing or even cost precision ([weight options](https://github.com/cimo-labs/cje/blob/main/guides/audit-correction.md#weight-the-prediction-or-not)). Agreement on easy, lopsided comparisons does not count. Before planning around savings, label a pilot of a few hundred random responses with the outcome you will actually report, measure that share, and size the budget with the [planning notebook](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_planning.ipynb); when it is below about 0.10, budget labels as if there were no judge and use the judge for triage and for ordering clear differences.
 
 ## Guardrails: claims CJE refuses to make
 
 Diagnostics never act silently; every estimate ships with its limitations attached.
 
-**Score-support badge (automatic).** Each policy gets a scalar badge checking whether its judge scores extrapolate beyond the labeled score range. When at least 5% of scores land outside it, the estimate carries `REFUSE-LEVEL`:
+**Score-support badge (automatic).** Each policy gets a scalar badge checking only whether its judge scores extrapolate beyond the labeled score range (not residual bias, covariate shift, or ranking validity). When at least 5% of scores land outside it, the estimate carries `REFUSE-LEVEL`:
 
 ```text
 REFUSE-LEVEL for policy 'candidate': 88.3% of fresh-draw judge scores fall
@@ -127,9 +156,9 @@ outside the oracle calibration range [0.161, 0.595]. Do not report level
 the missing score range.
 ```
 
-The badge checks scalar support only; it does not test mean residual bias, covariate shift, or ranking validity.
+The warning prints the range on CJE's internal 0–1 judge scale; `results.metadata["boundary_cards"][policy]["oracle_s_range"]` gives it in your judge's units. Expect the badge at small label counts: with m random labels, about 2/(m+1) of responses fall outside the labeled range by chance (in simulation it fired in about 90% of runs at 10 labels, 70% at 20 and 40% at 40). To clear it, label more responses at random within judge-score strata that include the extremes, declaring any unequal rates with `label_design="known_propensity"`; hand-picked out-of-range labels clear the badge but, treated as a random sample, bias the estimate.
 
-**Residual transport audit (opt-in).** Reusing a calibration map on another policy, time period, or domain is an assumption. Grade it with held-out oracle probes that were not used to fit the calibrator, plus a predeclared practical margin:
+**Residual transport audit (opt-in).** Reusing a calibration map on another policy, time period, or domain is an assumption. Grade it with held-out oracle probes that were not used to fit the calibrator (calibration labels reused as probes give a near-zero residual by construction; give draws and probes an `observation_id` and CJE rejects the overlap), plus a predeclared practical margin in the units of `results.estimates`:
 
 ```python
 from cje import TransportAuditConfig
@@ -142,31 +171,23 @@ results = analyze_dataset(fresh_draws_data=draws, transport=transport)
 print(results.metadata["transport_audits"]["fable-5"]["status"])
 ```
 
-`PASS` requires the simultaneous residual CI to lie wholly inside `[-delta_max, +delta_max]`; wholly outside is `FAIL`; overlap is `INCONCLUSIVE`; omitting the margin is `NOT_GRADED`. Fewer than 20 effective clusters withholds `PASS` but can still grade `FAIL`; a policy cannot escape a `FAIL` by supplying too small a probe. Policies without probes stay `NOT_CHECKED`. Among these audit states, only an observed `FAIL` hard-flags a policy whose estimate depends on that map; every other unresolved state remains visible as a limitation without suppressing the estimate. For an already fitted calibrator, the array primitive `transport_audit(probe_scores, probe_labels, results.calibrator, delta_max=...)` runs the same audit directly.
+`PASS` requires the simultaneous residual CI (Bonferroni across the audited policies) to lie wholly inside `[-delta_max, +delta_max]`; wholly outside is `FAIL`; overlap is `INCONCLUSIVE`; omitting the margin is `NOT_GRADED`. Fewer than 20 effective (Kish-weighted) prompt clusters withholds `PASS` but can still grade `FAIL`; a policy cannot escape a `FAIL` by supplying too small a probe. Policies without probes stay `NOT_CHECKED`. Among these audit states, only an observed `FAIL` hard-flags a policy whose estimate depends on that map; every other unresolved state remains visible as a limitation without suppressing the estimate. A `PASS` does not change any estimate or interval. For an already fitted calibrator, `cje.diagnostics.audit_transportability(results.calibrator, probe_rows, delta_max=...)` and its array twin `transport_audit(probe_scores, probe_labels, results.calibrator, delta_max=...)` run the same audit directly (pass `family_size=` the number of audited policies to get the same Bonferroni adjustment; their default is 1); they return a standalone diagnostic and do not flag `results`.
 
-**Use audit labels for correction.** Audit-only probes do not alter the point estimate. Attach probability-sampled labels to their matching evaluation responses to use the existing augmented estimator, then inspect `metadata["point_estimator"]["routes"]` and the recomputed intervals. The [audit-to-correction guide](https://github.com/cimo-labs/cje/blob/main/guides/audit-correction.md) includes a runnable example that keeps calibration fixed and distinguishes correction from independent validation.
+**Use audit labels for correction.** Probes only grade. To correct an estimate, attach probability-sampled labels to their matching evaluation responses (the `augmented` route) and use the recomputed intervals; those labels then no longer validate it independently ([audit-to-correction guide](https://github.com/cimo-labs/cje/blob/main/guides/audit-correction.md), with a runnable example).
 
-**Plan audit labels before collecting them.** `plan_transport_audits` estimates independent audit units under declared residual assumptions, checks availability, and counts calibration plus audit ratings in the human-label budget. It is a Gaussian planning model, not an observed audit. See the [audit budget guide](https://github.com/cimo-labs/cje/blob/main/guides/audit-budget-planning.md).
+**Plan audit labels before collecting them.** `plan_transport_audits` sizes independent audit probes and the total label budget under declared residual assumptions; it is a Gaussian planning model, not an observed audit ([audit budget guide](https://github.com/cimo-labs/cje/blob/main/guides/audit-budget-planning.md)).
 
-**Reliability-aware winner.** `results.best_policy()` demotes a gate-flagged argmax to the best gate-passing policy (the default, `reliable_only=True`), and the demotion is loud; the flagged raw winner stays visible with its limitations (`reliable_only=False` returns the raw argmax, marked `flagged`):
-
-```text
-Best by point estimate: candidate
-Limitations: flagged by the reliability gates; residual transport NOT_CHECKED
-Best reliable policy: baseline — raw argmax candidate was flagged (boundary:
-88.3% of judge scores outside the oracle calibration range); pass
-reliable_only=False for the raw argmax
-```
+**Reliability-aware winner.** `results.best_policy()` skips a gate-flagged argmax and returns the best gate-passing policy, loudly ([output and fields](https://github.com/cimo-labs/cje/blob/main/cje/interface/README.md#command-line-interface)); `reliable_only=False` returns the raw argmax, marked `flagged`. A demotion is not a comparison: no test is applied (with two policies, it simply returns the unflagged one). When labels come from one baseline policy, a better candidate whose judge scores exceed the labeled range is exactly what triggers the flag; clear it, then use `compare_all_policies()`.
 
 ## Levels, rankings, and production outcomes
 
-A level claim concerns the mean oracle outcome. A ranking concerns a difference between policies. For a pair, the oracle difference equals the calibrated-prediction difference plus the difference in policy mean residuals. A common residual offset cancels, so a failed level audit does not by itself prove the ordering wrong. Conversely, individual-score monotonicity or a scalar support badge does not certify policy ordering under a shift. Use `compare_policies` and evidence about the residual difference; CJE has no validated automatic label-free reuse gate.
+A level claim concerns a policy's mean oracle outcome; a ranking concerns the oracle difference between two policies, which equals the calibrated-prediction difference plus the difference in their mean residuals. A common residual offset cancels, so a failed level audit does not by itself prove the ordering wrong. Conversely, individual-score monotonicity or a scalar support badge does not certify policy ordering under a shift. Use the paired comparison (`results.compare_all_policies()`, shown in the [quickstart](#60-seconds)) with evidence about the residual difference; CJE has no validated automatic label-free reuse gate.
 
 Production outcomes can reduce **new annotation cost** when their meaning and response identity match the evaluation. Document how feedback was selected, the target population, dependence clusters, and any change in the judge or outcome process. Organic feedback is not automatically representative. Report incremental annotation cost separately from total label acquisition cost, and audit transport before relying on reuse across populations or time.
 
 ## The array API
 
-`calibrated_mean_ci` is the library's bottom layer: a ppi_py-style primitive accepting NumPy arrays and returning a calibrated mean and confidence interval. Reach for it when you have one sample of judge scores with ground-truth labels on a random slice; use `analyze_dataset` for multi-policy comparisons. The interval accounts for both sampling noise and the finite label budget (prompt-cluster-robust variance plus a delete-one-oracle-fold jackknife; a t interval whose degrees of freedom come from the labeled prompts: at most `n_labeled − 1` with the default weight, and lower when the jackknife term is large, as `diagnostics["cluster_robust"]["oracle_df_cap_applied"]` reports); `inference="bootstrap"` switches to refit-bootstrap percentile intervals, which lack that adjustment and under-cover with 10 to 20 labeled prompts.
+`calibrated_mean_ci` is the library's bottom layer: a ppi_py-style primitive that takes NumPy arrays for one sample (judge scores on any bounded scale; labels in [0, 1] on an equal-probability random slice, `NaN` elsewhere) and returns a calibrated mean and confidence interval. It has no weights argument, so use `analyze_dataset` with `label_design="known_propensity"` for stratified labels, and for multi-policy comparisons. [Inference details, bootstrap, and calibrator reuse →](https://github.com/cimo-labs/cje/blob/main/cje/interface/README.md#array-api-calibrated_mean_ci)
 
 ```python
 import numpy as np
@@ -198,8 +219,9 @@ When partial oracle coverage requires calibration, `result.calibrator` predicts 
 | **[Technical Walkthrough](https://youtu.be/r0dinGsPuqY)** | Video: calibration, evaluation, and transport auditing pipeline |
 | **[Operational Playbook](https://github.com/cimo-labs/cje/blob/main/PLAYBOOK.md)** | End-to-end runbook: audits, drift correction, label budgeting |
 | **[Migration Guide](https://github.com/cimo-labs/cje/blob/main/MIGRATING-0.6.md)** | Upgrading from 0.5.x or earlier: what changed and how to adapt |
-| **[Planning Notebook](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_planning.ipynb)** | Optimize your evaluation budget with pilot data |
-| **[Full Docs](https://cimolabs.com/cje)** | Installation, assumptions, API reference, research notes |
+| **[Planning Notebook](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_planning.ipynb)** | Choose sample sizes and an oracle-label budget from your judge's quality and per-call costs (no data needed), with optional pilot-data refinement |
+| **[API Reference](https://github.com/cimo-labs/cje/blob/main/cje/interface/README.md)** | `analyze_dataset()` parameters, `EstimationResult` methods, the `cje analyze` / `cje validate` CLI |
+| **[Website](https://cimolabs.com/cje)** | Overview, when CJE fits, research notes |
 
 **Bridges:** Use the [Langfuse experiment bridge](https://github.com/cimo-labs/cje/blob/main/scripts/langfuse_cje/README.md) to preserve response identity and label provenance before analysis. Already running evals in [Promptfoo, TruLens, LangSmith, or OpenCompass](https://github.com/cimo-labs/cje/blob/main/scripts/cje_bridges/README.md)? Convert those outputs into CJE format with one command.
 
@@ -207,13 +229,12 @@ When partial oracle coverage requires calibration, `result.calibrator` predicts 
 
 ## Why Direct mode only (no IPS/DR)?
 
-CJE is **Direct-mode only**: fresh draws, calibrated judge, audits. There is no off-policy machinery: no importance-sampling or doubly-robust estimators (`calibrated-ips`, `dr-cpo`, `mrdr`, `tmle`, `stacked-dr`), teacher forcing, SIMCal weight stabilization, or overlap diagnostics. Our own paper's results drove that design: for realistic LLM policy pairs, importance weighting failed even when ESS looked healthy (target-typicality coverage 0.19–0.49, far below the 0.70 gate), and the best DR stack merely matched Direct mode's accuracy at ~12× the compute. Direct mode is what the evidence supports, so it is the whole product.
+CJE is **Direct-mode only**: fresh draws, calibrated judge, audits. There is no off-policy machinery: no importance-sampling or doubly-robust estimators (`calibrated-ips`, `dr-cpo`, `mrdr`, `tmle`, `stacked-dr`), teacher forcing, SIMCal weight stabilization, or overlap diagnostics. Our own paper's results drove that design: for realistic LLM policy pairs, importance weighting failed even when ESS looked healthy (target-typicality coverage 0.19–0.49, far below the 0.70 gate), and the best DR stack merely matched Direct mode's accuracy at ~12× the compute.
 
-- **Need IPS/DR from logged propensities?** Pin the frozen OPE line: `pip install "cje-eval==0.3.*"` (maintained on the `0.3.x` branch; docs at the `v0.3.0` tag; requires Python <=3.12; on 3.13 use a 3.12 env for OPE).
-- **Have old logged data with `judge_score` + `oracle_label`?** It works as the calibration source: `analyze_dataset(fresh_draws_dir=..., calibration_data_path="logged.jsonl")`.
-- OPE entry points raise migration errors that say exactly this.
+- **Need IPS/DR from logged propensities?** Pin the frozen OPE line: `pip install "cje-eval==0.3.*"` (maintained on the `0.3.x` branch; docs at the `v0.3.0` tag; requires Python <=3.12).
+- **Have old logged data with `judge_score` + `oracle_label`?** It works as the calibration source: `analyze_dataset(fresh_draws_dir=..., calibration_data_path="logged.jsonl")`. Its values are read as [0, 1] unless you declare `calibration_judge_scale=(lo, hi)` / `calibration_oracle_scale=(lo, hi)`.
 
-Full version history in the [CHANGELOG](https://github.com/cimo-labs/cje/blob/main/CHANGELOG.md).
+Full version history in the [CHANGELOG](https://github.com/cimo-labs/cje/blob/main/CHANGELOG.md); two-stage calibrators saved before 0.8.0 need refitting from retained inputs.
 
 ## Development
 

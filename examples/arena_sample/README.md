@@ -8,7 +8,7 @@ This directory contains a real-world sample dataset from Chatbot Arena for demon
   - `base_responses.jsonl` - Base policy (1000 samples, 480 with oracle labels for calibration)
   - `clone_responses.jsonl` - Clone policy (1000 samples, no oracle)
   - `parallel_universe_prompt_responses.jsonl` - Alternative system prompt (1000 samples, no oracle)
-  - `unhelpful_responses.jsonl` - Adversarial policy that fools the judge (1000 samples, no oracle)
+  - `unhelpful_responses.jsonl` - Deliberately unhelpful system prompt: the judge scores it low, but base-policy calibration overstates its level, so it fails the residual transport audit (1000 samples, no oracle)
 
 - `probe_slice/` - Small oracle-labeled samples for transportability testing
   - `clone_probe.jsonl` - 50 samples with oracle labels
@@ -153,7 +153,7 @@ fig = plot_transport_comparison(audits)
 audits["unhelpful"].plot()  # Residuals by score bin
 ```
 
-The adversarial `unhelpful` policy is the point of this dataset: its judge scores look plausible, but the transport audit catches that the calibration learned on base-policy data does not hold for it.
+The adversarial `unhelpful` policy is the point of this dataset. The judge already scores its absurd answers low (mean judge score about 0.24, against about 0.85 for the other policies), but the calibration learned on base-policy labels maps those low scores far above the oracle, and the transport audit catches that this calibration does not hold for it (FAIL). Raw judge scores rank it last; its calibrated level is what is wrong.
 
 ## Data Source
 

@@ -14,6 +14,19 @@
   section now matches its own output: the calibration learned on the base
   policy, not the judge, inflates the adversarial policy's level, and the
   transport audit FAILs. The CLI text it quotes matches the current CLI.
+- New-user pass on the README and skill: the quickstart prints the paired
+  comparison (fable-5 - gpt-5.6 +0.038, 95% CI [-0.027, +0.102]) and says
+  `Best by point estimate` is not a test; why a policy without its own labels
+  gets a narrower interval; a "Your own data" section (CSV/pandas with NaN ->
+  None, where to put labels, `label_design="known_propensity"`); the estimand
+  and assumptions; validation claims scoped (model-reference study, corrected
+  coverage rerun); REFUSE-LEVEL range units and how to clear it without
+  hand-picking; reused calibration labels as probes always pass
+  (`observation_id` guards this); `compare_policies` indices follow the
+  name-sorted `target_policies`. The skill and reference now say records
+  reject NaN, ask agents to establish label provenance, and require a probe on
+  an unlabelled policy before naming it the winner. Reference detail on audit
+  states, best_policy demotion and the array API moved to the module READMEs.
 - Planning notebook: judge-quality tiers match `explain()` (0.85 / 0.65 /
   0.40), the example session is internally consistent, the fitted-model R²
   is explained, and per-replicate coverage warnings from internal refits are
