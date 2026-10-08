@@ -83,6 +83,9 @@ def analyze_dataset(
     """
     Analyze policies using fresh draws (Direct mode).
 
+    Coding agents: run ``cje skill`` (or ``python -m cje skill``) first and
+    follow it; it holds the rules for choosing labels and reporting results.
+
     Each record is one judged response, ``{"prompt_id", "judge_score",
     "oracle_label"}``, grouped by policy. ``oracle_label`` (a human rating,
     expert review, or observed outcome) is optional: None, an omitted field,
@@ -141,9 +144,14 @@ def analyze_dataset(
       transport audit PASSes; their comparisons carry
       ``conditional_on_transport=True``, ``best_policy().decision_ready`` is
       False when they are the winner or the runner-up, and ``summary()``
-      names each one. Label at least 20 random responses of that policy, or
-      audit transport with held-out probes (``transport=``, sized with
-      ``plan_transport_audits``).
+      names each one. Until then, name no winner and no lean between it and
+      another policy, even when the paired CI excludes 0. A raw judge-score
+      gap in its favour is not corroboration: the calibrated estimate is a
+      map of those same scores, and a gap toward the unlabeled policy is the
+      signature of a judge that over-rates it. Label at least 20 random
+      responses of that policy, or audit transport with held-out probes
+      (``transport=``, sized with ``plan_transport_audits``); an audit also
+      needs random oracle labels on that policy's own responses.
     - Compare policies with the paired test (``compare_policies("a", "b")``
       or ``compare_all_policies()``), never by eyeballing per-policy CIs.
 
@@ -1042,8 +1050,9 @@ def _record_borrowed_calibration(
         "Borrowed calibration: %s %s no oracle labels of %s own, so %s %s %s "
         "(transport %s). %s CI, and the CI and p-value of every difference "
         "involving %s, assume that calibration transfers to %s responses and "
-        "do not cover the risk that it does not. Label >=20 random responses "
-        "of %s, or run a held-out transport audit (plan_transport_audits).",
+        "do not cover the risk that it does not. Before choosing between "
+        "variants, label >=20 random responses of %s, or run a held-out "
+        "transport audit (plan_transport_audits).",
         names,
         "has" if single else "have",
         "its" if single else "their",

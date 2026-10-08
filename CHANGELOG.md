@@ -20,26 +20,34 @@ means unlabeled instead of raising.
   `"calibration_data"` for `calibration_data_path`, whose labels the
   calibration was fit on) and `metadata["transport_unverified"]` (policies
   with none whose transport audit is not `PASS`; empty when no calibrator
-  was fit). `summary()` and `cje analyze` print one named line for each
-  such policy with what would settle it (label 20 or more of its responses
-  at random, or run a held-out transport audit sized with
-  `plan_transport_audits`), and that policy's diagnostics status
+  was fit). `summary()` and `cje analyze` mark each such policy
+  `[borrowed calibration]` and, before any ranking, print one named line
+  for it with what would settle it (label 20 or more of its responses at
+  random, or run a held-out transport audit sized with
+  `plan_transport_audits`); its paired differences end
+  `[borrowed calibration: <policy>]`, and when every pair whose CI excludes
+  0 involves such a policy, the summary says "No decision-ready winner"
+  instead of leaving a lone significant pair to read as a result. That
+  policy's diagnostics status
   (`status_per_policy`, hence `overall_status`) is at least `warning`; no
   policy is demoted for it. `compare_policies` and `compare_all_policies`
   results add `transport_unverified` and `conditional_on_transport`;
   `best_policy()` adds `decision_ready` (False when the winner, or the
-  policy it is ranked against, is transport-unverified, or when the winner
-  failed the reliability gates; True is not a test) and `decision_note`.
+  policy it is ranked against, is transport-unverified, when the winner
+  failed the reliability gates, or when their paired 95% CI includes 0)
+  and `decision_note`.
 - **Paired differences in `summary()`.** With two or more policies,
   `summary()` prints every pair as
   `candidate - production: +0.038  95% CI [-0.027, +0.102]  p=0.22`
   (p unadjusted; with three or more policies it points to
   `compare_all_policies(adjust="bh")`; a pair involving a gate-flagged
   policy ends `[gate-flagged: <policy>]`), and "No reliable winner: every
-  paired CI includes 0" when that holds. The best-policy line now reads
-  `Best by point estimate: <policy> (point estimate, not a test)`. `cje
-  analyze` prints the same label, paired block and named lines after its
-  per-policy results.
+  paired CI includes 0 (not evidence that they are equal)" when that holds.
+  The best-policy line now reads
+  `Best by point estimate: <policy> (point estimate, not a test)`, and
+  `residual transport NOT_CHECKED` is listed only for a policy that borrows
+  its calibration (an observed FAIL or INCONCLUSIVE is always listed). `cje
+  analyze` prints the same lines in the same order.
 - **`compare_policies` takes policy names** as well as integer indices
   (`results.compare_policies("candidate", "production")`), and every
   comparison dict carries `policy1`/`policy2`. An unknown name raises
@@ -72,6 +80,9 @@ means unlabeled instead of raising.
 - **The REFUSE-LEVEL warning prints the labeled range in the judge's own
   units** (e.g. 0–100, marked "judge-score units") instead of CJE's
   internal 0–1 scale.
+- **`EstimationResult.ci()`'s error for a bad argument** (`ci(95)`,
+  `ci("candidate")`) now says it takes a significance level and shows how
+  to look intervals up by policy name.
 
 ### Documentation
 

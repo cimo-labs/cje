@@ -163,8 +163,8 @@ fallback), never by this parameter; its only observable effect is which name lan
   a better candidate whose judge scores exceed the labeled range is exactly what triggers the
   flag; clear it, then use `compare_all_policies()`. From 0.9.2 the verdict also carries
   `decision_ready` (False when the winner, or the runner-up it is compared with, is
-  transport-unverified, or when the winner failed the gates; True is not a test, so a
-  `decision_ready` winner can still be a tie) and `decision_note` (why, and what to do)
+  transport-unverified, when the winner failed the gates, or when their paired 95% CI includes
+  0) and `decision_note` (why, and what to do)
 - `.calibrator` → fitted calibrator when calibration is required; complete oracle coverage may return `None`
 - `.metadata["transport_audits"]` → per-policy PASS / FAIL / INCONCLUSIVE / NOT_GRADED / NOT_CHECKED records when using `TransportAuditConfig`; FAIL adds a hard result gate only when the current estimate depends on that calibrator
 - `.summary()` → compact text report (per-policy estimate + 95% CI + gate flags, best-policy line).

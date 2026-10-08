@@ -140,10 +140,11 @@ class PolicyVerdict:
             assumption: ``name``, or the policy it is ranked against (the
             demoted ``runner_up`` or the next-best point estimate), has no
             oracle labels of its own and no PASS transport audit
-            (``metadata["transport_unverified"]``), or ``name`` failed the
-            reliability gates. True does NOT mean the lead is significant:
-            the verdict ranks point estimates; test the pair with
-            ``compare_policies``.
+            (``metadata["transport_unverified"]``), ``name`` failed the
+            reliability gates, or the paired 95% CI of ``name`` minus that
+            policy includes 0. True means ``name`` beats it in the paired
+            comparison with none of those caveats; other policies, gates
+            and audits still need checking.
         decision_note: One sentence saying why, and what to do next.
     """
 
@@ -521,6 +522,15 @@ class EstimationResult(BaseModel):
             >>> result.ci()
             [(0.701, 0.745), (0.680, 0.720)]
         """
+        try:
+            _validate_alpha(alpha)
+        except ValueError as exc:
+            raise ValueError(
+                f"{exc}: ci(alpha) takes a significance level (0.05 for 95% "
+                "intervals) and returns one (lower, upper) tuple per policy in "
+                "target_policies order; by name, use "
+                "dict(zip(result.target_policies, result.ci()))."
+            ) from None
         lower, upper = self.confidence_interval(alpha)
         return [(float(l), float(u)) for l, u in zip(lower, upper)]
 
@@ -564,10 +574,11 @@ class EstimationResult(BaseModel):
         ``decision_ready`` is False when the verdict, or the policy it is
         ranked against, has no oracle labels of its own and no PASS
         transport audit (its estimate borrows another policy's calibration),
-        or when the returned policy is flagged; ``decision_note`` says why
-        and what to do. The verdict ranks point estimates and is never a
-        test: check the pair with ``compare_policies`` before declaring a
-        winner.
+        when the returned policy is flagged, or when the paired 95% CI
+        against that policy includes 0; ``decision_note`` says why and what
+        to do. The verdict itself ranks point estimates; with three or more
+        policies, check every pair with ``compare_all_policies`` before
+        declaring a winner.
 
         Note: This replaced the 0.4.x ``best_policy() -> int`` (naive
         argmax index) in 0.5.0. Use ``verdict.index`` for the old value.
@@ -776,9 +787,10 @@ class EstimationResult(BaseModel):
                 f"oracle labels of {'its' if single else 'their'} own and "
                 f"{'its transport audit is' if single else 'their transport audits are'}"
                 f" {statuses}, so this ranking assumes "
-                f"{self._calibration_source_phrase()} transfers. Label >=20 "
-                f"random responses of {names}, or run a held-out transport "
-                "audit (plan_transport_audits)."
+                f"{self._calibration_source_phrase()} transfers. Name no winner "
+                f"and no lean until {'it has' if single else 'they have'} labels: "
+                f"label >=20 random responses of {names}, or run a held-out "
+                "transport audit (plan_transport_audits)."
             )
         if verdict.all_flagged:
             return False, "Not decision-ready: no policy passed the reliability gates."
@@ -789,7 +801,7 @@ class EstimationResult(BaseModel):
         if not competitors:
             return True, "Only one usable policy; there is nothing to compare."
         # A ranking whose paired test cannot separate it from the next-best
-        # policy is a tie, not a decision.
+        # policy is not established, and not a decision.
         rival = competitors[-1]
         try:
             i, j = policies.index(verdict.name), policies.index(rival)
@@ -807,9 +819,10 @@ class EstimationResult(BaseModel):
         if not separated:
             return False, (
                 f"Not decision-ready: the paired 95% CI for {verdict.name} - {rival} "
-                f"includes 0 ({_format_p_value(float(p_value))}), so this ranking is "
-                "a tie at the current sample size. Size more labels with "
-                "plan_for_mde, or report no reliable winner."
+                f"includes 0 ({_format_p_value(float(p_value))}), so the ranking is "
+                "not established at this sample size (which is not evidence the "
+                "two are equal). Size more labels with plan_for_mde, or report no "
+                "reliable winner."
                 if p_value is not None
                 else f"Not decision-ready: {verdict.name} and {rival} are not "
                 "separated by the paired comparison."
@@ -850,6 +863,10 @@ class EstimationResult(BaseModel):
             )
         ]
         every_ci_includes_zero = True
+        # Policies with borrowed calibration in pairs whose CI excludes 0, and
+        # whether any such pair rests on labels of both policies' own.
+        separated_borrowed: List[str] = []
+        separated_unconditionally = False
         first_error: Optional[str] = None
         for i, j in pairs:
             label = f"{policies[i]} - {policies[j]}"
@@ -871,15 +888,24 @@ class EstimationResult(BaseModel):
                 lower, upper = difference - z * se, difference + z * se
             lower, upper = float(lower), float(upper)
             p_value = float(comparison["p_value"])
+            borrowed = [str(p) for p in comparison.get("transport_unverified") or []]
             if not all(np.isfinite([difference, lower, upper])):
                 every_ci_includes_zero = False
             elif lower > 0 or upper < 0:
                 every_ci_includes_zero = False
+                if borrowed:
+                    separated_borrowed.extend(
+                        p for p in borrowed if p not in separated_borrowed
+                    )
+                else:
+                    separated_unconditionally = True
             # A difference inherits a flagged input's unreliability,
             # however small its p-value: mark the pair, as the policy
             # lines above mark the policy.
             flagged = [str(p) for p in comparison.get("gate_flagged") or []]
             flag = f"  [gate-flagged: {', '.join(flagged)}]" if flagged else ""
+            if borrowed:
+                flag += f"  [borrowed calibration: {', '.join(borrowed)}]"
             lines.append(
                 f"  {label}: {difference:+.3f}  "
                 f"{100 * (1 - alpha):.0f}% CI [{lower:+.3f}, {upper:+.3f}]  "
@@ -898,26 +924,40 @@ class EstimationResult(BaseModel):
             )
         if every_ci_includes_zero:
             lines.append(
-                "No reliable winner: every paired CI includes 0"
-                if not hidden
-                else f"No reliable winner: every paired CI with {focus} includes 0"
+                (
+                    "No reliable winner: every paired CI includes 0"
+                    if not hidden
+                    else f"No reliable winner: every paired CI with {focus} includes 0"
+                )
+                + " (not evidence that they are equal)"
+            )
+        elif separated_borrowed and not separated_unconditionally:
+            names = _join_names(separated_borrowed)
+            single = len(separated_borrowed) == 1
+            lines.append(
+                "No decision-ready winner: every paired CI that excludes 0 "
+                f"involves {names}, whose calibration is borrowed and unaudited. "
+                f"Name no winner and no lean until {names} "
+                f"{'has' if single else 'have'} labels of "
+                f"{'its' if single else 'their'} own or a PASS transport audit."
             )
         return lines
 
     def summary(self) -> str:
         """Compact text summary: estimates, CIs, gates, paired differences.
 
-        Lines, in order: one per policy (estimate and 95% CI); the best
-        policy by point estimate (a ranking, not a test) with its
-        limitations; with two or more policies, every paired difference
-        ``a - b`` with its 95% CI and unadjusted p-value (marked
-        ``[gate-flagged: ...]`` when either policy failed the reliability
-        gates), plus "No reliable winner" when every paired CI includes 0;
-        one line per policy that
-        has no oracle labels of its own and an unverified transport audit
-        (its estimate and differences assume a borrowed calibration
-        transfers); and the diagnostics status (at least ``warning`` when a
-        policy borrows an unverified calibration).
+        Lines, in order: one per policy (estimate and 95% CI, marked
+        ``[borrowed calibration]`` when the policy has no oracle labels of
+        its own and no PASS transport audit); one line per such policy
+        saying its estimate and differences assume the borrowed calibration
+        transfers; the best policy by point estimate (a ranking, not a test)
+        with its limitations; with two or more policies, every paired
+        difference ``a - b`` with its 95% CI and unadjusted p-value (marked
+        ``[gate-flagged: ...]`` or ``[borrowed calibration: ...]``), plus
+        "No reliable winner" when every paired CI includes 0, or "No
+        decision-ready winner" when every pair whose CI excludes 0 involves
+        a borrowed calibration; and the diagnostics status (at least
+        ``warning`` when a policy borrows an unverified calibration).
 
         Example:
             >>> print(results.summary())
@@ -932,6 +972,7 @@ class EstimationResult(BaseModel):
         ci_lower, ci_upper = self.confidence_interval()
         gates = self.gates
         width = max(len(p) for p in policies)
+        unverified = [p for p in self._transport_unverified() if p in policies]
 
         lines = [f"CJE Estimation Results (method: {self.method})"]
         for i, policy in enumerate(policies):
@@ -939,10 +980,15 @@ class EstimationResult(BaseModel):
             flag = ""
             if gate is not None and gate.flagged:
                 flag = "  [gate: FLAGGED]"
+            if policy in unverified:
+                flag += "  [borrowed calibration]"
             lines.append(
                 f"  {policy:<{width}s}  {self.estimates[i]:.3f}  "
                 f"95% CI [{ci_lower[i]:.3f}, {ci_upper[i]:.3f}]{flag}"
             )
+        # Say what a borrowed calibration means before any ranking is read.
+        for policy in unverified:
+            lines.append(self._borrowed_calibration_line(policy))
 
         try:
             verdict = self.best_policy()
@@ -967,14 +1013,12 @@ class EstimationResult(BaseModel):
             # NOT_CHECKED matters only for a policy without labels of its own;
             # a policy corrected by its own labels does not rely on transport.
             # An observed audit result (FAIL / INCONCLUSIVE) is always shown.
-            if (
-                status
-                and status != "PASS"
-                and (
-                    status != "NOT_CHECKED"
-                    or display in set(self._transport_unverified())
+            if display in unverified:
+                limitations.append(
+                    "borrowed calibration (residual transport "
+                    f"{self._transport_status(display)})"
                 )
-            ):
+            elif status and status not in ("PASS", "NOT_CHECKED"):
                 limitations.append(f"residual transport {status}")
             lines.append(
                 f"Best by point estimate: {display} (point estimate, not a test)"
@@ -994,9 +1038,6 @@ class EstimationResult(BaseModel):
         except ValueError:
             focus = None
         lines.extend(self._paired_summary_lines(focus=focus))
-        unverified = [p for p in self._transport_unverified() if p in policies]
-        for policy in unverified:
-            lines.append(self._borrowed_calibration_line(policy))
 
         if self.diagnostics is not None:
             status = self.diagnostics.overall_status

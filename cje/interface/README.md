@@ -147,37 +147,36 @@ Running CJE analysis on examples/arena_sample/fresh_draws
 Results:
 ----------------------------------------
   base: 0.754 (SE 0.010, 95% CI [0.734, 0.775])
-    residual transport: NOT_CHECKED
   clone: 0.764 (SE 0.008, 95% CI [0.746, 0.783])
-    residual transport: NOT_CHECKED
+    borrowed calibration (residual transport NOT_CHECKED)
   parallel_universe_prompt: 0.765 (SE 0.006, 95% CI [0.749, 0.780])
-    residual transport: NOT_CHECKED
+    borrowed calibration (residual transport NOT_CHECKED)
   unhelpful: 0.512 (SE 0.237, 95% CI [-0.146, 1.170])
-    residual transport: NOT_CHECKED
-
-Best by point estimate: parallel_universe_prompt (point estimate, not a test)
-Limitations: residual transport NOT_CHECKED
-
-Paired differences (p unadjusted):
-  base - clone: -0.010  95% CI [-0.034, +0.015]  p=0.42
-  base - parallel_universe_prompt: -0.010  95% CI [-0.033, +0.013]  p=0.37
-  base - unhelpful: +0.242  95% CI [-0.415, +0.900]  p=0.36
-  clone - parallel_universe_prompt: -0.000  95% CI [-0.009, +0.009]  p=0.92
-  clone - unhelpful: +0.252  95% CI [-0.407, +0.911]  p=0.35
-  parallel_universe_prompt - unhelpful: +0.253  95% CI [-0.412, +0.917]  p=0.35
-  With 3+ policies, read Benjamini-Hochberg p_adjusted from compare_all_policies(adjust="bh").
-No reliable winner: every paired CI includes 0
+    borrowed calibration (residual transport NOT_CHECKED)
 
 clone: no labels of its own; its estimate and every difference involving it assume base's calibration transfers, which the CI and p-value do not cover. Label >=20 random clone responses, or run a held-out transport audit (plan_transport_audits).
 parallel_universe_prompt: no labels of its own; its estimate and every difference involving it assume base's calibration transfers, which the CI and p-value do not cover. Label >=20 random parallel_universe_prompt responses, or run a held-out transport audit (plan_transport_audits).
 unhelpful: no labels of its own; its estimate and every difference involving it assume base's calibration transfers, which the CI and p-value do not cover. Label >=20 random unhelpful responses, or run a held-out transport audit (plan_transport_audits).
+
+Best by point estimate: parallel_universe_prompt (point estimate, not a test)
+Limitations: borrowed calibration (residual transport NOT_CHECKED)
+
+Paired differences (p unadjusted):
+  base - clone: -0.010  95% CI [-0.034, +0.015]  p=0.42  [borrowed calibration: clone]
+  base - parallel_universe_prompt: -0.010  95% CI [-0.033, +0.013]  p=0.37  [borrowed calibration: parallel_universe_prompt]
+  base - unhelpful: +0.242  95% CI [-0.415, +0.900]  p=0.36  [borrowed calibration: unhelpful]
+  clone - parallel_universe_prompt: -0.000  95% CI [-0.009, +0.009]  p=0.92  [borrowed calibration: clone, parallel_universe_prompt]
+  clone - unhelpful: +0.252  95% CI [-0.407, +0.911]  p=0.35  [borrowed calibration: clone, unhelpful]
+  parallel_universe_prompt - unhelpful: +0.253  95% CI [-0.412, +0.917]  p=0.35  [borrowed calibration: parallel_universe_prompt, unhelpful]
+  With 3+ policies, read Benjamini-Hochberg p_adjusted from compare_all_policies(adjust="bh").
+No reliable winner: every paired CI includes 0 (not evidence that they are equal)
 ```
 
-The announcement is **reliability-aware**: the highest point estimate remains visible, and unresolved or failed checks are listed as limitations. It ranks point estimates and is not a test: the paired block below it decides (here every paired CI includes 0), and each policy with no labels of its own gets a line saying its estimate borrows `base`'s unaudited calibration. `analyze_dataset` logs the same caveat as a WARNING on stderr. `results.best_policy()` defaults to `reliable_only=True` (the safety default): a gate-flagged argmax is demoted to the best gate-passing policy, loudly — the flagged raw winner travels as `runner_up` with `runner_up_reasons`, a warning is logged, and `summary()` prints both. Pass `reliable_only=False` for the raw argmax with its `flagged` marker. When the argmax is flagged, `summary()` shows the demotion:
+The announcement is **reliability-aware**: the highest point estimate remains visible, and unresolved or failed checks are listed as limitations. It ranks point estimates and is not a test: the paired block below it decides (here every paired CI includes 0), and each policy with no labels of its own is marked `borrowed calibration` and gets a line, before the ranking, saying its estimate assumes `base`'s unaudited calibration transfers. `analyze_dataset` logs the same caveat as a WARNING on stderr. `results.best_policy()` defaults to `reliable_only=True` (the safety default): a gate-flagged argmax is demoted to the best gate-passing policy, loudly — the flagged raw winner travels as `runner_up` with `runner_up_reasons`, a warning is logged, and `summary()` prints both. Pass `reliable_only=False` for the raw argmax with its `flagged` marker. When the argmax is flagged, `summary()` shows the demotion:
 
 ```text
 Best by point estimate: candidate (point estimate, not a test)
-Limitations: flagged by the reliability gates; residual transport NOT_CHECKED
+Limitations: flagged by the reliability gates; borrowed calibration (residual transport NOT_CHECKED)
 Best reliable policy: baseline — raw argmax candidate was flagged (boundary:
 88.3% of judge scores outside the oracle calibration range; diagnostics status
 CRITICAL); pass reliable_only=False for the raw argmax
@@ -251,7 +250,7 @@ Provide `fresh_draws_dir` **or** `fresh_draws_data`.
 - `.ci()` / `.confidence_interval()`: t-based calibration-aware jackknife CIs by default on supported calibrated routes; complete-oracle routes need no calibration jackknife, and bootstrap inference uses percentile intervals (`.ci_info` records which)
 - `.compare_policies(a, b)`: paired policy comparison; `a`, `b` are policy names or integer indices into `target_policies` (sorted by name, not input order), and `difference` = a − b. The dict names the pair (`policy1`/`policy2`) and carries `gate_flagged`, `transport_unverified` and `conditional_on_transport` (True when a policy in the pair has no labels of its own and no `PASS` transport audit: the CI and p-value then assume the borrowed calibration transfers; `significant` still means only `p_value < alpha`). `.compare_all_policies(adjust=None)` returns every pair; `adjust="bh"` adds Benjamini-Hochberg `p_adjusted`/`significant_adjusted`
 - `.summary()`: compact text report: per-policy estimate + 95% CI + gate flags, the best-policy line (a point-estimate ranking, not a test), every paired difference with its 95% CI and unadjusted p-value, "No reliable winner: every paired CI includes 0" when that holds, and one line per policy that borrows an unaudited calibration
-- `.best_policy()`: `PolicyVerdict`; with the default `reliable_only=True` a gate-flagged argmax is demoted to the best gate-passing policy (the demoted argmax travels as `runner_up` with `runner_up_reasons`, plus a logged warning); `reliable_only=False` returns the raw argmax with `flagged` attached. `decision_ready` is False when the verdict or the policy it is ranked against borrows an unaudited calibration, or the verdict failed the gates, and `decision_note` says why; True is not a test, so check the pair with `compare_policies`
+- `.best_policy()`: `PolicyVerdict`; with the default `reliable_only=True` a gate-flagged argmax is demoted to the best gate-passing policy (the demoted argmax travels as `runner_up` with `runner_up_reasons`, plus a logged warning); `reliable_only=False` returns the raw argmax with `flagged` attached. `decision_ready` is False when the verdict or the policy it is ranked against borrows an unaudited calibration, the verdict failed the gates, or their paired 95% CI includes 0, and `decision_note` says why; with three or more policies, check every pair with `compare_all_policies`
 - `.gates`: `Dict[str, GateResult]` — typed view of `metadata["reliability_gates"]`
 - `.diagnostics`: `DirectDiagnostics` (statuses, boundary cards, calibration quality, per-policy transport states)
 - `.calibrator`: fitted calibrator when calibration is required; complete oracle coverage may return `None`

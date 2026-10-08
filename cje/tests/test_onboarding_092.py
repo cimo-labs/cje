@@ -49,18 +49,24 @@ QUICKSTART_LABELS: List[Optional[float]] = [
 # The exact README quickstart summary() text the docs must reproduce.
 QUICKSTART_SUMMARY = """\
 CJE Estimation Results (method: calibrated_direct)
-  candidate   0.824  95% CI [0.766, 0.882]
+  candidate   0.824  95% CI [0.766, 0.882]  [borrowed calibration]
   production  0.786  95% CI [0.696, 0.876]
-Best by point estimate: candidate (point estimate, not a test)
-Limitations: residual transport NOT_CHECKED
-Paired differences (p unadjusted):
-  candidate - production: +0.038  95% CI [-0.027, +0.102]  p=0.22
-No reliable winner: every paired CI includes 0
 candidate: no labels of its own; its estimate and every difference involving \
 it assume production's calibration transfers, which the CI and p-value do not \
 cover. Label >=20 random candidate responses, or run a held-out transport \
 audit (plan_transport_audits).
+Best by point estimate: candidate (point estimate, not a test)
+Limitations: borrowed calibration (residual transport NOT_CHECKED)
+Paired differences (p unadjusted):
+  candidate - production: +0.038  95% CI [-0.027, +0.102]  p=0.22  \
+[borrowed calibration: candidate]
+No reliable winner: every paired CI includes 0 (not evidence that they are equal)
 Status: warning"""
+
+NO_RELIABLE_WINNER = (
+    "No reliable winner: every paired CI includes 0 "
+    "(not evidence that they are equal)"
+)
 
 BORROWED_LINE = (
     "candidate: no labels of its own; its estimate and every difference "
@@ -216,7 +222,8 @@ class TestBorrowedCalibration:
         # decision.
         assert comparison["ci_lower"] < 0 < comparison["ci_upper"]
         assert verdict.decision_ready is False
-        assert "tie" in verdict.decision_note
+        assert "not established" in verdict.decision_note
+        assert "not evidence the two are equal" in verdict.decision_note
         assert "no labels of its own" not in verdict.decision_note
         with caplog.at_level(logging.WARNING, logger="cje"):
             analyze_dataset(fresh_draws_data=_both_labelled_draws())
@@ -324,6 +331,7 @@ class TestSummaryPairedBlock:
         line = (
             f"  candidate - production: {c['difference']:+.3f}  95% CI "
             f"[{c['ci_lower']:+.3f}, {c['ci_upper']:+.3f}]  p={c['p_value']:.2f}"
+            "  [borrowed calibration: candidate]"
         )
         assert line in s2_result.summary().splitlines()
 
@@ -340,10 +348,11 @@ class TestSummaryPairedBlock:
             )
 
         tie = result(0.001).summary().splitlines()
-        assert "No reliable winner: every paired CI includes 0" in tie
+        assert NO_RELIABLE_WINNER in tie
         assert "Best by point estimate: a (point estimate, not a test)" in tie
         clear = result(0.2).summary().splitlines()
-        assert "No reliable winner: every paired CI includes 0" not in clear
+        assert not any(line.startswith("No reliable winner") for line in clear)
+        assert not any(line.startswith("No decision-ready") for line in clear)
         assert any(line.startswith("  a - b: +0.200  95% CI [") for line in clear)
         assert any(line.endswith("p<0.001") for line in clear)
 
@@ -375,7 +384,9 @@ class TestSummaryPairedBlock:
             if line.startswith("  base - candidate: ")
         ]
         assert len(pairs) == 1
-        assert pairs[0].endswith("  [gate-flagged: candidate]")
+        assert pairs[0].endswith(
+            "  [gate-flagged: candidate]  [borrowed calibration: candidate]"
+        )
         quickstart = analyze_dataset(fresh_draws_data=_quickstart_draws())
         assert "gate-flagged" not in quickstart.summary()
 
@@ -749,8 +760,11 @@ def test_cli_analyze_prints_paired_block_and_borrowed_lines(
     lines = capsys.readouterr().out.splitlines()
     assert "Best by point estimate: candidate (point estimate, not a test)" in lines
     assert "Paired differences (p unadjusted):" in lines
-    assert "  candidate - production: +0.038  95% CI [-0.027, +0.102]  p=0.22" in lines
-    assert "No reliable winner: every paired CI includes 0" in lines
+    assert (
+        "  candidate - production: +0.038  95% CI [-0.027, +0.102]  p=0.22"
+        "  [borrowed calibration: candidate]"
+    ) in lines
+    assert NO_RELIABLE_WINNER in lines
     assert BORROWED_LINE in lines
 
 
@@ -802,3 +816,99 @@ def test_paired_block_is_capped_for_many_policies() -> None:
     text = analyze_dataset(fresh_draws_data=draws).summary()
     assert "Paired differences with " in text
     assert "10 more pairs not shown" in text
+
+
+# ---------------------------------------------------------------------------
+# Round 3: borrowed-calibration output that agents cannot read as a lean
+# ---------------------------------------------------------------------------
+
+
+def _summary_result(
+    estimates: List[float], unverified: List[str], names: Optional[List[str]] = None
+) -> EstimationResult:
+    names = names or ["candidate", "production"][: len(estimates)]
+    return EstimationResult(
+        estimates=np.array(estimates),
+        standard_errors=np.full(len(estimates), 0.01),
+        n_samples_used={name: 100 for name in names},
+        method="calibrated_direct",
+        influence_functions=None,
+        diagnostics=None,
+        metadata={
+            "target_policies": names,
+            "transport_unverified": unverified,
+            "own_oracle_labels_by_policy": {
+                name: 0 if name in unverified else 50 for name in names
+            },
+        },
+    )
+
+
+class TestBorrowedCalibrationOutput:
+    def test_separated_borrowed_pair_is_not_a_decision(self) -> None:
+        lines = _summary_result([0.70, 0.50], ["candidate"]).summary().splitlines()
+        assert lines[1].endswith("  [borrowed calibration]")
+        assert "borrowed" not in lines[2]
+        pair = next(line for line in lines if line.startswith("  candidate - "))
+        assert pair.endswith("p<0.001  [borrowed calibration: candidate]")
+        assert (
+            "No decision-ready winner: every paired CI that excludes 0 involves "
+            "candidate, whose calibration is borrowed and unaudited. Name no "
+            "winner and no lean until candidate has labels of its own or a PASS "
+            "transport audit."
+        ) in lines
+        assert not any(line.startswith("No reliable winner") for line in lines)
+
+    def test_borrowed_line_comes_before_any_ranking(self) -> None:
+        lines = _summary_result([0.70, 0.50], ["candidate"]).summary().splitlines()
+        borrowed = next(
+            i for i, line in enumerate(lines) if line.startswith("candidate: no labels")
+        )
+        best = next(i for i, line in enumerate(lines) if line.startswith("Best by"))
+        assert borrowed < best
+        assert lines[best + 1] == (
+            "Limitations: borrowed calibration (residual transport NOT_CHECKED)"
+        )
+
+    def test_an_unconditional_separation_suppresses_the_line(self) -> None:
+        # a and b both have labels and are clearly apart; c borrows.
+        result = _summary_result([0.80, 0.50, 0.70], ["c"], names=["a", "b", "c"])
+        text = result.summary()
+        assert "No decision-ready winner" not in text
+        assert "  b - c: " in text and "[borrowed calibration: c]" in text
+
+    def test_decision_note_forbids_a_lean(self) -> None:
+        verdict = _summary_result([0.70, 0.50], ["candidate"]).best_policy()
+        assert verdict.decision_ready is False
+        assert "Name no winner and no lean until it has labels" in (
+            verdict.decision_note or ""
+        )
+
+    def test_own_labelled_results_carry_no_borrowed_markers(self) -> None:
+        text = _summary_result([0.70, 0.50], []).summary()
+        assert "borrowed" not in text
+        assert "No decision-ready winner" not in text
+
+
+@pytest.mark.parametrize("alpha", [95, 1, 0, -0.1, "0.05", True, None])
+def test_ci_rejects_a_confidence_level_or_a_name(alpha: Any) -> None:
+    result = _summary_result([0.70, 0.50], [])
+    with pytest.raises(ValueError, match="takes a significance level") as excinfo:
+        result.ci(alpha)
+    assert "dict(zip(result.target_policies, result.ci()))" in str(excinfo.value)
+
+
+def test_ci_accepts_a_significance_level() -> None:
+    result = _summary_result([0.70, 0.50], [])
+    assert len(result.ci(0.1)) == 2
+    assert len(result.ci(np.float64(0.05))) == 2
+
+
+def test_analyze_dataset_docstring_points_agents_to_the_skill() -> None:
+    doc = " ".join((analyze_dataset.__doc__ or "").split())
+    assert doc.startswith(
+        "Analyze policies using fresh draws (Direct mode). Coding agents: run "
+        "``cje skill``"
+    )
+    assert "name no winner and no lean" in doc
+    assert "is not corroboration" in doc

@@ -617,9 +617,9 @@ class TestCLIBestPolicy:
             },
         )
         lines = best_policy_lines(results)
+        # No policy borrows a calibration here, so NOT_CHECKED is no limitation.
         assert lines == [
             "Best by point estimate: good (point estimate, not a test)",
-            "Limitations: residual transport NOT_CHECKED",
         ]
 
     def test_flagged_argmax_shown_with_reliable_fallback(self) -> None:

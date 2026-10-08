@@ -353,7 +353,6 @@ class TestCautionBandYieldsWarning:
         lines = best_policy_lines(result)
         assert lines == [
             "Best by point estimate: caution (point estimate, not a test)",
-            "Limitations: residual transport NOT_CHECKED",
         ]
 
 

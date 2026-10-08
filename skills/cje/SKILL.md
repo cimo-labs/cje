@@ -18,6 +18,9 @@ the legacy 0.5 line, whose API and output differ from this skill; the `>=0.9` fl
 fail instead, so switch to a 3.10–3.13 interpreter (e.g. `python3.12 -m venv .venv`). Put the
 printed version in your report.
 
+Read the docs whole, not through `head`: save the reference into the working directory with
+`cje skill --reference > cje_reference.md` and open it from there when this file points to it.
+
 `cje skill` prints this file for the installed version (0.9.2+; `python -m cje skill` if `cje`
 is not on `PATH`), and `cje skill --reference` prints `reference.md` (full signatures, CLI,
 troubleshooting). Without that command, download
@@ -31,25 +34,55 @@ fetcher drops the rules below.
    scores can be miscalibrated: in CJE's Chatbot Arena benchmark, naive 95% CIs on raw judge
    scores covered the truth 0% of the time. CJE calibrates the judge against a slice of
    ground-truth labels (≥10 independent labeled prompt clusters recommended; 4 is the
-   calibration floor) and refuses claims the data can't support.
+   calibration floor) and refuses claims the data can't support. Do not cite a raw judge gap as
+   corroboration either: the calibrated estimate is a map of the same scores, so their agreement
+   is not independent evidence.
 2. **Random labels only.** Attach `oracle_label` only to labels from a probability sample of
    that policy's responses. Never hand-pick, invent, impute, or self-generate labels.
 3. **One fixed judge.** The same judge model, rubric and scale for every policy, blind to which
    policy wrote the response.
 4. **Paired test, not eyeballed CIs.** Decide from the paired difference
    (`compare_all_policies()`; on 0.9.2+ also the paired block in `summary()`), never from
-   whether two policies' intervals overlap.
-5. **No winner on borrowed calibration.** A policy with no labels of its own whose transport
-   audit is not `PASS` is never named the winner or called "significant", whatever the p-value:
-   its estimate and every difference involving it assume another policy's calibration
-   transfers, which the CI and p-value do not cover. Report the verdict as undecided, and size
-   what would settle it: about 20 or more random labels on that policy's own responses, or a
-   held-out probe sized with `plan_transport_audits`. A raw judge gap toward the unlabeled
-   policy is a red flag (the judge may favor its style, and the borrowed calibration cannot
-   see that), not corroboration. On 0.9.2+ such policies are listed in
+   whether two policies' intervals overlap. A paired CI that includes 0 means the ranking is
+   not established, not that the policies are equal or interchangeable; an equivalence claim
+   needs a margin declared before looking.
+5. **No winner and no lean on borrowed calibration.** A policy with no labels of its own whose
+   transport audit is not `PASS` is never named the winner, said to lead "directionally", or
+   called "significant", whatever the p-value: its estimate and every difference involving it
+   assume another policy's calibration transfers, which the CI and p-value do not cover.
+   Report the verdict as undecided, and size what would settle it: about 20 or more random
+   labels on that policy's own responses, or a held-out probe sized with
+   `plan_transport_audits` (which also needs new random labels on its responses; an audit is
+   not a label-free shortcut). A raw judge gap toward the unlabeled policy is a red flag (the
+   judge may favor its style, and the borrowed calibration cannot see that), not
+   corroboration. On 0.9.2+ `summary()` marks such policies `[borrowed calibration]`, prints
+   "No decision-ready winner" when every separated pair involves one, and lists them in
    `results.metadata["transport_unverified"]`.
 6. **Surface every gate, badge and audit state** next to the estimate it qualifies. Never
    bypass, suppress, or explain one away to give a cleaner answer.
+
+## Reporting back to the user
+
+Write for a busy reader, in this order:
+
+1. **Verdict, one line.** "<A> beats <B>"; "No reliable winner: the paired CI includes 0"; or
+   "Undecided because <policy> has no labels of its own and its transport is `NOT_CHECKED`"
+   (also `INCONCLUSIVE`, `NOT_GRADED` or `FAIL`; hard rule 5). Say it before any p-value.
+2. **Size and uncertainty.** The paired difference with its 95% CI and p-value (say whether
+   adjusted), then each policy's calibrated estimate **with its 95% CI**, never a bare point
+   estimate.
+3. **What would make it firm.** How many labels and on which rows: e.g. "label 20+ random
+   candidate responses", "collect labels in the 0.6–0.95 judge-score range", or "a held-out
+   probe of N candidate prompts, sized with `plan_transport_audits`". New labels must be a
+   random sample of that policy's responses (or random within judge-score strata, declared
+   with `label_design`), never the responses someone picked out.
+4. **Limitations.** Gate and audit status per policy with each one-line reason, how the labels
+   were chosen, and the `cje-eval` version.
+
+Never infer that a ranking survives from a scalar support badge. Overlapping marginal CIs
+do not establish equivalence; use the paired difference and a predeclared practical margin
+for an equivalence claim. Plan the analysis sample/stopping rule before collection; repeated
+looks require an appropriate sequential design.
 
 ## Decide the flow
 
@@ -241,10 +274,10 @@ names: `results.compare_policies("candidate", "base")`) and surface the highest 
 substituting another policy. From 0.9.2 each comparison carries `transport_unverified` (the
 policies in the pair with no labels of its own and no `PASS`) and `conditional_on_transport`,
 and `results.best_policy()` carries `decision_ready` and `decision_note`. `decision_ready` is
-False when the winner or the policy it is ranked against is transport-unverified, or the winner
-failed the gates; True only means neither applies. It is not a test: a `decision_ready` winner
-can still be a tie, so the paired test decides. `significant` still means only
-`p_value < alpha`; it never overrides hard rule 5. Do not rely on eyeballed
+False when the winner or the policy it is ranked against is transport-unverified, the winner
+failed the gates, or their paired 95% CI includes 0; True means none of those applies, not that
+every gate and audit is clean. `significant` still means only `p_value < alpha`; it never
+overrides hard rule 5. Do not rely on eyeballed
 point estimates. The default analytic path combines the paired sampling SE with the
 oracle-jackknife variance of the difference (`method: "paired_if_oua"`); an explicit bootstrap
 run uses the joint replicate matrix (`method: "paired_bootstrap"`). Report the `method` key's
@@ -357,27 +390,6 @@ above; do not treat this starter batch as a sufficient variance-fitting pilot.
   a ranking claim needs evidence about the difference in policy mean residuals.
 - Surface gate/diagnostic status alongside every estimate (hard rule 6).
 
-## Reporting back to the user
-
-Write for a busy reader, in this order:
-
-1. **Verdict, one line.** "<A> beats <B>"; "No reliable winner: the paired CI includes 0"; or
-   "Undecided because <policy> has no labels of its own and its transport is `NOT_CHECKED`"
-   (also `INCONCLUSIVE`, `NOT_GRADED` or `FAIL`; hard rule 5). Say it before any p-value.
-2. **Size and uncertainty.** The paired difference with its 95% CI and p-value (say whether
-   adjusted), then each policy's calibrated estimate **with its 95% CI**, never a bare point
-   estimate.
-3. **What would make it firm.** How many labels and on which rows: e.g. "label 20+ random
-   candidate responses", "collect labels in the 0.6–0.95 judge-score range", or "a held-out
-   probe of N candidate prompts, sized with `plan_transport_audits`".
-4. **Limitations.** Gate and audit status per policy with each one-line reason, how the labels
-   were chosen, and the `cje-eval` version.
-
-Never infer that a ranking survives from a scalar support badge. Overlapping marginal CIs
-do not establish equivalence; use the paired difference and a predeclared practical margin
-for an equivalence claim. Plan the analysis sample/stopping rule before collection; repeated
-looks require an appropriate sequential design.
-
 ## Save an auditable run
 
 Leave an executable analysis script and an output directory, not only a chat summary. Save:
@@ -406,6 +418,7 @@ and analysis can be inspected and reproduced, not that their assumptions are gua
 | Averaging raw judge scores to compare policies | `analyze_dataset`; naive CIs had 0% coverage in the Arena benchmark |
 | Putting every label on one policy when each could be labeled | With a few policies, label a random slice of each (routes become `augmented`); with many, pool labels and grade the transfer with held-out probes before relying on it |
 | Naming an unlabeled policy the winner because its judge scores are higher | Hard rule 5: undecided until its own random labels or a transport `PASS` |
+| Calling a no-winner result "equivalent" or "interchangeable" | Say the ranking is not established; equivalence needs a margin declared before looking |
 | Reusing last month's calibrator silently | Held-out `transport_audit` with an explicit margin and at least 20 effective clusters |
 | Rescaling Likert/0–100 scores before calling | Pass as-is; bounded scales auto-normalize |
 | Fitting calibration with <4 independent labeled prompt clusters, or inventing labels | Treat the flagged `naive_direct` fallback as blocked and run the labeling loop. The array API raises when partial coverage needs calibration; complete oracle coverage can use the direct oracle mean. |

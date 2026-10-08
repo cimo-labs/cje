@@ -337,10 +337,15 @@ def best_policy_lines(results: "EstimationResult") -> list:
         )
     if metadata and metadata.get("calibration_status") == "UNCALIBRATED":
         limitations.append("UNCALIBRATED raw judge-score mean")
-    transport_audits = metadata.get("transport_audits", {}) if metadata else {}
-    winner_audit = transport_audits.get(display, {})
-    transport_status = winner_audit.get("status", "NOT_CHECKED")
-    if transport_status != "PASS":
+    # As in summary(): NOT_CHECKED matters only for a policy that borrows
+    # its calibration; an observed audit result (FAIL / INCONCLUSIVE) is
+    # always shown.
+    transport_status = results._transport_status(display)
+    if display in results._transport_unverified():
+        limitations.append(
+            f"borrowed calibration (residual transport {transport_status})"
+        )
+    elif transport_status not in ("PASS", "NOT_CHECKED"):
         limitations.append(f"residual transport {transport_status}")
 
     lines = [f"Best by point estimate: {display} (point estimate, not a test)"]
@@ -356,27 +361,30 @@ def best_policy_lines(results: "EstimationResult") -> list:
     return lines
 
 
-def caveat_blocks(results: "EstimationResult") -> list:
-    """The paired-difference block and borrowed-calibration lines of summary().
-
-    Returns a list of line blocks (possibly empty): every paired difference
-    with its 95% CI and unadjusted p-value (two or more policies), then one
-    named line per policy with no oracle labels of its own whose transport
-    is unverified (``metadata["transport_unverified"]``).
-    """
-    blocks = []
-    paired = results._paired_summary_lines()
-    if paired:
-        blocks.append(paired)
+def borrowed_calibration_lines(results: "EstimationResult") -> list:
+    """summary()'s line per policy with no oracle labels of its own whose
+    transport is unverified (``metadata["transport_unverified"]``)."""
     policies = set(results.target_policies)
-    borrowed = [
+    return [
         results._borrowed_calibration_line(policy)
         for policy in results._transport_unverified()
         if policy in policies
     ]
-    if borrowed:
-        blocks.append(borrowed)
-    return blocks
+
+
+def caveat_blocks(results: "EstimationResult") -> list:
+    """The paired-difference block of summary(), as a list of line blocks.
+
+    Empty with fewer than two policies; otherwise every paired difference
+    with its 95% CI and unadjusted p-value, focused on the best policy by
+    point estimate when there are more than 10 pairs.
+    """
+    try:
+        focus = results.best_policy(reliable_only=False).name
+    except ValueError:
+        focus = None
+    paired = results._paired_summary_lines(focus=focus)
+    return [paired] if paired else []
 
 
 # Logged-data logprob fields. In fresh draws they are ignored (Direct mode
@@ -582,6 +590,7 @@ def run_analysis(args: argparse.Namespace) -> int:
             # Display estimates
             target_policies = results.metadata.get("target_policies", [])
             ci_lower, ci_upper = results.confidence_interval(alpha=0.05)
+            unverified = set(results._transport_unverified())
             for i, policy in enumerate(target_policies):
                 estimate = results.estimates[i]
                 se = results.standard_errors[i]
@@ -589,10 +598,19 @@ def run_analysis(args: argparse.Namespace) -> int:
                     f"  {policy}: {estimate:.3f} "
                     f"(SE {se:.3f}, 95% CI [{ci_lower[i]:.3f}, {ci_upper[i]:.3f}])"
                 )
-                audit = results.metadata.get("transport_audits", {}).get(policy, {})
-                print(
-                    "    residual transport: " f"{audit.get('status', 'NOT_CHECKED')}"
-                )
+                status = results._transport_status(policy)
+                if policy in unverified:
+                    print(f"    borrowed calibration (residual transport {status})")
+                elif status != "NOT_CHECKED":
+                    print(f"    residual transport: {status}")
+
+            # As in summary(): what a borrowed calibration means comes
+            # before any ranking.
+            borrowed = borrowed_calibration_lines(results)
+            if borrowed:
+                print()
+                for line in borrowed:
+                    print(line)
 
             # Best policy (reliability-aware: an argmax that failed the
             # refusal-gate limitations are printed beside the point winner)
@@ -602,8 +620,7 @@ def run_analysis(args: argparse.Namespace) -> int:
                 for line in lines:
                     print(line)
 
-            # As in summary(): the paired test, then one line per policy whose
-            # estimate borrows an unaudited calibration.
+            # As in summary(): the paired test.
             for block in caveat_blocks(results):
                 print()
                 for line in block:
