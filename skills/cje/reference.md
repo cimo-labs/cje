@@ -10,8 +10,10 @@ The workflow and hard rules live in `SKILL.md`; this file is detail only.
 | Field | Required | Notes |
 |---|---|---|
 | `judge_score` | yes | Any bounded scale (0–1, 0–100, Likert 1–5). Auto-normalized; results return in the original scale (`metadata["normalization"]`). |
-| `oracle_label` | no | Ground-truth on the labeled slice. `None`/`NaN`/missing = unlabeled. Same scale conventions. |
+| `oracle_label` | no | Ground-truth on the labeled slice. `None` (JSON `null`) or missing = unlabeled. Records reject `NaN`, so convert pandas blanks first (`df.astype(object).where(df.notna(), None)`); `NaN` means unlabeled only in the array APIs. Same scale conventions. |
 | `prompt_id` | no | Enables paired within-prompt comparisons across policies (lower-variance). Auto-generated from a hash of `prompt` if absent. |
+| `row_id` | no | Unique response ID within a policy/source (e.g. the run ID; not the `prompt_id`). Exact repeats are deduplicated with a warning; repeats with differing fields raise. Without it, re-exported duplicates count as separate rows. |
+| `observation_id` | no | Stable ID of the judged response. Set it on evaluation rows, calibration rows and transport probes: `analyze_dataset` then raises on a probe that was also used to fit the calibrator and reports cross-source label conflicts. Does not change estimates. |
 | `response` | no | Only needed for `include_response_length=True`. |
 | `metadata` | no | Dict; fields here are usable as `calibration_covariates`. |
 
@@ -53,7 +55,9 @@ results = analyze_dataset(
     calibration_oracle_scale=None,  # declared scale for the calibration file's oracle labels
     output_scale=None,            # display axis only — never changes the estimand label
     strict=False,                 # retained for compatibility; invalid records raise by default
-    on_invalid=None,              # default "error" (loud); "drop" filters with counted logging
+    on_invalid=None,              # default "error" (loud); "drop" filters with counted logging.
+                                  # A NaN oracle_label is invalid, so "drop" deletes those
+                                  # unlabeled rows: convert NaN to None instead
     label_design="representative",  # or "known_propensity" / "targeted_unknown"
     label_propensities=None,      # per-policy inclusion probs for "known_propensity"
     transport=None,               # TransportAuditConfig with held-out probes (below)
@@ -85,10 +89,12 @@ fallback), never by this parameter; its only observable effect is which name lan
 
 **`EstimationResult`:**
 
-- `.estimates` (np.ndarray, order matches `metadata["target_policies"]`), `.standard_errors`
+- `.estimates` (np.ndarray, order matches `metadata["target_policies"]`, which is sorted by policy name, not input dict order), `.standard_errors`
 - `.ci(alpha=0.05)` → list of `(lo, hi)` per policy; `.confidence_interval()` → `(lo_array, hi_array)`
 - `.compare_policies(i, j, alpha=0.05)` → dict with difference, SE, CI, p-value; use this for
-  pairwise claims. The `method` key names the inference basis, best-first: `"paired_bootstrap"`
+  pairwise claims. `i`/`j` are integer indices into `metadata["target_policies"]` (names raise
+  `TypeError`); `difference` = estimate[i] − estimate[j]; the dict carries no policy names, so
+  report pairs from `compare_all_policies()`, which adds `policy1`/`policy2`. The `method` key names the inference basis, best-first: `"paired_bootstrap"`
   (bootstrap runs: paired inference over the replicate matrix; the difference SE includes
   calibrator noise, honest on near-tie pairs; sign-test p-value floored at 2/(B+1)),
   `"paired_if_oua"` (cluster-robust runs: t-test from the stored pairwise SE + oracle-jackknife
@@ -401,7 +407,9 @@ units (the units of the printed estimates).
 
 `cje analyze` surfaces the highest point estimate together with any diagnostic limitations; it
 does not silently substitute a different winner. Run `cje validate` first on user-provided
-directories.
+directories. It checks fields, finite judge scores, declared scales and label counts; it does not
+flag policy-name variants, duplicate rows, prompt overlap across policies, or whether labels were
+randomly sampled, so exit 0 does not mean the design is sound.
 
 ## Diagnostics glossary
 

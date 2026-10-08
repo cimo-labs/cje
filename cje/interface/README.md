@@ -131,7 +131,15 @@ Best by point estimate: parallel_universe_prompt
 Limitations: residual transport NOT_CHECKED
 ```
 
-The announcement is **reliability-aware**: the highest point estimate remains visible, and unresolved or failed checks are listed as limitations. `results.best_policy()` defaults to `reliable_only=True` (the safety default): a gate-flagged argmax is demoted to the best gate-passing policy, loudly — the flagged raw winner travels as `runner_up` with `runner_up_reasons`, a warning is logged, and `summary()` prints both. Pass `reliable_only=False` for the raw argmax with its `flagged` marker.
+The announcement is **reliability-aware**: the highest point estimate remains visible, and unresolved or failed checks are listed as limitations. `results.best_policy()` defaults to `reliable_only=True` (the safety default): a gate-flagged argmax is demoted to the best gate-passing policy, loudly — the flagged raw winner travels as `runner_up` with `runner_up_reasons`, a warning is logged, and `summary()` prints both. Pass `reliable_only=False` for the raw argmax with its `flagged` marker. When the argmax is flagged, `summary()` shows the demotion:
+
+```text
+Best by point estimate: candidate
+Limitations: flagged by the reliability gates; residual transport NOT_CHECKED
+Best reliable policy: baseline — raw argmax candidate was flagged (boundary:
+88.3% of judge scores outside the oracle calibration range; diagnostics status
+CRITICAL); pass reliable_only=False for the raw argmax
+```
 
 ### `cje analyze PATH`
 
@@ -189,7 +197,7 @@ Provide `fresh_draws_dir` **or** `fresh_draws_data`.
 **Returns** `EstimationResult` with:
 - `.estimates` / `.standard_errors`: numpy arrays (order = `metadata["target_policies"]`)
 - `.ci()` / `.confidence_interval()`: t-based calibration-aware jackknife CIs by default on supported calibrated routes; complete-oracle routes need no calibration jackknife, and bootstrap inference uses percentile intervals (`.ci_info` records which)
-- `.compare_policies(i, j)`: paired policy comparison
+- `.compare_policies(i, j)`: paired policy comparison; `i`, `j` are integer indices into `target_policies` (sorted by name, not input order) and `difference` = estimate i − estimate j. `.compare_all_policies(adjust=None)` returns every pair with `policy1`/`policy2` names
 - `.summary()`: compact text report (per-policy estimate + 95% CI + gate flags, best-policy line)
 - `.best_policy()`: `PolicyVerdict`; with the default `reliable_only=True` a gate-flagged argmax is demoted to the best gate-passing policy (the demoted argmax travels as `runner_up` with `runner_up_reasons`, plus a logged warning); `reliable_only=False` returns the raw argmax with `flagged` attached
 - `.gates`: `Dict[str, GateResult]` — typed view of `metadata["reliability_gates"]`
@@ -263,6 +271,14 @@ results = analyze_dataset(
 ```
 
 Covariates trigger two-stage calibration (see [`cje/calibration/README.md`](../calibration/README.md)).
+
+### Array API (`calibrated_mean_ci`)
+
+`calibrated_mean_ci(judge_scores, oracle_labels)` estimates one sample's mean from NumPy arrays: judge scores on any bounded scale, and full-length oracle labels in [0, 1] with `NaN` for unlabeled rows (labels outside [0, 1] raise `ValueError`; rescale them or use `analyze_dataset`). The labeled rows must be an equal-probability random slice; there is no weights argument, so use `analyze_dataset` with `label_design="known_propensity"` for stratified labels. Pass `cluster_ids` when a prompt has several responses; otherwise each row is its own cluster.
+
+The interval accounts for both sampling noise and the finite label budget (prompt-cluster-robust variance plus a delete-one-oracle-fold jackknife; a t interval whose degrees of freedom come from the labeled prompts: at most `n_labeled − 1` with the default weight, and lower when the jackknife term is large, as `diagnostics["cluster_robust"]["oracle_df_cap_applied"]` reports); `inference="bootstrap"` switches to refit-bootstrap percentile intervals, which lack that adjustment and under-cover with 10 to 20 labeled prompts.
+
+When partial oracle coverage requires calibration, `result.calibrator` predicts in the same public judge and oracle units supplied by the caller, and `result.diagnostics["boundary_card"]` carries the separate scalar score-support badge. Grade the calibrator's reuse on an independent probe with `transport_audit(..., delta_max=<practical margin>)`. Complete oracle coverage returns the direct oracle mean with `result.calibrator is None` (see [Transport audits](#transport-audits)).
 
 ### Transport audits
 

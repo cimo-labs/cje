@@ -1,6 +1,6 @@
 ---
 name: cje
-description: Use CJE (pip install cje-eval) to compare policies from judge scores and oracle labels, report calibrated means and paired differences with uncertainty, audit or correct calibration reuse, and plan evaluation or audit-label budgets. Use for eval-harness exports and production judge/outcome records; counterfactual IPS/DR evaluation is outside current CJE.
+description: Use CJE (pip install cje-eval) to compare policies from judge scores and oracle labels, report calibrated means and paired differences with uncertainty, audit or correct calibration reuse, and plan evaluation or audit-label budgets. Use for eval-harness exports, production judge/outcome records, and estimating a candidate model or prompt from its generated responses before shipping it; off-policy IPS/DR reweighting of another policy's logged responses is outside current CJE.
 ---
 
 # CJE: calibrated LLM-judge evaluation
@@ -15,6 +15,11 @@ and refuses claims the data can't support.
 
 ## Decide the flow
 
+`reference.md` sits next to this file; if you fetched this file by URL, fetch the same URL ending in `reference.md`.
+
+- Labels already exist (eval export, audit, production feedback) → first establish how each was
+  chosen (**Reshape the user's data**); count only probability-sampled labels toward the 4- and
+  10-cluster thresholds below.
 - Planning labels to resolve a residual transport audit → **Audit budget** in `reference.md`;
   use `plan_transport_audits`, not the evaluation-power planner.
 - Planning a future evaluation (sample size, label budget, detectable effect, or power) →
@@ -39,8 +44,13 @@ and refuses claims the data can't support.
 - A transport audit failed and representative target labels are available → **Correction**
   in `reference.md`. Audit-only probes do not change the estimate.
 - Existing production judge/outcome records → **Production outcomes** in `reference.md`;
-  distinguish calibration data, observed evaluation responses, and counterfactual OPE.
-- Counterfactual estimates for unobserved policy outputs (IPS/DR) → not this library; `pip install "cje-eval==0.3.*"`
+  distinguish calibration data, observed evaluation responses, and off-policy estimation from logs.
+- A candidate model or prompt not yet shipped → generate its responses on representative prompts
+  and use the **Canonical flow** against the current policy. The calibrated judge stands in for
+  the outcome only as far as the calibration carries over: grade that with a held-out probe of the
+  candidate's labelled responses (**Reusing a calibrator**), or report its `NOT_CHECKED` limitation.
+- Reweighting another policy's logged responses by logged propensities (IPS, or DR on top of
+  target-policy fresh draws) → not this library; `pip install "cje-eval==0.3.*"`
   (Python ≤3.12). Predicting one response's score → not CJE (conformal methods).
 
 ## Planning flow: size a future evaluation
@@ -87,11 +97,36 @@ Target shape: `fresh_draws_data={policy_name: [records]}` where each record is
 or nonempty `prompt` text from which CJE can derive it. Reuse the same prompt ID across
 policies and repeated responses to preserve pairing and dependence clusters; a response ID
 is a separate identity. `judge_score` is required (any bounded scale, auto-normalized; pass 0–100 or
-Likert as-is), `oracle_label` optional (`None`/`NaN`/missing = unlabeled). For Langfuse, use
+Likert as-is), `oracle_label` optional: `None` (JSON `null`) or a missing key = unlabeled. Records reject `NaN`
+(`Oracle field 'oracle_label' must be finite`), including the `NaN` pandas puts in blank cells, so
+convert first (`df.astype(object).where(df.notna(), None)`); `NaN` means unlabeled only in the
+array APIs. Do not pass `on_invalid="drop"` to get past that error: it deletes every unlabeled row. For Langfuse, use
 the existing bridge before writing custom joins; see **Langfuse** in `reference.md`. For other
 formats, convert CSV/JSON exports while preserving response identity, missing labels, and
 sampling provenance. Files on disk (`fresh_draws_dir`) and separate labeled logs
 (`calibration_data_path`) also work; see `reference.md`.
+
+Before analysis, check what CJE cannot:
+
+- **How each existing label was chosen.** Read any label-source column and ask the user. Attach
+  `oracle_label` only for labels from a probability sample of that policy's rows: simple random
+  (the default `label_design="representative"`) or random within strata at recorded rates
+  (`label_design="known_propensity"` with `label_propensities`, a probability in (0, 1] for every
+  row of every policy). Leave out labels chosen for the response's quality (complaints, failure
+  reviews, judge–human disagreements, "interesting" cases): they pass every gate without warning
+  and can reverse a comparison. `label_design="targeted_unknown"` does not repair them. If
+  provenance is unknown, use only labels known to be random, or run the labeling loop.
+- **Policy names and duplicate rows.** Print each policy with its row count. Names are used
+  exactly, so `GPT-5.6`, `gpt-5.6` and `gpt-5.6 ` are three policies; merge variants only after
+  the user confirms. Re-exported duplicates count twice unless each record has a unique `row_id`
+  (e.g. the harness run ID, never the `prompt_id`): exact repeats of a `row_id` are then dropped
+  with a warning, and conflicting repeats raise.
+- **Prompt coverage and repeats.** Each policy's estimate averages its own rows, so policies that
+  answered different prompts are compared over different prompt mixes (comparisons report
+  `basis: "prompt_cluster_partial_overlap"`), and a prompt with k responses counts k times. Score
+  refusals and errors as that policy's responses rather than dropping them; restrict to shared
+  prompts only when prompts are missing for reasons unrelated to the policy, and report what you
+  dropped.
 
 ## Canonical flow: compare policies
 
@@ -107,9 +142,9 @@ power for a real evaluation:
 ```python
 from cje import analyze_dataset
 
-# Two policies, gpt-5.6 vs fable-5, each answered the same 20 prompts.
-# A separate fixed judge model scored all 40 responses; human raters
-# labeled a random half of gpt-5.6's (None = not labeled).
+# Synthetic data: two policies, gpt-5.6 vs fable-5, each answered the same
+# 20 prompts. A separate fixed judge model scored all 40 responses; human
+# raters labeled 10 of gpt-5.6's (None = not labeled).
 judge_scores = {
     "gpt-5.6": [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
                 0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94],
@@ -119,9 +154,6 @@ judge_scores = {
 human_labels = [0.55, 0.60, 0.70, 0.74, 0.75, 0.80, 0.90, 0.92, 0.88, 0.97,
                 None, None, None, None, None, None, None, None, None, None]
 
-# gpt-5.6's labeled slice calibrates the judge for BOTH policies. Reusing
-# that map for fable-5 is an assumption; the output flags it as
-# "residual transport NOT_CHECKED" until a held-out probe audit grades it.
 draws = {
     "gpt-5.6": [
         {"prompt_id": f"q{i:02d}", "judge_score": s, "oracle_label": y}
@@ -134,13 +166,20 @@ draws = {
 }
 results = analyze_dataset(fresh_draws_data=draws)
 print(results.summary())
+
+# Is fable-5 better? Test the paired difference on the shared prompts;
+# don't compare the two intervals by eye.
+for c in results.compare_all_policies():
+    print(f"{c['policy1']} - {c['policy2']}: {c['difference']:+.3f}  "
+          f"95% CI [{c['ci_lower']:+.3f}, {c['ci_upper']:+.3f}]  p={c['p_value']:.2f}")
 ```
 
 `summary()` reports each policy's calibrated estimate with a 95% CI, the best policy, and
 its limitations. A policy with no calibration labels of its own still depends on the
 shared-calibration assumption; grade residual transport separately with held-out oracle
 probes and a predeclared practical margin. For programmatic access use `results.estimates`,
-`results.ci()`, and `results.metadata["target_policies"]`.
+`results.ci()`, and `results.metadata["target_policies"]` (sorted by policy name, not input order;
+`estimates`, `ci()` and `compare_policies` indices all follow it).
 
 ## Read the gates before reporting
 
@@ -148,7 +187,9 @@ probes and a predeclared practical margin. For programmatic access use `results.
 status = results.diagnostics.overall_status          # GOOD | WARNING | CRITICAL
 refused = results.diagnostics.refuse_level_policies  # policies with the REFUSE-LEVEL badge
 gates = results.metadata["reliability_gates"]        # {policy: {"flagged": bool, ...}}
-verdict = results.compare_policies(0, 1)             # difference, CI, p-value for pairwise claims
+pairs = results.compare_all_policies()               # every pair, named: difference = policy1 - policy2
+pols = results.target_policies                       # sorted by name, NOT your dict order
+verdict = results.compare_policies(pols.index("candidate"), pols.index("base"))  # candidate - base
 ```
 
 Use `results.compare_policies(i, j)` for pairwise claims and surface the highest point estimate
@@ -188,7 +229,7 @@ from cje import TransportAuditConfig
 
 transport = TransportAuditConfig(
     probes_by_policy={"candidate": held_out_probe_rows},
-    delta_max_by_policy={"candidate": 0.03},
+    delta_max_by_policy={"candidate": 0.03},  # units of results.estimates (label scale); 0.03 suits 0-1 labels
     family_size=n_groups,
 )
 results = analyze_dataset(fresh_draws_data=draws, transport=transport)
@@ -209,6 +250,16 @@ diag = transport_audit(
 )
 ```
 
+Probes must be labels the calibrator was not fit on: never pass a row whose `oracle_label` is
+already in the evaluation draws or `calibration_data_path`. The calibrator reproduces the mean of
+its own training labels, so reused rows give a residual near zero by construction and the
+audit cannot catch a failure. Give every record an `observation_id` (the response or run ID) on draws and probes
+alike, and `analyze_dataset` raises on overlap; `transport_audit` cannot check this. Ask the user
+for the margin before seeing probe results: the largest mean calibration error they would accept
+for this decision, in the units of `results.estimates`. `0.03` above is a placeholder for 0–1
+labels; on a 0–10 scale it makes `PASS` nearly unreachable. If the user cannot name a margin,
+omit it and report `NOT_GRADED`.
+
 `PASS` means the simultaneous residual CI is wholly inside the declared margin. `FAIL` means
 it is wholly outside (graded even below the 20-effective-cluster floor; a policy cannot
 escape a FAIL by supplying too small a probe). Boundary overlap or too few effective clusters is `INCONCLUSIVE`;
@@ -224,7 +275,12 @@ strata**, so the slice stays a probability sample while covering the score range
 items is the classic mistake; see `label_design` in `reference.md` if strata are sampled
 unevenly). Ground truth = human judgment, expert review, or a downstream KPI.
 A trusted stronger model can also serve; the estimate then targets that model's judgment, so
-say so when reporting. Labels may all sit in one policy. Then run the canonical flow.
+say so when reporting. Labels may all sit in one policy, but then every other policy's estimate, and any difference
+involving it, rests on that calibration carrying over, which the `compare_policies` p-value does
+not cover. When the user can rate every policy's responses, spread the random slice across
+policies. Otherwise, before naming a winner, put a held-out probe (at least 20 effective prompt
+clusters, kept out of `oracle_label`) on each policy in the deciding comparison that has no labels
+of its own. Then run the canonical flow.
 For prospective sample-size or label-budget decisions, use the separate **Planning flow**
 above; do not treat this starter batch as a sufficient variance-fitting pilot.
 
@@ -257,7 +313,10 @@ above; do not treat this starter batch as a sufficient variance-fitting pilot.
 Give: each policy's calibrated estimate **with its 95% CI** (never a bare point estimate); the
 pairwise verdict from `compare_policies` (difference, CI, p-value); gate status per policy; and
 for any limited claim, the one-line reason plus the concrete fix (e.g. "collect labels in the
-0.6–0.95 judge-score range"). Never infer that a ranking survives from a scalar support badge. Overlapping marginal CIs
+0.6–0.95 judge-score range"). If a policy in the headline comparison has no labels of its own
+and its transport audit is `NOT_CHECKED`, `INCONCLUSIVE` or `NOT_GRADED`, call the difference
+provisional (it assumes the calibration fits both policies equally), say so before the p-value,
+and recommend a held-out probe. Never infer that a ranking survives from a scalar support badge. Overlapping marginal CIs
 do not establish equivalence; use the paired difference and a predeclared practical margin
 for an equivalence claim. Plan the analysis sample/stopping rule before collection; repeated
 looks require an appropriate sequential design.
@@ -287,7 +346,7 @@ and analysis can be inspected and reproduced, not that their assumptions are gua
 | Pitfall | Instead |
 |---|---|
 | Averaging raw judge scores to compare policies | `analyze_dataset`; naive CIs had 0% coverage in the Arena benchmark |
-| Buying labels under every policy | Labels pool; one calibration can serve every policy; but grade that transfer with held-out probes before relying on it |
+| Putting every label on one policy when each could be labeled | With a few policies, label a random slice of each (routes become `augmented`); with many, pool labels and grade the transfer with held-out probes before relying on it |
 | Reusing last month's calibrator silently | Held-out `transport_audit` with an explicit margin and at least 20 effective clusters |
 | Rescaling Likert/0–100 scores before calling | Pass as-is; bounded scales auto-normalize |
 | Fitting calibration with <4 independent labeled prompt clusters, or inventing labels | Treat the flagged `naive_direct` fallback as blocked and run the labeling loop. The array API raises when partial coverage needs calibration; complete oracle coverage can use the direct oracle mean. |

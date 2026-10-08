@@ -26,7 +26,8 @@ cp -r skills/cje .claude/skills/
 
 ```text
 Read https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/SKILL.md,
-then use CJE to compare the policies in my eval data.
+then use CJE to compare the policies in my eval data. When it points to reference.md,
+fetch https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/reference.md.
 ```
 
 ## Plan an evaluation

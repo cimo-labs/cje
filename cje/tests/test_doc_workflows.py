@@ -94,6 +94,16 @@ def doc_inputs(tmp_path_factory: pytest.TempPathFactory) -> Tuple[Path, Dict[str
             "".join(json.dumps(row, allow_nan=False) + "\n" for row in records)
         )
 
+    # README "Your own data": a CSV with blank cells for unlabeled rows.
+    csv_lines = ["prompt_id,variant,judge_score,human_rating"]
+    for variant, shift in (("A", 0.0), ("B", 0.05)):
+        for i, row in enumerate(rows[:120]):
+            label = row["oracle_label"]
+            rating = "" if label is None else f"{min(1.0, label + shift):.4f}"
+            score = min(0.99, row["judge_score"] + shift)
+            csv_lines.append(f"{row['prompt_id']},{variant},{score:.4f},{rating}")
+    (root / "evals.csv").write_text("\n".join(csv_lines) + "\n")
+
     for directory in ("responses", "responses/current_batch", "responses/pilot"):
         for policy in ("base", "model_a", "model_b"):
             save_rows(root / directory / f"{policy}_responses.jsonl", rows)

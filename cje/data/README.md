@@ -157,7 +157,9 @@ policies = result.metadata["target_policies"]   # list of policy names
 ci_lower, ci_upper = result.confidence_interval(alpha=0.05)
 cis = result.ci()  # [(lower, upper), ...]
 
-# Compare two policies (paired when prompts are shared)
+# Compare two policies (paired when prompts are shared). Indices follow
+# result.target_policies, which is sorted by name, not your input order;
+# difference = estimates[i] - estimates[j]. compare_all_policies() names each pair.
 comparison = result.compare_policies(0, 1)
 print(f"Difference: {comparison['difference']:.3f} (p={comparison['p_value']:.3f})")
 
@@ -293,8 +295,8 @@ Every record failed validation (the warnings above the error give per-record rea
 ### "Invalid fresh draw record at file.jsonl:LINE"
 A record is malformed (bad JSON, missing `judge_score`, out-of-range value). The message includes the exact file and line.
 
-### "Inconsistent draws per prompt"
-Some prompts have more draws than others for a policy. This is a warning, not an error — estimation handles unbalanced draws.
+### Unequal draws per prompt
+CJE does not warn about this. Estimates weight each response equally, so a prompt with more draws counts more in that policy's mean; standard errors still cluster by prompt. Balance draws per prompt, or keep one per prompt chosen at random, when every prompt should count equally.
 
 ### Policy name mismatches
 Policy names come from filenames (`{policy}_responses.jsonl`). Use identical names everywhere (`"gpt-5.6"` vs `"gpt5.6"` are different policies).

@@ -92,7 +92,7 @@ The returned `BoundaryCard` dataclass carries `status`, `out_of_range`, `saturat
 
 **Wiring**: `CalibratedDirectEstimator.estimate()` computes a card per policy automatically, grading each policy's fresh-draw judge scores against the oracle S-range the reward calibrator recorded at fit time. Cards land in `diagnostics.boundary_cards` and `result.metadata["boundary_cards"]`; for a calibrator-dependent point route, REFUSE-LEVEL triggers a loud warning, sets that policy's status to CRITICAL, and flags it in `result.metadata["reliability_gates"]` (`refuse_level_claims`). A fully observed `direct_oracle` estimate does not use the calibrator, so its card remains descriptive with `applies_to_current_estimate=false` and cannot gate that estimate.
 
-**Fixing a REFUSE-LEVEL badge**: collect oracle labels covering the missing score range (the warning names the range), then re-run.
+**Fixing a REFUSE-LEVEL badge**: collect a probability sample of oracle labels that reaches the missing score range (random within judge-score strata; pass `label_design="known_propensity"` if rates differ), then re-run. The warning prints the range on the internal 0–1 scale; the card's `oracle_s_range` gives it in your judge's units.
 
 ## Transportability Audit
 
@@ -109,6 +109,8 @@ The returned `BoundaryCard` dataclass carries `status`, `out_of_range`, `saturat
    - **NOT_GRADED**: no `delta_max` was declared — the residual estimate and CI are descriptive and can never PASS or FAIL. Calling without a margin emits a `UserWarning` prompting you to declare one.
 
 `NOT_CHECKED` is the fifth state, reserved for high-level `analyze_dataset` results when no independent probe was supplied for a policy; the low-level audit never fabricates it. There is no `WARN` status — diagnostics deserialized with a legacy `WARN` value normalize to `INCONCLUSIVE` (`reason_code="legacy_warn"`).
+
+**Inside `analyze_dataset`** (`transport=TransportAuditConfig(...)`), `family_size` defaults to the number of policies given probes (Bonferroni across them; pass a larger value if other audits share the decision). Of the audit states, only an observed `FAIL` hard-flags a policy, and only one whose estimate depends on the audited calibration; every other unresolved state remains visible as a limitation without suppressing the estimate, and a `PASS` does not change any estimate or interval. Called directly on an already fitted calibrator, `audit_transportability(results.calibrator, probe_rows, delta_max=...)` and its array twin `cje.transport_audit(probe_scores, probe_labels, results.calibrator, delta_max=...)` run the same audit but return a standalone diagnostic; they do not flag `results`.
 
 **Units**: `delta_max` (and `delta_hat`/`delta_ci`) are in the units of the probe `oracle_label` values — this audit grades `oracle_label − calibrator.predict(...)` with no rescaling. For audits wired through `analyze_dataset(transport=TransportAuditConfig(...))`, probe labels are converted to the result OUTPUT scale first, so those margins are in output units (the units of `result.estimates`).
 
@@ -158,7 +160,7 @@ for s in samples[:3]:
           f"→ calibrated={s['calibrated']:.2f}  oracle={s['oracle_label']:.2f}")
 ```
 
-`sort_by="residual"` (default) puts the samples that most fooled the judge first; `"abs_residual"` sorts by error magnitude; `None` preserves input order.
+`sort_by="residual"` (default) puts the largest overestimates first (calibrated score furthest above the oracle); `"abs_residual"` sorts by error magnitude; `None` preserves input order.
 
 ## Robust Inference
 

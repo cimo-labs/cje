@@ -7,23 +7,23 @@
 
 **Start here:** [`cje_core_demo.ipynb`](cje_core_demo.ipynb) — Compare policies, check calibration transfers, monitor drift.
 
-1. **Compare Policies** — One-line analysis with `analyze_dataset()`
-2. **Know When Not to Trust the Levels** — Per-policy coverage badge (`boundary_cards`), including a real REFUSE-LEVEL
+1. **Compare Policies** — Hold out audit labels, then analyze with `analyze_dataset()`
+2. **Know When Not to Trust the Levels** — Per-policy coverage badge (`boundary_cards`); all four real policies come out OK, and a small simulated example shows what REFUSE-LEVEL looks like
 3. **Check If Calibration Transfers** — Test on held-out data with `audit_transportability()`
-4. **Inspect What's Fooling the Judge** — Dig into worst residuals with `compute_residuals()`
+4. **Inspect What the Calibration Gets Wrong** — Worst residuals (oracle minus calibrated) with `compute_residuals()`
 5. **Monitor Calibration Over Time** — Detect drift before it breaks your metrics
 
-No setup required — runs entirely in Google Colab with real Chatbot Arena data.
+No setup required — runs entirely in Google Colab on Chatbot Arena prompts and responses (GPT-5 labels stand in for human ratings).
 
 ### Budget Planning
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_planning.ipynb)
 
 **Optimize costs:** [`cje_planning.ipynb`](cje_planning.ipynb) — How many samples? How many oracle labels? What's the minimum detectable effect?
 
-1. **Fit Variance Model** — Learn σ²_eval and σ²_cal from pilot data
-2. **Budget-Constrained Planning** — "I have $X, what MDE can I detect?"
-3. **MDE-Constrained Planning** — "I need to detect X%, what's the cost?"
-4. **Visualize Tradeoffs** — Interactive dashboard for budget vs precision
+1. **Quick Planning (no data)** — Judge quality (R²) + per-call costs → allocation and MDE with `simulate_planning()`
+2. **Understanding the Tradeoffs** — How judge quality shifts the split between samples and oracle labels
+3. **Budget vs MDE** — `plan_evaluation()` ("I have $X, what MDE?") and `plan_for_mde()` ("I need X%, what's the cost?"), plus a static planning dashboard (`plot_planning_dashboard`)
+4. **Refine with Pilot Data (optional, off by default)** — `fit_variance_model()` learns σ²_eval and σ²_cal from labeled pilot data
 
 ### Off-Policy Evaluation (0.3.x line)
 
