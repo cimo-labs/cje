@@ -131,12 +131,12 @@ probe = [json.loads(line) for line in open("gpt56_mini_probe.jsonl")]
 diag = audit_transportability(
     results.calibrator,
     probe,
-    group_label="policy:gpt-5.6-mini",
+    group_label="policy:candidate",
     delta_max=0.05,  # predeclared practical margin, probe oracle-label units
     family_size=2,   # all policy/group audits used in this decision
 )
 print(diag.summary())
-# Residual transport: PASS | Group: policy:gpt-5.6-mini | N=60 (60 clusters) | delta: +0.012 (CI: [-0.008, +0.032]) | margin: +/-0.050
+# Residual transport: PASS | Group: policy:candidate | N=60 (60 clusters) | delta: +0.012 (CI: [-0.008, +0.032]) | margin: +/-0.050
 
 diag.plot()  # residuals by score decile (requires the viz extra)
 

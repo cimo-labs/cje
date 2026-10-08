@@ -185,7 +185,7 @@ diag = transport_audit(
     probe_scores,
     probe_labels,
     calibrator,
-    group_label="policy:gpt-5.6-mini",
+    group_label="policy:candidate",
     delta_max=0.03,
     cluster_ids=prompt_ids,
     family_size=n_groups,

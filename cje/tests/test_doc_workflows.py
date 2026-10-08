@@ -122,9 +122,7 @@ def doc_inputs(tmp_path_factory: pytest.TempPathFactory) -> Tuple[Path, Dict[str
         samples=[Sample(prompt="", **row) for row in rows], target_policies=[]
     )
     _, cal_result = calibrate_dataset(dataset)
-    draws = {
-        policy: rows for policy in ("base", "candidate", "fable-5", "gpt-5.6-mini")
-    }
+    draws = {policy: rows for policy in ("base", "candidate", "production")}
     results = analyze_dataset(fresh_draws_data=draws)
     namespace: Dict[str, Any] = {
         # These imports are introduced by earlier snippets in the same section.

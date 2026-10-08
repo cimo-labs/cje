@@ -28,32 +28,32 @@ You need, for each **policy** (model, system prompt, or agent version) you compa
 ```python
 from cje import analyze_dataset
 
-# Synthetic data: two policies, gpt-5.6 vs fable-5, each answered the same
+# Synthetic data: two policies, production vs candidate, each answered the same
 # 20 prompts. A separate fixed judge model scored all 40 responses; human
-# raters labeled 10 of gpt-5.6's (None = not labeled).
+# raters labeled 10 of production's (None = not labeled).
 judge_scores = {
-    "gpt-5.6": [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
+    "production": [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
                 0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94],
-    "fable-5": [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94,
+    "candidate": [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94,
                 0.72, 0.76, 0.79, 0.80, 0.84, 0.85, 0.88, 0.89, 0.91, 0.95],
 }
 human_labels = [0.55, 0.60, 0.70, 0.74, 0.75, 0.80, 0.90, 0.92, 0.88, 0.97,
                 None, None, None, None, None, None, None, None, None, None]
 
 draws = {
-    "gpt-5.6": [
+    "production": [
         {"prompt_id": f"q{i:02d}", "judge_score": s, "oracle_label": y}
-        for i, (s, y) in enumerate(zip(judge_scores["gpt-5.6"], human_labels))
+        for i, (s, y) in enumerate(zip(judge_scores["production"], human_labels))
     ],
-    "fable-5": [
+    "candidate": [
         {"prompt_id": f"q{i:02d}", "judge_score": s}
-        for i, s in enumerate(judge_scores["fable-5"])
+        for i, s in enumerate(judge_scores["candidate"])
     ],
 }
 results = analyze_dataset(fresh_draws_data=draws)
 print(results.summary())
 
-# Is fable-5 better? Test the paired difference on the shared prompts;
+# Is candidate better? Test the paired difference on the shared prompts;
 # don't compare the two intervals by eye.
 for c in results.compare_all_policies():
     print(f"{c['policy1']} - {c['policy2']}: {c['difference']:+.3f}  "
@@ -62,17 +62,17 @@ for c in results.compare_all_policies():
 
 ```text
 CJE Estimation Results (method: calibrated_direct)
-  fable-5  0.824  95% CI [0.766, 0.882]
-  gpt-5.6  0.786  95% CI [0.696, 0.876]
-Best by point estimate: fable-5
+  candidate   0.824  95% CI [0.766, 0.882]
+  production  0.786  95% CI [0.696, 0.876]
+Best by point estimate: candidate
 Limitations: residual transport NOT_CHECKED
 Status: warning
-fable-5 - gpt-5.6: +0.038  95% CI [-0.027, +0.102]  p=0.22
+candidate - production: +0.038  95% CI [-0.027, +0.102]  p=0.22
 ```
 
-`Best by point estimate` ranks point estimates; it is not a test. The paired interval includes 0 (p = 0.22), so these 20 synthetic prompts do not show that fable-5 is better. `compare_all_policies()` names each pair (`difference` = `policy1` − `policy2`; for many pairs add `adjust="bh"` and read `p_adjusted`; `p_value`, `significant` and the CIs stay unadjusted); `results.compare_policies(i, j)` takes integer indices into `results.target_policies`, which is sorted by name, not your dict's order.
+`Best by point estimate` ranks point estimates; it is not a test. The paired interval includes 0 (p = 0.22), so these 20 synthetic prompts do not show that candidate is better. `compare_all_policies()` names each pair (`difference` = `policy1` − `policy2`; for many pairs add `adjust="bh"` and read `p_adjusted`; `p_value`, `significant` and the CIs stay unadjusted); `results.compare_policies(i, j)` takes integer indices into `results.target_policies`, which is sorted by name, not your dict's order.
 
-`fable-5` has no labels of its own, so it borrows gpt-5.6's calibration. Its interval covers prompt sampling and calibration-fit uncertainty, but not the chance that the calibration is off for fable-5's responses; that is why it is narrower than gpt-5.6's, which its own 10 labels correct. This unaudited reuse, which the difference inherits, is what `NOT_CHECKED` marks: a [held-out audit](#guardrails-claims-cje-refuses-to-make) grades it, and labeling a random slice of fable-5's own responses removes the reliance ([Your own data](#your-own-data)).
+`candidate` has no labels of its own, so it borrows production's calibration. Its interval covers prompt sampling and calibration-fit uncertainty, but not the chance that the calibration is off for candidate's responses; that is why it is narrower than production's, which its own 10 labels correct. This unaudited reuse, which the difference inherits, is what `NOT_CHECKED` marks: a [held-out audit](#guardrails-claims-cje-refuses-to-make) grades it, and labeling a random slice of candidate's own responses removes the reliance ([Your own data](#your-own-data)).
 
 → [Colab tutorial](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb) on Chatbot Arena prompts (GPT-5 labels stand in for human ratings) · [API reference](https://github.com/cimo-labs/cje/blob/main/cje/interface/README.md#api-reference) · [Overview](https://cimolabs.com/cje)
 
@@ -132,8 +132,8 @@ fetch https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/reference.
 Confidence intervals include finite-label calibration uncertainty on supported inference paths. Each estimate targets the policy's mean oracle label over the prompt population your prompts were sampled from, assuming (1) labels are a probability sample of the responses they describe, (2) the judge and rubric stay fixed, and (3) for a policy without labels of its own, the reused calibration has zero mean error on its responses (transport). CJE cannot check (1) or (2); it reports (3) as `NOT_CHECKED` until a held-out audit grades it. [Estimator details](https://github.com/cimo-labs/cje/blob/main/cje/estimators/README.md).
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/cimo-labs/cje/main/images/forest_plot_n1000_oracle25.png" alt="CJE forest plot showing calibrated policy estimates with confidence intervals" width="80%">
-  <br><em>Calibrated estimates with 95% CIs under the experiment's stated sampling and calibration assumptions</em>
+  <img src="https://raw.githubusercontent.com/cimo-labs/cje/main/images/forest_plot_n1000_oracle25.png" alt="Forest plot of calibrated estimates with 95% CIs for four Chatbot Arena policies (base, clone, parallel_universe_prompt, unhelpful) next to mean labels on held-out responses; the unhelpful policy's estimate sits far above its held-out mean and its transport audit fails" width="80%">
+  <br><em>The Chatbot Arena sample in <code>examples/arena_sample</code> (GPT-5 labels stand in for human ratings). The calibration is fit on base-policy labels; diamonds are mean labels on 50 held-out responses per policy (for base, on its own labels). The calibration overstates the deliberately unhelpful policy, and its transport audit fails. Made by <code>scripts/make_readme_forest_plot.py</code>.</em>
 </div>
 
 ## Validation against reference labels
@@ -164,11 +164,11 @@ The warning prints the range on CJE's internal 0–1 judge scale; `results.metad
 from cje import TransportAuditConfig
 
 transport = TransportAuditConfig(
-    probes_by_policy={"fable-5": held_out_probe_rows},  # same record shape as draws, oracle_label filled
-    delta_max_by_policy={"fable-5": 0.03},  # OUTPUT units (units of results.estimates)
+    probes_by_policy={"candidate": held_out_probe_rows},  # same record shape as draws, oracle_label filled
+    delta_max_by_policy={"candidate": 0.03},  # OUTPUT units (units of results.estimates)
 )
 results = analyze_dataset(fresh_draws_data=draws, transport=transport)
-print(results.metadata["transport_audits"]["fable-5"]["status"])
+print(results.metadata["transport_audits"]["candidate"]["status"])
 ```
 
 `PASS` requires the simultaneous residual CI (Bonferroni across the audited policies) to lie wholly inside `[-delta_max, +delta_max]`; wholly outside is `FAIL`; overlap is `INCONCLUSIVE`; omitting the margin is `NOT_GRADED`. Fewer than 20 effective (Kish-weighted) prompt clusters withholds `PASS` but can still grade `FAIL`; a policy cannot escape a `FAIL` by supplying too small a probe. Policies without probes stay `NOT_CHECKED`. Among these audit states, only an observed `FAIL` hard-flags a policy whose estimate depends on that map; every other unresolved state remains visible as a limitation without suppressing the estimate. A `PASS` does not change any estimate or interval. For an already fitted calibrator, `cje.diagnostics.audit_transportability(results.calibrator, probe_rows, delta_max=...)` and its array twin `transport_audit(probe_scores, probe_labels, results.calibrator, delta_max=...)` run the same audit directly (pass `family_size=` the number of audited policies to get the same Bonferroni adjustment; their default is 1); they return a standalone diagnostic and do not flag `results`.

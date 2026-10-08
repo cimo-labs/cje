@@ -117,7 +117,7 @@ Before analysis, check what CJE cannot:
   and can reverse a comparison. `label_design="targeted_unknown"` does not repair them. If
   provenance is unknown, use only labels known to be random, or run the labeling loop.
 - **Policy names and duplicate rows.** Print each policy with its row count. Names are used
-  exactly, so `GPT-5.6`, `gpt-5.6` and `gpt-5.6 ` are three policies; merge variants only after
+  exactly, so `GPT-5.6`, `production` and `production ` are three policies; merge variants only after
   the user confirms. Re-exported duplicates count twice unless each record has a unique `row_id`
   (e.g. the harness run ID, never the `prompt_id`): exact repeats of a `row_id` are then dropped
   with a warning, and conflicting repeats raise.
@@ -142,32 +142,32 @@ power for a real evaluation:
 ```python
 from cje import analyze_dataset
 
-# Synthetic data: two policies, gpt-5.6 vs fable-5, each answered the same
+# Synthetic data: two policies, production vs candidate, each answered the same
 # 20 prompts. A separate fixed judge model scored all 40 responses; human
-# raters labeled 10 of gpt-5.6's (None = not labeled).
+# raters labeled 10 of production's (None = not labeled).
 judge_scores = {
-    "gpt-5.6": [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
+    "production": [0.62, 0.68, 0.72, 0.76, 0.79, 0.83, 0.85, 0.88, 0.91, 0.95,
                 0.64, 0.69, 0.73, 0.77, 0.80, 0.84, 0.87, 0.89, 0.92, 0.94],
-    "fable-5": [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94,
+    "candidate": [0.70, 0.74, 0.75, 0.78, 0.81, 0.83, 0.86, 0.90, 0.93, 0.94,
                 0.72, 0.76, 0.79, 0.80, 0.84, 0.85, 0.88, 0.89, 0.91, 0.95],
 }
 human_labels = [0.55, 0.60, 0.70, 0.74, 0.75, 0.80, 0.90, 0.92, 0.88, 0.97,
                 None, None, None, None, None, None, None, None, None, None]
 
 draws = {
-    "gpt-5.6": [
+    "production": [
         {"prompt_id": f"q{i:02d}", "judge_score": s, "oracle_label": y}
-        for i, (s, y) in enumerate(zip(judge_scores["gpt-5.6"], human_labels))
+        for i, (s, y) in enumerate(zip(judge_scores["production"], human_labels))
     ],
-    "fable-5": [
+    "candidate": [
         {"prompt_id": f"q{i:02d}", "judge_score": s}
-        for i, s in enumerate(judge_scores["fable-5"])
+        for i, s in enumerate(judge_scores["candidate"])
     ],
 }
 results = analyze_dataset(fresh_draws_data=draws)
 print(results.summary())
 
-# Is fable-5 better? Test the paired difference on the shared prompts;
+# Is candidate better? Test the paired difference on the shared prompts;
 # don't compare the two intervals by eye.
 for c in results.compare_all_policies():
     print(f"{c['policy1']} - {c['policy2']}: {c['difference']:+.3f}  "

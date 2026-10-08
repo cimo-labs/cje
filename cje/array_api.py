@@ -855,7 +855,7 @@ def transport_audit(
         calibrator: A fitted calibrator with `.predict()` — e.g. the
             `calibrator` returned by `calibrated_mean_ci`.
         bins: Number of score-quantile bins for the residual breakdown.
-        group_label: Optional label (e.g. "policy:gpt-5.6-mini").
+        group_label: Optional label (e.g. "policy:candidate").
         alpha: Significance level for the audit CI (default 0.05 → 95% CI,
             Bonferroni-adjusted across ``family_size`` audits).
         delta_max: Practical absolute mean-residual margin in oracle units.
