@@ -331,10 +331,10 @@ def simulate_variance_model(
     Args:
         r2: Judge quality as isotonic R² (0 to 1). This is the fraction of oracle
             variance explained by the judge after isotonic calibration.
-            - 0.9+: Excellent judge (minimal calibration uncertainty)
-            - 0.7-0.9: Good judge (moderate calibration uncertainty)
-            - 0.5-0.7: Moderate judge (significant calibration uncertainty)
-            - <0.5: Weak judge (high calibration uncertainty)
+            - 0.85+: Excellent judge (minimal calibration uncertainty)
+            - 0.65-0.85: Good judge (moderate calibration uncertainty)
+            - 0.40-0.65: Moderate judge (significant calibration uncertainty)
+            - <0.40: Low-quality judge (high calibration uncertainty)
         n_total: Simulated dataset size (default 1000).
         oracle_fraction: Fraction with oracle labels (default 0.4).
         n_replicates: Subsample replicates per measurement (default 50).

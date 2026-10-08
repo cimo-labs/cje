@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- README: the quickstart's stale "Upgrading to 0.8.0" note is now a one-line
+  pointer to this changelog. The scope table says CJE estimates a candidate
+  model or prompt from its generated responses before shipping (with offline
+  labels and a held-out audit), and describes the removed IPS/DR line as
+  reweighting another policy's logged responses rather than as
+  "counterfactual" estimation. The skill uses the same wording.
+- Colab notebooks install 0.9.1 (were 0.7.1). The core demo's adversarial
+  section now matches its own output: the calibration learned on the base
+  policy, not the judge, inflates the adversarial policy's level, and the
+  transport audit FAILs. The CLI text it quotes matches the current CLI.
+- Planning notebook: judge-quality tiers match `explain()` (0.85 / 0.65 /
+  0.40), the example session is internally consistent, the fitted-model R²
+  is explained, and per-replicate coverage warnings from internal refits are
+  silenced. The `simulate_variance_model` docstring uses the same tiers.
+
 ## [0.9.1] - 2026-10-06
 
 Fixes. The augmented interval now takes its degrees of freedom from the

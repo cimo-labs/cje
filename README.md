@@ -21,11 +21,7 @@
 pip install cje-eval
 ```
 
-**Upgrading to 0.8.0:** Refit saved two-stage calibrators to rebuild their
-empirical-rank boundaries with the corrected prediction arithmetic. Calibrated
-scores are now stable when prediction rows are split into batches or reordered;
-values at learned rank boundaries can differ from earlier versions. See the
-[release notes](https://github.com/cimo-labs/cje/releases/tag/v0.8.0).
+**Upgrading?** Read the [CHANGELOG](https://github.com/cimo-labs/cje/blob/main/CHANGELOG.md) first. Two-stage calibrators saved before 0.8.0 need refitting from retained inputs.
 
 **Using a coding agent?** The [bundled skill](#use-cje-from-your-ai-agent) covers data reshaping, calibration, comparisons, and diagnostics.
 
@@ -92,10 +88,11 @@ then use CJE to compare the policies in my eval data.
 | Your situation | Use |
 |---|---|
 | Rank/compare policies using an LLM judge, with some ground-truth labels | **CJE** |
+| Estimate how a new model or prompt would do before shipping it, without an A/B test | **CJE**, when the outcome can be labelled offline (raters, experts). Generate its responses on prompts sampled from real traffic and score them with the calibrated judge. Labels on a held-out, probability-sampled slice of its own responses check that the calibration carries over; without them the estimate is marked `NOT_CHECKED` |
 | One dataset, labels sampled from it, want a CI on its mean | CJE's `calibrated_mean_ci` provides a prediction-powered mean estimate with diagnostics |
 | Evaluate **many** policies without labeling under each | **CJE**. Labels pool across policies; audit that reuse with held-out probes before relying on it |
 | Predict how a *specific response* will score | Per-item prediction (e.g. conformal methods) |
-| Counterfactual estimates for unobserved policy outputs using importance weighting / doubly robust OPE | The frozen `cje-eval==0.3.*` OPE line. Current CJE is Direct-mode only (see [Why Direct mode only?](#why-direct-mode-only-no-ipsdr)) |
+| Estimate a policy by reweighting another policy's logged responses (importance sampling, or doubly robust OPE on top of target-policy fresh draws) | The frozen `cje-eval==0.3.*` OPE line. Current CJE is Direct-mode only (see [Why Direct mode only?](#why-direct-mode-only-no-ipsdr)) |
 
 ## How it works
 

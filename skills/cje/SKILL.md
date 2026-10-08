@@ -1,6 +1,6 @@
 ---
 name: cje
-description: Use CJE (pip install cje-eval) to compare policies from judge scores and oracle labels, report calibrated means and paired differences with uncertainty, audit or correct calibration reuse, and plan evaluation or audit-label budgets. Use for eval-harness exports and production judge/outcome records; counterfactual IPS/DR evaluation is outside current CJE.
+description: Use CJE (pip install cje-eval) to compare policies from judge scores and oracle labels, report calibrated means and paired differences with uncertainty, audit or correct calibration reuse, and plan evaluation or audit-label budgets. Use for eval-harness exports, production judge/outcome records, and estimating a candidate model or prompt from its generated responses before shipping it; off-policy IPS/DR reweighting of another policy's logged responses is outside current CJE.
 ---
 
 # CJE: calibrated LLM-judge evaluation
@@ -39,8 +39,13 @@ and refuses claims the data can't support.
 - A transport audit failed and representative target labels are available → **Correction**
   in `reference.md`. Audit-only probes do not change the estimate.
 - Existing production judge/outcome records → **Production outcomes** in `reference.md`;
-  distinguish calibration data, observed evaluation responses, and counterfactual OPE.
-- Counterfactual estimates for unobserved policy outputs (IPS/DR) → not this library; `pip install "cje-eval==0.3.*"`
+  distinguish calibration data, observed evaluation responses, and off-policy estimation from logs.
+- A candidate model or prompt not yet shipped → generate its responses on representative prompts
+  and use the **Canonical flow** against the current policy. The calibrated judge stands in for
+  the outcome only as far as the calibration carries over: grade that with a held-out probe of the
+  candidate's labelled responses (**Reusing a calibrator**), or report its `NOT_CHECKED` limitation.
+- Reweighting another policy's logged responses by logged propensities (IPS, or DR on top of
+  target-policy fresh draws) → not this library; `pip install "cje-eval==0.3.*"`
   (Python ≤3.12). Predicting one response's score → not CJE (conformal methods).
 
 ## Planning flow: size a future evaluation
