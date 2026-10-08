@@ -10,8 +10,10 @@ diagnostics): judge-score mass outside the oracle calibration range at or
 above the 5% threshold triggers REFUSE-LEVEL for level (absolute) claims.
 """
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional, Tuple
 import logging
 
 import numpy as np
@@ -19,6 +21,40 @@ import numpy as np
 from .gates import OUT_OF_RANGE_REFUSE_THRESHOLD, SATURATION_CAUTION_THRESHOLD
 
 logger = logging.getLogger(__name__)
+
+# Public judge scale for the REFUSE-LEVEL warning text. analyze_dataset fits on
+# internal [0, 1] judge scores; it sets this around estimation so the warning
+# prints the labeled range in the judge's own units (e.g. 0-100). Unset, the
+# calibrator's scores already are the caller's units (array API, direct use).
+_JUDGE_DISPLAY_SCALE: ContextVar[Optional[Any]] = ContextVar(
+    "cje_judge_display_scale", default=None
+)
+
+
+@contextmanager
+def judge_units_for_warnings(judge_scale: Optional[Any]) -> Iterator[None]:
+    """Print REFUSE-LEVEL ranges in ``judge_scale`` units inside the block.
+
+    ``judge_scale`` is a ``ScaleInfo``-like object with ``inverse`` and
+    ``is_identity``; None leaves ranges in the calibrator's own units.
+    """
+    token = _JUDGE_DISPLAY_SCALE.set(judge_scale)
+    try:
+        yield
+    finally:
+        _JUDGE_DISPLAY_SCALE.reset(token)
+
+
+def _judge_unit_range(s_range: Any) -> Tuple[str, str]:
+    """Format the labeled judge-score range in the judge's own units."""
+    lo, hi = float(s_range[0]), float(s_range[1])
+    scale = _JUDGE_DISPLAY_SCALE.get()
+    if scale is None or scale.is_identity():
+        return f"{lo:.3f}", f"{hi:.3f}"
+    return (
+        f"{float(scale.inverse(lo)):.4g}",
+        f"{float(scale.inverse(hi)):.4g}",
+    )
 
 
 @dataclass
@@ -171,20 +207,21 @@ def boundary_card_dict(
     card_dict["oracle_s_range"] = [float(s_range[0]), float(s_range[1])]
 
     if card.status == "REFUSE-LEVEL" and emit_warning:
+        lo_text, hi_text = _judge_unit_range(s_range)
         if warn_label is not None:
             logger.warning(
                 f"REFUSE-LEVEL for policy '{warn_label}': "
                 f"{card.out_of_range:.1%} of fresh-draw judge "
                 f"scores fall outside the oracle calibration range "
-                f"[{s_range[0]:.3f}, {s_range[1]:.3f}]. Do not report level "
-                f"(absolute) claims for this policy from this fit. "
+                f"[{lo_text}, {hi_text}] (judge-score units). Do not report "
+                f"level (absolute) claims for this policy from this fit. "
                 f"Collect oracle labels covering the missing score range."
             )
         else:
             logger.warning(
                 f"REFUSE-LEVEL coverage badge: {card.out_of_range:.1%} of judge "
                 f"scores fall outside the oracle calibration range "
-                f"[{s_range[0]:.3f}, {s_range[1]:.3f}]. Do not ship level "
+                f"[{lo_text}, {hi_text}] (judge-score units). Do not ship level "
                 f"(absolute) claims from this estimate."
             )
     return card_dict

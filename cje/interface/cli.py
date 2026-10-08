@@ -32,6 +32,10 @@ def create_parser() -> argparse.ArgumentParser:
             "Causal Judge Evaluation - calibrated Direct-mode evaluation of "
             "LLM policies from judge-scored fresh draws"
         ),
+        epilog=(
+            "Coding agents: run `cje skill` (or `python -m cje skill`) before "
+            "using the API; it prints the bundled SKILL.md."
+        ),
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -273,6 +277,29 @@ def create_parser() -> argparse.ArgumentParser:
         help="Show detailed validation results",
     )
 
+    # Skill command: the agent skill bundled with this installed version
+    skill_parser = subparsers.add_parser(
+        "skill",
+        help="Print the agent skill (SKILL.md) for coding agents",
+        description=(
+            "Print the CJE agent skill bundled with this installed version: "
+            "SKILL.md (the procedure and hard rules) by default, reference.md "
+            "(full API detail) with --reference, or the folder holding both "
+            "with --path. Coding agents: read SKILL.md before using the API."
+        ),
+    )
+    skill_target = skill_parser.add_mutually_exclusive_group()
+    skill_target.add_argument(
+        "--reference",
+        action="store_true",
+        help="Print reference.md (full API detail) instead of SKILL.md",
+    )
+    skill_target.add_argument(
+        "--path",
+        action="store_true",
+        help="Print the folder containing SKILL.md and reference.md",
+    )
+
     return parser
 
 
@@ -316,7 +343,7 @@ def best_policy_lines(results: "EstimationResult") -> list:
     if transport_status != "PASS":
         limitations.append(f"residual transport {transport_status}")
 
-    lines = [f"Best by point estimate: {display}"]
+    lines = [f"Best by point estimate: {display} (point estimate, not a test)"]
     if limitations:
         lines.append("Limitations: " + "; ".join(limitations))
     if verdict.runner_up is not None:
@@ -327,6 +354,29 @@ def best_policy_lines(results: "EstimationResult") -> list:
             f"reliable_only=False for the raw argmax"
         )
     return lines
+
+
+def caveat_blocks(results: "EstimationResult") -> list:
+    """The paired-difference block and borrowed-calibration lines of summary().
+
+    Returns a list of line blocks (possibly empty): every paired difference
+    with its 95% CI and unadjusted p-value (two or more policies), then one
+    named line per policy with no oracle labels of its own whose transport
+    is unverified (``metadata["transport_unverified"]``).
+    """
+    blocks = []
+    paired = results._paired_summary_lines()
+    if paired:
+        blocks.append(paired)
+    policies = set(results.target_policies)
+    borrowed = [
+        results._borrowed_calibration_line(policy)
+        for policy in results._transport_unverified()
+        if policy in policies
+    ]
+    if borrowed:
+        blocks.append(borrowed)
+    return blocks
 
 
 # Logged-data logprob fields. In fresh draws they are ignored (Direct mode
@@ -552,6 +602,13 @@ def run_analysis(args: argparse.Namespace) -> int:
                 for line in lines:
                     print(line)
 
+            # As in summary(): the paired test, then one line per policy whose
+            # estimate borrows an unaudited calibration.
+            for block in caveat_blocks(results):
+                print()
+                for line in block:
+                    print(line)
+
         # Save results if requested
         if args.output:
             from ..utils.export import export_results_json
@@ -772,10 +829,62 @@ def validate_data(args: argparse.Namespace) -> int:
         return 1
 
 
-def main() -> int:
-    """Main CLI entry point."""
+# The agent skill ships inside the package (library-skills convention):
+# cje/.agents/skills/cje/ holds byte-identical copies of skills/cje/SKILL.md and
+# reference.md (`make sync-skill` copies them; test_skill_bundle.py enforces).
+SKILL_FILES = ("SKILL.md", "reference.md")
+SKILL_SOURCE_URL = "https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/"
+
+
+def skill_dir() -> Path:
+    """Return the folder of the agent skill bundled with this installed package."""
+    return Path(__file__).resolve().parent.parent / ".agents" / "skills" / "cje"
+
+
+def show_skill(args: argparse.Namespace) -> int:
+    """Run the skill command: print SKILL.md, reference.md, or their folder.
+
+    File contents are written as the exact bundled bytes (UTF-8), so
+    ``cje skill > SKILL.md`` reproduces the file and non-ASCII text cannot
+    fail on a narrow-encoding pipe. A missing bundle fails loudly with the
+    URL of the canonical copy rather than printing nothing.
+    """
+    folder = skill_dir()
+    missing = [name for name in SKILL_FILES if not (folder / name).is_file()]
+    if missing:
+        print(
+            f"❌ Error: the agent skill is not bundled with this install of "
+            f"cje-eval (missing {', '.join(missing)} in {folder}). Fetch the "
+            f"raw files instead: {SKILL_SOURCE_URL}SKILL.md and "
+            f"{SKILL_SOURCE_URL}reference.md",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.path:
+        print(folder)
+        return 0
+
+    data = (folder / ("reference.md" if args.reference else "SKILL.md")).read_bytes()
+    stdout = sys.stdout
+    buffer = getattr(stdout, "buffer", None)
+    if buffer is not None:
+        stdout.flush()
+        buffer.write(data)
+        buffer.flush()
+    else:  # a text-only stream (no byte buffer)
+        stdout.write(data.decode("utf-8"))
+        stdout.flush()
+    return 0
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Main CLI entry point.
+
+    ``argv`` defaults to ``sys.argv[1:]``.
+    """
     parser = create_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.command is None:
         parser.print_help()
@@ -785,6 +894,8 @@ def main() -> int:
         return run_analysis(args)
     elif args.command == "validate":
         return validate_data(args)
+    elif args.command == "skill":
+        return show_skill(args)
     else:
         print(f"Unknown command: {args.command}", file=sys.stderr)
         return 1

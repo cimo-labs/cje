@@ -1,4 +1,11 @@
-"""CJE: Causal Judge Evaluation - Calibrated LLM Policy Evaluation.
+"""Coding agents: run `cje skill` before using this API.
+
+Never report a raw judge-score mean as quality; attach oracle labels only from
+random samples; a policy without its own labels is not decision-ready until its
+transport is audited. (`python -m cje skill` works when the `cje` command is not
+on PATH; `cje skill --reference` prints the full API reference.)
+
+CJE: Causal Judge Evaluation - Calibrated LLM Policy Evaluation.
 
 Simple API for evaluating policies from fresh draws with judge scores.
 

@@ -13,6 +13,7 @@ import numpy as np
 from .ingest import (
     canonicalize_record,
     deduplicate_canonical_records,
+    log_nan_labels_as_unlabeled,
     require_prompt_identity,
 )
 from .models import Dataset, Sample
@@ -181,6 +182,8 @@ class DatasetLoader:
         """Convert raw data to Dataset."""
         canonical_records: List[Dict[str, Any]] = []
         n_skipped = 0
+        # NaN labels read as unlabeled: one INFO line per load, not per row.
+        nan_label_counts: Dict[str, int] = {}
         for idx, record in enumerate(data):
             try:
                 canonical_records.append(
@@ -192,6 +195,7 @@ class DatasetLoader:
                         oracle_field=self.oracle_field,
                         prompt_field=self.prompt_field,
                         response_field=self.response_field,
+                        nan_label_counts=nan_label_counts,
                     )
                 )
             except (KeyError, TypeError, ValueError) as e:
@@ -200,6 +204,7 @@ class DatasetLoader:
                 n_skipped += 1
                 logger.warning(f"Skipping invalid record {idx}: {e}")
                 continue
+        log_nan_labels_as_unlabeled(nan_label_counts, self.oracle_field)
 
         if not canonical_records:
             raise ValueError(

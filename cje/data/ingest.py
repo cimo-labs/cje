@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import math
+import numbers
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -123,6 +124,42 @@ def require_prompt_identity(
     )
 
 
+def is_nan_label(value: Any) -> bool:
+    """True for a floating-point NaN (``float("nan")``, ``numpy.nan``).
+
+    A NaN in a record's oracle field means "not labeled": pandas and NumPy
+    write it for blank cells. Only real floating values qualify; strings
+    such as ``"nan"``, infinities, booleans and other invalid labels are
+    not NaN labels and keep failing validation.
+    """
+    if isinstance(value, (bool, str, bytes)):
+        return False
+    if not isinstance(value, numbers.Real) or isinstance(value, numbers.Integral):
+        return False
+    try:
+        return math.isnan(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def log_nan_labels_as_unlabeled(
+    counts: Dict[str, int], oracle_field: str = "oracle_label"
+) -> None:
+    """Emit the single INFO line for NaN oracle labels read as unlabeled."""
+    total = int(sum(counts.values()))
+    if not total:
+        return
+    detail = ", ".join(f"{policy}: {count}" for policy, count in sorted(counts.items()))
+    logger.info(
+        "Treated %d NaN %r value(s) as unlabeled (%s). None or an omitted "
+        "field also marks a row unlabeled; other invalid labels (text, "
+        "infinities, booleans) still raise.",
+        total,
+        oracle_field,
+        detail,
+    )
+
+
 def canonicalize_record(
     record: Dict[str, Any],
     index: int,
@@ -133,6 +170,7 @@ def canonicalize_record(
     oracle_field: str = "oracle_label",
     prompt_field: str = "prompt",
     response_field: str = "response",
+    nan_label_counts: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """Promote one raw record into the canonical Direct-mode field layout.
 
@@ -140,6 +178,12 @@ def canonicalize_record(
     covariates, source-local row identity, and filename/record policy checks
     therefore have identical semantics across file, directory, and in-memory
     inputs.
+
+    A floating-point NaN in the oracle field is read as "not labeled" (the
+    canonical record carries no ``oracle_label``). When ``nan_label_counts``
+    is given, the caller aggregates those rows per policy and logs once
+    (``log_nan_labels_as_unlabeled``); otherwise each such record logs one
+    INFO line. Infinite, boolean, and non-numeric labels still raise.
     """
     if not isinstance(record, dict):
         raise ValueError(f"expected a mapping, got {type(record).__name__}")
@@ -163,6 +207,14 @@ def canonicalize_record(
     draw_idx = read_aliased_field(record, "draw_idx")
     oracle_raw = read_aliased_field(record, oracle_field)
     oracle_label: Optional[float] = None
+    if oracle_raw is not None and is_nan_label(oracle_raw):
+        # NaN means "not labeled" (pandas/NumPy blanks), never a label value.
+        oracle_raw = None
+        nan_key = str(policy) if policy is not None else source_id
+        if nan_label_counts is not None:
+            nan_label_counts[nan_key] = nan_label_counts.get(nan_key, 0) + 1
+        else:
+            log_nan_labels_as_unlabeled({nan_key: 1}, oracle_field)
     if oracle_raw is not None:
         if isinstance(oracle_raw, bool):
             raise ValueError(

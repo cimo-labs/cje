@@ -420,7 +420,9 @@ def test_high_level_without_probes_is_explicitly_not_checked() -> None:
     assert audit["status"] == "NOT_CHECKED"
     assert audit["reason_code"] == "probe_not_provided"
     assert result.best_policy().name == "policy"
-    assert "residual transport NOT_CHECKED" in result.summary()
+    # The audit state stays NOT_CHECKED in metadata, but a policy corrected by
+    # its own labels does not rely on transport, so summary() does not list it.
+    assert "residual transport NOT_CHECKED" not in result.summary()
 
 
 def test_high_level_rejects_probe_reused_for_calibrator_fit() -> None:

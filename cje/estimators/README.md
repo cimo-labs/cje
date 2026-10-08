@@ -2,7 +2,7 @@
 
 ## Overview
 
-Direct-mode estimation: turn judge-scored fresh draws into per-policy value estimates with honest uncertainty quantification. The estimand is the **mean calibrated reward of each policy on a shared prompt set** — "which of these policies produces the best outputs on my eval set, and by how much?"
+Direct-mode estimation: turn judge-scored fresh draws into per-policy value estimates with honest uncertainty quantification. The estimand is each policy's **mean oracle label over the prompt population the evaluation prompts were sampled from**, estimated from calibrated judge scores on those prompts — "which of these policies produces the best outputs, and by how much?" The assumptions behind it are under [Methods](#methods).
 
 > **Note (0.4.0):** The off-policy estimators were removed; for IPS/DR workflows pin `pip install "cje-eval==0.3.*"`.
 
@@ -128,6 +128,40 @@ Calibration uses k-fold cross-fitting. `fit_cv` assigns whole oracle **prompt cl
 - **"No fresh draws added"** — call `add_fresh_draws()` for every policy in `target_policies` before `fit_and_estimate()`.
 - **"Only N oracle-labeled samples"** — cross-fitted calibration needs at least 2 labels per fold (10 for the default 5 folds); with 4–9 labels CJE reduces the fold count with a warning, below 4 it raises.
 - **REFUSE-LEVEL badge** — not an error: do not ship absolute numbers from that calibration fit until labels cover the policy's score range. The scalar-support check alone does not certify rankings or residual transport.
+
+## Methods
+
+### Estimand and assumptions
+
+Each estimate targets the policy's mean oracle label over the prompt population your prompts were sampled from, reported on the label scale. It assumes:
+
+1. the labels are a probability sample of the responses they describe (simple random under the default `label_design="representative"`, or known inclusion probabilities under `"known_propensity"`);
+2. the judge and rubric stay fixed;
+3. for a policy without labels of its own, the reused calibration has zero mean error on its responses (transport).
+
+CJE cannot check (1) or (2); it reports (3) as `NOT_CHECKED` until a held-out audit grades it ([diagnostics](../diagnostics/README.md#claims-cje-refuses-to-make)). Confidence intervals include finite-label calibration uncertainty on supported inference paths ([Standard Errors](#standard-errors)).
+
+### How it works
+
+1. **Calibrate**: learn the judge → oracle mapping on the labeled slice (isotonic regression, unless the default auto mode's cross-validation prefers a two-stage variant that is isotonic in a learned index of the score, so it need not be monotone in the raw score; two-stage whenever covariates are used; cross-fitted by prompt). Details in the [calibration README](../calibration/README.md).
+2. **Evaluate**: average each policy's calibrated scores; when a policy has random labels of its own, correct that average by their mean residual (label minus calibrated score; the `augmented` route). Compare policies on the same prompts.
+3. **Diagnose**: automatically report scalar score-range support, and optionally run a held-out residual equivalence audit with a predeclared practical margin ([diagnostics](../diagnostics/README.md)).
+
+A level claim concerns a policy's mean oracle outcome; a ranking concerns the oracle difference between two policies, which equals the calibrated-prediction difference plus the difference in their mean residuals. A common residual offset cancels, so a failed level audit does not by itself prove the ordering wrong, and a scalar support badge does not certify the ordering under a shift.
+
+### Why Direct mode only
+
+CJE is **Direct-mode only**: fresh draws, calibrated judge, audits. There is no off-policy machinery: no importance-sampling or doubly-robust estimators (`calibrated-ips`, `dr-cpo`, `mrdr`, `tmle`, `stacked-dr`), teacher forcing, SIMCal weight stabilization, or overlap diagnostics. Our own paper's results drove that design: for realistic LLM policy pairs, importance weighting failed even when ESS looked healthy (target-typicality coverage 0.19–0.49, far below the 0.70 gate), and the best DR stack merely matched Direct mode's accuracy at ~12× the compute.
+
+- **Need IPS/DR from logged propensities?** Pin the frozen OPE line: `pip install "cje-eval==0.3.*"` (maintained on the `0.3.x` branch; docs at the `v0.3.0` tag; requires Python <=3.12).
+- **Have old logged data with `judge_score` + `oracle_label`?** It works as the calibration source: `analyze_dataset(fresh_draws_dir=..., calibration_data_path="logged.jsonl")`. Its values are read as [0, 1] unless you declare `calibration_judge_scale=(lo, hi)` / `calibration_oracle_scale=(lo, hi)`.
+
+### Validation against reference labels
+
+- **HealthBench Consensus (29,511 response–criterion records)**: a custom confidence-augmented regrade found judge overconfidence of 24.5 (gpt-4o-mini) and 13.0 (Claude Haiku 4.5) percentage points against strict positive physician majority, with ties coded not met (14.4 and 3.0 points, respectively, against mean physician agreement). One seeded retrospective replay exposed 5% of aggregate labels (1,454 endpoints, each based on 2–5 physician grades); calibrated estimates were within 1.4–2.1 points of the full aggregate endpoint. This was not prospective annotation or repeated-split validation. [Read the full audit →](https://cimolabs.com/research/healthbench-judge-audit)
+- **Chatbot Arena (4,961 prompts, 5 policies; GPT-5 ratings stand in for human labels, so this is a model-reference study, not human validation)**: 99% pairwise ranking accuracy in the headline 5%-oracle configuration, and 94% averaged across configurations with a response-length covariate (92% without it, the `analyze_dataset` default). The arXiv v3 cost model gives a 14× reduction against full labeling under that reference; that saving comes from reusing one calibration across policies ([how many labels a judge saves](../../guides/evaluation-planning.md)). Nominal 95% intervals on raw judge means covered the reference mean 0% of the time; the calibration-aware intervals the library uses by default covered about 95% (93.9% Direct, 95.6% with the covariate) in a [corrected rerun](https://github.com/cimo-labs/cje-arena-experiments/blob/main/erratum_rerun/DELTAS.md) of the paper's experiments. A deliberately unhelpful policy, which the judge already ranks last but whose level the base-policy calibration overstates, fails the residual transport audit and is flagged. [Paper →](https://arxiv.org/abs/2512.11150)
+
+The root README's forest plot is drawn from the shipped Arena sample (`examples/arena_sample`) by `scripts/make_readme_forest_plot.py`.
 
 ## Summary
 

@@ -7,13 +7,45 @@ from datetime import date, datetime, time
 from enum import Enum
 from html import escape
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Set, Tuple, cast
+from typing import Dict, List, Optional, Any, Set, Tuple, Union, cast
 from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 RESULT_SCHEMA_VERSION = "cje.estimation_result/v2"
+
+# metadata["calibration_label_sources"] entry for labels that came from
+# calibration_data_path (the others are policy names).
+_CALIBRATION_DATA_SOURCE = "calibration_data"
+
+# compare_policies keys re-derived from the result on every call; stored
+# portable comparisons omit them so a reversed pair is never mislabelled.
+_DERIVED_COMPARISON_KEYS = (
+    "gate_flagged",
+    "policy1",
+    "policy2",
+    "transport_unverified",
+    "conditional_on_transport",
+)
+
+
+def _join_names(names: List[str]) -> str:
+    """'a', 'a and b', 'a, b and c'."""
+    if len(names) <= 1:
+        return "".join(names)
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _format_p_value(p_value: float) -> str:
+    """'p=0.22'; small values stay visible ('p=0.004', 'p<0.001')."""
+    if not np.isfinite(p_value):
+        return "p=nan"
+    if p_value < 0.001:
+        return "p<0.001"
+    if p_value < 0.01:
+        return f"p={p_value:.3f}"
+    return f"p={p_value:.2f}"
 
 
 def _validate_alpha(alpha: Any) -> float:
@@ -104,6 +136,15 @@ class PolicyVerdict:
             estimate but failed the gates). None otherwise.
         runner_up_reasons: Why ``runner_up`` was flagged (gate reasons and/or
             CRITICAL diagnostics status). None unless ``runner_up`` is set.
+        decision_ready: False when the ranking rests on an unverified
+            assumption: ``name``, or the policy it is ranked against (the
+            demoted ``runner_up`` or the next-best point estimate), has no
+            oracle labels of its own and no PASS transport audit
+            (``metadata["transport_unverified"]``), or ``name`` failed the
+            reliability gates. True does NOT mean the lead is significant:
+            the verdict ranks point estimates; test the pair with
+            ``compare_policies``.
+        decision_note: One sentence saying why, and what to do next.
     """
 
     name: str
@@ -113,6 +154,8 @@ class PolicyVerdict:
     all_flagged: bool = False
     runner_up: Optional[str] = None
     runner_up_reasons: Optional[List[str]] = None
+    decision_ready: bool = False
+    decision_note: str = ""
 
 
 class Sample(BaseModel):
@@ -518,6 +561,14 @@ class EstimationResult(BaseModel):
         the argmax is returned with ``all_flagged=True`` — do not crown it.
         Pass ``reliable_only=False`` for the raw argmax with its gate flag.
 
+        ``decision_ready`` is False when the verdict, or the policy it is
+        ranked against, has no oracle labels of its own and no PASS
+        transport audit (its estimate borrows another policy's calibration),
+        or when the returned policy is flagged; ``decision_note`` says why
+        and what to do. The verdict ranks point estimates and is never a
+        test: check the pair with ``compare_policies`` before declaring a
+        winner.
+
         Note: This replaced the 0.4.x ``best_policy() -> int`` (naive
         argmax index) in 0.5.0. Use ``verdict.index`` for the old value.
 
@@ -529,12 +580,20 @@ class EstimationResult(BaseModel):
 
         Returns:
             PolicyVerdict (name, index, estimate, flagged, all_flagged,
-            runner_up, runner_up_reasons).
+            runner_up, runner_up_reasons, decision_ready, decision_note).
 
         Raises:
             ValueError: If there are no estimates, no target_policies
                 metadata, or every estimate is NaN.
         """
+        verdict = self._best_policy_verdict(reliable_only)
+        ready, note = self._decision_readiness(verdict)
+        verdict.decision_ready = ready
+        verdict.decision_note = note
+        return verdict
+
+    def _best_policy_verdict(self, reliable_only: bool) -> PolicyVerdict:
+        """Point-estimate verdict with gate demotion (see ``best_policy``)."""
         policies = self.target_policies
         if len(self.estimates) == 0 or not policies:
             raise ValueError(
@@ -605,8 +664,260 @@ class EstimationResult(BaseModel):
             runner_up_reasons=runner_up_reasons,
         )
 
+    # ------------------------------------------------------------------
+    # Borrowed calibration (policies without oracle labels of their own)
+    # ------------------------------------------------------------------
+
+    def _transport_unverified(self) -> List[str]:
+        """Policies whose estimate borrows a calibration that is unaudited.
+
+        Read from ``metadata["transport_unverified"]`` (written by
+        ``analyze_dataset``); results without it report none.
+        """
+        raw = (
+            self.metadata.get("transport_unverified")
+            if isinstance(self.metadata, dict)
+            else None
+        )
+        if not isinstance(raw, (list, tuple)):
+            return []
+        return [str(policy) for policy in raw]
+
+    def _transport_status(self, policy: str) -> str:
+        audits = self.metadata.get("transport_audits")
+        audit = audits.get(policy) if isinstance(audits, dict) else None
+        if isinstance(audit, dict) and audit.get("status"):
+            return str(audit["status"])
+        return "NOT_CHECKED"
+
+    def _calibration_source_phrase(self) -> str:
+        """Name the labels the shared calibration was fit on.
+
+        "production's calibration" for one labeled policy; otherwise "the
+        calibration fit on ..." naming the policies and/or the external
+        calibration data.
+        """
+        raw = self.metadata.get("calibration_label_sources")
+        sources = [str(s) for s in raw] if isinstance(raw, (list, tuple)) else []
+        if not sources:
+            own = self.metadata.get("own_oracle_labels_by_policy")
+            if isinstance(own, dict):
+                sources = sorted(str(p) for p, n in own.items() if n)
+        external = _CALIBRATION_DATA_SOURCE in sources
+        policies = [s for s in sources if s != _CALIBRATION_DATA_SOURCE]
+        if not external and len(policies) == 1:
+            return f"{policies[0]}'s calibration"
+        parts: List[str] = []
+        if external:
+            parts.append("calibration_data_path")
+        if policies:
+            noun = "'s labels" if len(policies) == 1 else " labels"
+            parts.append(_join_names(policies) + noun)
+        if not parts:
+            return "the shared calibration"
+        return "the calibration fit on " + " and ".join(parts)
+
+    def _borrowed_calibration_line(self, policy: str) -> str:
+        """The named summary line for one transport-unverified policy."""
+        status = self._transport_status(policy)
+        if status == "NOT_CHECKED":
+            action = (
+                f"Label >=20 random {policy} responses, or run a held-out "
+                "transport audit (plan_transport_audits)."
+            )
+        elif status == "FAIL":
+            action = (
+                f"Its held-out transport audit FAILED: label >=20 random "
+                f"{policy} responses before using it."
+            )
+        elif status == "NOT_GRADED":
+            action = (
+                f"Label >=20 random {policy} responses, or grade its transport "
+                "audit with a delta_max margin (now NOT_GRADED)."
+            )
+        else:
+            action = (
+                f"Label >=20 random {policy} responses, or extend its held-out "
+                f"transport audit (now {status}; plan_transport_audits)."
+            )
+        return (
+            f"{policy}: no labels of its own; its estimate and every difference "
+            f"involving it assume {self._calibration_source_phrase()} "
+            f"transfers, which the CI and p-value do not cover. {action}"
+        )
+
+    def _decision_readiness(self, verdict: PolicyVerdict) -> Tuple[bool, str]:
+        """``decision_ready`` / ``decision_note`` for a best_policy verdict."""
+        policies = self.target_policies
+        estimates = np.asarray(self.estimates, dtype=float)
+        competitors: List[str] = []
+        if verdict.runner_up is not None:
+            competitors.append(verdict.runner_up)
+        others = [
+            (float(estimates[i]), policy)
+            for i, policy in enumerate(policies)
+            if i < len(estimates)
+            and not np.isnan(estimates[i])
+            and policy != verdict.name
+        ]
+        if others:
+            next_best = max(others)[1]
+            if next_best not in competitors:
+                competitors.append(next_best)
+
+        unverified = set(self._transport_unverified())
+        blockers = [p for p in [verdict.name, *competitors] if p in unverified]
+        if blockers:
+            names = _join_names(blockers)
+            single = len(blockers) == 1
+            statuses = "/".join(sorted({self._transport_status(p) for p in blockers}))
+            return False, (
+                f"Not decision-ready: {names} {'has' if single else 'have'} no "
+                f"oracle labels of {'its' if single else 'their'} own and "
+                f"{'its transport audit is' if single else 'their transport audits are'}"
+                f" {statuses}, so this ranking assumes "
+                f"{self._calibration_source_phrase()} transfers. Label >=20 "
+                f"random responses of {names}, or run a held-out transport "
+                "audit (plan_transport_audits)."
+            )
+        if verdict.all_flagged:
+            return False, "Not decision-ready: no policy passed the reliability gates."
+        if verdict.flagged:
+            return False, (
+                f"Not decision-ready: {verdict.name} failed the reliability gates."
+            )
+        if not competitors:
+            return True, "Only one usable policy; there is nothing to compare."
+        # A ranking whose paired test cannot separate it from the next-best
+        # policy is a tie, not a decision.
+        rival = competitors[-1]
+        try:
+            i, j = policies.index(verdict.name), policies.index(rival)
+            comparison = self._compare_policies_impl(i, j, 0.05, warn=False)
+        except (InferenceUnavailableError, ValueError) as exc:
+            return False, (
+                f"Not decision-ready: the paired comparison of {verdict.name} and "
+                f"{rival} is unavailable ({exc})."
+            )
+        lower, upper = comparison.get("ci_lower"), comparison.get("ci_upper")
+        p_value = comparison.get("p_value")
+        separated = (
+            lower is not None and upper is not None and (lower > 0 or upper < 0)
+        ) or (lower is None and p_value is not None and float(p_value) < 0.05)
+        if not separated:
+            return False, (
+                f"Not decision-ready: the paired 95% CI for {verdict.name} - {rival} "
+                f"includes 0 ({_format_p_value(float(p_value))}), so this ranking is "
+                "a tie at the current sample size. Size more labels with "
+                "plan_for_mde, or report no reliable winner."
+                if p_value is not None
+                else f"Not decision-ready: {verdict.name} and {rival} are not "
+                "separated by the paired comparison."
+            )
+        p_text = f" ({_format_p_value(float(p_value))})" if p_value is not None else ""
+        return True, (
+            f"{verdict.name} beats {rival} in the paired comparison{p_text}; "
+            "check gates and audits before acting."
+        )
+
+    def _paired_summary_lines(
+        self, alpha: float = 0.05, focus: Optional[str] = None
+    ) -> List[str]:
+        """The summary()'s paired-difference block (unadjusted p-values).
+
+        With more than 10 pairs, only the pairs involving ``focus`` (the best
+        policy by point estimate) are printed, with a pointer to
+        ``compare_all_policies()`` for the rest.
+        """
+        from scipy import stats
+
+        policies = self.target_policies
+        n = len(self.estimates)
+        if n < 2 or len(policies) != n:
+            return []
+        pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
+        hidden = 0
+        if len(pairs) > 10 and focus in policies:
+            k = policies.index(focus)
+            shown = [(i, j) for i, j in pairs if k in (i, j)]
+            hidden = len(pairs) - len(shown)
+            pairs = shown
+        lines = [
+            (
+                "Paired differences (p unadjusted):"
+                if not hidden
+                else f"Paired differences with {focus} (p unadjusted):"
+            )
+        ]
+        every_ci_includes_zero = True
+        first_error: Optional[str] = None
+        for i, j in pairs:
+            label = f"{policies[i]} - {policies[j]}"
+            try:
+                comparison = self._compare_policies_impl(i, j, alpha, warn=False)
+            except (InferenceUnavailableError, ValueError) as exc:
+                every_ci_includes_zero = False
+                first_error = first_error or str(exc)
+                lines.append(f"  {label}: unavailable")
+                continue
+            difference = float(comparison["difference"])
+            lower = comparison.get("ci_lower")
+            upper = comparison.get("ci_upper")
+            if lower is None or upper is None:
+                # z-test paths carry no stored CI: show the interval that
+                # matches their p-value.
+                z = float(stats.norm.ppf(1 - alpha / 2))
+                se = float(comparison["se_difference"])
+                lower, upper = difference - z * se, difference + z * se
+            lower, upper = float(lower), float(upper)
+            p_value = float(comparison["p_value"])
+            if not all(np.isfinite([difference, lower, upper])):
+                every_ci_includes_zero = False
+            elif lower > 0 or upper < 0:
+                every_ci_includes_zero = False
+            # A difference inherits a flagged input's unreliability,
+            # however small its p-value: mark the pair, as the policy
+            # lines above mark the policy.
+            flagged = [str(p) for p in comparison.get("gate_flagged") or []]
+            flag = f"  [gate-flagged: {', '.join(flagged)}]" if flagged else ""
+            lines.append(
+                f"  {label}: {difference:+.3f}  "
+                f"{100 * (1 - alpha):.0f}% CI [{lower:+.3f}, {upper:+.3f}]  "
+                f"{_format_p_value(p_value)}{flag}"
+            )
+        if first_error:
+            lines.append(f"  ({first_error})")
+        if hidden:
+            lines.append(
+                f"  ({hidden} more pairs not shown: compare_all_policies() lists all)"
+            )
+        if n >= 3:
+            lines.append(
+                "  With 3+ policies, read Benjamini-Hochberg p_adjusted from "
+                'compare_all_policies(adjust="bh").'
+            )
+        if every_ci_includes_zero:
+            lines.append(
+                "No reliable winner: every paired CI includes 0"
+                if not hidden
+                else f"No reliable winner: every paired CI with {focus} includes 0"
+            )
+        return lines
+
     def summary(self) -> str:
-        """Compact text summary: per-policy estimates, CIs, gates, best policy.
+        """Compact text summary: estimates, CIs, gates, paired differences.
+
+        Lines, in order: one per policy (estimate and 95% CI); the best
+        policy by point estimate (a ranking, not a test) with its
+        limitations; with two or more policies, every paired difference
+        ``a - b`` with its 95% CI and unadjusted p-value (marked
+        ``[gate-flagged: ...]`` when either policy failed the reliability
+        gates), plus "No reliable winner" when every paired CI includes 0;
+        one line per policy that
+        has no oracle labels of its own and an unverified transport audit
+        (its estimate and differences assume a borrowed calibration
+        transfers); and the diagnostics status (at least ``warning`` when a
+        policy borrows an unverified calibration).
 
         Example:
             >>> print(results.summary())
@@ -652,11 +963,22 @@ class EstimationResult(BaseModel):
             if self.metadata.get("calibration_status") == "UNCALIBRATED":
                 limitations.append("UNCALIBRATED raw judge-score mean")
             audit = (self.metadata.get("transport_audits") or {}).get(display, {})
-            if audit and audit.get("status") != "PASS":
-                limitations.append(
-                    f"residual transport {audit.get('status', 'NOT_CHECKED')}"
+            status = audit.get("status", "NOT_CHECKED") if audit else None
+            # NOT_CHECKED matters only for a policy without labels of its own;
+            # a policy corrected by its own labels does not rely on transport.
+            # An observed audit result (FAIL / INCONCLUSIVE) is always shown.
+            if (
+                status
+                and status != "PASS"
+                and (
+                    status != "NOT_CHECKED"
+                    or display in set(self._transport_unverified())
                 )
-            lines.append(f"Best by point estimate: {display}")
+            ):
+                limitations.append(f"residual transport {status}")
+            lines.append(
+                f"Best by point estimate: {display} (point estimate, not a test)"
+            )
             if limitations:
                 lines.append("Limitations: " + "; ".join(limitations))
             if verdict.runner_up is not None:
@@ -667,8 +989,23 @@ class EstimationResult(BaseModel):
                     f"reliable_only=False for the raw argmax"
                 )
 
+        try:
+            focus = self.best_policy(reliable_only=False).name
+        except ValueError:
+            focus = None
+        lines.extend(self._paired_summary_lines(focus=focus))
+        unverified = [p for p in self._transport_unverified() if p in policies]
+        for policy in unverified:
+            lines.append(self._borrowed_calibration_line(policy))
+
         if self.diagnostics is not None:
-            lines.append(f"Status: {self.diagnostics.overall_status.value}")
+            status = self.diagnostics.overall_status
+            if unverified:
+                from ..diagnostics import Status
+                from ..diagnostics.gates import worst_status
+
+                status = worst_status(status, Status.WARNING)
+            lines.append(f"Status: {status.value}")
         return "\n".join(lines)
 
     # Minimum NaN-filtered paired deltas required for the paired-bootstrap
@@ -677,9 +1014,17 @@ class EstimationResult(BaseModel):
     _MIN_PAIRED_BOOTSTRAP_DELTAS = 100
 
     def compare_policies(
-        self, policy1_idx: int, policy2_idx: int, alpha: float = 0.05
+        self,
+        policy1_idx: Union[int, str],
+        policy2_idx: Union[int, str],
+        alpha: float = 0.05,
     ) -> Dict[str, Any]:
         """Compare two policies with the most honest difference SE available.
+
+        Each policy is given by name (``"candidate"``) or by integer index
+        into ``target_policies`` (sorted by name, not your dict's order);
+        ``compare_policies("a", "b")`` equals ``compare_policies(i, j)``.
+        ``difference`` is policy1 minus policy2.
 
         Dispatches over four inference bases, best-first; the winning basis
         is reported in the returned ``method`` key:
@@ -715,35 +1060,69 @@ class EstimationResult(BaseModel):
            covariance (conservative for positively correlated policies).
 
         Args:
-            policy1_idx: Index of the first policy (order of
-                ``metadata["target_policies"]``).
-            policy2_idx: Index of the second policy.
+            policy1_idx: The first policy: its name, or its index in
+                ``metadata["target_policies"]``.
+            policy2_idx: The second policy (name or index).
             alpha: Significance level for ``significant`` and (paths 1-2)
                 the returned CI.
 
         Returns:
-            Dict with ``difference``, ``se_difference``, ``z_score``,
-            ``p_value``, ``significant``, ``used_influence``, ``method``,
-            and ``gate_flagged`` (names among the pair whose reliability
-            gates are flagged — a comparison involving a flagged policy
-            inherits that unreliability, however honest the SE); paths 1-2
-            add ``ci_lower``/``ci_upper``/``alpha`` (plus ``n_replicates``
-            for the bootstrap path and ``df``/``basis`` for the analytic
-            path).
+            Dict with ``policy1``/``policy2`` (names), ``difference``,
+            ``se_difference``, ``z_score``, ``p_value``, ``significant``,
+            ``used_influence``, ``method``, ``gate_flagged`` (names among the
+            pair whose reliability gates are flagged — a comparison
+            involving a flagged policy inherits that unreliability, however
+            honest the SE), ``transport_unverified`` (names among the pair
+            with no oracle labels of their own and no PASS transport audit)
+            and ``conditional_on_transport`` (True when that list is
+            non-empty: the difference assumes a borrowed calibration
+            transfers, which neither the CI nor the p-value covers;
+            ``significant`` keeps its meaning); paths 1-2 add
+            ``ci_lower``/``ci_upper``/``alpha`` (plus ``n_replicates`` for
+            the bootstrap path and ``df``/``basis`` for the analytic path).
+
+        Raises:
+            ValueError: An unknown policy name.
+            TypeError: A policy given as neither a name nor an integer.
+            IndexError: An integer index out of range.
         """
+        return self._compare_policies_impl(policy1_idx, policy2_idx, alpha, warn=True)
+
+    def _resolve_policy_index(self, name: str, value: Any) -> int:
+        """Accept a policy name or an integer index; return the index."""
         n_policies = len(self.estimates)
-        for name, index in (
-            ("policy1_idx", policy1_idx),
-            ("policy2_idx", policy2_idx),
-        ):
-            if isinstance(index, bool) or not isinstance(index, (int, np.integer)):
-                raise TypeError(f"{name} must be an integer, got {index!r}")
-            if int(index) < 0 or int(index) >= n_policies:
-                raise IndexError(
-                    f"{name}={index} is out of range for {n_policies} policies"
-                )
-        policy1_idx = int(policy1_idx)
-        policy2_idx = int(policy2_idx)
+        if isinstance(value, str):
+            policies = self.target_policies
+            if value in policies:
+                return policies.index(value)
+            folded = value.strip().casefold()
+            near = [p for p in policies if p.strip().casefold() == folded]
+            hint = f" Did you mean {near[0]!r}?" if near else ""
+            raise ValueError(
+                f"{name}={value!r} is not a policy in this result.{hint} "
+                f"Policies: {policies}"
+            )
+        if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+            raise TypeError(
+                f"{name} must be an integer index or a policy name, got {value!r}"
+            )
+        if int(value) < 0 or int(value) >= n_policies:
+            raise IndexError(
+                f"{name}={value} is out of range for {n_policies} policies"
+            )
+        return int(value)
+
+    def _compare_policies_impl(
+        self,
+        policy1_idx: Union[int, str],
+        policy2_idx: Union[int, str],
+        alpha: float,
+        *,
+        warn: bool,
+    ) -> Dict[str, Any]:
+        """``compare_policies`` body; ``warn=False`` keeps summary() quiet."""
+        policy1_idx = self._resolve_policy_index("policy1_idx", policy1_idx)
+        policy2_idx = self._resolve_policy_index("policy2_idx", policy2_idx)
         alpha = _validate_alpha(alpha)
 
         unavailable_raw = self.metadata.get("inference_unavailable_policies", [])
@@ -787,7 +1166,7 @@ class EstimationResult(BaseModel):
                         policy1_idx, policy2_idx, alpha
                     )
                     return self._annotate_gate_flags(
-                        recomputed_comparison, policy1_idx, policy2_idx
+                        recomputed_comparison, policy1_idx, policy2_idx, warn=warn
                     )
 
                 stored_alpha = float(serialized_state.get("alpha", 0.05))
@@ -816,17 +1195,21 @@ class EstimationResult(BaseModel):
                         serialized_result["ci_lower"] = lower
                         serialized_result["ci_upper"] = upper
                 return self._annotate_gate_flags(
-                    serialized_result, policy1_idx, policy2_idx
+                    serialized_result, policy1_idx, policy2_idx, warn=warn
                 )
 
-        comparison = self._compare_paired_bootstrap(policy1_idx, policy2_idx, alpha)
+        comparison = self._compare_paired_bootstrap(
+            policy1_idx, policy2_idx, alpha, warn=warn
+        )
         if comparison is None:
             comparison = self._compare_pairwise_inference(
                 policy1_idx, policy2_idx, alpha
             )
         if comparison is None:
             comparison = self._compare_legacy(policy1_idx, policy2_idx, alpha)
-        return self._annotate_gate_flags(comparison, policy1_idx, policy2_idx)
+        return self._annotate_gate_flags(
+            comparison, policy1_idx, policy2_idx, warn=warn
+        )
 
     def _inference_unavailable_detail(self, policy: str) -> str:
         """Why a policy has no interval (``inference_unavailable_reasons``)."""
@@ -851,16 +1234,19 @@ class EstimationResult(BaseModel):
         )
 
     def _annotate_gate_flags(
-        self, result: Dict[str, Any], idx1: int, idx2: int
+        self, result: Dict[str, Any], idx1: int, idx2: int, *, warn: bool = True
     ) -> Dict[str, Any]:
-        """Surface reliability-gate refusals on the pair.
+        """Name the pair and surface reliability-gate and transport caveats.
 
         A difference CI cannot repair a biased input: when a policy's
         estimate is unreliable (flagged gate / refused level claims, e.g.
         after a failed transport audit), every comparison involving it
         inherits that unreliability regardless of how honest the
-        difference SE is. Adds ``gate_flagged`` (list of flagged policy
-        names, possibly empty) and warns when non-empty.
+        difference SE is. Adds ``policy1``/``policy2`` (names),
+        ``gate_flagged`` (list of flagged policy names, possibly empty; warns
+        when non-empty), ``transport_unverified`` (pair members with no
+        oracle labels of their own and no PASS transport audit) and
+        ``conditional_on_transport`` (whether that list is non-empty).
         """
         flagged: List[str] = []
         policies = self.target_policies
@@ -870,8 +1256,20 @@ class EstimationResult(BaseModel):
                 gate = gates.get(policies[idx])
                 if gate is not None and (gate.flagged or gate.refuse_level_claims):
                     flagged.append(policies[idx])
+        names = [
+            policies[idx] if 0 <= idx < len(policies) else str(idx)
+            for idx in (idx1, idx2)
+        ]
+        result["policy1"], result["policy2"] = names
+        unverified = set(self._transport_unverified())
+        pair_unverified: List[str] = []
+        for policy in names:
+            if policy in unverified and policy not in pair_unverified:
+                pair_unverified.append(policy)
+        result["transport_unverified"] = pair_unverified
+        result["conditional_on_transport"] = bool(pair_unverified)
         result["gate_flagged"] = flagged
-        if flagged:
+        if flagged and warn:
             logger.warning(
                 "compare_policies: %s flagged by reliability gates — the "
                 "difference estimate inherits that unreliability (a paired "
@@ -882,7 +1280,7 @@ class EstimationResult(BaseModel):
         return result
 
     def _compare_paired_bootstrap(
-        self, idx1: int, idx2: int, alpha: float
+        self, idx1: int, idx2: int, alpha: float, *, warn: bool = True
     ) -> Optional[Dict[str, Any]]:
         """Paired difference inference from the bootstrap replicate matrix.
 
@@ -903,6 +1301,8 @@ class EstimationResult(BaseModel):
         valid = deltas[~np.isnan(deltas)]
         n_valid = int(valid.size)
         if n_valid < self._MIN_PAIRED_BOOTSTRAP_DELTAS:
+            if not warn:
+                return None
             logger.warning(
                 f"compare_policies: only {n_valid} valid paired bootstrap "
                 f"deltas (< {self._MIN_PAIRED_BOOTSTRAP_DELTAS}); falling "
@@ -1089,24 +1489,19 @@ class EstimationResult(BaseModel):
                 many-pair audit setting).
 
         Returns:
-            List of comparison dicts (one per pair, in (i, j) index order),
-            each carrying ``policy1``/``policy2`` names in addition to the
-            ``compare_policies`` keys.
+            List of ``compare_policies`` dicts (one per pair, in (i, j)
+            index order, each naming its ``policy1``/``policy2``).
         """
         alpha = _validate_alpha(alpha)
         if adjust not in (None, "bh"):
             raise ValueError(f"adjust must be None or 'bh', got {adjust!r}")
 
-        policies = self.target_policies
         n = len(self.estimates)
 
         comparisons: List[Dict[str, Any]] = []
         for i in range(n):
             for j in range(i + 1, n):
-                comparison = self.compare_policies(i, j, alpha=alpha)
-                comparison["policy1"] = policies[i] if i < len(policies) else str(i)
-                comparison["policy2"] = policies[j] if j < len(policies) else str(j)
-                comparisons.append(comparison)
+                comparisons.append(self.compare_policies(i, j, alpha=alpha))
 
         if adjust == "bh":
             # Benjamini-Hochberg step-up: p_adj_(k) = min_{l >= k} p_(l)*m/l,
@@ -1360,7 +1755,8 @@ class EstimationResult(BaseModel):
                         recomputable_pairs.append(pair_key)
                         continue
                     comparison = dict(comparison)
-                    comparison.pop("gate_flagged", None)
+                    for derived_key in _DERIVED_COMPARISON_KEYS:
+                        comparison.pop(derived_key, None)
                     comparisons[pair_key] = comparison
             if comparisons or recomputable_pairs:
                 pairwise_state = {

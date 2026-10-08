@@ -83,6 +83,70 @@ def analyze_dataset(
     """
     Analyze policies using fresh draws (Direct mode).
 
+    Each record is one judged response, ``{"prompt_id", "judge_score",
+    "oracle_label"}``, grouped by policy. ``oracle_label`` (a human rating,
+    expert review, or observed outcome) is optional: None, an omitted field,
+    or a float NaN means unlabeled. Responses that share a ``prompt_id`` are
+    paired across policies and clustered for uncertainty, so reuse the same
+    ids. Judge and label scales may differ; estimates come back on the label
+    scale.
+
+    Recipe, from a CSV with columns prompt_id, variant, judge_score,
+    human_rating (blank = unlabeled)::
+
+        import csv
+        from collections import defaultdict
+
+        import cje
+
+        draws = defaultdict(list)
+        with open("evals.csv") as f:
+            for row in csv.DictReader(f):
+                draws[row["variant"]].append({
+                    "prompt_id": row["prompt_id"],
+                    "judge_score": float(row["judge_score"]),
+                    "oracle_label": (
+                        float(row["human_rating"]) if row["human_rating"] else None
+                    ),
+                })
+        results = cje.analyze_dataset(fresh_draws_data=dict(draws))
+        print(cje.__version__)
+        print(results.summary())  # estimates, paired differences, caveats
+        print(results.compare_policies("candidate", "production"))
+
+    From pandas, ``df.to_dict("records")`` per policy works: NaN labels are
+    read as unlabeled.
+
+    Rules the numbers depend on:
+
+    - Provenance: attach oracle labels only to responses sampled at random
+      (or with known inclusion probabilities, declared through
+      ``label_design="known_propensity"``). Hand-picked labels bias the
+      estimate, and CJE cannot detect it. Use one fixed judge and rubric for
+      every policy.
+    - Policy names are used exactly as given and listed sorted by name:
+      ``"gpt_4"`` and ``"GPT-4"`` are two different policies (a warning is
+      logged when names differ only in case, spaces, or ``_``/``-``).
+    - ``row_id``: give each row a stable, unique ``row_id`` (or a
+      ``draw_idx``) when a prompt has several rows for one policy. Rows
+      without one that repeat a ``(policy, prompt_id)`` are analyzed as
+      repeated draws of that prompt, and a warning is logged in case they
+      are accidental duplicates.
+    - Borrowed calibration: a policy with no oracle labels of its own is
+      estimated through the calibration fit on other labels (other
+      policies', or ``calibration_data_path``). Its CI, and the CI and
+      p-value of every difference involving it, assume that calibration
+      transfers to its responses, which they do not test. Such policies are
+      listed in ``metadata["transport_unverified"]`` until a held-out
+      transport audit PASSes; their comparisons carry
+      ``conditional_on_transport=True``, ``best_policy().decision_ready`` is
+      False when they are the winner or the runner-up, and ``summary()``
+      names each one. Label at least 20 random responses of that policy, or
+      audit transport with held-out probes (``transport=``, sized with
+      ``plan_transport_audits``).
+    - Compare policies with the paired test (``compare_policies("a", "b")``
+      or ``compare_all_policies()``), never by eyeballing per-policy CIs.
+
     This high-level function handles:
     - Data loading and validation
     - Automatic reward calibration (judge → oracle mapping)
@@ -167,6 +231,16 @@ def analyze_dataset(
     Returns:
         EstimationResult with estimates, standard errors, and metadata.
 
+        Metadata about where each estimate's labels come from:
+        - results.metadata["own_oracle_labels_by_policy"]: {policy: number of
+          that policy's own oracle labels the analysis used}
+        - results.metadata["calibration_label_sources"]: the labels the
+          calibration was fit on (policy names, plus "calibration_data" for
+          calibration_data_path); empty when no calibrator was fit
+        - results.metadata["transport_unverified"]: sorted policies with no
+          labels of their own whose transport audit is not PASS
+        - results.metadata["cje_version"]: the cje-eval version that ran
+
         New metadata fields when using calibration_data_path:
         - results.metadata["oracle_sources"]: Breakdown of oracle labels by source
         - results.metadata["oracle_sources"]["conflicts"]: Cross-source oracle disagreements
@@ -203,6 +277,7 @@ def analyze_dataset(
         coerce_scale,
         unit_scale,
     )
+    from ..diagnostics.reward_boundary import judge_units_for_warnings
     from ..diagnostics.robust_inference import CalibrationProvenance, LabelDesign
     from ..estimators.direct_method import CalibratedDirectEstimator
 
@@ -297,6 +372,7 @@ def analyze_dataset(
         logger.info(
             f"Found {len(target_policies)} policies: {', '.join(target_policies)}"
         )
+    one_policy_labels_warning = _warn_data_quality(raw_fresh_draws, fresh_draws_dict)
 
     all_fresh_draws = []
     for fd in fresh_draws_dict.values():
@@ -591,6 +667,7 @@ def analyze_dataset(
         **estimator_kwargs,
     )
 
+    own_oracle_labels_by_policy: Dict[str, int] = {}
     for policy in target_policies:
         fd = fresh_draws_dict[policy]
         if calibration_result is not None and covariate_names:
@@ -609,8 +686,14 @@ def analyze_dataset(
                 }
             )
         estimator_obj.add_fresh_draws(policy, fd)
+        own_oracle_labels_by_policy[policy] = sum(
+            1 for sample in fd.samples if sample.oracle_label is not None
+        )
 
-    results = estimator_obj.fit_and_estimate()
+    # The estimator fits on internal [0, 1] judge scores; REFUSE-LEVEL
+    # warnings print the labeled range in the judge's own units.
+    with judge_units_for_warnings(fresh_judge_public_scale):
+        results = estimator_obj.fit_and_estimate()
     declared_output_scale = coerce_scale(output_scale, field_name="output_scale")
     if mixed_direct_without_calibration:
         # Oracle and judge values can have different public scales. A single
@@ -857,7 +940,220 @@ def analyze_dataset(
         output_scale=result_output_scale,
     )
 
+    _record_borrowed_calibration(
+        results,
+        target_policies=target_policies,
+        own_oracle_labels_by_policy=own_oracle_labels_by_policy,
+        calibration_dataset=(
+            calibration_dataset_for_rewards if calibration_result is not None else None
+        ),
+    )
+    # The borrowed-calibration WARNING names the same policies and the labels
+    # they borrow; log the generic labels-on-one-policy warning only when it
+    # did not fire (a PASS audit, or no calibrator fitted).
+    if one_policy_labels_warning and not results.metadata.get("transport_unverified"):
+        logger.warning(one_policy_labels_warning)
+    from .. import __version__ as cje_version
+
+    results.metadata["cje_version"] = cje_version
+
     return results
+
+
+def _record_borrowed_calibration(
+    results: EstimationResult,
+    *,
+    target_policies: List[str],
+    own_oracle_labels_by_policy: Dict[str, int],
+    calibration_dataset: Optional[Dataset],
+) -> None:
+    """Make borrowed calibration explicit in metadata, status, and the log.
+
+    A policy with no oracle labels of its own is estimated through a
+    calibration fit on other labels. Its interval and every paired
+    difference involving it assume that calibration transfers to its
+    responses; nothing in the CI or p-value covers that. Until a held-out
+    transport audit PASSes, such a policy is listed in
+    ``metadata["transport_unverified"]``, its diagnostics status is at least
+    WARNING, and one WARNING names it and the labels it borrows. Estimates,
+    intervals, gates and ``significant`` are unchanged.
+    """
+    from ..data.models import _CALIBRATION_DATA_SOURCE
+
+    sources: List[str] = []
+    if calibration_dataset is not None:
+        found = set()
+        for sample in calibration_dataset.samples:
+            if sample.oracle_label is None:
+                continue
+            if sample.metadata.get("row_role") == "evaluation":
+                key = sample.metadata.get("evaluation_key")
+                if isinstance(key, (tuple, list)) and key:
+                    found.add(str(key[0]))
+            else:
+                found.add(_CALIBRATION_DATA_SOURCE)
+        sources = sorted(found - {_CALIBRATION_DATA_SOURCE})
+        if _CALIBRATION_DATA_SOURCE in found:
+            sources.insert(0, _CALIBRATION_DATA_SOURCE)
+
+    audits = results.metadata.get("transport_audits") or {}
+    unverified = (
+        sorted(
+            policy
+            for policy in target_policies
+            if own_oracle_labels_by_policy.get(policy, 0) == 0
+            and str((audits.get(policy) or {}).get("status", "NOT_CHECKED")) != "PASS"
+        )
+        if calibration_dataset is not None and results.calibrator is not None
+        else []
+    )
+
+    results.metadata["own_oracle_labels_by_policy"] = {
+        policy: int(own_oracle_labels_by_policy.get(policy, 0))
+        for policy in target_policies
+    }
+    results.metadata["calibration_label_sources"] = sources
+    results.metadata["transport_unverified"] = unverified
+    if not unverified:
+        return
+
+    if results.diagnostics is not None:
+        from ..diagnostics import Status
+        from ..diagnostics.gates import worst_status
+
+        statuses = dict(results.diagnostics.status_per_policy or {})
+        for policy in unverified:
+            statuses[policy] = worst_status(statuses.get(policy), Status.WARNING)
+        results.diagnostics.status_per_policy = statuses
+
+    from ..data.models import _join_names
+
+    names = _join_names(unverified)
+    single = len(unverified) == 1
+    statuses_text = "/".join(
+        sorted(
+            {
+                str((audits.get(policy) or {}).get("status", "NOT_CHECKED"))
+                for policy in unverified
+            }
+        )
+    )
+    logger.warning(
+        "Borrowed calibration: %s %s no oracle labels of %s own, so %s %s %s "
+        "(transport %s). %s CI, and the CI and p-value of every difference "
+        "involving %s, assume that calibration transfers to %s responses and "
+        "do not cover the risk that it does not. Label >=20 random responses "
+        "of %s, or run a held-out transport audit (plan_transport_audits).",
+        names,
+        "has" if single else "have",
+        "its" if single else "their",
+        "its estimate" if single else "their estimates",
+        "uses" if single else "use",
+        results._calibration_source_phrase(),
+        statuses_text,
+        "Its" if single else "Their",
+        "it" if single else "them",
+        "its" if single else "their",
+        names,
+    )
+
+
+def _warn_data_quality(
+    raw_fresh_draws: Dict[str, List[Any]],
+    fresh_draws_dict: Dict[str, Any],
+) -> Optional[str]:
+    """Log likely input mistakes; never changes the analysis.
+
+    1. Policy names that collide after strip/casefold and ``_`` -> ``-``
+       (``"gpt_4"`` vs ``"GPT-4"`` are analyzed as two policies).
+    2. Rows without a ``row_id`` or ``draw_idx`` that repeat a
+       ``(policy, prompt_id)``: analyzed as repeated draws of one prompt,
+       which is wrong if they are duplicates (e.g. an export loaded twice).
+    3. Oracle labels present on only one of two or more policies: returned
+       (not logged) so the caller can skip it when the borrowed-calibration
+       warning, which names the same policies, fires.
+    """
+    import re
+
+    from ..data.ingest import read_aliased_field
+
+    policies = sorted(fresh_draws_dict)
+
+    groups: Dict[str, List[str]] = {}
+    for policy in policies:
+        key = policy.strip().casefold().replace("_", "-")
+        groups.setdefault(key, []).append(policy)
+    collisions = [names for names in groups.values() if len(names) > 1]
+    if collisions:
+        logger.warning(
+            "Policy names that differ only in case, surrounding spaces, or "
+            "'_' vs '-' are analyzed as separate policies: %s. If they are the "
+            "same policy, give its rows one exact name.",
+            "; ".join(" vs ".join(repr(n) for n in names) for names in collisions),
+        )
+
+    # Loader-assigned row ids end in ":row:<n>" / ":line:<n>"; only a row_id
+    # the caller supplied marks rows as distinct observations.
+    auto_row_id = re.compile(r":(row|line):\d+$")
+    repeated: Dict[str, Dict[str, int]] = {}
+    for policy, records in raw_fresh_draws.items():
+        counts: Dict[str, int] = {}
+        for record in records or []:
+            if not isinstance(record, dict):
+                continue
+            try:
+                row_id = read_aliased_field(record, "row_id")
+                draw_idx = read_aliased_field(record, "draw_idx")
+                prompt_id = read_aliased_field(record, "prompt_id")
+                if prompt_id is None:
+                    prompt_id = read_aliased_field(record, "prompt")
+            except ValueError:
+                continue
+            if draw_idx is not None or prompt_id is None:
+                continue
+            if row_id is not None and not auto_row_id.search(str(row_id)):
+                continue
+            counts[str(prompt_id)] = counts.get(str(prompt_id), 0) + 1
+        dupes = {pid: n for pid, n in counts.items() if n > 1}
+        if dupes:
+            repeated[str(policy)] = dupes
+    if repeated:
+        details = []
+        for policy, dupes in sorted(repeated.items()):
+            example_id, example_n = sorted(dupes.items())[0]
+            details.append(
+                f"{policy}: {len(dupes)} prompt_id(s), e.g. {example_id!r} x{example_n}"
+            )
+        logger.warning(
+            "Repeated (policy, prompt_id) rows without a row_id: %s. They are "
+            "analyzed as repeated draws of the same prompt (clustered together). "
+            "If they are duplicates (e.g. the same export loaded twice), remove "
+            "them; give each row a unique row_id (or draw_idx) to mark intended "
+            "repeats.",
+            "; ".join(details),
+        )
+
+    if len(policies) >= 2:
+        label_counts = {
+            policy: sum(
+                1
+                for sample in fresh_draws_dict[policy].samples
+                if sample.oracle_label is not None
+            )
+            for policy in policies
+        }
+        labeled = [policy for policy in policies if label_counts[policy] > 0]
+        if len(labeled) == 1:
+            only = labeled[0]
+            others = [policy for policy in policies if policy != only]
+            return (
+                f"Oracle labels are present on only 1 of {len(policies)} "
+                f"policies ({only} has {label_counts[only]}; "
+                f"{', '.join(others)} {'has' if len(others) == 1 else 'have'} "
+                "none). If you can rate every policy, label a random sample of "
+                "each (>=20) so each estimate is corrected by its own labels."
+            )
+    return None
 
 
 def _attach_transport_audits(

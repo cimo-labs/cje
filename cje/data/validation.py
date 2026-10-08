@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
-from .ingest import read_aliased_field
+from .ingest import is_nan_label, read_aliased_field
 from .normalization import (
     ScaleDeclaration,
     coerce_scale,
@@ -232,7 +232,8 @@ def validate_direct_data(
             value = _safe_field(record, oracle_field, i, label)
             if value is field_conflict:
                 continue
-            if value is None:
+            if value is None or is_nan_label(value):
+                # NaN reads as unlabeled, exactly as the loaders treat it.
                 continue
             if _is_numeric(value):
                 oracle_counts[policy] += 1

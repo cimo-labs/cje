@@ -2,8 +2,114 @@
 
 ## [Unreleased]
 
+Safer first runs, for people and for coding agents. Estimates, intervals,
+and the meaning of `significant` are unchanged; the new fields and output
+lines are additions. The one behaviour change: a `NaN` label in records now
+means unlabeled instead of raising.
+
+### Added
+
+- **Borrowed calibration is explicit.** A policy with no oracle labels of
+  its own borrows the calibration fitted on other policies' labels; its
+  estimate and every difference involving it assume that calibration
+  transfers, which the CI and p-value do not cover. `analyze_dataset` now
+  logs one warning naming those policies and the labels whose calibration
+  they borrow, and records `metadata["own_oracle_labels_by_policy"]` (each
+  policy's own non-missing oracle labels used),
+  `metadata["calibration_label_sources"]` (the policies, and
+  `"calibration_data"` for `calibration_data_path`, whose labels the
+  calibration was fit on) and `metadata["transport_unverified"]` (policies
+  with none whose transport audit is not `PASS`; empty when no calibrator
+  was fit). `summary()` and `cje analyze` print one named line for each
+  such policy with what would settle it (label 20 or more of its responses
+  at random, or run a held-out transport audit sized with
+  `plan_transport_audits`), and that policy's diagnostics status
+  (`status_per_policy`, hence `overall_status`) is at least `warning`; no
+  policy is demoted for it. `compare_policies` and `compare_all_policies`
+  results add `transport_unverified` and `conditional_on_transport`;
+  `best_policy()` adds `decision_ready` (False when the winner, or the
+  policy it is ranked against, is transport-unverified, or when the winner
+  failed the reliability gates; True is not a test) and `decision_note`.
+- **Paired differences in `summary()`.** With two or more policies,
+  `summary()` prints every pair as
+  `candidate - production: +0.038  95% CI [-0.027, +0.102]  p=0.22`
+  (p unadjusted; with three or more policies it points to
+  `compare_all_policies(adjust="bh")`; a pair involving a gate-flagged
+  policy ends `[gate-flagged: <policy>]`), and "No reliable winner: every
+  paired CI includes 0" when that holds. The best-policy line now reads
+  `Best by point estimate: <policy> (point estimate, not a test)`. `cje
+  analyze` prints the same label, paired block and named lines after its
+  per-policy results.
+- **`compare_policies` takes policy names** as well as integer indices
+  (`results.compare_policies("candidate", "production")`), and every
+  comparison dict carries `policy1`/`policy2`. An unknown name raises
+  `ValueError` listing the policies.
+- `metadata["cje_version"]` records the installed version (it was None).
+- **Data-quality warnings in `analyze_dataset`**, with no change to the
+  analysis: policy names that collide after trimming, case-folding and
+  `_`→`-`; repeated `(policy, prompt_id)` rows when no `row_id` is given;
+  labels present on only one of two or more policies (folded into the
+  borrowed-calibration warning when that one fires).
+- **The agent skill ships in the package.** `SKILL.md` and `reference.md`
+  are in the wheel at `cje/.agents/skills/cje/`, identical to
+  `skills/cje/`. `cje skill` prints `SKILL.md` for the installed version,
+  `cje skill --reference` prints `reference.md`, and `cje skill --path`
+  prints their folder (`python -m cje skill` works when `cje` is not on
+  `PATH`). `help(cje)` opens with the rules for coding agents, and the
+  `analyze_dataset` docstring carries the CSV recipe, the label-provenance
+  rule, `row_id`, exact policy names, and the borrowed-calibration rule.
+
+### Changed
+
+- **A `NaN` `oracle_label` in records is read as unlabeled**, with one INFO
+  log per call, instead of raising `Oracle field 'oracle_label' must be
+  finite`. This is the `NaN` pandas writes for blank cells. `None` or an
+  omitted field still marks a row unlabeled, and other invalid labels
+  (text, infinities, booleans) still raise. Through 0.9.1,
+  `on_invalid="drop"` deleted those rows. The same holds for
+  `calibration_data_path` files and `cje validate`; a transport probe still
+  needs a real label.
+- **The REFUSE-LEVEL warning prints the labeled range in the judge's own
+  units** (e.g. 0–100, marked "judge-score units") instead of CJE's
+  internal 0–1 scale.
+
 ### Documentation
 
+- **README rewritten for people deciding whether to use CJE** (about 1,200
+  words): what it answers, then handing the work to a coding agent on the
+  first screen (`pip install "cje-eval>=0.9"`, `cje skill`, and a fill-in
+  prompt with the data path, the question, and how the labels were chosen),
+  what you need, the 60-second quickstart with its new paired block, what it
+  estimates, a compact fit table, two scoped evidence bullets, and a docs
+  map. The quickstart now prints only `summary()`, whose paired block
+  replaces its own `compare_all_policies()` loop. Detail moved rather than
+  dropped: CSV/pandas recipes, where to put labels and unequal sampling
+  rates to `skills/cje/reference.md` ("Your own data") and the interface
+  README; the guardrails, audit states, best-policy demotion, and levels
+  versus rankings to the diagnostics README ("Claims CJE refuses to make");
+  the estimand, assumptions, how it works, why Direct mode only, and the
+  full validation numbers to a new Methods section in the estimators
+  README; the label-savings arithmetic to a new guide,
+  `guides/evaluation-planning.md`. The README's old section links still
+  resolve.
+- **Skill.** Step 0 at the top installs `"cje-eval>=0.9"` on Python
+  3.10–3.13 and prints `cje.__version__`: on Python 3.9 a bare
+  `pip install cje-eval` silently installs the legacy 0.5 line. A
+  hard-rules block follows, with a new rule: a policy with no labels of its
+  own and no transport `PASS` is never named the winner or called
+  "significant" (the verdict is undecided, and a raw judge gap toward it is
+  a red flag, not corroboration). Agents read `reference.md` with
+  `cje skill --reference` or fetch the raw files with `curl`, not a
+  summarizing web fetcher. Reports lead with the verdict (winner, no
+  reliable winner, or undecided because ...), then the size and CI, then
+  what would make it firm. `reference.md` documents the fields above, noting
+  which versions have them.
+- The estimators README described the estimand as the "mean calibrated
+  reward of each policy on a shared prompt set"; it now matches the README:
+  each policy's mean oracle label over the population the prompts were
+  sampled from. The interface README no longer implies that
+  `analyze_dataset` checks calibration reuse by itself: it audits transport
+  only when given held-out probes.
 - The README forest plot showed invented vendor-model results with no data
   source. It is now drawn from the shipped Arena sample by
   `scripts/make_readme_forest_plot.py`: calibrated estimates against mean
@@ -21,7 +127,7 @@
   policy, not the judge, inflates the adversarial policy's level, and the
   transport audit FAILs. The CLI text it quotes matches the current CLI.
 - New-user pass on the README and skill: the quickstart prints the paired
-  comparison (fable-5 - gpt-5.6 +0.038, 95% CI [-0.027, +0.102]) and says
+  comparison (candidate - production +0.038, 95% CI [-0.027, +0.102]) and says
   `Best by point estimate` is not a test; why a policy without its own labels
   gets a narrower interval; a "Your own data" section (CSV/pandas with NaN ->
   None, where to put labels, `label_design="known_propensity"`); the estimand
