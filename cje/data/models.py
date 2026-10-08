@@ -733,8 +733,9 @@ class EstimationResult(BaseModel):
         status = self._transport_status(policy)
         if status == "NOT_CHECKED":
             action = (
-                f"Label >=20 random {policy} responses, or run a held-out "
-                "transport audit (plan_transport_audits)."
+                f"Label >=20 random {policy} responses, or audit transport on a "
+                f"held-out random sample of them (size it with "
+                "plan_transport_audits)."
             )
         elif status == "FAIL":
             action = (
@@ -754,7 +755,8 @@ class EstimationResult(BaseModel):
         return (
             f"{policy}: no labels of its own; its estimate and every difference "
             f"involving it assume {self._calibration_source_phrase()} "
-            f"transfers, which the CI and p-value do not cover. {action}"
+            "transfers, which the CI and p-value do not cover (the true "
+            f"difference can have either sign). {action}"
         )
 
     def _decision_readiness(self, verdict: PolicyVerdict) -> Tuple[bool, str]:
@@ -789,8 +791,9 @@ class EstimationResult(BaseModel):
                 f" {statuses}, so this ranking assumes "
                 f"{self._calibration_source_phrase()} transfers. Name no winner "
                 f"and no lean until {'it has' if single else 'they have'} labels: "
-                f"label >=20 random responses of {names}, or run a held-out "
-                "transport audit (plan_transport_audits)."
+                f"label >=20 random responses of {names}, or audit transport on "
+                "a held-out random sample of them (size it with "
+                "plan_transport_audits)."
             )
         if verdict.all_flagged:
             return False, "Not decision-ready: no policy passed the reliability gates."

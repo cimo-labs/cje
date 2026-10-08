@@ -37,6 +37,11 @@ def create_parser() -> argparse.ArgumentParser:
             "using the API; it prints the bundled SKILL.md."
         ),
     )
+    from .. import __version__
+
+    parser.add_argument(
+        "--version", action="version", version=f"cje-eval {__version__}"
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 

@@ -22,8 +22,9 @@ means unlabeled instead of raising.
   with none whose transport audit is not `PASS`; empty when no calibrator
   was fit). `summary()` and `cje analyze` mark each such policy
   `[borrowed calibration]` and, before any ranking, print one named line
-  for it with what would settle it (label 20 or more of its responses at
-  random, or run a held-out transport audit sized with
+  for it saying the true difference can have either sign and what would
+  settle it (label 20 or more of its responses at random, or audit
+  transport on a held-out random sample of them sized with
   `plan_transport_audits`); its paired differences end
   `[borrowed calibration: <policy>]`, and when every pair whose CI excludes
   0 involves such a policy, the summary says "No decision-ready winner"
@@ -48,6 +49,7 @@ means unlabeled instead of raising.
   `residual transport NOT_CHECKED` is listed only for a policy that borrows
   its calibration (an observed FAIL or INCONCLUSIVE is always listed). `cje
   analyze` prints the same lines in the same order.
+- **`cje --version`** prints the installed version.
 - **`compare_policies` takes policy names** as well as integer indices
   (`results.compare_policies("candidate", "production")`), and every
   comparison dict carries `policy1`/`policy2`. An unknown name raises

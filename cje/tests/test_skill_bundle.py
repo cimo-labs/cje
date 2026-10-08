@@ -159,3 +159,12 @@ def test_package_docstring_opens_with_the_agent_rules() -> None:
         "until it is labeled or its transport is audited",
     ):
         assert rule in flat
+
+
+def test_cli_version_flag(capsys: pytest.CaptureFixture) -> None:
+    from cje.interface.cli import main
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--version"])
+    assert excinfo.value.code == 0
+    assert capsys.readouterr().out.strip() == f"cje-eval {cje.__version__}"

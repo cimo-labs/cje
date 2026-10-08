@@ -154,9 +154,9 @@ Results:
   unhelpful: 0.512 (SE 0.237, 95% CI [-0.146, 1.170])
     borrowed calibration (residual transport NOT_CHECKED)
 
-clone: no labels of its own; its estimate and every difference involving it assume base's calibration transfers, which the CI and p-value do not cover. Label >=20 random clone responses, or run a held-out transport audit (plan_transport_audits).
-parallel_universe_prompt: no labels of its own; its estimate and every difference involving it assume base's calibration transfers, which the CI and p-value do not cover. Label >=20 random parallel_universe_prompt responses, or run a held-out transport audit (plan_transport_audits).
-unhelpful: no labels of its own; its estimate and every difference involving it assume base's calibration transfers, which the CI and p-value do not cover. Label >=20 random unhelpful responses, or run a held-out transport audit (plan_transport_audits).
+clone: no labels of its own; its estimate and every difference involving it assume base's calibration transfers, which the CI and p-value do not cover (the true difference can have either sign). Label >=20 random clone responses, or audit transport on a held-out random sample of them (size it with plan_transport_audits).
+parallel_universe_prompt: no labels of its own; its estimate and every difference involving it assume base's calibration transfers, which the CI and p-value do not cover (the true difference can have either sign). Label >=20 random parallel_universe_prompt responses, or audit transport on a held-out random sample of them (size it with plan_transport_audits).
+unhelpful: no labels of its own; its estimate and every difference involving it assume base's calibration transfers, which the CI and p-value do not cover (the true difference can have either sign). Label >=20 random unhelpful responses, or audit transport on a held-out random sample of them (size it with plan_transport_audits).
 
 Best by point estimate: parallel_universe_prompt (point estimate, not a test)
 Limitations: borrowed calibration (residual transport NOT_CHECKED)

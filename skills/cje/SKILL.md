@@ -35,8 +35,8 @@ fetcher drops the rules below.
    scores covered the truth 0% of the time. CJE calibrates the judge against a slice of
    ground-truth labels (≥10 independent labeled prompt clusters recommended; 4 is the
    calibration floor) and refuses claims the data can't support. Do not cite a raw judge gap as
-   corroboration either: the calibrated estimate is a map of the same scores, so their agreement
-   is not independent evidence.
+   corroboration or a "consistency check" either: the calibrated estimate is a map of the same
+   scores, so their agreement is not independent evidence.
 2. **Random labels only.** Attach `oracle_label` only to labels from a probability sample of
    that policy's responses. Never hand-pick, invent, impute, or self-generate labels.
 3. **One fixed judge.** The same judge model, rubric and scale for every policy, blind to which
@@ -44,12 +44,18 @@ fetcher drops the rules below.
 4. **Paired test, not eyeballed CIs.** Decide from the paired difference
    (`compare_all_policies()`; on 0.9.2+ also the paired block in `summary()`), never from
    whether two policies' intervals overlap. A paired CI that includes 0 means the ranking is
-   not established, not that the policies are equal or interchangeable; an equivalence claim
-   needs a margin declared before looking.
+   not established, not that the policies are equal: avoid "interchangeable", "statistically
+   indistinguishable", "within noise" and "no meaningful gap", and do not suggest choosing on
+   cost as if quality were tied. Write instead: "not established at this sample size; the
+   paired CI [-0.14, +0.37] still allows a real gap either way." An equivalence claim needs a
+   margin declared before looking.
 5. **No winner and no lean on borrowed calibration.** A policy with no labels of its own whose
-   transport audit is not `PASS` is never named the winner, said to lead "directionally", or
-   called "significant", whatever the p-value: its estimate and every difference involving it
-   assume another policy's calibration transfers, which the CI and p-value do not cover.
+   transport audit is not `PASS` is never named the winner, said to lead, be ahead, "point
+   toward" it or win "directionally", or called "significant", whatever the p-value: its
+   estimate and every difference involving it assume another policy's calibration transfers,
+   which the CI and p-value do not cover. The true difference can have either sign (in a
+   synthetic test, a borrowed +0.36 with p = 0.03 was truly −0.14), so do not frame new labels
+   as confirming a win either.
    Report the verdict as undecided, and size what would settle it: about 20 or more random
    labels on that policy's own responses, or a held-out probe sized with
    `plan_transport_audits` (which also needs new random labels on its responses; an audit is
@@ -72,8 +78,9 @@ Write for a busy reader, in this order:
    adjusted), then each policy's calibrated estimate **with its 95% CI**, never a bare point
    estimate.
 3. **What would make it firm.** How many labels and on which rows: e.g. "label 20+ random
-   candidate responses", "collect labels in the 0.6–0.95 judge-score range", or "a held-out
-   probe of N candidate prompts, sized with `plan_transport_audits`". New labels must be a
+   candidate responses", "collect random labels in the judge-score range the REFUSE-LEVEL
+   warning names (in your judge's units)", or "a held-out random probe of N candidate
+   prompts, sized with `plan_transport_audits`". New labels must be a
    random sample of that policy's responses (or random within judge-score strata, declared
    with `label_design`), never the responses someone picked out.
 4. **Limitations.** Gate and audit status per policy with each one-line reason, how the labels

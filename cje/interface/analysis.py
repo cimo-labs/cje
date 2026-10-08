@@ -1051,8 +1051,8 @@ def _record_borrowed_calibration(
         "(transport %s). %s CI, and the CI and p-value of every difference "
         "involving %s, assume that calibration transfers to %s responses and "
         "do not cover the risk that it does not. Before choosing between "
-        "variants, label >=20 random responses of %s, or run a held-out "
-        "transport audit (plan_transport_audits).",
+        "variants, label >=20 random responses of %s, or audit transport on "
+        "a held-out random sample of them (size it with plan_transport_audits).",
         names,
         "has" if single else "have",
         "its" if single else "their",

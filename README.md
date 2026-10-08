@@ -115,7 +115,7 @@ print(results.summary())
 CJE Estimation Results (method: calibrated_direct)
   candidate   0.824  95% CI [0.766, 0.882]  [borrowed calibration]
   production  0.786  95% CI [0.696, 0.876]
-candidate: no labels of its own; its estimate and every difference involving it assume production's calibration transfers, which the CI and p-value do not cover. Label >=20 random candidate responses, or run a held-out transport audit (plan_transport_audits).
+candidate: no labels of its own; its estimate and every difference involving it assume production's calibration transfers, which the CI and p-value do not cover (the true difference can have either sign). Label >=20 random candidate responses, or audit transport on a held-out random sample of them (size it with plan_transport_audits).
 Best by point estimate: candidate (point estimate, not a test)
 Limitations: borrowed calibration (residual transport NOT_CHECKED)
 Paired differences (p unadjusted):
