@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cje-eval"
-version = "0.5.1"
+version = "0.5.2"
 description = "Causal Judge Evaluation - Calibrated LLM-judge evaluation with honest confidence intervals"
 authors = ["Eddie Landesberg <eddie@cimolabs.com>"]
 license = "MIT"
@@ -17,7 +17,7 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.9,<3.14"
+python = ">=3.9,<3.10"
 # Core dependencies
 numpy = ">=1.26,<3.0"  # numpy 2.x validated on py3.13 (fast suite green)
 scipy = "^1.11.0"

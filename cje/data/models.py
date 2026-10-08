@@ -8,6 +8,10 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# First line of EstimationResult.summary() on the legacy 0.5.x line (0.5.2), so
+# pasted output is never mistaken for a current (0.9+) release.
+_LEGACY_SUMMARY_LINE = "LEGACY cje-eval 0.5.x (Python 3.9): current docs describe 0.9+."
+
 
 @dataclass
 class CIInfo:
@@ -431,6 +435,7 @@ class EstimationResult(BaseModel):
         policies = self.target_policies
         if not policies:
             return (
+                f"{_LEGACY_SUMMARY_LINE}\n"
                 f"CJE Estimation Results (method: {self.method}): "
                 f"{len(self.estimates)} estimate(s); no target_policies metadata"
             )
@@ -439,7 +444,10 @@ class EstimationResult(BaseModel):
         gates = self.gates
         width = max(len(p) for p in policies)
 
-        lines = [f"CJE Estimation Results (method: {self.method})"]
+        lines = [
+            _LEGACY_SUMMARY_LINE,
+            f"CJE Estimation Results (method: {self.method})",
+        ]
         for i, policy in enumerate(policies):
             gate = gates.get(policy)
             flag = ""

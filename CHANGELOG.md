@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.2] - Unreleased
+
+Legacy-line marker release. The 0.5.x line is the last one that installs on Python
+3.9; current releases (0.9+) need Python 3.10-3.13. Estimates, standard errors, CIs and
+all other outputs are unchanged from 0.5.1.
+
+### Changed
+
+- **`python_requires` narrowed to `>=3.9,<3.10`.** On Python 3.10+ pip skips 0.5.2 and
+  resolves a current release instead. Earlier 0.4.x-0.5.x releases stay on PyPI (not
+  yanked), so Python 3.9 never falls back to the 0.3.x line.
+- **`import cje` prints one banner to stderr**: "cje-eval 0.5.x is the legacy Python
+  3.9 line. Current releases (0.9+) need Python 3.10-3.13: pip install
+  'cje-eval>=0.9'. This version's API and outputs differ from the current docs." It is
+  a plain `print` to stderr, not a logging or warnings call, so it always shows.
+- **`EstimationResult.summary()` starts with** "LEGACY cje-eval 0.5.x (Python 3.9):
+  current docs describe 0.9+." The remaining lines are unchanged.
+
 ## [0.5.1] - Unreleased
 
 Pairwise-inference fix and planning-instrument switch. Per-policy estimates, standard

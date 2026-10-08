@@ -9,6 +9,17 @@ Example:
     print(results.summary())
 """
 
+import sys as _sys
+
+# Legacy-line banner (0.5.2). A plain stderr print, not a logging or warnings
+# call, so no logging configuration or warnings filter can hide it.
+_LEGACY_BANNER = (
+    "cje-eval 0.5.x is the legacy Python 3.9 line. Current releases (0.9+) need "
+    "Python 3.10-3.13: pip install 'cje-eval>=0.9'. This version's API and "
+    "outputs differ from the current docs."
+)
+print(_LEGACY_BANNER, file=_sys.stderr)
+
 
 # Single-source the version. Installed packages read the cje-eval
 # distribution metadata (which poetry generates from pyproject.toml); source
@@ -30,7 +41,7 @@ def _resolve_version() -> str:
 
         return _dist_version("cje-eval")
     except Exception:  # PackageNotFoundError, or metadata unavailable
-        return "0.5.1"
+        return "0.5.2"
 
 
 __version__ = _resolve_version()
