@@ -4,6 +4,12 @@
 
 ### Documentation
 
+- The README forest plot showed invented vendor-model results with no data
+  source. It is now drawn from the shipped Arena sample by
+  `scripts/make_readme_forest_plot.py`: calibrated estimates against mean
+  labels on held-out responses, with each policy's audit state.
+- The synthetic quickstart's policies are `production` and `candidate`
+  instead of vendor-style model names; the numbers are unchanged.
 - README: the quickstart's stale "Upgrading to 0.8.0" note is now a one-line
   pointer to this changelog. The scope table says CJE estimates a candidate
   model or prompt from its generated responses before shipping (with offline

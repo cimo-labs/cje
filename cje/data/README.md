@@ -244,7 +244,7 @@ from cje import analyze_dataset
 
 results = analyze_dataset(
     fresh_draws_data={
-        "gpt-5.6": [
+        "production": [
             {"prompt_id": "1", "judge_score": 85, "oracle_label": 78},
             {"prompt_id": "2", "judge_score": 72, "oracle_label": 65},
         ],
@@ -299,7 +299,7 @@ A record is malformed (bad JSON, missing `judge_score`, out-of-range value). The
 CJE does not warn about this. Estimates weight each response equally, so a prompt with more draws counts more in that policy's mean; standard errors still cluster by prompt. Balance draws per prompt, or keep one per prompt chosen at random, when every prompt should count equally.
 
 ### Policy name mismatches
-Policy names come from filenames (`{policy}_responses.jsonl`). Use identical names everywhere (`"gpt-5.6"` vs `"gpt5.6"` are different policies).
+Policy names come from filenames (`{policy}_responses.jsonl`). Use identical names everywhere (`"candidate"` vs `"Candidate"` are different policies).
 
 ## Summary
 

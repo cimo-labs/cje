@@ -88,8 +88,8 @@ from cje import TransportAuditConfig, analyze_dataset
 
 probe = [json.loads(line) for line in open("probes/policy_gpt56mini.jsonl")]
 transport = TransportAuditConfig(
-    probes_by_policy={"gpt-5.6-mini": probe},
-    delta_max_by_policy={"gpt-5.6-mini": 0.03},  # OUTPUT units (units of results.estimates)
+    probes_by_policy={"candidate": probe},
+    delta_max_by_policy={"candidate": 0.03},  # OUTPUT units (units of results.estimates)
     family_size=4,
 )
 results = analyze_dataset(fresh_draws_data=draws, transport=transport)
@@ -105,7 +105,7 @@ probe = [json.loads(line) for line in open("probes/policy_gpt56mini.jsonl")]
 diag = audit_transportability(
     calibrator=results.calibrator,
     probe_samples=probe,
-    group_label="policy:gpt-5.6-mini",
+    group_label="policy:candidate",
     delta_max=0.03,  # practical mean-bias margin, probe oracle-label units
     family_size=4,   # all policy/group audits used in this decision
 )
