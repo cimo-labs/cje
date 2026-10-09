@@ -12,7 +12,7 @@ from cje.data.models import EstimationResult
 
 BANNER = (
     "cje-eval 0.5.x is the legacy Python 3.9 line. Current releases (0.9+) need "
-    "Python 3.10-3.13: pip install 'cje-eval>=0.9'. This version's API and "
+    "Python 3.10-3.13: pip install -U 'cje-eval>=0.9.2'. This version's API and "
     "outputs differ from the current docs."
 )
 LEGACY_LINE = "LEGACY cje-eval 0.5.x (Python 3.9): current docs describe 0.9+."

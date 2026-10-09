@@ -15,7 +15,7 @@ import sys as _sys
 # call, so no logging configuration or warnings filter can hide it.
 _LEGACY_BANNER = (
     "cje-eval 0.5.x is the legacy Python 3.9 line. Current releases (0.9+) need "
-    "Python 3.10-3.13: pip install 'cje-eval>=0.9'. This version's API and "
+    "Python 3.10-3.13: pip install -U 'cje-eval>=0.9.2'. This version's API and "
     "outputs differ from the current docs."
 )
 print(_LEGACY_BANNER, file=_sys.stderr)
