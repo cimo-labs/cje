@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.9.2] - 2026-10-08
 
 Safer first runs, for people and for coding agents. Estimates, intervals,
 and the meaning of `significant` are unchanged; the new fields and output
