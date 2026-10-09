@@ -38,17 +38,20 @@ def _join_names(names: List[str]) -> str:
 
 
 def _format_p_value(p_value: float) -> str:
-    """'p=0.22'; three decimals below 0.1 so values near 0.05 stay
-    distinguishable ('p=0.049', 'p=0.052', 'p=0.004'); 'p<0.001'."""
+    """'p=0.22', 'p=0.031', 'p<0.001'. Below 0.1 three decimals, and more
+    when needed so the printed value never sits on the wrong side of 0.05
+    or reads as exactly 0.05 ('p=0.0496', 'p=0.05004')."""
     if not np.isfinite(p_value):
         return "p=nan"
     if p_value < 0.001:
         return "p<0.001"
-    if abs(p_value - 0.05) < 0.0005:
-        return f"p={p_value:.4f}"
-    if p_value < 0.1:
-        return f"p={p_value:.3f}"
-    return f"p={p_value:.2f}"
+    decimals = 2 if p_value >= 0.0995 else 3
+    while decimals < 6:
+        shown = float(f"{p_value:.{decimals}f}")
+        if (shown < 0.05) == (p_value < 0.05) and (shown != 0.05 or p_value == 0.05):
+            break
+        decimals += 1
+    return f"p={p_value:.{decimals}f}"
 
 
 def _validate_alpha(alpha: Any) -> float:
@@ -787,16 +790,23 @@ class EstimationResult(BaseModel):
             group = by_status[status]
             names = _join_names(group)
             whose = f"of {names}" if len(group) == 1 else f"of each of {names}"
-            uncorrected = [p for p in group if self._own_label_count(p) > 0]
-            label = (
-                f"label >=20 random responses {whose}"
-                if not uncorrected
-                else (
-                    f"attach >=20 random labels {whose} and keep the default "
-                    "augmented route (use_augmented_estimator on, label_design "
-                    "'representative' or 'known_propensity')"
+            routes = {self._point_route(p) for p in group if self._own_label_count(p)}
+            if not routes:
+                label = f"label >=20 random responses {whose}"
+            elif routes == {"plug_in"}:
+                label = (
+                    "turn use_augmented_estimator back on, so the default "
+                    f"augmented route corrects the estimate {whose} with its own "
+                    "random labels"
                 )
-            )
+            else:
+                label = (
+                    f"keep only probability-sampled labels on the evaluation rows "
+                    f"{whose} (move targeted labels to calibration_data_path with "
+                    "combine_oracle_sources=False, or declare known inclusion "
+                    "rates with label_design='known_propensity'), so the "
+                    "augmented route can correct the estimate"
+                )
             if status == "FAIL":
                 sentences.append(
                     f"Transport audit FAILED for {names}: {label}, and re-run "
@@ -811,13 +821,14 @@ class EstimationResult(BaseModel):
             elif status == "NOT_CHECKED":
                 sentences.append(
                     f"{label[0].upper()}{label[1:]}, or audit transport on a "
-                    "held-out random sample of them (size it with "
+                    "held-out random sample of their responses (size it with "
                     "plan_transport_audits)."
                 )
             else:
                 sentences.append(
-                    f"{label[0].upper()}{label[1:]}, or extend the held-out "
-                    f"transport audit (now {status}; plan_transport_audits)."
+                    f"{label[0].upper()}{label[1:]}, or run a new, pre-sized "
+                    f"held-out audit on fresh probes (now {status}; "
+                    "plan_transport_audits)."
                 )
         return " ".join(sentences)
 
@@ -850,6 +861,26 @@ class EstimationResult(BaseModel):
             return f"residual transport {status}"
         return None
 
+    def _pair_transport_margin(self, policy1: str, policy2: str) -> float:
+        """Summed ``delta_max`` of the PASS audits a difference relies on.
+
+        A PASS bounds a transport-reliant policy's residual by its margin,
+        which the paired CI does not include; a difference within the summed
+        margins could be calibration error.
+        """
+        audits = self.metadata.get("transport_audits") or {}
+        margin = 0.0
+        for policy in {policy1, policy2}:
+            audit = audits.get(policy) if isinstance(audits, dict) else None
+            if (
+                isinstance(audit, dict)
+                and audit.get("status") == "PASS"
+                and audit.get("delta_max") is not None
+                and self._relies_on_transport(policy)
+            ):
+                margin += float(audit["delta_max"])
+        return margin
+
     def _paired_interval(
         self, i: int, j: int, alpha: float = 0.05
     ) -> Tuple[Dict[str, Any], float, float, float, float]:
@@ -864,8 +895,13 @@ class EstimationResult(BaseModel):
         difference = float(comparison["difference"])
         lower, upper = comparison.get("ci_lower"), comparison.get("ci_upper")
         if lower is None or upper is None:
-            z = float(stats.norm.ppf(1 - alpha / 2))
             se = float(comparison["se_difference"])
+            if not np.isfinite(se) or se <= 0:
+                raise ValueError(
+                    "the paired standard error is zero or undefined, so there "
+                    "is no interval or test for this pair"
+                )
+            z = float(stats.norm.ppf(1 - alpha / 2))
             lower, upper = difference - z * se, difference + z * se
         return (
             comparison,
@@ -894,12 +930,21 @@ class EstimationResult(BaseModel):
                 f"Not decision-ready: {verdict.name} failed the reliability gates."
             )
         if verdict.runner_up is not None:
+            leader = verdict.runner_up
             reasons = "; ".join(verdict.runner_up_reasons or []) or "gates"
+            fix = f"Resolve {leader}'s gate before ranking them."
+            if self._transport_status(
+                leader
+            ) == "FAIL" and not self._relies_on_transport(leader):
+                fix = (
+                    f"{leader}'s estimate is corrected by its own labels; if those "
+                    "are a random sample, re-run without the failed probes in "
+                    "transport= (keep that audit as a record) and compare again."
+                )
             return False, (
-                f"Not decision-ready: the point-estimate leader "
-                f"{verdict.runner_up} failed the reliability gates ({reasons}); "
-                f"{verdict.name} is the best gate-passing policy, not a tested "
-                f"winner. Resolve {verdict.runner_up}'s gate before ranking them."
+                f"Not decision-ready: the point-estimate leader {leader} failed "
+                f"the reliability gates ({reasons}); {verdict.name} is the best "
+                f"gate-passing policy, not a tested winner. {fix}"
             )
         if not self._transport_provenance_known():
             return False, (
@@ -917,10 +962,16 @@ class EstimationResult(BaseModel):
             and not np.isnan(estimates[i])
             and policy != verdict.name
         ]
+        unverified = set(self._transport_unverified())
         if not others:
+            if verdict.name in unverified:
+                return False, (
+                    f"Not decision-ready: {verdict.name}'s calibration transfer is "
+                    f"unverified (it assumes {self._calibration_source_phrase()} "
+                    f"transfers). {self._transport_actions([verdict.name])}"
+                )
             return True, "Only one usable policy; there is nothing to compare."
 
-        unverified = set(self._transport_unverified())
         blockers = [p for p in [verdict.name, *others] if p in unverified]
         if blockers:
             names = _join_names(blockers)
@@ -959,12 +1010,7 @@ class EstimationResult(BaseModel):
                 )
             # A PASS audit bounds a policy's residual by its delta_max, which
             # the paired CI does not include: the difference must clear it.
-            margin = 0.0
-            for policy in (verdict.name, rival):
-                if self._relies_on_transport(policy):
-                    audit = (self.metadata.get("transport_audits") or {}).get(policy)
-                    delta = audit.get("delta_max") if isinstance(audit, dict) else None
-                    margin += float(delta) if delta is not None else 0.0
+            margin = self._pair_transport_margin(verdict.name, rival)
             if not np.isfinite(lower) or lower <= margin:
                 if margin > 0 and np.isfinite(lower) and lower > 0:
                     return False, (
@@ -1029,6 +1075,7 @@ class EstimationResult(BaseModel):
         # Policies relying on an unverified transfer in pairs whose CI
         # excludes 0, and whether any such pair rests on verified estimates.
         separated_unverified: List[str] = []
+        separated_within_margin = False
         separated_unconditionally = False
         first_error: Optional[str] = None
         for i, j in pairs:
@@ -1043,14 +1090,19 @@ class EstimationResult(BaseModel):
                 lines.append(f"  {label}: unavailable")
                 continue
             unverified = [str(p) for p in comparison.get("transport_unverified") or []]
+            margin = self._pair_transport_margin(policies[i], policies[j])
+            within_margin = False
             if not all(np.isfinite([difference, lower, upper])):
                 every_ci_includes_zero = False
             elif lower > 0 or upper < 0:
                 every_ci_includes_zero = False
+                within_margin = margin > 0 and min(abs(lower), abs(upper)) <= margin
                 if unverified:
                     separated_unverified.extend(
                         p for p in unverified if p not in separated_unverified
                     )
+                elif within_margin:
+                    separated_within_margin = True
                 else:
                     separated_unconditionally = True
             # A difference inherits a flagged input's unreliability,
@@ -1062,6 +1114,8 @@ class EstimationResult(BaseModel):
                 kinds = {self._calibration_marker(p) for p in unverified}
                 kind = kinds.pop() if len(kinds) == 1 else "unverified calibration"
                 flag += f"  [{kind}: {', '.join(unverified)}]"
+            if within_margin:
+                flag += f"  [within transport margin {margin:.3f}]"
             lines.append(
                 f"  {label}: {difference:+.3f}  "
                 f"{100 * (1 - alpha):.0f}% CI [{lower:+.3f}, {upper:+.3f}]  "
@@ -1084,14 +1138,26 @@ class EstimationResult(BaseModel):
                 f"No reliable winner: {scope} includes 0 "
                 "(not evidence that they are equal)"
             )
-        elif separated_unverified and not separated_unconditionally:
-            names = _join_names(separated_unverified)
-            single = len(separated_unverified) == 1
+        elif (
+            separated_unverified or separated_within_margin
+        ) and not separated_unconditionally:
+            reasons = []
+            if separated_unverified:
+                names = _join_names(separated_unverified)
+                single = len(separated_unverified) == 1
+                reasons.append(
+                    f"involves {names}, whose calibration transfer is unverified "
+                    f"(see {'its line' if single else 'their lines'} above)"
+                )
+            if separated_within_margin:
+                reasons.append(
+                    "lies within the transport margin a PASS audit allows, so "
+                    "calibration error could reverse it"
+                )
             lines.append(
-                f"No decision-ready winner: {scope} that excludes 0 involves "
-                f"{names}, whose calibration transfer is unverified (see "
-                f"{'its line' if single else 'their lines'} above). Name no winner "
-                "and no lean until that changes."
+                f"No decision-ready winner: {scope} that excludes 0 "
+                f"{' or '.join(reasons)}. Name no winner and no lean until that "
+                "changes."
             )
         return lines
 

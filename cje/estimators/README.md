@@ -49,6 +49,10 @@ cis = result.ci()                      # (lower, upper) tuples: t-based jackknif
 diagnostics = result.diagnostics       # DirectDiagnostics incl. boundary cards
 ```
 
+A result built this way does not record which policies have oracle labels of their own, so
+`best_policy().decision_ready` is always False and comparisons carry
+`conditional_on_transport=None`; `analyze_dataset` records that provenance.
+
 Fresh draws are auto-discovered from a `fresh_draws_dir` under the canonical `POLICY_FILE_PATTERNS` names: `{policy}_responses.jsonl`, `{policy}.jsonl`, `responses/{policy}.jsonl`, `fresh_draws/{policy}.jsonl`.
 
 ## Standard Errors

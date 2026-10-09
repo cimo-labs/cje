@@ -48,8 +48,10 @@ three decimals.
   policy in the paired comparison (each 95% CI above 0, and above the
   `delta_max` of any PASS audit the difference relies on), no policy in
   the comparison is transport-unverified or gate-flagged, and the winner
-  was not reached by demoting a flagged leader; results saved before 0.9.2
-  are never decision-ready.
+  was not reached by demoting a flagged leader; results saved before 0.9.2,
+  or built by calling an estimator directly, are never decision-ready. A
+  pair that excludes 0 only within a PASS audit's margin is marked
+  `[within transport margin ...]` in `summary()`.
 - **Paired differences in `summary()`.** With two or more policies,
   `summary()` prints each pair (with more than 10 pairs, those with the
   best point estimate) as

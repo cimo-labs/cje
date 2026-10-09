@@ -250,8 +250,10 @@ def analyze_dataset(
         - results.metadata["calibration_label_sources"]: the labels the
           calibration was fit on (policy names, plus "calibration_data" for
           calibration_data_path); empty when no calibrator was fit
-        - results.metadata["transport_unverified"]: sorted policies with no
-          labels of their own whose transport audit is not PASS
+        - results.metadata["transport_unverified"]: sorted policies whose
+          estimate relies on an unverified calibration transfer (no labels
+          of their own, or a plug-in route that does not correct with them)
+          and whose transport audit is not PASS
         - results.metadata["cje_version"]: the cje-eval version that ran
 
         New metadata fields when using calibration_data_path:
@@ -1061,10 +1063,11 @@ def _record_borrowed_calibration(
     single = len(unverified) == 1
     statuses_text = "/".join(sorted({results._transport_status(p) for p in unverified}))
     logger.warning(
-        "Borrowed calibration: %s, so %s %s %s (transport %s). %s CI, and the CI "
+        "%s: %s, so %s %s %s (transport %s). %s CI, and the CI "
         "and p-value of every difference involving %s, assume that calibration "
         "transfers and do not cover the risk that it does not. Before choosing "
         "between variants: %s",
+        "Unverified calibration transfer" if uncorrected else "Borrowed calibration",
         "; ".join(parts),
         "its estimate" if single else "their estimates",
         "uses" if single else "use",

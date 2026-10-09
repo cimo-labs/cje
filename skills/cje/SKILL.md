@@ -64,7 +64,7 @@ fetcher drops the rules below.
    corroboration. The same holds for a policy whose own labels go unused on a plug-in route
    (`use_augmented_estimator=False`, `label_design="targeted_unknown"`). On 0.9.2+ `summary()`
    marks such policies `[borrowed calibration]` or `[uncorrected calibration]`, prints
-   "No decision-ready winner" when every separated pair involves one, and lists them in
+   "No decision-ready winner" when every printed separated pair involves one, and lists them in
    `results.metadata["transport_unverified"]`.
 6. **Surface every gate, badge and audit state** next to the estimate it qualifies. Never
    bypass, suppress, or explain one away to give a cleaner answer.
@@ -256,10 +256,12 @@ print(results.summary())
 ```
 
 `summary()` reports each policy's calibrated estimate with a 95% CI, the best policy by point
-estimate (not a test), and its limitations. From 0.9.2 it also prints every paired difference
-with its unadjusted CI and p-value (`[gate-flagged: ...]` when a policy in the pair failed the
-gates), "No reliable winner" when every paired CI includes 0, and a named line for each policy
-with no labels of its own whose transport is unverified; `cje analyze` prints the same lines.
+estimate (not a test), and its limitations. From 0.9.2 it also prints the paired differences
+with unadjusted CI and p-value (with more than 10 pairs, only those with the best point
+estimate; `compare_all_policies()` lists all), marked `[gate-flagged: ...]`, `[borrowed
+calibration: ...]` or `[within transport margin ...]` where they apply; "No reliable winner"
+or "No decision-ready winner" when every printed pair supports that; and a named line for each
+policy whose calibration transfer is unverified; `cje analyze` prints the same lines.
 Before 0.9.2, print the pairs with `results.compare_all_policies()` (each dict has `policy1`,
 `policy2`, `difference`, `ci_lower`, `ci_upper`, `p_value`). The quickstart's `candidate` is
 the borrowed case: by hard rule 5 its comparison is undecided, not only non-significant. Grade residual transport separately with held-out oracle probes and a
@@ -283,10 +285,12 @@ names: `results.compare_policies("candidate", "base")`) and surface the highest 
 substituting another policy. From 0.9.2 each comparison carries `transport_unverified` (the
 policies in the pair whose calibration transfer is unverified) and `conditional_on_transport`,
 and `results.best_policy()` carries `decision_ready` and `decision_note`. `decision_ready` is True
-only when the winner beats every other usable policy in the paired comparison, with no
-transport-unverified or gate-flagged policy in the comparison and no gate demotion; True still
-does not mean every gate and audit is clean, and a demotion is never a decision (the demoted
-leader may be the better policy). `significant` still means only `p_value < alpha`; it never
+only when the winner beats every other usable policy in the paired comparison (by more than
+any PASS audit's `delta_max` the difference relies on), with no transport-unverified or
+gate-flagged policy in the comparison and no gate demotion. Those per-pair CIs are unadjusted on
+purpose (an intersection-union test), so it can be True while a BH `p_adjusted` exceeds 0.05.
+True still does not mean every gate and audit is clean, and a demotion is never a decision (the
+demoted leader may be the better policy). `significant` still means only `p_value < alpha`; it never
 overrides hard rule 5. Do not rely on eyeballed
 point estimates. The default analytic path combines the paired sampling SE with the
 oracle-jackknife variance of the difference (`method: "paired_if_oua"`); an explicit bootstrap

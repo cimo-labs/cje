@@ -57,7 +57,7 @@ Through 0.9.1 records reject `NaN`; from 0.9.2 a `NaN` label is read as unlabele
   variant's style does not carry into the difference; the intervals are wider than with every
   label on one policy. Put all labels on one policy only when labeling the others is
   impractical; a policy without labels of its own is then not decision-ready until its
-  transport is audited (SKILL.md hard rule 5).
+  transport audit PASSes (SKILL.md hard rule 5).
 - **Unequal sampling.** The default `label_design="representative"` treats each policy's labeled
   rows as a simple random sample of that policy. If sampling rates differ (for example, you
   oversampled some score ranges), pass `label_design="known_propensity",
@@ -135,10 +135,12 @@ fallback), never by this parameter; its only observable effect is which name lan
   sorted by name, not your dict's order; `difference` = estimate[i] − estimate[j]. From 0.9.2
   `i`/`j` may also be policy names and the dict carries `policy1`/`policy2`; through 0.9.1
   names raise `TypeError` and the dict carries no names, so report pairs from
-  `compare_all_policies()`. From 0.9.2 the dict also carries `transport_unverified` (policies in
-  the pair with no labels of its own whose transport audit is not `PASS`) and
+  `compare_all_policies()`. From 0.9.2 the dict also carries `transport_unverified` (the pair's
+  policies whose estimate relies on an unverified calibration transfer: no labels of their own,
+  or a plug-in route that does not correct with them, and no `PASS` audit) and
   `conditional_on_transport` (true when that list is non-empty: the CI and p-value then assume
-  the borrowed calibration transfers). `significant` keeps its meaning, `p_value < alpha`. The `method` key names the inference basis, best-first: `"paired_bootstrap"`
+  the calibration transfers; None for results that do not record label provenance, such as
+  results saved before 0.9.2 or built by calling an estimator directly). `significant` keeps its meaning, `p_value < alpha`. The `method` key names the inference basis, best-first: `"paired_bootstrap"`
   (bootstrap runs: paired inference over the replicate matrix; the difference SE includes
   calibrator noise, honest on near-tie pairs; sign-test p-value floored at 2/(B+1)),
   `"paired_if_oua"` (cluster-robust runs: t-test from the stored pairwise SE + oracle-jackknife
@@ -166,7 +168,9 @@ fallback), never by this parameter; its only observable effect is which name lan
   the winner beats every other usable policy in the paired comparison (each 95% CI above 0), no
   policy in the comparison is transport-unverified or gate-flagged, the winner was not reached by
   demoting a flagged leader, and each difference clears any PASS audit's `delta_max` it relies
-  on; results saved before 0.9.2 are never decision-ready
+  on. The per-pair CIs are unadjusted on purpose: requiring every pair is an intersection-union
+  test, so `decision_ready=True` can sit next to a BH `p_adjusted` above 0.05. Results saved
+  before 0.9.2, or built by calling an estimator directly, are never decision-ready
 - `.calibrator` → fitted calibrator when calibration is required; complete oracle coverage may return `None`
 - `.metadata["transport_audits"]` → per-policy PASS / FAIL / INCONCLUSIVE / NOT_GRADED / NOT_CHECKED records when using `TransportAuditConfig`; FAIL adds a hard result gate only when the current estimate depends on that calibrator
 - `.summary()` → compact text report (per-policy estimate + 95% CI + gate flags, best-policy line).
@@ -196,8 +200,9 @@ fallback), never by this parameter; its only observable effect is which name lan
   `own_oracle_labels_by_policy` (`{policy: count of that policy's own non-missing oracle labels
   used}`), `calibration_label_sources` (what the calibration was fit on: policy names, plus
   `"calibration_data"` for `calibration_data_path`; empty when no calibrator was fit),
-  `transport_unverified` (sorted policies with zero own labels whose transport audit is not
-  `PASS`; empty when no calibrator was fit), and `cje_version`
+  `transport_unverified` (sorted policies with no own labels, or on a plug-in route that does
+  not correct with them, whose transport audit is not `PASS`; empty when no calibrator was
+  fit), and `cje_version`
 - `.diagnostics` (DirectDiagnostics): `overall_status` (GOOD/WARNING/CRITICAL), `status_per_policy`,
   `boundary_cards`, `refuse_level_policies`, `calibration_rmse`, `n_oracle_labels`, `.summary()`
 

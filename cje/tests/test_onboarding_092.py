@@ -58,8 +58,8 @@ QUICKSTART_SUMMARY = "\n".join(
             "ce involving it assume production's calibration transfers, which"
             " the CI and p-value do not cover (the true difference can have e"
             "ither sign). Label >=20 random responses of candidate, or audit "
-            "transport on a held-out random sample of them (size it with plan"
-            "_transport_audits)."
+            "transport on a held-out random sample of their responses (size i"
+            "t with plan_transport_audits)."
         ),
         "Best by point estimate: candidate (point estimate, not a test)",
         ("Limitations: borrowed calibration (residual transport NOT_CHECKE" "D)"),
@@ -86,8 +86,8 @@ BORROWED_LINE = (
     "ce involving it assume production's calibration transfers, which"
     " the CI and p-value do not cover (the true difference can have e"
     "ither sign). Label >=20 random responses of candidate, or audit "
-    "transport on a held-out random sample of them (size it with plan"
-    "_transport_audits)."
+    "transport on a held-out random sample of their responses (size i"
+    "t with plan_transport_audits)."
 )
 
 COLLISION_TEXT = "differ only in case"
@@ -1104,7 +1104,16 @@ def test_array_like_record_containers_still_work(container: str) -> None:
 
 @pytest.mark.parametrize(
     "p_value,text",
-    [(0.0496, "p=0.0496"), (0.0516, "p=0.052"), (0.031, "p=0.031"), (0.22, "p=0.22")],
+    [
+        (0.0496, "p=0.0496"),
+        (0.0516, "p=0.052"),
+        (0.04996, "p=0.04996"),
+        (0.05004, "p=0.05004"),
+        (0.05, "p=0.050"),
+        (0.031, "p=0.031"),
+        (0.0995, "p=0.10"),
+        (0.22, "p=0.22"),
+    ],
 )
 def test_p_values_near_the_threshold_stay_distinguishable(
     p_value: float, text: str
@@ -1112,3 +1121,97 @@ def test_p_values_near_the_threshold_stay_distinguishable(
     from cje.data.models import _format_p_value
 
     assert _format_p_value(p_value) == text
+
+
+class TestSecondReviewFixes:
+    def test_a_lone_unverified_policy_is_not_decision_ready(self) -> None:
+        result = _verdict_result(
+            [0.70], ["candidate"], unverified=["candidate"], own={"candidate": 0}
+        )
+        verdict = result.best_policy()
+        assert verdict.decision_ready is False
+        assert "candidate's calibration transfer is unverified" in (
+            verdict.decision_note
+        )
+
+    def test_a_difference_within_a_pass_margin_is_marked(self) -> None:
+        result = _verdict_result(
+            [0.55, 0.52],
+            ["candidate", "production"],
+            own={"candidate": 0, "production": 50},
+            audits={"candidate": {"status": "PASS", "delta_max": 0.06}},
+        )
+        lines = result.summary().splitlines()
+        pair = next(line for line in lines if line.startswith("  candidate - "))
+        assert pair.endswith("[within transport margin 0.060]")
+        assert any(
+            line.startswith("No decision-ready winner: every paired CI that excludes 0")
+            and "lies within the transport margin a PASS audit allows" in line
+            for line in lines
+        )
+
+    def test_zero_standard_error_pairs_are_unavailable(self) -> None:
+        result = _verdict_result([1.0, 0.0], ["a", "b"], se=0.0)
+        lines = result.summary().splitlines()
+        assert "  a - b: unavailable" in lines
+        verdict = result.best_policy()
+        assert verdict.decision_ready is False
+        assert "p=1.00" not in verdict.decision_note
+
+    def test_remedies_follow_the_route(self) -> None:
+        def note(route: str) -> str:
+            result = _verdict_result(
+                [0.70, 0.50],
+                ["candidate", "production"],
+                unverified=["candidate"],
+                own={"candidate": 10, "production": 50},
+            )
+            result.metadata["point_estimator"] = {"routes": [route, "augmented"]}
+            return result._transport_actions(["candidate"])
+
+        assert note("plug_in").startswith("Turn use_augmented_estimator back on")
+        targeted = note("plug_in_targeted_unknown")
+        assert targeted.startswith("Keep only probability-sampled labels")
+        assert "combine_oracle_sources=False" in targeted
+
+    def test_inconclusive_remedy_asks_for_a_new_audit(self) -> None:
+        result = _verdict_result(
+            [0.70, 0.50],
+            ["candidate", "production"],
+            unverified=["candidate"],
+            own={"candidate": 0, "production": 50},
+            audits={"candidate": {"status": "INCONCLUSIVE", "delta_max": 0.03}},
+        )
+        text = result._transport_actions(["candidate"])
+        assert "run a new, pre-sized held-out audit on fresh probes" in text
+        assert "extend" not in text
+
+    def test_failed_audit_on_an_own_labelled_leader_points_to_correction(self) -> None:
+        result = _verdict_result(
+            [0.70, 0.50],
+            ["candidate", "production"],
+            flagged=["candidate"],
+            own={"candidate": 40, "production": 50},
+            audits={"candidate": {"status": "FAIL", "delta_max": 0.03}},
+        )
+        result.metadata["point_estimator"] = {"routes": ["augmented", "augmented"]}
+        verdict = result.best_policy()
+        assert verdict.decision_ready is False
+        assert "re-run without the failed probes in transport=" in (
+            verdict.decision_note
+        )
+
+    def test_plug_in_warning_is_not_headed_borrowed(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        draws = _quickstart_draws()
+        for i, row in enumerate(draws["candidate"]):
+            row["oracle_label"] = QUICKSTART_LABELS[i]
+        with caplog.at_level(logging.WARNING, logger="cje.interface.analysis"):
+            analyze_dataset(
+                fresh_draws_data=draws,
+                estimator_config={"use_augmented_estimator": False},
+            )
+        messages = [r.getMessage() for r in caplog.records]
+        assert any(m.startswith("Unverified calibration transfer:") for m in messages)
+        assert not any(m.startswith("Borrowed calibration:") for m in messages)
