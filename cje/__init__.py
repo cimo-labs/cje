@@ -2,8 +2,8 @@
 
 Never report a raw judge-score mean as quality; attach oracle labels only from
 random samples; for a policy without labels of its own, name no winner and no
-lean until it is labeled or its transport is audited. A paired CI that excludes
-0 is not a decision on its own. (`python -m cje skill` works when the `cje`
+lean until it is labeled or its transport audit PASSes. A paired CI that
+excludes 0 is not a decision on its own. (`python -m cje skill` works when the `cje`
 command is not on PATH; `cje skill --reference` prints the full API reference.)
 
 CJE: Causal Judge Evaluation - Calibrated LLM Policy Evaluation.

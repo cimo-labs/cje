@@ -156,7 +156,7 @@ def test_package_docstring_opens_with_the_agent_rules() -> None:
         "Never report a raw judge-score mean as quality",
         "attach oracle labels only from random samples",
         "for a policy without labels of its own, name no winner and no lean "
-        "until it is labeled or its transport is audited",
+        "until it is labeled or its transport audit PASSes",
     ):
         assert rule in flat
 

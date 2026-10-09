@@ -4,7 +4,7 @@ A calibrated judge saves labels in two different ways, and they are worth very d
 
 ## Reusing one calibration across policies
 
-The Chatbot Arena study's 14× reduction against full labeling (the arXiv v3 cost model, with GPT-5 ratings standing in for human labels) comes from fitting one calibration and applying it to policies that have no labels of their own. That saving holds only if the calibration carries over to those policies' responses. CJE reports the reuse as `NOT_CHECKED` until held-out labels on each such policy grade it; [plan that audit](audit-budget-planning.md) before relying on the saving.
+The Chatbot Arena study's 14× lower total cost than full labeling (the arXiv v3 cost model, oracle labels plus judge calls, with GPT-5 ratings standing in for human labels) is 8.8× for a single policy; fitting one calibration and applying it to policies that have no labels of their own raises it to 14×. That extra saving holds only if the calibration carries over to those policies' responses. CJE reports the reuse as `NOT_CHECKED` until held-out labels on each such policy grade it; [plan that audit](audit-budget-planning.md) before relying on the saving.
 
 ## Correcting a policy's own estimate
 

@@ -9,13 +9,13 @@ description: Use CJE (pip install cje-eval) to compare policies from judge score
 
 ```bash
 python --version                     # must be 3.10–3.13
-pip install "cje-eval>=0.9" pandas
+pip install -U "cje-eval>=0.9.2" pandas
 python -c "import cje; print(cje.__version__)"
 ```
 
 Do this before anything else. On Python 3.9, a plain `pip install cje-eval` silently installs
-the legacy 0.5 line, whose API and output differ from this skill; the `>=0.9` floor makes pip
-fail instead, so switch to a 3.10–3.13 interpreter (e.g. `python3.12 -m venv .venv`). Put the
+the legacy 0.5 line, whose API and output differ from this skill; the `>=0.9.2` floor makes pip
+fail instead (and `-U` upgrades an older 0.9 install, which has no `cje skill`), so switch to a 3.10–3.13 interpreter (e.g. `python3.12 -m venv .venv`). Put the
 printed version in your report.
 
 Read the docs whole, not through `head`: save the reference into the working directory with
@@ -61,7 +61,9 @@ fetcher drops the rules below.
    `plan_transport_audits` (which also needs new random labels on its responses; an audit is
    not a label-free shortcut). A raw judge gap toward the unlabeled policy is a red flag (the
    judge may favor its style, and the borrowed calibration cannot see that), not
-   corroboration. On 0.9.2+ `summary()` marks such policies `[borrowed calibration]`, prints
+   corroboration. The same holds for a policy whose own labels go unused on a plug-in route
+   (`use_augmented_estimator=False`, `label_design="targeted_unknown"`). On 0.9.2+ `summary()`
+   marks such policies `[borrowed calibration]` or `[uncorrected calibration]`, prints
    "No decision-ready winner" when every separated pair involves one, and lists them in
    `results.metadata["transport_unverified"]`.
 6. **Surface every gate, badge and audit state** next to the estimate it qualifies. Never
@@ -213,7 +215,7 @@ Before analysis, check what CJE cannot:
 ## Canonical flow: compare policies
 
 Install as in **Step 0**. Record the package version and the
-version that fitted any reused calibrator. **When upgrading to 0.8.0, refit pre-0.8.0 saved two-stage calibrators
+version that fitted any reused calibrator. **Two-stage calibrators saved by a version before 0.8.0 must be refit
 from retained inputs before reuse** to rebuild empirical-rank boundaries with corrected
 arithmetic. If fit provenance is unknown, refit from retained inputs rather than assuming
 compatibility. See [the release notes](https://github.com/cimo-labs/cje/releases/tag/v0.8.0).
@@ -279,11 +281,12 @@ verdict = results.compare_policies(pols.index("candidate"), pols.index("base")) 
 Use `results.compare_policies(i, j)` for pairwise claims (from 0.9.2 it also takes policy
 names: `results.compare_policies("candidate", "base")`) and surface the highest point estimate with its diagnostics rather than silently
 substituting another policy. From 0.9.2 each comparison carries `transport_unverified` (the
-policies in the pair with no labels of its own and no `PASS`) and `conditional_on_transport`,
-and `results.best_policy()` carries `decision_ready` and `decision_note`. `decision_ready` is
-False when the winner or the policy it is ranked against is transport-unverified, the winner
-failed the gates, or their paired 95% CI includes 0; True means none of those applies, not that
-every gate and audit is clean. `significant` still means only `p_value < alpha`; it never
+policies in the pair whose calibration transfer is unverified) and `conditional_on_transport`,
+and `results.best_policy()` carries `decision_ready` and `decision_note`. `decision_ready` is True
+only when the winner beats every other usable policy in the paired comparison, with no
+transport-unverified or gate-flagged policy in the comparison and no gate demotion; True still
+does not mean every gate and audit is clean, and a demotion is never a decision (the demoted
+leader may be the better policy). `significant` still means only `p_value < alpha`; it never
 overrides hard rule 5. Do not rely on eyeballed
 point estimates. The default analytic path combines the paired sampling SE with the
 oracle-jackknife variance of the difference (`method: "paired_if_oua"`); an explicit bootstrap

@@ -3,42 +3,56 @@
 ## [0.9.2] - 2026-10-08
 
 Safer first runs, for people and for coding agents. Estimates, intervals,
-and the meaning of `significant` are unchanged; the new fields and output
-lines are additions. The one behaviour change: a `NaN` label in records now
-means unlabeled instead of raising.
+and the meaning of `significant` are unchanged, with one exception: a `NaN`
+label in records now means unlabeled. That call used to raise, and with
+`on_invalid="drop"` it used to delete the row, so those callers' estimates
+change. Other visible changes: a policy whose calibration transfer is
+unverified now has diagnostics status at least `warning` (raising
+`overall_status`), `residual transport NOT_CHECKED` is no longer printed for
+policies corrected by their own labels, and p-values below 0.1 print with
+three decimals.
 
 ### Added
 
 - **Borrowed calibration is explicit.** A policy with no oracle labels of
-  its own borrows the calibration fitted on other policies' labels; its
-  estimate and every difference involving it assume that calibration
-  transfers, which the CI and p-value do not cover. `analyze_dataset` now
+  its own borrows the calibration fitted on other policies' labels, and a
+  policy on a plug-in route (`use_augmented_estimator=False`,
+  `label_design="targeted_unknown"`) does not correct it with its own
+  labels; its estimate and every difference involving it assume that
+  calibration transfers, which the CI and p-value do not cover. `analyze_dataset` now
   logs one warning naming those policies and the labels whose calibration
   they borrow, and records `metadata["own_oracle_labels_by_policy"]` (each
   policy's own non-missing oracle labels used),
   `metadata["calibration_label_sources"]` (the policies, and
   `"calibration_data"` for `calibration_data_path`, whose labels the
-  calibration was fit on) and `metadata["transport_unverified"]` (policies
-  with none whose transport audit is not `PASS`; empty when no calibrator
-  was fit). `summary()` and `cje analyze` mark each such policy
-  `[borrowed calibration]` and, before any ranking, print one named line
+  calibration was fit on) and `metadata["transport_unverified"]` (such
+  policies whose transport audit is not `PASS`; empty when no calibrator
+  was fit). `summary()` and `cje analyze` mark each one
+  `[borrowed calibration]` (or `[uncorrected calibration]` on a plug-in
+  route) and, before any ranking, print one named line
   for it saying the true difference can have either sign and what would
-  settle it (label 20 or more of its responses at random, or audit
-  transport on a held-out random sample of them sized with
-  `plan_transport_audits`); its paired differences end
+  settle it, by audit status (for `NOT_CHECKED`: label 20 or more of its
+  responses at random, or audit transport on a held-out random sample of
+  them sized with `plan_transport_audits`; after a `FAIL`: label, and do
+  not re-audit to escape it); its paired differences end
   `[borrowed calibration: <policy>]`, and when every pair whose CI excludes
   0 involves such a policy, the summary says "No decision-ready winner"
   instead of leaving a lone significant pair to read as a result. That
   policy's diagnostics status
   (`status_per_policy`, hence `overall_status`) is at least `warning`; no
   policy is demoted for it. `compare_policies` and `compare_all_policies`
-  results add `transport_unverified` and `conditional_on_transport`;
-  `best_policy()` adds `decision_ready` (False when the winner, or the
-  policy it is ranked against, is transport-unverified, when the winner
-  failed the reliability gates, or when their paired 95% CI includes 0)
-  and `decision_note`.
+  results add `transport_unverified` and `conditional_on_transport` (None
+  for results saved before 0.9.2, which do not record label provenance);
+  `best_policy()` adds `decision_ready` and `decision_note`.
+  `decision_ready` is True only when the winner beats every other usable
+  policy in the paired comparison (each 95% CI above 0, and above the
+  `delta_max` of any PASS audit the difference relies on), no policy in
+  the comparison is transport-unverified or gate-flagged, and the winner
+  was not reached by demoting a flagged leader; results saved before 0.9.2
+  are never decision-ready.
 - **Paired differences in `summary()`.** With two or more policies,
-  `summary()` prints every pair as
+  `summary()` prints each pair (with more than 10 pairs, those with the
+  best point estimate) as
   `candidate - production: +0.038  95% CI [-0.027, +0.102]  p=0.22`
   (p unadjusted; with three or more policies it points to
   `compare_all_policies(adjust="bh")`; a pair involving a gate-flagged
@@ -88,9 +102,9 @@ means unlabeled instead of raising.
 
 ### Documentation
 
-- **README rewritten for people deciding whether to use CJE** (about 1,200
-  words): what it answers, then handing the work to a coding agent on the
-  first screen (`pip install "cje-eval>=0.9"`, `cje skill`, and a fill-in
+- **README rewritten for people deciding whether to use CJE**: what it
+  answers, then handing the work to a coding agent on the
+  first screen (`pip install -U "cje-eval>=0.9.2"`, `cje skill`, and a fill-in
   prompt with the data path, the question, and how the labels were chosen),
   what you need, the 60-second quickstart with its new paired block, what it
   estimates, a compact fit table, two scoped evidence bullets, and a docs
@@ -103,9 +117,11 @@ means unlabeled instead of raising.
   the estimand, assumptions, how it works, why Direct mode only, and the
   full validation numbers to a new Methods section in the estimators
   README; the label-savings arithmetic to a new guide,
-  `guides/evaluation-planning.md`. The README's old section links still
-  resolve.
-- **Skill.** Step 0 at the top installs `"cje-eval>=0.9"` on Python
+  `guides/evaluation-planning.md`. Links to the README's removed sections
+  (`#how-it-works`, `#validation-against-reference-labels`,
+  `#levels-rankings-and-production-outcomes`, `#why-direct-mode-only-no-ipsdr`,
+  `#development`) now open at the top of the page.
+- **Skill.** Step 0 at the top installs `"cje-eval>=0.9.2"` on Python
   3.10–3.13 and prints `cje.__version__`: on Python 3.9 a bare
   `pip install cje-eval` silently installs the legacy 0.5 line. A
   hard-rules block follows, with a new rule: a policy with no labels of its
@@ -135,7 +151,7 @@ means unlabeled instead of raising.
   labels and a held-out audit), and describes the removed IPS/DR line as
   reweighting another policy's logged responses rather than as
   "counterfactual" estimation. The skill uses the same wording.
-- Colab notebooks install 0.9.1 (were 0.7.1). The core demo's adversarial
+- Colab notebooks install 0.9.2 (were 0.7.1). The core demo's adversarial
   section now matches its own output: the calibration learned on the base
   policy, not the judge, inflates the adversarial policy's level, and the
   transport audit FAILs. The CLI text it quotes matches the current CLI.
@@ -148,9 +164,10 @@ means unlabeled instead of raising.
   coverage rerun); REFUSE-LEVEL range units and how to clear it without
   hand-picking; reused calibration labels as probes always pass
   (`observation_id` guards this); `compare_policies` indices follow the
-  name-sorted `target_policies`. The skill and reference now say records
-  reject NaN, ask agents to establish label provenance, and require a probe on
-  an unlabelled policy before naming it the winner. Reference detail on audit
+  name-sorted `target_policies`. The skill and reference say how each version
+  treats a NaN label (rejected through 0.9.1, read as unlabeled from 0.9.2),
+  ask agents to establish label provenance, and require own labels or a
+  transport `PASS` before naming an unlabelled policy the winner. Reference detail on audit
   states, best_policy demotion and the array API moved to the module READMEs.
 - Planning notebook: judge-quality tiers match `explain()` (0.85 / 0.65 /
   0.40), the example session is internally consistent, the fitted-model R²

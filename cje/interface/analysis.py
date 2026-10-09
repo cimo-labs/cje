@@ -109,7 +109,9 @@ def analyze_dataset(
                     "prompt_id": row["prompt_id"],
                     "judge_score": float(row["judge_score"]),
                     "oracle_label": (
-                        float(row["human_rating"]) if row["human_rating"] else None
+                        float(row["human_rating"])
+                        if (row["human_rating"] or "").strip()
+                        else None
                     ),
                 })
         results = cje.analyze_dataset(fresh_draws_data=dict(draws))
@@ -137,21 +139,24 @@ def analyze_dataset(
       are accidental duplicates.
     - Borrowed calibration: a policy with no oracle labels of its own is
       estimated through the calibration fit on other labels (other
-      policies', or ``calibration_data_path``). Its CI, and the CI and
-      p-value of every difference involving it, assume that calibration
-      transfers to its responses, which they do not test. Such policies are
-      listed in ``metadata["transport_unverified"]`` until a held-out
-      transport audit PASSes; their comparisons carry
-      ``conditional_on_transport=True``, ``best_policy().decision_ready`` is
-      False when they are the winner or the runner-up, and ``summary()``
-      names each one. Until then, name no winner and no lean between it and
-      another policy, even when the paired CI excludes 0. A raw judge-score
-      gap in its favour is not corroboration: the calibrated estimate is a
-      map of those same scores, and a gap toward the unlabeled policy is the
-      signature of a judge that over-rates it. Label at least 20 random
-      responses of that policy, or audit transport with held-out probes
-      (``transport=``, sized with ``plan_transport_audits``); an audit also
-      needs random oracle labels on that policy's own responses.
+      policies', or ``calibration_data_path``); so is a policy on a
+      plug-in route (``use_augmented_estimator=False`` or
+      ``label_design="targeted_unknown"``) whose own labels do not correct
+      its estimate. Its CI, and the CI and p-value of every difference
+      involving it, assume that calibration transfers to its responses,
+      which they do not test. Such policies are listed in
+      ``metadata["transport_unverified"]`` until a held-out transport audit
+      PASSes; their comparisons carry ``conditional_on_transport=True``,
+      ``best_policy().decision_ready`` is False whenever one is in the
+      ranking, and ``summary()`` names each one. Until then, name no winner
+      and no lean between it and another policy, even when the paired CI
+      excludes 0. A raw judge-score gap in its favour is not corroboration:
+      the calibrated estimate is a map of those same scores, and a judge
+      that over-rates the unlabeled policy would produce the same gap.
+      Label at least 20 random responses of that policy, or audit transport
+      with held-out probes (``transport=``, sized with
+      ``plan_transport_audits``); an audit also needs random oracle labels
+      on that policy's own responses.
     - Compare policies with the paired test (``compare_policies("a", "b")``
       or ``compare_all_policies()``), never by eyeballing per-policy CIs.
 
@@ -978,10 +983,12 @@ def _record_borrowed_calibration(
     """Make borrowed calibration explicit in metadata, status, and the log.
 
     A policy with no oracle labels of its own is estimated through a
-    calibration fit on other labels. Its interval and every paired
-    difference involving it assume that calibration transfers to its
-    responses; nothing in the CI or p-value covers that. Until a held-out
-    transport audit PASSes, such a policy is listed in
+    calibration fit on other labels; so is a policy on a plug-in route that
+    does not correct with its own labels (``EstimationResult.
+    _relies_on_transport``). Its interval and every paired difference
+    involving it assume that calibration transfers to its responses;
+    nothing in the CI or p-value covers that. Until a held-out transport
+    audit PASSes, such a policy is listed in
     ``metadata["transport_unverified"]``, its diagnostics status is at least
     WARNING, and one WARNING names it and the labels it borrows. Estimates,
     intervals, gates and ``significant`` are unchanged.
@@ -1004,23 +1011,22 @@ def _record_borrowed_calibration(
         if _CALIBRATION_DATA_SOURCE in found:
             sources.insert(0, _CALIBRATION_DATA_SOURCE)
 
-    audits = results.metadata.get("transport_audits") or {}
-    unverified = (
-        sorted(
-            policy
-            for policy in target_policies
-            if own_oracle_labels_by_policy.get(policy, 0) == 0
-            and str((audits.get(policy) or {}).get("status", "NOT_CHECKED")) != "PASS"
-        )
-        if calibration_dataset is not None and results.calibrator is not None
-        else []
-    )
-
     results.metadata["own_oracle_labels_by_policy"] = {
         policy: int(own_oracle_labels_by_policy.get(policy, 0))
         for policy in target_policies
     }
     results.metadata["calibration_label_sources"] = sources
+    audits = results.metadata.get("transport_audits") or {}
+    unverified = (
+        sorted(
+            policy
+            for policy in target_policies
+            if results._relies_on_transport(policy)
+            and str((audits.get(policy) or {}).get("status", "NOT_CHECKED")) != "PASS"
+        )
+        if calibration_dataset is not None and results.calibrator is not None
+        else []
+    )
     results.metadata["transport_unverified"] = unverified
     if not unverified:
         return
@@ -1036,34 +1042,37 @@ def _record_borrowed_calibration(
 
     from ..data.models import _join_names
 
-    names = _join_names(unverified)
-    single = len(unverified) == 1
-    statuses_text = "/".join(
-        sorted(
-            {
-                str((audits.get(policy) or {}).get("status", "NOT_CHECKED"))
-                for policy in unverified
-            }
+    borrowed = [p for p in unverified if results._own_label_count(p) == 0]
+    uncorrected = [p for p in unverified if p not in borrowed]
+    parts: List[str] = []
+    if borrowed:
+        single = len(borrowed) == 1
+        parts.append(
+            f"{_join_names(borrowed)} {'has' if single else 'have'} no oracle "
+            f"labels of {'its' if single else 'their'} own"
         )
-    )
+    if uncorrected:
+        routes = sorted({results._point_route(p) or "unknown" for p in uncorrected})
+        parts.append(
+            f"{_join_names(uncorrected)} {'is' if len(uncorrected) == 1 else 'are'} "
+            f"estimated on a route that does not correct with own labels "
+            f"({'/'.join(routes)})"
+        )
+    single = len(unverified) == 1
+    statuses_text = "/".join(sorted({results._transport_status(p) for p in unverified}))
     logger.warning(
-        "Borrowed calibration: %s %s no oracle labels of %s own, so %s %s %s "
-        "(transport %s). %s CI, and the CI and p-value of every difference "
-        "involving %s, assume that calibration transfers to %s responses and "
-        "do not cover the risk that it does not. Before choosing between "
-        "variants, label >=20 random responses of %s, or audit transport on "
-        "a held-out random sample of them (size it with plan_transport_audits).",
-        names,
-        "has" if single else "have",
-        "its" if single else "their",
+        "Borrowed calibration: %s, so %s %s %s (transport %s). %s CI, and the CI "
+        "and p-value of every difference involving %s, assume that calibration "
+        "transfers and do not cover the risk that it does not. Before choosing "
+        "between variants: %s",
+        "; ".join(parts),
         "its estimate" if single else "their estimates",
         "uses" if single else "use",
         results._calibration_source_phrase(),
         statuses_text,
         "Its" if single else "Their",
         "it" if single else "them",
-        "its" if single else "their",
-        names,
+        results._transport_actions(unverified),
     )
 
 
@@ -1107,7 +1116,12 @@ def _warn_data_quality(
     repeated: Dict[str, Dict[str, int]] = {}
     for policy, records in raw_fresh_draws.items():
         counts: Dict[str, int] = {}
-        for record in records or []:
+        # No truth test: records may be a numpy array or pandas Series.
+        try:
+            iterable = iter(records if records is not None else ())
+        except TypeError:
+            continue
+        for record in iterable:
             if not isinstance(record, dict):
                 continue
             try:
@@ -1296,8 +1310,11 @@ def _attach_transport_audits(
 
             if canonical.get("oracle_label") is None:
                 raise ValueError(
-                    f"Transport probe {index} for policy {policy!r} is "
-                    f"missing oracle field {oracle_field!r}."
+                    f"Transport probe {index} for policy {policy!r} has no "
+                    f"label in oracle field {oracle_field!r} (missing, None or "
+                    "NaN). Every probe needs a real label: unlike evaluation "
+                    "rows, where a missing or NaN label means unlabeled, an "
+                    "unlabeled probe cannot audit anything."
                 )
             source_row = (
                 str(canonical["source_id"]),

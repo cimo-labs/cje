@@ -24,7 +24,7 @@ You get each policy's mean on the label scale and the paired differences between
 Paste this into your coding agent, filling in the brackets:
 
 ```text
-Install cje-eval in a Python 3.10-3.13 environment: pip install "cje-eval>=0.9" pandas
+Install cje-eval in a Python 3.10-3.13 environment: pip install -U "cje-eval>=0.9.2" pandas
 (on Python 3.9 a bare `pip install cje-eval` silently installs the legacy 0.5 line).
 Run `cje skill` and follow it; when it points to reference.md, run `cje skill --reference`.
 If `cje` is unavailable, curl the raw files from
@@ -59,7 +59,7 @@ with open("evals.csv") as f:  # prompt_id, variant, judge_score, human_rating (b
         draws[row["variant"]].append({
             "prompt_id": row["prompt_id"],
             "judge_score": float(row["judge_score"]),
-            "oracle_label": float(row["human_rating"]) if row["human_rating"].strip() else None,
+            "oracle_label": float(row["human_rating"]) if (row["human_rating"] or "").strip() else None,
         })
 results = analyze_dataset(fresh_draws_data=dict(draws))
 print(results.summary())
@@ -74,7 +74,7 @@ Each estimate targets the policy's mean label over the population your prompts w
 ## 60 seconds
 
 ```bash
-pip install "cje-eval>=0.9"   # Python 3.10–3.13
+pip install -U "cje-eval>=0.9.2"   # Python 3.10–3.13
 ```
 
 Each record is one judged response, `{"prompt_id", "judge_score", "oracle_label" (optional)}`; the API calls these records *fresh draws*.
@@ -115,7 +115,7 @@ print(results.summary())
 CJE Estimation Results (method: calibrated_direct)
   candidate   0.824  95% CI [0.766, 0.882]  [borrowed calibration]
   production  0.786  95% CI [0.696, 0.876]
-candidate: no labels of its own; its estimate and every difference involving it assume production's calibration transfers, which the CI and p-value do not cover (the true difference can have either sign). Label >=20 random candidate responses, or audit transport on a held-out random sample of them (size it with plan_transport_audits).
+candidate: no labels of its own; its estimate and every difference involving it assume production's calibration transfers, which the CI and p-value do not cover (the true difference can have either sign). Label >=20 random responses of candidate, or audit transport on a held-out random sample of them (size it with plan_transport_audits).
 Best by point estimate: candidate (point estimate, not a test)
 Limitations: borrowed calibration (residual transport NOT_CHECKED)
 Paired differences (p unadjusted):
@@ -151,7 +151,7 @@ Every estimate ships with its limitations attached: a `REFUSE-LEVEL` badge when 
 ## Evidence
 
 - **HealthBench Consensus (29,511 response–criterion records, physician grades).** In a custom confidence-augmented regrade, judges were overconfident by 24.5 (gpt-4o-mini) and 13.0 (Claude Haiku 4.5) percentage points against strict positive physician majority. In one seeded retrospective replay that exposed 5% of the aggregate labels, calibrated estimates were within 1.4–2.1 points of the full aggregate endpoint; this was not prospective annotation or repeated-split validation. [Audit →](https://cimolabs.com/research/healthbench-judge-audit)
-- **Chatbot Arena (4,961 prompts, 5 policies; GPT-5 ratings stand in for human labels, so this is a model-reference study, not human validation).** With 5% of responses labeled, policy pairs were ranked correctly 99% of the time in the headline configuration (92% averaged across configurations at the `analyze_dataset` default, 94% with a response-length covariate). The arXiv v3 cost model puts this at 14× fewer labels than labeling everything, assuming the base policy's calibration transfers to the others; it does not for the deliberately unhelpful policy, which the transport audit flags. Nominal 95% intervals on raw judge means covered the reference mean 0% of the time; CJE's default intervals covered about 95% (93.9% Direct, 95.6% with the covariate, across 25 sample-size and label-fraction settings × 50 seeds) in a [corrected rerun](https://github.com/cimo-labs/cje-arena-experiments/blob/main/erratum_rerun/DELTAS.md). [Paper →](https://arxiv.org/abs/2512.11150)
+- **Chatbot Arena (4,961 prompts, 5 policies; GPT-5 ratings stand in for human labels, so this is a model-reference study, not human validation).** With 5% of the base policy's responses labeled, policy pairs were ranked correctly 99% of the time in the headline configuration (92% averaged across configurations at the `analyze_dataset` default, 94% with a response-length covariate). The arXiv v3 cost model puts this at 14× lower total cost (oracle labels plus judge calls) than labeling every response: 8.8× for one policy, 14× when one calibration is reused for all five, assuming it transfers to the others; it does not for the deliberately unhelpful policy, which the transport audit flags. Nominal 95% intervals on raw judge means covered the reference mean 0% of the time; CJE's default intervals covered about 95% (93.9% Direct, 95.6% with the covariate, across 25 sample-size and label-fraction settings × 50 seeds) in a [corrected rerun](https://github.com/cimo-labs/cje-arena-experiments/blob/main/erratum_rerun/DELTAS.md). [Paper →](https://arxiv.org/abs/2512.11150)
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/cimo-labs/cje/main/images/forest_plot_n1000_oracle25.png" alt="Forest plot of calibrated estimates with 95% CIs for four Chatbot Arena policies (base, clone, parallel_universe_prompt, unhelpful) next to mean labels on held-out responses; the unhelpful policy's estimate sits far above its held-out mean and its transport audit fails" width="80%">

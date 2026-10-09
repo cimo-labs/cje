@@ -342,16 +342,10 @@ def best_policy_lines(results: "EstimationResult") -> list:
         )
     if metadata and metadata.get("calibration_status") == "UNCALIBRATED":
         limitations.append("UNCALIBRATED raw judge-score mean")
-    # As in summary(): NOT_CHECKED matters only for a policy that borrows
-    # its calibration; an observed audit result (FAIL / INCONCLUSIVE) is
-    # always shown.
-    transport_status = results._transport_status(display)
-    if display in results._transport_unverified():
-        limitations.append(
-            f"borrowed calibration (residual transport {transport_status})"
-        )
-    elif transport_status not in ("PASS", "NOT_CHECKED"):
-        limitations.append(f"residual transport {transport_status}")
+    # The same transport caveat summary() prints.
+    transport = results._transport_limitation(display)
+    if transport:
+        limitations.append(transport)
 
     lines = [f"Best by point estimate: {display} (point estimate, not a test)"]
     if limitations:
@@ -595,7 +589,6 @@ def run_analysis(args: argparse.Namespace) -> int:
             # Display estimates
             target_policies = results.metadata.get("target_policies", [])
             ci_lower, ci_upper = results.confidence_interval(alpha=0.05)
-            unverified = set(results._transport_unverified())
             for i, policy in enumerate(target_policies):
                 estimate = results.estimates[i]
                 se = results.standard_errors[i]
@@ -603,9 +596,10 @@ def run_analysis(args: argparse.Namespace) -> int:
                     f"  {policy}: {estimate:.3f} "
                     f"(SE {se:.3f}, 95% CI [{ci_lower[i]:.3f}, {ci_upper[i]:.3f}])"
                 )
+                transport = results._transport_limitation(policy)
                 status = results._transport_status(policy)
-                if policy in unverified:
-                    print(f"    borrowed calibration (residual transport {status})")
+                if transport and transport != f"residual transport {status}":
+                    print(f"    {transport}")
                 elif status != "NOT_CHECKED":
                     print(f"    residual transport: {status}")
 

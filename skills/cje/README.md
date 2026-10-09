@@ -14,7 +14,7 @@ Python 3.9 a bare `pip install cje-eval` silently installs the legacy 0.5 line, 
 version floor:
 
 ```bash
-pip install "cje-eval>=0.9"
+pip install -U "cje-eval>=0.9.2"
 cje skill               # prints SKILL.md
 cje skill --reference   # prints reference.md
 cje skill --path        # prints the folder holding both
@@ -36,7 +36,7 @@ mkdir -p .claude/skills
 cp -r skills/cje .claude/skills/
 ```
 
-**Any other agent**: no install needed. Paste this into the conversation, filling in the brackets:
+**Any other agent**: install the package as above (or let the agent do it), then paste this into the conversation, filling in the brackets:
 
 ```text
 Run `cje skill` and follow it; when it points to reference.md, run `cje skill --reference`.

@@ -43,7 +43,7 @@ with open("evals.csv") as f:  # prompt_id, variant, judge_score, human_rating (b
         draws[row["variant"]].append({
             "prompt_id": row["prompt_id"],
             "judge_score": float(row["judge_score"]),
-            "oracle_label": float(row["human_rating"]) if row["human_rating"] else None,
+            "oracle_label": float(row["human_rating"]) if (row["human_rating"] or "").strip() else None,
         })
 results = analyze_dataset(fresh_draws_data=dict(draws))
 print(results.summary())
@@ -154,9 +154,9 @@ Results:
   unhelpful: 0.512 (SE 0.237, 95% CI [-0.146, 1.170])
     borrowed calibration (residual transport NOT_CHECKED)
 
-clone: no labels of its own; its estimate and every difference involving it assume base's calibration transfers, which the CI and p-value do not cover (the true difference can have either sign). Label >=20 random clone responses, or audit transport on a held-out random sample of them (size it with plan_transport_audits).
-parallel_universe_prompt: no labels of its own; its estimate and every difference involving it assume base's calibration transfers, which the CI and p-value do not cover (the true difference can have either sign). Label >=20 random parallel_universe_prompt responses, or audit transport on a held-out random sample of them (size it with plan_transport_audits).
-unhelpful: no labels of its own; its estimate and every difference involving it assume base's calibration transfers, which the CI and p-value do not cover (the true difference can have either sign). Label >=20 random unhelpful responses, or audit transport on a held-out random sample of them (size it with plan_transport_audits).
+clone: no labels of its own; its estimate and every difference involving it assume base's calibration transfers, which the CI and p-value do not cover (the true difference can have either sign). Label >=20 random responses of clone, or audit transport on a held-out random sample of them (size it with plan_transport_audits).
+parallel_universe_prompt: no labels of its own; its estimate and every difference involving it assume base's calibration transfers, which the CI and p-value do not cover (the true difference can have either sign). Label >=20 random responses of parallel_universe_prompt, or audit transport on a held-out random sample of them (size it with plan_transport_audits).
+unhelpful: no labels of its own; its estimate and every difference involving it assume base's calibration transfers, which the CI and p-value do not cover (the true difference can have either sign). Label >=20 random responses of unhelpful, or audit transport on a held-out random sample of them (size it with plan_transport_audits).
 
 Best by point estimate: parallel_universe_prompt (point estimate, not a test)
 Limitations: borrowed calibration (residual transport NOT_CHECKED)
@@ -172,7 +172,7 @@ Paired differences (p unadjusted):
 No reliable winner: every paired CI includes 0 (not evidence that they are equal)
 ```
 
-The announcement is **reliability-aware**: the highest point estimate remains visible, and unresolved or failed checks are listed as limitations. It ranks point estimates and is not a test: the paired block below it decides (here every paired CI includes 0), and each policy with no labels of its own is marked `borrowed calibration` and gets a line, before the ranking, saying its estimate assumes `base`'s unaudited calibration transfers. `analyze_dataset` logs the same caveat as a WARNING on stderr. `results.best_policy()` defaults to `reliable_only=True` (the safety default): a gate-flagged argmax is demoted to the best gate-passing policy, loudly — the flagged raw winner travels as `runner_up` with `runner_up_reasons`, a warning is logged, and `summary()` prints both. Pass `reliable_only=False` for the raw argmax with its `flagged` marker. When the argmax is flagged, `summary()` shows the demotion:
+The announcement is **reliability-aware**: the highest point estimate remains visible, and unresolved or failed checks are listed as limitations. It ranks point estimates and is not a test: the paired block below it decides (here every paired CI includes 0), and each policy with no labels of its own is marked `borrowed calibration` and gets a line, before the ranking, saying its estimate assumes `base`'s calibration transfers, with no transport audit to check it. `analyze_dataset` logs the same caveat as a WARNING on stderr. `results.best_policy()` defaults to `reliable_only=True` (the safety default): a gate-flagged argmax is demoted to the best gate-passing policy, loudly — the flagged raw winner travels as `runner_up` with `runner_up_reasons`, a warning is logged, and `summary()` prints both. Pass `reliable_only=False` for the raw argmax with its `flagged` marker. When the argmax is flagged, `summary()` shows the demotion:
 
 ```text
 Best by point estimate: candidate (point estimate, not a test)
@@ -249,8 +249,8 @@ Provide `fresh_draws_dir` **or** `fresh_draws_data`.
 - `.estimates` / `.standard_errors`: numpy arrays (order = `metadata["target_policies"]`)
 - `.ci()` / `.confidence_interval()`: t-based calibration-aware jackknife CIs by default on supported calibrated routes; complete-oracle routes need no calibration jackknife, and bootstrap inference uses percentile intervals (`.ci_info` records which)
 - `.compare_policies(a, b)`: paired policy comparison; `a`, `b` are policy names or integer indices into `target_policies` (sorted by name, not input order), and `difference` = a − b. The dict names the pair (`policy1`/`policy2`) and carries `gate_flagged`, `transport_unverified` and `conditional_on_transport` (True when a policy in the pair has no labels of its own and no `PASS` transport audit: the CI and p-value then assume the borrowed calibration transfers; `significant` still means only `p_value < alpha`). `.compare_all_policies(adjust=None)` returns every pair; `adjust="bh"` adds Benjamini-Hochberg `p_adjusted`/`significant_adjusted`
-- `.summary()`: compact text report: per-policy estimate + 95% CI + gate flags, the best-policy line (a point-estimate ranking, not a test), every paired difference with its 95% CI and unadjusted p-value, "No reliable winner: every paired CI includes 0" when that holds, and one line per policy that borrows an unaudited calibration
-- `.best_policy()`: `PolicyVerdict`; with the default `reliable_only=True` a gate-flagged argmax is demoted to the best gate-passing policy (the demoted argmax travels as `runner_up` with `runner_up_reasons`, plus a logged warning); `reliable_only=False` returns the raw argmax with `flagged` attached. `decision_ready` is False when the verdict or the policy it is ranked against borrows an unaudited calibration, the verdict failed the gates, or their paired 95% CI includes 0, and `decision_note` says why; with three or more policies, check every pair with `compare_all_policies`
+- `.summary()`: compact text report: per-policy estimate + 95% CI + gate flags, the best-policy line (a point-estimate ranking, not a test), the paired differences with 95% CI and unadjusted p-value (with more than 10 pairs, only those with the best point estimate), "No reliable winner" or "No decision-ready winner" when that holds, and one line per policy whose calibration transfer is unverified
+- `.best_policy()`: `PolicyVerdict`; with the default `reliable_only=True` a gate-flagged argmax is demoted to the best gate-passing policy (the demoted argmax travels as `runner_up` with `runner_up_reasons`, plus a logged warning); `reliable_only=False` returns the raw argmax with `flagged` attached. `decision_ready` is True only when the verdict beats every other usable policy in the paired comparison, with no transport-unverified or gate-flagged policy in the comparison and no gate demotion, and `decision_note` says why; a demotion is never a decision
 - `.gates`: `Dict[str, GateResult]` — typed view of `metadata["reliability_gates"]`
 - `.diagnostics`: `DirectDiagnostics` (statuses, boundary cards, calibration quality, per-policy transport states)
 - `.calibrator`: fitted calibrator when calibration is required; complete oracle coverage may return `None`

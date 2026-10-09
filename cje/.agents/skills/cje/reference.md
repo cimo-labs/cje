@@ -42,7 +42,7 @@ with open("evals.csv") as f:  # prompt_id, variant, judge_score, human_rating (b
         draws[row["variant"]].append({
             "prompt_id": row["prompt_id"],
             "judge_score": float(row["judge_score"]),
-            "oracle_label": float(row["human_rating"]) if row["human_rating"] else None,
+            "oracle_label": float(row["human_rating"]) if (row["human_rating"] or "").strip() else None,
         })
 results = analyze_dataset(fresh_draws_data=dict(draws))
 ```
@@ -162,18 +162,24 @@ fallback), never by this parameter; its only observable effect is which name lan
   two policies it simply returns the unflagged one). When labels come from one baseline policy,
   a better candidate whose judge scores exceed the labeled range is exactly what triggers the
   flag; clear it, then use `compare_all_policies()`. From 0.9.2 the verdict also carries
-  `decision_ready` (False when the winner, or the runner-up it is compared with, is
-  transport-unverified, when the winner failed the gates, or when their paired 95% CI includes
-  0) and `decision_note` (why, and what to do)
+  `decision_ready` and `decision_note` (why, and what to do). `decision_ready` is True only when
+  the winner beats every other usable policy in the paired comparison (each 95% CI above 0), no
+  policy in the comparison is transport-unverified or gate-flagged, the winner was not reached by
+  demoting a flagged leader, and each difference clears any PASS audit's `delta_max` it relies
+  on; results saved before 0.9.2 are never decision-ready
 - `.calibrator` → fitted calibrator when calibration is required; complete oracle coverage may return `None`
 - `.metadata["transport_audits"]` → per-policy PASS / FAIL / INCONCLUSIVE / NOT_GRADED / NOT_CHECKED records when using `TransportAuditConfig`; FAIL adds a hard result gate only when the current estimate depends on that calibrator
 - `.summary()` → compact text report (per-policy estimate + 95% CI + gate flags, best-policy line).
   From 0.9.2, with two or more policies, it adds each pair as `a - b: +0.038  95% CI [-0.027,
   +0.102]  p=0.22` (unadjusted; a BH note with three or more policies), "No reliable winner:
   every paired CI includes 0" when true, labels the best-policy line "(point estimate, not a
-  test)", and prints one named line per transport-unverified policy (status at least WARNING).
-  A pair involving a gate-flagged policy ends `[gate-flagged: <policy>]`. `cje analyze` prints
-  the same paired block and named lines
+  test)", and prints one named line per transport-unverified policy (status at least WARNING),
+  marking it `[borrowed calibration]` (no own labels) or `[uncorrected calibration]` (a plug-in
+  route that does not correct with its own labels). A pair involving a gate-flagged or
+  transport-unverified policy ends `[gate-flagged: <policy>]` / `[borrowed calibration:
+  <policy>]`, and "No decision-ready winner" is printed when every pair whose CI excludes 0
+  involves a transport-unverified policy. With more than 10 pairs only those with the best point
+  estimate are printed (`compare_all_policies()` lists all). `cje analyze` prints the same lines
 - `.gates` → `Dict[str, GateResult]` (typed view of `metadata["reliability_gates"]`); `.target_policies`
 - `.metadata` keys: `target_policies`, `reliability_gates` (`{policy: {"flagged": bool, ...}}`),
   `boundary_cards`, `normalization`, `oracle_sources`, `bootstrap_ci`, `pairwise_inference`
@@ -466,8 +472,10 @@ because exported state is missing.
 ## CLI
 
 ```text
+cje --version                               # installed cje-eval version (0.9.2+)
+cje skill [--reference | --path]            # print the bundled SKILL.md / reference.md / their folder (0.9.2+)
 cje validate PATH [-v]                      # check a fresh-draws dir/file; exit 0 = ready
-cje analyze PATH [--calibration-data F]     # per-policy estimates + 95% CIs
+cje analyze PATH [--calibration-data F]     # estimates, 95% CIs and the summary() caveat and paired lines
             [--estimator-config JSON] [-o results.json]
             [--judge-field NAME] [--oracle-field NAME]
             [--transport-probe POLICY=FILE] [--transport-margin POLICY=DELTA]
@@ -513,4 +521,4 @@ randomly sampled, so exit 0 does not mean the design is sound.
 | `UserWarning: ... audits without delta_max are NOT_GRADED` | Declare a practical margin (`delta_max=`); no-margin audits can never PASS or FAIL. |
 | `results.calibrator is None` | Complete oracle coverage: the estimate is the direct oracle mean; no calibrator was fit. Check for `None` before a transport audit. |
 | `ImportError`/`ValueError` naming a replacement (e.g. `BaseCJEEstimator`, `calibrate_from_raw_data`) | Consolidated API: the error message names the current entry point; use it. |
-| Python version / `cje.__version__` starts with 0.5 | CJE requires Python 3.10–3.13. On Python 3.9 a bare `pip install cje-eval` silently installs the legacy 0.5 line; install `"cje-eval>=0.9"` on 3.10–3.13 so pip fails loudly instead. |
+| Python version / `cje.__version__` starts with 0.5 | CJE requires Python 3.10–3.13. On Python 3.9 a bare `pip install cje-eval` silently installs the legacy 0.5 line; install `"cje-eval>=0.9.2"` on 3.10–3.13 so pip fails loudly instead. |

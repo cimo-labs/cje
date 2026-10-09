@@ -1,15 +1,16 @@
-"""0.9.2 onboarding: package output and API (spec section A, plus B4).
+"""0.9.2 onboarding: package output and API.
 
 Pins the behaviours a reader meets in printed output and docstrings:
 
-- A1 borrowed calibration made explicit (metadata, summary line, status,
+- borrowed calibration made explicit (metadata, summary line, status,
   comparison and best_policy flags, one analyze_dataset WARNING);
-- A2 summary()'s paired-difference block (the README quickstart numbers);
-- A3 compare_policies by name;
-- A4 a float NaN oracle_label in records is unlabeled (one INFO log);
-- A5 metadata["cje_version"];
-- A6 the three data-quality warnings;
-- A7 REFUSE-LEVEL warning text in the judge's own units.
+- summary()'s paired-difference block (the README quickstart numbers);
+- compare_policies by name;
+- a float NaN oracle_label in records is unlabeled (one INFO log);
+- metadata["cje_version"];
+- the three data-quality warnings;
+- REFUSE-LEVEL warning text in the judge's own units;
+- the analyze_dataset docstring carries the agent rules.
 """
 
 import json
@@ -47,22 +48,33 @@ QUICKSTART_LABELS: List[Optional[float]] = [
 ]  # fmt: skip
 
 # The exact README quickstart summary() text the docs must reproduce.
-QUICKSTART_SUMMARY = """\
-CJE Estimation Results (method: calibrated_direct)
-  candidate   0.824  95% CI [0.766, 0.882]  [borrowed calibration]
-  production  0.786  95% CI [0.696, 0.876]
-candidate: no labels of its own; its estimate and every difference involving \
-it assume production's calibration transfers, which the CI and p-value do not \
-cover (the true difference can have either sign). Label >=20 random candidate \
-responses, or audit transport on a held-out random sample of them (size it \
-with plan_transport_audits).
-Best by point estimate: candidate (point estimate, not a test)
-Limitations: borrowed calibration (residual transport NOT_CHECKED)
-Paired differences (p unadjusted):
-  candidate - production: +0.038  95% CI [-0.027, +0.102]  p=0.22  \
-[borrowed calibration: candidate]
-No reliable winner: every paired CI includes 0 (not evidence that they are equal)
-Status: warning"""
+QUICKSTART_SUMMARY = "\n".join(
+    [
+        "CJE Estimation Results (method: calibrated_direct)",
+        ("  candidate   0.824  95% CI [0.766, 0.882]  [borrowed calibratio" "n]"),
+        "  production  0.786  95% CI [0.696, 0.876]",
+        (
+            "candidate: no labels of its own; its estimate and every differen"
+            "ce involving it assume production's calibration transfers, which"
+            " the CI and p-value do not cover (the true difference can have e"
+            "ither sign). Label >=20 random responses of candidate, or audit "
+            "transport on a held-out random sample of them (size it with plan"
+            "_transport_audits)."
+        ),
+        "Best by point estimate: candidate (point estimate, not a test)",
+        ("Limitations: borrowed calibration (residual transport NOT_CHECKE" "D)"),
+        "Paired differences (p unadjusted):",
+        (
+            "  candidate - production: +0.038  95% CI [-0.027, +0.102]  p=0.2"
+            "2  [borrowed calibration: candidate]"
+        ),
+        (
+            "No reliable winner: every paired CI includes 0 (not evidence tha"
+            "t they are equal)"
+        ),
+        "Status: warning",
+    ]
+)
 
 NO_RELIABLE_WINNER = (
     "No reliable winner: every paired CI includes 0 "
@@ -70,11 +82,12 @@ NO_RELIABLE_WINNER = (
 )
 
 BORROWED_LINE = (
-    "candidate: no labels of its own; its estimate and every difference "
-    "involving it assume production's calibration transfers, which the CI "
-    "and p-value do not cover (the true difference can have either sign). "
-    "Label >=20 random candidate responses, or audit transport on a held-out "
-    "random sample of them (size it with plan_transport_audits)."
+    "candidate: no labels of its own; its estimate and every differen"
+    "ce involving it assume production's calibration transfers, which"
+    " the CI and p-value do not cover (the true difference can have e"
+    "ither sign). Label >=20 random responses of candidate, or audit "
+    "transport on a held-out random sample of them (size it with plan"
+    "_transport_audits)."
 )
 
 COLLISION_TEXT = "differ only in case"
@@ -127,7 +140,7 @@ def both_result() -> EstimationResult:
 
 
 # ---------------------------------------------------------------------------
-# A1: borrowed calibration made explicit
+# borrowed calibration made explicit
 # ---------------------------------------------------------------------------
 
 
@@ -224,7 +237,7 @@ class TestBorrowedCalibration:
         # decision.
         assert comparison["ci_lower"] < 0 < comparison["ci_upper"]
         assert verdict.decision_ready is False
-        assert "not established" in verdict.decision_note
+        assert "is not shown to beat production" in verdict.decision_note
         assert "not evidence the two are equal" in verdict.decision_note
         assert "no labels of its own" not in verdict.decision_note
         with caplog.at_level(logging.WARNING, logger="cje"):
@@ -316,7 +329,7 @@ class TestBorrowedCalibration:
 
 
 # ---------------------------------------------------------------------------
-# A2: summary()'s paired-comparison block
+# summary()'s paired-comparison block
 # ---------------------------------------------------------------------------
 
 
@@ -414,7 +427,7 @@ class TestSummaryPairedBlock:
 
 
 # ---------------------------------------------------------------------------
-# A3: compare_policies by name
+# compare_policies by name
 # ---------------------------------------------------------------------------
 
 
@@ -480,11 +493,12 @@ class TestCompareByName:
         )
         comparison = result.compare_policies(0, 1)
         assert (comparison["policy1"], comparison["policy2"]) == ("0", "1")
-        assert comparison["conditional_on_transport"] is False
+        # No label provenance recorded: reliance on transport is unknown.
+        assert comparison["conditional_on_transport"] is None
 
 
 # ---------------------------------------------------------------------------
-# A4: NaN oracle labels in records are unlabeled
+# NaN oracle labels in records are unlabeled
 # ---------------------------------------------------------------------------
 
 
@@ -573,7 +587,7 @@ class TestNaNLabels:
     def test_transport_probe_nan_label_is_missing_not_a_value(self) -> None:
         draws = _quickstart_draws()
         probe = [{"prompt_id": "x0", "judge_score": 0.8, "oracle_label": math.nan}]
-        with pytest.raises(ValueError, match="missing oracle field"):
+        with pytest.raises(ValueError, match="has no label in oracle field"):
             analyze_dataset(
                 fresh_draws_data=draws,
                 transport=TransportAuditConfig(probes_by_policy={"candidate": probe}),
@@ -581,7 +595,7 @@ class TestNaNLabels:
 
 
 # ---------------------------------------------------------------------------
-# A5: version in metadata
+# version in metadata
 # ---------------------------------------------------------------------------
 
 
@@ -592,7 +606,7 @@ def test_metadata_records_the_cje_version(s2_result: EstimationResult) -> None:
 
 
 # ---------------------------------------------------------------------------
-# A6: data-quality warnings (no behaviour change)
+# data-quality warnings (no behaviour change)
 # ---------------------------------------------------------------------------
 
 
@@ -668,7 +682,7 @@ class TestDataQualityWarnings:
 
 
 # ---------------------------------------------------------------------------
-# A7: REFUSE-LEVEL in the judge's own units
+# REFUSE-LEVEL in the judge's own units
 # ---------------------------------------------------------------------------
 
 
@@ -725,7 +739,7 @@ def test_judge_unit_context_is_scoped() -> None:
 
 
 # ---------------------------------------------------------------------------
-# B4: the analyze_dataset docstring carries the rules
+# the analyze_dataset docstring carries the rules
 # ---------------------------------------------------------------------------
 
 
@@ -855,9 +869,8 @@ class TestBorrowedCalibrationOutput:
         assert pair.endswith("p<0.001  [borrowed calibration: candidate]")
         assert (
             "No decision-ready winner: every paired CI that excludes 0 involves "
-            "candidate, whose calibration is borrowed and unaudited. Name no "
-            "winner and no lean until candidate has labels of its own or a PASS "
-            "transport audit."
+            "candidate, whose calibration transfer is unverified (see its line "
+            "above). Name no winner and no lean until that changes."
         ) in lines
         assert not any(line.startswith("No reliable winner") for line in lines)
 
@@ -882,7 +895,7 @@ class TestBorrowedCalibrationOutput:
     def test_decision_note_forbids_a_lean(self) -> None:
         verdict = _summary_result([0.70, 0.50], ["candidate"]).best_policy()
         assert verdict.decision_ready is False
-        assert "Name no winner and no lean until it has labels" in (
+        assert "Name no winner and no lean until that changes" in (
             verdict.decision_note or ""
         )
 
@@ -914,3 +927,188 @@ def test_analyze_dataset_docstring_points_agents_to_the_skill() -> None:
     )
     assert "name no winner and no lean" in doc
     assert "is not corroboration" in doc
+
+
+# ---------------------------------------------------------------------------
+# Pre-release review: decision_ready is a tested claim, never a demotion
+# ---------------------------------------------------------------------------
+
+
+def _verdict_result(
+    estimates: List[float],
+    names: List[str],
+    *,
+    unverified: Optional[List[str]] = None,
+    own: Optional[Dict[str, int]] = None,
+    flagged: Optional[List[str]] = None,
+    audits: Optional[Dict[str, Dict[str, Any]]] = None,
+    se: float = 0.01,
+    provenance: bool = True,
+) -> EstimationResult:
+    metadata: Dict[str, Any] = {
+        "target_policies": names,
+        "reliability_gates": {
+            name: {
+                "flagged": name in (flagged or []),
+                "refused": False,
+                "reasons": ["test flag"] if name in (flagged or []) else [],
+            }
+            for name in names
+        },
+    }
+    if provenance:
+        metadata["transport_unverified"] = list(unverified or [])
+        metadata["own_oracle_labels_by_policy"] = own or {n: 50 for n in names}
+    if audits:
+        metadata["transport_audits"] = audits
+    return EstimationResult(
+        estimates=np.array(estimates, dtype=float),
+        standard_errors=np.full(len(estimates), se),
+        n_samples_used={name: 100 for name in names},
+        method="calibrated_direct",
+        influence_functions=None,
+        diagnostics=None,
+        metadata=metadata,
+    )
+
+
+class TestDecisionReadiness:
+    def test_a_demotion_is_never_decision_ready(self) -> None:
+        # The flagged leader is clearly better; the demoted verdict must not
+        # be certified as beating it.
+        result = _verdict_result([0.70, 0.50], ["good", "worse"], flagged=["good"])
+        verdict = result.best_policy()
+        assert verdict.name == "worse" and verdict.runner_up == "good"
+        assert verdict.decision_ready is False
+        assert "point-estimate leader good failed the reliability gates" in (
+            verdict.decision_note
+        )
+        assert "beats" not in verdict.decision_note
+
+    def test_every_other_policy_must_be_beaten(self) -> None:
+        # a clearly beats b, but c is within noise of a.
+        result = _verdict_result([0.70, 0.50, 0.68], ["a", "b", "c"], se=0.02)
+        verdict = result.best_policy()
+        assert verdict.name == "a"
+        assert verdict.decision_ready is False
+        assert "a - c" in verdict.decision_note
+
+    def test_beating_every_other_policy_is_ready(self) -> None:
+        result = _verdict_result([0.80, 0.50, 0.55], ["a", "b", "c"])
+        verdict = result.best_policy()
+        assert verdict.decision_ready is True
+        assert verdict.decision_note.startswith(
+            "a beats every other policy (closest: c, 95% CI ["
+        )
+
+    def test_a_borrowed_third_policy_blocks_the_ranking(self) -> None:
+        result = _verdict_result(
+            [0.80, 0.50, 0.55],
+            ["a", "b", "c"],
+            unverified=["c"],
+            own={"a": 50, "b": 50, "c": 0},
+        )
+        verdict = result.best_policy()
+        assert verdict.decision_ready is False
+        assert "the ranking involves c" in verdict.decision_note
+
+    def test_a_pass_audit_margin_must_be_cleared(self) -> None:
+        audits = {"candidate": {"status": "PASS", "delta_max": 0.06}}
+        own = {"candidate": 0, "production": 50}
+        tight = _verdict_result(
+            [0.55, 0.52], ["candidate", "production"], own=own, audits=audits
+        )
+        verdict = tight.best_policy()
+        assert verdict.decision_ready is False
+        assert "inside the transport margin (0.060)" in verdict.decision_note
+        wide = _verdict_result(
+            [0.70, 0.52], ["candidate", "production"], own=own, audits=audits
+        )
+        assert wide.best_policy().decision_ready is True
+
+    def test_results_without_provenance_are_not_ready(self) -> None:
+        result = _verdict_result([0.80, 0.50], ["a", "b"], provenance=False)
+        verdict = result.best_policy()
+        assert verdict.decision_ready is False
+        assert "saved before cje-eval 0.9.2" in verdict.decision_note
+        assert "Limitations: residual transport NOT_CHECKED" in result.summary()
+        assert result.compare_policies("a", "b")["conditional_on_transport"] is None
+
+    def test_failed_audit_remedy_does_not_invite_a_new_audit(self) -> None:
+        result = _verdict_result(
+            [0.70, 0.50],
+            ["candidate", "production"],
+            unverified=["candidate"],
+            own={"candidate": 0, "production": 50},
+            audits={"candidate": {"status": "FAIL", "delta_max": 0.03}},
+        )
+        note = result.best_policy().decision_note
+        line = result._borrowed_calibration_line("candidate")
+        for text in (note, line):
+            assert "Transport audit FAILED for candidate" in text
+            assert "do not re-audit to escape a FAIL" in text
+            assert "audit transport on a held-out" not in text
+        assert "unaudited" not in result.summary()
+
+
+def test_plug_in_route_with_own_labels_is_uncorrected() -> None:
+    draws = _quickstart_draws()
+    for i, row in enumerate(draws["candidate"]):
+        row["oracle_label"] = QUICKSTART_LABELS[i]
+    result = analyze_dataset(
+        fresh_draws_data=draws,
+        estimator_config={"use_augmented_estimator": False},
+    )
+    assert result.metadata["point_estimator"]["routes"] == ["plug_in", "plug_in"]
+    assert result.metadata["transport_unverified"] == ["candidate", "production"]
+    text = result.summary()
+    assert "[uncorrected calibration]" in text
+    assert "its own labels do not correct its estimate (route plug_in)" in text
+    assert result.best_policy().decision_ready is False
+
+
+def test_more_than_ten_pairs_scope_the_closing_line() -> None:
+    names = [f"p{i}" for i in range(6)]
+    result = _verdict_result(
+        [0.90, 0.50, 0.50, 0.50, 0.50, 0.50],
+        names,
+        unverified=["p0"],
+        own={n: (0 if n == "p0" else 50) for n in names},
+    )
+    lines = result.summary().splitlines()
+    assert "Paired differences with p0 (p unadjusted):" in lines
+    assert any(
+        line.startswith("No decision-ready winner: every paired CI with p0 that")
+        for line in lines
+    )
+
+
+@pytest.mark.parametrize("container", ["ndarray", "series"])
+def test_array_like_record_containers_still_work(container: str) -> None:
+    import pandas as pd
+
+    draws = _quickstart_draws()
+    wrapped = {
+        policy: (
+            np.array(rows, dtype=object) if container == "ndarray" else pd.Series(rows)
+        )
+        for policy, rows in draws.items()
+    }
+    expected = analyze_dataset(fresh_draws_data=draws).estimates
+    np.testing.assert_allclose(
+        # The annotation says lists; array-like containers worked in 0.9.1.
+        analyze_dataset(fresh_draws_data=wrapped).estimates,  # type: ignore[arg-type]
+        expected,
+    )
+
+
+@pytest.mark.parametrize(
+    "p_value,text",
+    [(0.0496, "p=0.0496"), (0.0516, "p=0.052"), (0.031, "p=0.031"), (0.22, "p=0.22")],
+)
+def test_p_values_near_the_threshold_stay_distinguishable(
+    p_value: float, text: str
+) -> None:
+    from cje.data.models import _format_p_value
+
+    assert _format_p_value(p_value) == text
