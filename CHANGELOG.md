@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.5.2] - Unreleased
+## [0.5.2] - 2026-10-08
 
 Legacy-line marker release. The 0.5.x line is the last one that installs on Python
 3.9; current releases (0.9+) need Python 3.10-3.13. Estimates, standard errors, CIs and
