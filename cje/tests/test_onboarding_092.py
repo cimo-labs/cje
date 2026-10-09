@@ -1113,6 +1113,8 @@ def test_array_like_record_containers_still_work(container: str) -> None:
         (0.031, "p=0.031"),
         (0.0995, "p=0.10"),
         (0.22, "p=0.22"),
+        (0.0500004, "p>0.05"),
+        (0.0499996, "p<0.05"),
     ],
 )
 def test_p_values_near_the_threshold_stay_distinguishable(
@@ -1215,3 +1217,59 @@ class TestSecondReviewFixes:
         messages = [r.getMessage() for r in caplog.records]
         assert any(m.startswith("Unverified calibration transfer:") for m in messages)
         assert not any(m.startswith("Borrowed calibration:") for m in messages)
+
+
+class TestFinalCheckFixes:
+    def _mixed(self, route: str, design: str = "representative") -> EstimationResult:
+        result = _verdict_result(
+            [0.70, 0.60, 0.50],
+            ["A", "B", "C"],
+            unverified=["A", "B", "C"],
+            own={"A": 60, "B": 60, "C": 0},
+        )
+        result.metadata["point_estimator"] = {
+            "routes": [route, route, "plug_in"],
+            "label_design": design,
+        }
+        return result
+
+    def test_each_policy_gets_its_own_remedy(self) -> None:
+        text = self._mixed("plug_in")._transport_actions(["A", "B", "C"])
+        assert text.startswith("Label >=20 random responses of C; turn ")
+        assert "corrects the estimate of each of A and B" in text
+        assert "of each of A, B and C" not in text
+
+    def test_targeted_design_on_a_plug_in_route_gets_the_targeted_remedy(
+        self,
+    ) -> None:
+        text = self._mixed("plug_in", "targeted_unknown")._transport_actions(["A"])
+        assert text.startswith("Keep only probability-sampled labels")
+        assert "label_design 'representative'" in text
+
+    def test_own_labelled_augmented_pairs_never_carry_a_margin(self) -> None:
+        # Saved before 0.9.2: no own-label counts, but the routes say augmented.
+        result = _verdict_result(
+            [0.55, 0.52],
+            ["a", "b"],
+            provenance=False,
+            audits={"a": {"status": "PASS", "delta_max": 0.06}},
+        )
+        result.metadata["point_estimator"] = {"routes": ["augmented", "augmented"]}
+        assert "within transport margin" not in result.summary()
+
+    def test_a_single_policy_line_does_not_mention_differences(self) -> None:
+        result = _verdict_result(
+            [0.70], ["candidate"], unverified=["candidate"], own={"candidate": 0}
+        )
+        line = result._borrowed_calibration_line("candidate")
+        assert "which its CI does not cover" in line
+        assert "difference" not in line
+
+    def test_a_policy_named_calibration_data_is_a_policy(self) -> None:
+        result = _verdict_result([0.70, 0.50], ["calibration_data", "other"])
+        result.metadata["calibration_label_sources"] = ["calibration_data"]
+        assert result._calibration_source_phrase() == "calibration_data's calibration"
+        result.metadata["calibration_data_path"] = "cal.jsonl"
+        assert result._calibration_source_phrase() == (
+            "the calibration fit on calibration_data_path"
+        )

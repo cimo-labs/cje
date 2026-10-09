@@ -31,13 +31,17 @@ three decimals.
   `[borrowed calibration]` (or `[uncorrected calibration]` on a plug-in
   route) and, before any ranking, print one named line
   for it saying the true difference can have either sign and what would
-  settle it, by audit status (for `NOT_CHECKED`: label 20 or more of its
-  responses at random, or audit transport on a held-out random sample of
-  them sized with `plan_transport_audits`; after a `FAIL`: label, and do
-  not re-audit to escape it); its paired differences end
-  `[borrowed calibration: <policy>]`, and when every pair whose CI excludes
-  0 involves such a policy, the summary says "No decision-ready winner"
-  instead of leaving a lone significant pair to read as a result. That
+  settle it, by audit status and route (for `NOT_CHECKED`: label 20 or
+  more of its responses at random, turn the augmented route back on for a
+  plug-in policy with random labels, or audit transport on a held-out
+  random sample of its responses sized with `plan_transport_audits`; after
+  a `FAIL`: label, and do not re-audit to escape it); its paired
+  differences end `[borrowed calibration: <policy>]` (or `[uncorrected
+  calibration: ...]` / `[unverified calibration: ...]`), a pair whose CI
+  excludes 0 only inside a PASS audit's `delta_max` ends `[within transport
+  margin <m>]`, and when every printed pair whose CI excludes 0 is one of
+  these, the summary says "No decision-ready winner" instead of leaving a
+  lone significant pair to read as a result. That
   policy's diagnostics status
   (`status_per_policy`, hence `overall_status`) is at least `warning`; no
   policy is demoted for it. `compare_policies` and `compare_all_policies`

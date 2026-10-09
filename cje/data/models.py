@@ -46,12 +46,12 @@ def _format_p_value(p_value: float) -> str:
     if p_value < 0.001:
         return "p<0.001"
     decimals = 2 if p_value >= 0.0995 else 3
-    while decimals < 6:
+    while decimals <= 6:
         shown = float(f"{p_value:.{decimals}f}")
         if (shown < 0.05) == (p_value < 0.05) and (shown != 0.05 or p_value == 0.05):
-            break
+            return f"p={p_value:.{decimals}f}"
         decimals += 1
-    return f"p={p_value:.{decimals}f}"
+    return "p<0.05" if p_value < 0.05 else "p>0.05"
 
 
 def _validate_alpha(alpha: Any) -> float:
@@ -739,10 +739,10 @@ class EstimationResult(BaseModel):
         on transport; a plug-in route does, unless the calibration was fit on
         this policy's labels alone.
         """
-        if self._own_label_count(policy) == 0:
-            return True
         if self._point_route(policy) in ("augmented", "direct_oracle"):
             return False
+        if self._own_label_count(policy) == 0:
+            return True
         raw = self.metadata.get("calibration_label_sources")
         sources = [str(s) for s in raw] if isinstance(raw, (list, tuple)) else []
         return sources != [policy]
@@ -760,8 +760,14 @@ class EstimationResult(BaseModel):
             own = self.metadata.get("own_oracle_labels_by_policy")
             if isinstance(own, dict):
                 sources = sorted(str(p) for p, n in own.items() if n)
-        external = _CALIBRATION_DATA_SOURCE in sources
-        policies = [s for s in sources if s != _CALIBRATION_DATA_SOURCE]
+        # A policy literally named "calibration_data" is a policy unless a
+        # calibration_data_path was actually given.
+        external = _CALIBRATION_DATA_SOURCE in sources and bool(
+            self.metadata.get("calibration_data_path")
+        )
+        policies = [
+            s for s in sources if not (external and s == _CALIBRATION_DATA_SOURCE)
+        ]
         if not external and len(policies) == 1:
             return f"{policies[0]}'s calibration"
         parts: List[str] = []
@@ -780,33 +786,63 @@ class EstimationResult(BaseModel):
             return "borrowed calibration"
         return "uncorrected calibration"
 
+    def _label_design(self) -> Optional[str]:
+        point = self.metadata.get("point_estimator")
+        design = point.get("label_design") if isinstance(point, dict) else None
+        return str(design or self.metadata.get("label_design") or "") or None
+
+    def _remedy_kind(self, policy: str) -> str:
+        """'label' (no own labels), 'augment' (plug-in route with random
+        labels) or 'targeted' (labels declared targeted_unknown)."""
+        if self._own_label_count(policy) == 0:
+            return "label"
+        route = self._point_route(policy)
+        if route == "plug_in_targeted_unknown" or (
+            route == "plug_in" and self._label_design() == "targeted_unknown"
+        ):
+            return "targeted"
+        if route == "plug_in":
+            return "augment"
+        return "label"
+
     def _transport_actions(self, policies: List[str]) -> str:
-        """What would verify these policies' calibration, by audit status."""
+        """What would verify these policies' calibration, by audit status and
+        by what each policy needs (labels, the augmented route, or random
+        rather than targeted labels)."""
         by_status: Dict[str, List[str]] = {}
         for policy in policies:
             by_status.setdefault(self._transport_status(policy), []).append(policy)
         sentences: List[str] = []
         for status in sorted(by_status):
             group = by_status[status]
+            clauses: List[str] = []
+            for kind in ("label", "augment", "targeted"):
+                members = [p for p in group if self._remedy_kind(p) == kind]
+                if not members:
+                    continue
+                names = _join_names(members)
+                whose = f"of {names}" if len(members) == 1 else f"of each of {names}"
+                if kind == "label":
+                    clauses.append(f"label >=20 random responses {whose}")
+                elif kind == "augment":
+                    clauses.append(
+                        "turn use_augmented_estimator back on, so the augmented "
+                        f"route corrects the estimate {whose} with its own random "
+                        "labels"
+                    )
+                else:
+                    clauses.append(
+                        "keep only probability-sampled labels on the evaluation "
+                        f"rows {whose} (move targeted labels to "
+                        "calibration_data_path with combine_oracle_sources=False) "
+                        "and re-run with label_design 'representative' (or "
+                        "'known_propensity' with known inclusion rates) and "
+                        "use_augmented_estimator on, so the augmented route can "
+                        "correct the estimate"
+                    )
+            label = "; ".join(clauses)
+            alt = "; or" if len(clauses) > 1 else ", or"
             names = _join_names(group)
-            whose = f"of {names}" if len(group) == 1 else f"of each of {names}"
-            routes = {self._point_route(p) for p in group if self._own_label_count(p)}
-            if not routes:
-                label = f"label >=20 random responses {whose}"
-            elif routes == {"plug_in"}:
-                label = (
-                    "turn use_augmented_estimator back on, so the default "
-                    f"augmented route corrects the estimate {whose} with its own "
-                    "random labels"
-                )
-            else:
-                label = (
-                    f"keep only probability-sampled labels on the evaluation rows "
-                    f"{whose} (move targeted labels to calibration_data_path with "
-                    "combine_oracle_sources=False, or declare known inclusion "
-                    "rates with label_design='known_propensity'), so the "
-                    "augmented route can correct the estimate"
-                )
             if status == "FAIL":
                 sentences.append(
                     f"Transport audit FAILED for {names}: {label}, and re-run "
@@ -815,18 +851,18 @@ class EstimationResult(BaseModel):
                 )
             elif status == "NOT_GRADED":
                 sentences.append(
-                    f"{label[0].upper()}{label[1:]}, or grade the transport audit "
+                    f"{label[0].upper()}{label[1:]}{alt} grade the transport audit "
                     "with a delta_max margin (now NOT_GRADED)."
                 )
             elif status == "NOT_CHECKED":
                 sentences.append(
-                    f"{label[0].upper()}{label[1:]}, or audit transport on a "
+                    f"{label[0].upper()}{label[1:]}{alt} audit transport on a "
                     "held-out random sample of their responses (size it with "
                     "plan_transport_audits)."
                 )
             else:
                 sentences.append(
-                    f"{label[0].upper()}{label[1:]}, or run a new, pre-sized "
+                    f"{label[0].upper()}{label[1:]}{alt} run a new, pre-sized "
                     f"held-out audit on fresh probes (now {status}; "
                     "plan_transport_audits)."
                 )
@@ -840,6 +876,13 @@ class EstimationResult(BaseModel):
             route = self._point_route(policy) or "unknown"
             opening = (
                 f"{policy}: its own labels do not correct its estimate (route {route})"
+            )
+        estimates = np.asarray(self.estimates, dtype=float)
+        if int(np.isfinite(estimates).sum()) < 2:
+            return (
+                f"{opening}; its estimate assumes "
+                f"{self._calibration_source_phrase()} transfers, which its CI does "
+                f"not cover. {self._transport_actions([policy])}"
             )
         return (
             f"{opening}; its estimate and every difference involving it assume "
@@ -1174,11 +1217,15 @@ class EstimationResult(BaseModel):
         limitations; with two or more policies, the paired differences
         ``a - b`` with 95% CI and unadjusted p-value (every pair, or with
         more than 10 pairs only those with the best point estimate), marked
-        ``[gate-flagged: ...]`` or ``[borrowed calibration: ...]``, plus "No
+        ``[gate-flagged: ...]``, ``[borrowed calibration: ...]``,
+        ``[uncorrected calibration: ...]``, ``[unverified calibration: ...]``
+        (a mix) or ``[within transport margin m]`` (the CI excludes 0 only
+        inside the PASS-audit margin the difference relies on), plus "No
         reliable winner" when every printed paired CI includes 0, or "No
         decision-ready winner" when every printed pair whose CI excludes 0
-        involves an unverified calibration transfer; and the diagnostics
-        status (at least ``warning`` for such a policy).
+        involves an unverified calibration transfer or lies within such a
+        margin; and the diagnostics status (at least ``warning`` for a
+        transport-unverified policy).
 
         Example:
             >>> print(results.summary())

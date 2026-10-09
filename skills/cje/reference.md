@@ -179,11 +179,14 @@ fallback), never by this parameter; its only observable effect is which name lan
   every paired CI includes 0" when true, labels the best-policy line "(point estimate, not a
   test)", and prints one named line per transport-unverified policy (status at least WARNING),
   marking it `[borrowed calibration]` (no own labels) or `[uncorrected calibration]` (a plug-in
-  route that does not correct with its own labels). A pair involving a gate-flagged or
-  transport-unverified policy ends `[gate-flagged: <policy>]` / `[borrowed calibration:
-  <policy>]`, and "No decision-ready winner" is printed when every pair whose CI excludes 0
-  involves a transport-unverified policy. With more than 10 pairs only those with the best point
-  estimate are printed (`compare_all_policies()` lists all). `cje analyze` prints the same lines
+  route that does not correct with its own labels). Pair markers: `[gate-flagged: <policy>]`;
+  `[borrowed calibration: <policy>]` (no own labels), `[uncorrected calibration: <policy>]`
+  (plug-in route) or `[unverified calibration: <policies>]` (a mix of the two); and
+  `[within transport margin <m>]` when the CI excludes 0 only inside the summed `delta_max` of
+  the PASS audits the difference relies on. "No decision-ready winner" is printed when every
+  printed pair whose CI excludes 0 involves a transport-unverified policy or lies within such a
+  margin. With more than 10 pairs only those with the best point estimate are printed
+  (`compare_all_policies()` lists all). `cje analyze` prints the same lines
 - `.gates` → `Dict[str, GateResult]` (typed view of `metadata["reliability_gates"]`); `.target_policies`
 - `.metadata` keys: `target_policies`, `reliability_gates` (`{policy: {"flagged": bool, ...}}`),
   `boundary_cards`, `normalization`, `oracle_sources`, `bootstrap_ci`, `pairwise_inference`

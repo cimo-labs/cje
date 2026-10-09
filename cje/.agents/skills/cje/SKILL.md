@@ -431,7 +431,7 @@ and analysis can be inspected and reproduced, not that their assumptions are gua
 |---|---|
 | Averaging raw judge scores to compare policies | `analyze_dataset`; naive CIs had 0% coverage in the Arena benchmark |
 | Putting every label on one policy when each could be labeled | With a few policies, label a random slice of each (routes become `augmented`); with many, pool labels and grade the transfer with held-out probes before relying on it |
-| Naming an unlabeled policy the winner because its judge scores are higher | Hard rule 5: undecided until its own random labels or a transport `PASS` |
+| Naming an unlabeled policy the winner because its judge scores are higher | Hard rule 5: undecided until its own random labels, or a transport `PASS` whose `delta_max` the difference clears |
 | Calling a no-winner result "equivalent" or "interchangeable" | Say the ranking is not established; equivalence needs a margin declared before looking |
 | Reusing last month's calibrator silently | Held-out `transport_audit` with an explicit margin and at least 20 effective clusters |
 | Rescaling Likert/0–100 scores before calling | Pass as-is; bounded scales auto-normalize |
