@@ -11,6 +11,46 @@ Direct mode has no importance weights, so there are no weight/overlap metrics he
 1. **Coverage** — did the calibrator see oracle labels where this policy's judge scores live? → the **boundary card** (coverage badge).
 2. **Transport** — does a calibrator learned on one policy/era still hold on another? → the **transport audit**.
 
+## Claims CJE refuses to make
+
+Diagnostics never act silently; every estimate ships with its limitations attached. This section is the user-level summary; the sections below document each mechanism.
+
+**Score-support badge (automatic).** Each policy gets a scalar badge checking only whether its judge scores extrapolate beyond the labeled score range (not residual bias, covariate shift, or ranking validity). When at least 5% of scores land outside it, the estimate carries `REFUSE-LEVEL`:
+
+```text
+REFUSE-LEVEL for policy 'candidate': 88.3% of fresh-draw judge scores fall
+outside the oracle calibration range [0.161, 0.595] (judge-score units). Do not
+report level (absolute) claims for this policy from this fit. Collect oracle
+labels covering the missing score range.
+```
+
+From 0.9.2 the warning prints the labeled range in your judge's own units (e.g. 0–100); through 0.9.1 it printed CJE's internal 0–1 judge scale. `results.metadata["boundary_cards"][policy]["oracle_s_range"]` gives it in your judge's units on every version. Expect the badge at small label counts: with m random labels, about 2/(m+1) of responses fall outside the labeled range by chance (in simulation it fired in about 90% of runs at 10 labels, 70% at 20 and 40% at 40). To clear it, label more responses at random within judge-score strata that include the extremes, declaring any unequal rates with `label_design="known_propensity"`; hand-picked out-of-range labels clear the badge but, treated as a random sample, bias the estimate.
+
+**Borrowed calibration.** A policy with no oracle labels of its own borrows the calibration fitted on other policies' labels. Its estimate, and every difference involving it, assume that calibration transfers, and the CI and p-value do not cover that assumption. From 0.9.2 this is explicit: `metadata["own_oracle_labels_by_policy"]` counts each policy's own labels, `metadata["transport_unverified"]` lists the policies whose estimate relies on an unverified calibration transfer (no oracle labels of their own, or a plug-in route that does not correct with them) and whose transport audit is not `PASS` (a policy on a plug-in route, `use_augmented_estimator=False` or `label_design="targeted_unknown"`, counts too and is marked `[uncorrected calibration]`), `analyze_dataset` logs a warning naming them, `summary()` prints a line for each (status at least WARNING), comparisons involving one carry `conditional_on_transport: true` (None for results that do not record label provenance, such as those saved before 0.9.2), and `best_policy()` reports `decision_ready=False` whenever one is in the ranking. `significant` keeps its meaning. To make such a policy decision-ready, label a random sample of its own responses (20 or more), or audit the reuse with held-out probes (below) sized with `plan_transport_audits`.
+
+**Residual transport audit (opt-in).** Reusing a calibration map on another policy, time period, or domain is an assumption. Grade it with held-out oracle probes that were not used to fit the calibrator (calibration labels reused as probes give a near-zero residual by construction; give draws and probes an `observation_id` and CJE rejects the overlap), plus a predeclared practical margin in the units of `results.estimates`:
+
+```python
+from cje import TransportAuditConfig, analyze_dataset
+
+transport = TransportAuditConfig(
+    probes_by_policy={"candidate": held_out_probe_rows},  # same record shape as draws, oracle_label filled
+    delta_max_by_policy={"candidate": 0.03},  # OUTPUT units (units of results.estimates)
+)
+results = analyze_dataset(fresh_draws_data=draws, transport=transport)
+print(results.metadata["transport_audits"]["candidate"]["status"])
+```
+
+The grading rules (`PASS`, `FAIL`, `INCONCLUSIVE`, `NOT_GRADED`, `NOT_CHECKED`), the 20-effective-cluster floor, and which states flag a policy are under [Transportability Audit](#transportability-audit). Of these states, only an observed `FAIL` hard-flags a policy whose estimate depends on that map, and a `PASS` does not change any estimate or interval.
+
+**Use audit labels for correction.** Probes only grade. To correct an estimate, attach probability-sampled labels to their matching evaluation responses (the `augmented` route) and use the recomputed intervals; those labels then no longer validate it independently ([audit-to-correction guide](../../guides/audit-correction.md), with a runnable example).
+
+**Plan audit labels before collecting them.** `plan_transport_audits` sizes independent audit probes and the total label budget under declared residual assumptions; it is a Gaussian planning model, not an observed audit ([audit budget guide](../../guides/audit-budget-planning.md)).
+
+**Reliability-aware winner.** `results.best_policy()` skips a gate-flagged argmax and returns the best gate-passing policy, loudly ([output and fields](../interface/README.md#command-line-interface)); `reliable_only=False` returns the raw argmax, marked `flagged`. A demotion is not a comparison: no test is applied (with two policies, it simply returns the unflagged one). When labels come from one baseline policy, a better candidate whose judge scores exceed the labeled range is exactly what triggers the flag; clear it, then use `compare_all_policies()`.
+
+**Levels and rankings.** A level claim concerns a policy's mean oracle outcome; a ranking concerns the oracle difference between two policies, which equals the calibrated-prediction difference plus the difference in their mean residuals. A common residual offset cancels, so a failed level audit does not by itself prove the ordering wrong. Conversely, individual-score monotonicity or a scalar support badge does not certify policy ordering under a shift. Use the paired comparison (`results.compare_all_policies()`) with evidence about the residual difference; CJE has no validated automatic label-free reuse gate.
+
 ## File Structure
 
 ```
@@ -92,7 +132,7 @@ The returned `BoundaryCard` dataclass carries `status`, `out_of_range`, `saturat
 
 **Wiring**: `CalibratedDirectEstimator.estimate()` computes a card per policy automatically, grading each policy's fresh-draw judge scores against the oracle S-range the reward calibrator recorded at fit time. Cards land in `diagnostics.boundary_cards` and `result.metadata["boundary_cards"]`; for a calibrator-dependent point route, REFUSE-LEVEL triggers a loud warning, sets that policy's status to CRITICAL, and flags it in `result.metadata["reliability_gates"]` (`refuse_level_claims`). A fully observed `direct_oracle` estimate does not use the calibrator, so its card remains descriptive with `applies_to_current_estimate=false` and cannot gate that estimate.
 
-**Fixing a REFUSE-LEVEL badge**: collect a probability sample of oracle labels that reaches the missing score range (random within judge-score strata; pass `label_design="known_propensity"` if rates differ), then re-run. The warning prints the range on the internal 0–1 scale; the card's `oracle_s_range` gives it in your judge's units.
+**Fixing a REFUSE-LEVEL badge**: collect a probability sample of oracle labels that reaches the missing score range (random within judge-score strata; pass `label_design="known_propensity"` if rates differ), then re-run. The warning names the range (in your judge's units from 0.9.2; on the internal 0–1 scale through 0.9.1), and the card's `oracle_s_range` gives it in your judge's units.
 
 ## Transportability Audit
 
@@ -110,7 +150,7 @@ The returned `BoundaryCard` dataclass carries `status`, `out_of_range`, `saturat
 
 `NOT_CHECKED` is the fifth state, reserved for high-level `analyze_dataset` results when no independent probe was supplied for a policy; the low-level audit never fabricates it. There is no `WARN` status — diagnostics deserialized with a legacy `WARN` value normalize to `INCONCLUSIVE` (`reason_code="legacy_warn"`).
 
-**Inside `analyze_dataset`** (`transport=TransportAuditConfig(...)`), `family_size` defaults to the number of policies given probes (Bonferroni across them; pass a larger value if other audits share the decision). Of the audit states, only an observed `FAIL` hard-flags a policy, and only one whose estimate depends on the audited calibration; every other unresolved state remains visible as a limitation without suppressing the estimate, and a `PASS` does not change any estimate or interval. Called directly on an already fitted calibrator, `audit_transportability(results.calibrator, probe_rows, delta_max=...)` and its array twin `cje.transport_audit(probe_scores, probe_labels, results.calibrator, delta_max=...)` run the same audit but return a standalone diagnostic; they do not flag `results`.
+**Inside `analyze_dataset`** (`transport=TransportAuditConfig(...)`), `family_size` defaults to the number of policies given probes (Bonferroni across them; pass a larger value if other audits share the decision). Of the audit states, only an observed `FAIL` hard-flags a policy, and only one whose estimate depends on the audited calibration; every other unresolved state remains visible as a limitation without suppressing the estimate, and a `PASS` does not change any estimate or interval. Called directly on an already fitted calibrator, `audit_transportability(results.calibrator, probe_rows, delta_max=...)` and its array twin `cje.transport_audit(probe_scores, probe_labels, results.calibrator, delta_max=...)` run the same audit but return a standalone diagnostic; they do not flag `results`. Their `family_size` defaults to 1, so pass the number of audited policies to get the same Bonferroni adjustment.
 
 **Units**: `delta_max` (and `delta_hat`/`delta_ci`) are in the units of the probe `oracle_label` values — this audit grades `oracle_label − calibrator.predict(...)` with no rescaling. For audits wired through `analyze_dataset(transport=TransportAuditConfig(...))`, probe labels are converted to the result OUTPUT scale first, so those margins are in output units (the units of `result.estimates`).
 

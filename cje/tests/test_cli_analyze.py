@@ -617,8 +617,10 @@ class TestCLIBestPolicy:
             },
         )
         lines = best_policy_lines(results)
+        # Built without analyze_dataset: label provenance is unknown, so the
+        # NOT_CHECKED transport caveat stays (as in 0.9.1).
         assert lines == [
-            "Best by point estimate: good",
+            "Best by point estimate: good (point estimate, not a test)",
             "Limitations: residual transport NOT_CHECKED",
         ]
 
@@ -641,7 +643,9 @@ class TestCLIBestPolicy:
             },
         )
         lines = best_policy_lines(results)
-        assert lines[0] == "Best by point estimate: unhelpful"
+        assert lines[0] == (
+            "Best by point estimate: unhelpful (point estimate, not a test)"
+        )
         assert any("reliability gates flagged" in line for line in lines)
         assert any(
             "Best reliable policy: clone" in line and "reliable_only=False" in line
@@ -658,7 +662,7 @@ class TestCLIBestPolicy:
         )
         results = self._make_results([0.9, 0.6], ["bad", "ok"], diagnostics=diag)
         lines = best_policy_lines(results)
-        assert lines[0] == "Best by point estimate: bad"
+        assert lines[0] == "Best by point estimate: bad (point estimate, not a test)"
         assert any("reliability gates flagged" in line for line in lines)
         assert any("Best reliable policy: ok" in line for line in lines)
 

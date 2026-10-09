@@ -1,6 +1,6 @@
 # CJE Makefile
 
-.PHONY: test test-examples lint format help
+.PHONY: test test-examples lint format sync-skill help
 
 # Documentation now hosted on cimolabs.com
 
@@ -17,6 +17,10 @@ lint:  ## Run linting
 
 format:  ## Format code
 	poetry run black cje/
+
+sync-skill:  ## Copy skills/cje/{SKILL.md,reference.md} into the bundled cje/.agents/skills/cje/
+	mkdir -p cje/.agents/skills/cje
+	cp skills/cje/SKILL.md skills/cje/reference.md cje/.agents/skills/cje/
 
 # Installation
 install:  ## Install package

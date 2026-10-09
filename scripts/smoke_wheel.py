@@ -57,6 +57,20 @@ def main() -> None:
                 check=True,
                 cwd=directory,
             )
+        # The README's agent handoff runs `cje skill`: the bundled skill and
+        # reference must ship in the wheel.
+        for extra, marker in (
+            ([], "## Hard rules"),
+            (["--reference"], "# CJE reference"),
+        ):
+            shown = subprocess.run(
+                [sys.executable, "-m", "cje", "skill", *extra],
+                check=True,
+                cwd=directory,
+                capture_output=True,
+                text=True,
+            ).stdout
+            assert marker in shown, f"cje skill {extra} printed no {marker!r}"
     print(f"Installed core-only cje-eval {cje.__version__}: API and CLI smoke passed")
 
 

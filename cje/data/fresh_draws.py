@@ -12,6 +12,7 @@ from .ingest import (
     POLICY_FILE_PATTERNS,
     canonicalize_record,
     deduplicate_canonical_records,
+    log_nan_labels_as_unlabeled,
     require_prompt_identity,
     resolve_policy_file,
 )
@@ -138,6 +139,7 @@ def _parse_fresh_draw_record(
     source_id: str,
     judge_field: str = "judge_score",
     oracle_field: str = "oracle_label",
+    nan_label_counts: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """Parse one raw fresh-draw record into canonical dict form.
 
@@ -148,7 +150,8 @@ def _parse_fresh_draw_record(
       checks so falsy-but-valid ids (0, "") survive; records with neither
       prompt_id nor prompt text fail loudly (no fabricated index ids);
     - judge_score / oracle_label: top level first, then metadata; missing
-      judge_score is never fabricated - fail clearly;
+      judge_score is never fabricated - fail clearly; a NaN oracle_label is
+      read as unlabeled (counted in ``nan_label_counts`` when given);
     - float coercion here so type errors surface with file/line context.
     """
     if not isinstance(data, dict):
@@ -164,6 +167,7 @@ def _parse_fresh_draw_record(
         policy=policy,
         judge_field=judge_field,
         oracle_field=oracle_field,
+        nan_label_counts=nan_label_counts,
     )
 
 
@@ -269,6 +273,8 @@ def load_fresh_draws_auto(
     if verbose:
         logger.info(f"Loading fresh draws from {file_path}")
 
+    nan_label_counts: Dict[str, int] = {}
+
     def _parse_record(data: Dict[str, Any], idx: int) -> Dict[str, Any]:
         record = _parse_fresh_draw_record(
             data,
@@ -277,6 +283,7 @@ def load_fresh_draws_auto(
             source_id=str(file_path.resolve()),
             judge_field=judge_field,
             oracle_field=oracle_field,
+            nan_label_counts=nan_label_counts,
         )
         validate_values_on_scale(
             np.asarray([record["judge_score"]], dtype=float),
@@ -292,6 +299,7 @@ def load_fresh_draws_auto(
         return record
 
     fresh_records = _load_policy_file_records(file_path, policy, _parse_record)
+    log_nan_labels_as_unlabeled(nan_label_counts, oracle_field)
     datasets, _ = fresh_draws_from_dict(
         {policy: fresh_records},
         auto_normalize=False,
@@ -342,6 +350,7 @@ def fresh_draws_data_from_dir(
         raise ValueError("on_invalid must be 'error' or 'drop'")
     data: Dict[str, List[Dict[str, Any]]] = {}
     excluded = {Path(path).resolve() for path in (exclude_paths or [])}
+    nan_label_counts: Dict[str, int] = {}
 
     for policy in discover_policies_from_fresh_draws(
         data_dir, exclude_paths=list(excluded)
@@ -369,6 +378,7 @@ def fresh_draws_data_from_dir(
                 source_id=str(file_path.resolve()),
                 judge_field=judge_field,
                 oracle_field=oracle_field,
+                nan_label_counts=nan_label_counts,
             )
 
         data[policy] = _load_policy_file_records(
@@ -379,6 +389,7 @@ def fresh_draws_data_from_dir(
             drop_stats=drop_stats,
         )
 
+    log_nan_labels_as_unlabeled(nan_label_counts, oracle_field)
     return data
 
 
@@ -449,6 +460,8 @@ def fresh_draws_from_dict(
 
     Each record must have at minimum: prompt_id, judge_score
     Optional fields: oracle_label, response, draw_idx, metadata
+    (an unlabeled row has oracle_label None or omitted; a float NaN is also
+    read as unlabeled, with one INFO log for the call)
 
     Args:
         data: Dict mapping policy names to lists of record dicts
@@ -487,6 +500,7 @@ def fresh_draws_from_dict(
 
     canonical_data: Dict[str, List[Dict[str, Any]]] = {}
     n_dropped = 0
+    nan_label_counts: Dict[str, int] = {}
 
     def _count_drop(policy_name: str) -> None:
         if drop_stats is not None:
@@ -509,6 +523,7 @@ def fresh_draws_from_dict(
                         policy=str(policy),
                         judge_field=judge_field,
                         oracle_field=oracle_field,
+                        nan_label_counts=nan_label_counts,
                     )
                 )
             except (KeyError, TypeError, ValueError) as exc:
@@ -535,6 +550,7 @@ def fresh_draws_from_dict(
 
     if not canonical_data:
         raise ValueError("No valid fresh draws data found in any policy")
+    log_nan_labels_as_unlabeled(nan_label_counts, oracle_field)
 
     flattened = [record for records in canonical_data.values() for record in records]
     flattened, n_duplicate_rows = deduplicate_canonical_records(

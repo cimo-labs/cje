@@ -1,11 +1,18 @@
 [tool.poetry]
 name = "cje-eval"
-version = "0.9.1"
+version = "0.9.2"
 description = "Causal Judge Evaluation - Calibrated LLM-judge evaluation with calibration-aware confidence intervals"
 authors = ["Eddie Landesberg <eddie@cimolabs.com>"]
 license = "MIT"
 packages = [{ include = "cje" }]
 exclude = ["cje/tests", "cje/tests/**/*"]
+# The agent skill ships inside the package (library-skills convention) and
+# `cje skill` prints it. Listed explicitly so the dot-directory cannot drop out
+# of a build. Refresh the copies from skills/cje/ with `make sync-skill`.
+include = [
+    { path = "cje/.agents/skills/cje/SKILL.md", format = ["sdist", "wheel"] },
+    { path = "cje/.agents/skills/cje/reference.md", format = ["sdist", "wheel"] },
+]
 readme = "README.md"
 homepage = "https://cimolabs.com/cje"
 repository = "https://github.com/cimo-labs/cje"

@@ -352,8 +352,7 @@ class TestCautionBandYieldsWarning:
         # The CLI still crowns the policy (WARNING is not a demotion)
         lines = best_policy_lines(result)
         assert lines == [
-            "Best by point estimate: caution",
-            "Limitations: residual transport NOT_CHECKED",
+            "Best by point estimate: caution (point estimate, not a test)",
         ]
 
 

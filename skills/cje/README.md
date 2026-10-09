@@ -9,11 +9,25 @@ Planning is optional; its power estimates are projections under explicit assumpt
 
 ## Install
 
+The package ships the skill matching its own version (0.9.2+). Install on Python 3.10–3.13; on
+Python 3.9 a bare `pip install cje-eval` silently installs the legacy 0.5 line, so keep the
+version floor:
+
+```bash
+pip install -U "cje-eval>=0.9.2"
+cje skill               # prints SKILL.md
+cje skill --reference   # prints reference.md
+cje skill --path        # prints the folder holding both
+```
+
 **Agents with a skills directory** (Claude Code and compatible): copy both files into it.
 
 ```bash
-# Claude Code, all projects
+# Claude Code, all projects, from the installed package (0.9.2+)
 mkdir -p ~/.claude/skills/cje
+cp "$(cje skill --path)"/SKILL.md "$(cje skill --path)"/reference.md ~/.claude/skills/cje/
+
+# Or from GitHub main (raw text)
 curl -fsSL https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/SKILL.md -o ~/.claude/skills/cje/SKILL.md
 curl -fsSL https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/reference.md -o ~/.claude/skills/cje/reference.md
 
@@ -22,13 +36,20 @@ mkdir -p .claude/skills
 cp -r skills/cje .claude/skills/
 ```
 
-**Any other agent**: no install needed — paste this into the conversation:
+**Any other agent**: install the package as above (or let the agent do it), then paste this into the conversation, filling in the brackets:
 
 ```text
-Read https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/SKILL.md,
-then use CJE to compare the policies in my eval data. When it points to reference.md,
-fetch https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/reference.md.
+Run `cje skill` and follow it; when it points to reference.md, run `cje skill --reference`.
+Data: [path to the eval export]
+Question: [e.g. is candidate better than production on support prompts, and by how much?]
+How the labels were chosen: [e.g. 50 random responses per policy rated by our QA team /
+escalated tickets only / not sure]
 ```
+
+If the agent cannot run `cje` (or has a version before 0.9.2), have it download the raw
+[SKILL.md](https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/SKILL.md) and
+[reference.md](https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/reference.md)
+with `curl` and read the text itself; a summarizing web fetcher drops the rules.
 
 ## Plan an evaluation
 
