@@ -1085,15 +1085,14 @@ def test_more_than_ten_pairs_scope_the_closing_line() -> None:
 
 @pytest.mark.parametrize("container", ["ndarray", "series"])
 def test_array_like_record_containers_still_work(container: str) -> None:
-    import pandas as pd
-
     draws = _quickstart_draws()
-    wrapped = {
-        policy: (
-            np.array(rows, dtype=object) if container == "ndarray" else pd.Series(rows)
-        )
-        for policy, rows in draws.items()
-    }
+    if container == "series":
+        pd = pytest.importorskip("pandas")
+        wrapped = {policy: pd.Series(rows) for policy, rows in draws.items()}
+    else:
+        wrapped = {
+            policy: np.array(rows, dtype=object) for policy, rows in draws.items()
+        }
     expected = analyze_dataset(fresh_draws_data=draws).estimates
     np.testing.assert_allclose(
         # The annotation says lists; array-like containers worked in 0.9.1.
