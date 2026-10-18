@@ -13,7 +13,8 @@ read it whole before anything else. These decide the verdict line before any num
 - The only labels are ratings users chose to give (stars, thumbs, CSAT): they count as zero
   labels; "Undecided: the only labels are self-selected" (hard rule 2).
 - Judge models, versions or rubrics differ unevenly by policy: "Not decision-grade" (rule 3).
-- A policy with no labels of its own: "Undecided", with no winner and no lean (hard rule 5).
+- A policy with no labels of its own and no transport `PASS`: "Undecided", with no winner and
+  no lean (hard rule 5).
 - Decide from the paired difference, never from raw judge means or overlapping intervals.
 
 ## Step 0: install, then print the version
@@ -24,7 +25,8 @@ pip install -U "cje-eval>=0.9.2" pandas
 python -c "import cje; print(cje.__version__)"
 ```
 
-If installs are not allowed, print the installed version and continue. On Python 3.9 a plain
+If installs are not allowed, print the version from the `python` that will run the analysis;
+below 0.9.2 this skill does not match it: say so and stop. On Python 3.9 a plain
 `pip install cje-eval` silently installs the legacy 0.5 line; the `>=0.9.2` floor makes pip
 fail instead, so switch to 3.10–3.13 (`python3.12 -m venv .venv`). Put the version in your
 report.
@@ -41,8 +43,8 @@ same URL ending in `reference.md`); a summarizing web fetcher drops the rules be
    put raw judge means in the report as contrast, context or corroboration: the calibrated
    estimate is a map of the same scores, so their agreement is not independent evidence. In a
    run with labels you may say in words that the judge seems to favor a policy, as a reason for
-   caution. CJE calibrates the judge against random ground-truth labels (floor: 4 independent
-   labeled prompt clusters; 10+ recommended).
+   caution, never as a finding that the judge is biased. CJE calibrates the judge against random
+   ground-truth labels (floor: 4 independent labeled prompt clusters; 10+ recommended).
    **No labels means no answer.** Count only probability-sampled labels; self-selected ratings
    count as zero. Below 4 independent labeled prompt clusters the verdict is "Blocked: no
    ground-truth labels yet, so there is no ranking or pick." CJE still runs (`naive_direct`) and
@@ -77,21 +79,23 @@ same URL ending in `reference.md`); a summarizing web fetcher drops the rules be
    from whether two policies' intervals overlap. A paired CI that includes 0 means the ranking
    is not established at this sample size. Never state or imply that the policies are equal,
    close, tied, comparable or within noise, in any section or wording (negated, quoted or in a
-   team summary), and do not describe the sign of the point estimate. Write instead, in the
-   user's units: "No reliable winner: the paired CI for <B> − <A>, [<lo>, <hi>], allows <A> to
-   be up to <|lo|> better or <B> up to <hi> better." Then ask "What is the smallest gap on
-   <scale> that would change which one you ship?" and size the labels (Reporting item 3). No
-   cost or latency tiebreak, even hedged, unless the paired CI lies wholly inside a margin the
-   user declared before seeing results; then say "equivalent within ±<m>" and cost may decide.
+   team summary). Never narrate which policy the point estimate favours or present it alone as
+   the size of the gap. Write instead, in the user's units: "No reliable winner: the paired CI for
+   <B> − <A>, [<lo>, <hi>], allows <A> to be up to <|lo|> better or <B> up to <hi> better." Then
+   ask exactly "What is the smallest gap on <scale> that would change which one you ship?" and
+   size the labels (Reporting item 3). No cost or latency tiebreak, even hedged, unless the
+   paired CI lies wholly inside a margin the user declared before seeing results; then say
+   "equivalent within ±<m>" and cost may decide.
 5. **No winner and no lean on borrowed calibration.** A policy with no labels of its own whose
    transport audit is not `PASS` is never named the winner, said to lead or be ahead, or called
    "significant", whatever the p-value: its estimate and every difference involving it assume
    another policy's calibration transfers, which the CI and p-value do not cover, and the true
-   difference can have either sign. The first line, before any number: "Undecided: <B> has no
+   difference can have either sign. The first line: "Undecided: <B> has no
    labels of its own, so the paired difference <d> [<lo>, <hi>] assumes <A>'s calibration
    carries over to <B>; the true difference can have either sign." Do not narrate which estimate
    is higher; say the interval and p-value measure sampling noise only, not whether <A>'s
-   calibration fits <B>. A raw judge gap toward the unlabeled policy is a red flag (the judge
+   calibration fits <B>. A raw judge gap toward the unlabeled policy, said in words without
+   raw means, is a red flag (the judge
    may favor its style, and the borrowed calibration cannot see that), not support. Then size
    what would settle it:
    - Any random labels on that policy's own responses (same prompts, raters blind to policy)
@@ -119,13 +123,14 @@ Write for a busy reader, in this order, even for a "quick answer":
    paired CI includes 0" (hard rule 4); "Undecided: <B> has no labels of its own and its
    transport is `NOT_CHECKED`" (also `INCONCLUSIVE`, `NOT_GRADED` or `FAIL`; hard rule 5);
    "Blocked: no ground-truth labels yet" (hard rule 1); "Undecided: the only labels are
-   self-selected" (hard rule 2); "Not decision-grade: <precondition>" (hard rule 3). Once nothing
+   self-selected" (hard rule 2); "Not decision-grade: <precondition>" (hard rule 3); with a
+   flagged gate, the `decision_note` ("Not decision-ready: ...", hard rule 6). Once nothing
    above blocks the verdict (own labels on both sides or a transport `PASS`, no flagged gate),
    compare a ship threshold the user named with the paired CI, not with 0: lower bound above it
    means ship, a CI straddling it means not shown to clear the bar, an upper bound below it means
    shown not to clear it. Report the difference once, as candidate − baseline, taking
    `difference`, `ci_lower` and `ci_upper` from one `compare_policies("candidate", "baseline")`
-   call; `summary()` prints pairs in name order.
+   call; `summary()` prints pairs in name order, so never relabel one of its lines.
 2. **Size and uncertainty.** The paired difference with its 95% CI and p-value (say whether
    adjusted; with one pair, that it is the only comparison), then each policy's calibrated
    estimate **with its 95% CI**, never a bare point estimate or an unlabeled ±. Name intervals
@@ -135,18 +140,22 @@ Write for a busy reader, in this order, even for a "quick answer":
    prompts, never rows someone picked; 20+ for a policy with none of its own (hard rule 5). When
    every policy has labels and the paired CI includes 0, ask for the smallest gap g that matters
    and give a number: as a rough lower bound, m_needed ≈ m_now × (2.8 × SE_now / g)² labels per
-   policy for 80% power at two-sided α = 0.05 (SE_now = the pair's `se_difference`). Report the
-   additional labels, capped at the unlabeled rows left; say plainly when g is out of reach
-   without new prompts, and that the rerun can still come back not established. For a real plan,
-   use the **Planning flow**.
+   policy for 80% power at two-sided α = 0.05 (SE_now = the pair's `se_difference`, or its CI
+   width / 4). Report m_needed − m_now more labels, capped at the unlabeled rows left; say
+   plainly when g is out of reach without new prompts, and that the rerun can still come back
+   not established. A boundary flag needs more random labels within judge-score strata that
+   reach the range the warning names (unequal rates: `known_propensity`). For a real plan, use
+   the **Planning flow**.
 4. **Limitations, on every run, even when everything passes.** One line each:
    - Status and gates per policy, each glossed in a clause the user could paste into a decision
      doc: `GOOD` "the estimator's own checks passed; they do not test how labels were chosen or
      which judge scored"; boundary card OK "the labeled rows cover the judge-score range the
-     estimate uses"; `decision_ready` (quote its `decision_note`) "the top policy beats every
+     estimate uses"; `decision_ready` (its `decision_note` in your words, as candidate − baseline)
+     "the top policy beats every
      other in the paired test and no gate blocks it"; df "set by the number of labeled prompts,
-     which limit precision". `NOT_CHECKED` on a policy with its own labels (route `augmented`):
-     "not needed: each policy was calibrated on its own labels", and nothing more about
+     which limit precision". `NOT_CHECKED` on a policy with its own labels (route `augmented` or
+     `direct_oracle`): "not needed: its estimate is corrected by its own random labels", and
+     nothing more about
      transport; on a borrowed policy: "nobody has checked that <A>'s calibration fits <B>".
    - Labels: how they were chosen, credited to the user when they said it ("the random <n> you
      described; label rates are even across judge-score fifths, which fits that but cannot prove
@@ -154,8 +163,8 @@ Write for a busy reader, in this order, even for a "quick answer":
    - Judge: which judge scored the rows (hard rule 3). The `cje-eval` version. In the last line,
      the saved analysis script and results file. Leave method keys such as `paired_if_oua` out.
 
-Overlapping marginal CIs never establish equivalence. Plan the analysis sample and stopping rule
-before collection; repeated looks require an appropriate sequential design.
+Plan the analysis sample and stopping rule before collection; repeated looks require an
+appropriate sequential design.
 
 ## Decide the flow
 
@@ -244,7 +253,8 @@ identity, missing labels and sampling provenance.
 Before analysis, check what CJE cannot:
 
 - **How each existing label was chosen.** If the user has not said, read any label-source
-  column and ask. Attach `oracle_label` only for labels from a probability sample of that
+  column and ask; labels nobody can account for count as not random. Attach `oracle_label`
+  only for labels from a probability sample of that
   policy's rows: simple random (the default `label_design="representative"`) or random within
   strata at recorded rates (`label_design="known_propensity"` with `label_propensities`, a
   probability in (0, 1] for every row of every policy). Leave out labels chosen for the
@@ -318,7 +328,7 @@ pols = results.target_policies                       # sorted by name, NOT your 
 cis = dict(zip(pols, results.ci()))                  # {policy: (lo, hi)}
 routes = dict(zip(pols, results.metadata["point_estimator"]["routes"]))  # augmented = own labels
 pairs = results.compare_all_policies()               # difference = policy1 - policy2
-verdict = results.compare_policies("candidate", "base")  # candidate - base (names from 0.9.2)
+verdict = results.compare_policies("candidate", "base")  # candidate - base
 best = results.best_policy()                         # .decision_ready, .decision_note
 ```
 
@@ -334,8 +344,9 @@ labels, one judge, blind raters>". A demotion is never a decision, and `signific
 labels were random, one judge scored every row, or a decision is supported; never write "ready
 for decision" or "no data-quality problem" from them. Boundary cards are OK / CAUTION /
 REFUSE-LEVEL: a scalar badge never shows that a ranking survives, and a REFUSE-LEVEL policy gets
-no absolute quality number. With a flagged gate, still surface the highest point estimate with
-its limitation adjacent; never substitute another policy. After a transport `FAIL`, base no
+no absolute quality number. In a calibrated run with a flagged gate, still surface the highest
+point estimate with its limitation adjacent and never substitute another policy (hard rules 1
+and 5 still apply). After a transport `FAIL`, base no
 decision on the unchanged map; a failed level audit alone does not disprove a ranking
 (**Correction** in `reference.md`).
 
@@ -392,7 +403,6 @@ exports.
 |---|---|
 | Putting every label on one policy when each could be labeled | Label a random slice of each (routes become `augmented`); with many policies, pool labels and grade the transfer with held-out probes |
 | Reusing last month's calibrator silently | Held-out transport audit with an explicit margin |
-| Rescaling Likert/0–100 scores before calling | Pass as-is and declare the scale |
 
 Full signatures, CSV/pandas recipes, `fresh_draws_dir`/CLI usage, planning API, diagnostics
 glossary, and troubleshooting: read `reference.md` (`cje skill --reference`).

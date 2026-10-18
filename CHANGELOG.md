@@ -19,18 +19,21 @@ and the skill now addresses each one.
   Agents had ranked a judge-only prompt sweep "for context" and offered the
   judge's favourite as a fallback pick; in the test it was truly 5th of 6.
 - **Self-selected feedback is not a label (hard rule 2).** Star ratings,
-  thumbs, CSAT, complaints and escalations are named as self-selected, even
+  thumbs, CSAT, complaints and tickets are named as self-selected, even
   when the user calls them ground truth. The verdict is "Undecided: the
   only labels are self-selected", and the fix is a fresh random sample.
   An outcome recorded for every response is not self-selected. Reshaping
   now includes a label-rate check by judge-score quintile within each
   policy.
 - **Check judge identity (hard rule 3).** For scores the user hands over,
-  tabulate any judge model, version or rubric column by policy; a mix is a
-  blocker in the verdict line. CJE does not read such a column.
-- **No tie or cost wording (hard rule 4).** "Toss-up", "similar", "a wash",
-  "splits the difference" and point-estimate leans join the banned list, in
-  every section; no cost or latency tiebreak. Agents state both bounds of
+  tabulate any judge model, version or rubric column by policy; a mix that
+  is uneven by policy is a blocker in the verdict line, an even mix a stated
+  limitation. CJE does not read such a column.
+- **No tie or cost wording (hard rule 4).** Saying or implying the policies
+  are equal, close, tied, comparable or within noise is banned in every
+  section, as is narrating which policy the point estimate favours; no cost
+  or latency tiebreak unless the paired CI sits inside a margin declared
+  before the results. Agents state both bounds of
   the paired CI in the user's units and size the labels that would settle
   it.
 - **Borrowed calibration (hard rule 5)** gets a write-instead template, a
@@ -40,7 +43,8 @@ and the skill now addresses each one.
 - **Reporting.** The verdict comes first and has templates for blocked,
   self-selected and mixed-judge cases. A user's ship threshold is compared
   with the paired CI. Differences are reported as candidate minus baseline.
-  Status codes get one plain-language gloss. A rough label-count formula
+  Status codes get one plain-language gloss. A flagged gate has its own
+  verdict line, and a boundary flag says where to add random labels. A rough label-count formula
   covers runs where every policy already has labels.
 - **Status is not readiness.** `overall_status` GOOD does not cover label
   provenance, judge identity or decision readiness; agents quote
@@ -55,13 +59,14 @@ and the skill now addresses each one.
   including variants the judge scores low, with raters blind to the policy
   (was 10–25 items); stratified designs declare `known_propensity`.
 - **Fits in one tool output.** `SKILL.md` stays under 28,500 characters so
-  agent tools return `cje skill` whole instead of a short preview, it opens
+  Claude Code, which keeps at most 30,000 characters of a command's output,
+  returns `cje skill` whole instead of a short preview, it opens
   with the stop checks, and a test holds the limit. Detail moved to
   `reference.md`.
 - **Smaller fixes.** Declared scales and what they change; named
   `AuditScenario` arguments; comparison dict keys; the `ci()` naming idiom;
-  glossary rows for calibration RMSE and coverage; a Step 0 note for
-  environments where installs are not allowed.
+  glossary rows for calibration RMSE and coverage; a Step 0 version
+  guard: below 0.9.2 the skill says it does not match the installed package.
 
 ## [0.9.2] - 2026-10-08
 
