@@ -10,8 +10,9 @@ data whose ground truth they could not see (8 scenarios, 3 agent models).
 Agents computed CJE's numbers correctly every time. Their mistakes were in
 what they reported and in checks only the user's data can answer. On
 0.9.2, two of 24 runs led the simulated user to ship the wrong system (a
-judge-only prompt sweep). With this text, validated on the same scenarios
-plus a new one (33 runs), none did, and no run reached a wrong conclusion.
+judge-only prompt sweep). Across 33 validation runs of this text and its
+near-final draft, on the same scenarios plus a new one, none did, and none
+reached a wrong conclusion.
 
 ### Changed
 
