@@ -1,7 +1,8 @@
 # CJE reference (for agents)
 
 Load this file when you need full signatures, the planning API, the CLI, or troubleshooting.
-The workflow and hard rules live in `SKILL.md`; this file is detail only.
+The workflow and hard rules live in `SKILL.md`; this file is detail only. If you have not read
+SKILL.md's hard rules in full, stop and read them first (`cje skill > cje_skill.md`).
 
 ## Data formats
 
@@ -9,7 +10,7 @@ The workflow and hard rules live in `SKILL.md`; this file is detail only.
 
 | Field | Required | Notes |
 |---|---|---|
-| `judge_score` | yes | Any bounded scale (0–1, 0–100, Likert 1–5). Auto-normalized; results return in the original scale (`metadata["normalization"]`). |
+| `judge_score` | yes | Any bounded scale (0–1, 0–100, Likert 1–5). Declare known endpoints with `fresh_judge_scale`/`fresh_oracle_scale`; undeclared values outside [0, 1] are normalized by their observed min and max. Results return in label units (`metadata["normalization"]`). |
 | `oracle_label` | no | Ground-truth on the labeled slice. `None` (JSON `null`) or missing = unlabeled. Convert pandas blanks first (`df.astype(object).where(df.notna(), None)`): through 0.9.1 records reject `NaN`; from 0.9.2 a float `NaN` is read as unlabeled (one INFO log) and other invalid labels still raise. The array APIs always use `NaN` for unlabeled. Same scale conventions. |
 | `prompt_id` | no | Enables paired within-prompt comparisons across policies (lower-variance). Auto-generated from a hash of `prompt` if absent. |
 | `row_id` | no | Unique response ID within a policy/source (e.g. the run ID; not the `prompt_id`). Exact repeats are deduplicated with a warning; repeats with differing fields raise. Without it, re-exported duplicates count as separate rows. |
@@ -58,6 +59,13 @@ Through 0.9.1 records reject `NaN`; from 0.9.2 a `NaN` label is read as unlabele
   label on one policy. Put all labels on one policy only when labeling the others is
   impractical; a policy without labels of its own is then not decision-ready until its
   transport audit PASSes (SKILL.md hard rule 5).
+- **Names, duplicates, coverage.** `analyze_dataset` warns about policy names that collide
+  after trimming, case-folding and `_`→`-`, repeated `(policy, prompt_id)` rows without a
+  `row_id`, and labels present on only one of several policies; the warnings change nothing.
+  With a `row_id`, exact repeats are dropped with a warning and conflicting repeats raise.
+  Policies over different prompts report `basis: "prompt_cluster_partial_overlap"`; restrict to
+  shared prompts only when prompts are missing for reasons unrelated to the policy, and report
+  what you dropped.
 - **Unequal sampling.** The default `label_design="representative"` treats each policy's labeled
   rows as a simple random sample of that policy. If sampling rates differ (for example, you
   oversampled some score ranges), pass `label_design="known_propensity",
@@ -129,8 +137,11 @@ fallback), never by this parameter; its only observable effect is which name lan
 **`EstimationResult`:**
 
 - `.estimates` (np.ndarray, order matches `metadata["target_policies"]`, which is sorted by policy name, not input dict order), `.standard_errors`
-- `.ci(alpha=0.05)` → list of `(lo, hi)` per policy; `.confidence_interval()` → `(lo_array, hi_array)`
-- `.compare_policies(i, j, alpha=0.05)` → dict with difference, SE, CI, p-value; use this for
+- `.ci(alpha=0.05)` → list of `(lo, hi)` per policy; `.confidence_interval()` → `(lo_array, hi_array)`.
+  Name them with `dict(zip(results.target_policies, results.ci()))`; with exactly two policies,
+  `lo, hi = results.ci()` silently unpacks the two policies' intervals instead.
+- `.compare_policies(i, j, alpha=0.05)` → dict with `difference`, `se_difference`, `ci_lower`,
+  `ci_upper`, `p_value`, `df`, `method` and `basis` (among others); use this for
   pairwise claims. `i`/`j` are integer indices into `metadata["target_policies"]`, which is
   sorted by name, not your dict's order; `difference` = estimate[i] − estimate[j]. From 0.9.2
   `i`/`j` may also be policy names and the dict carries `policy1`/`policy2`; through 0.9.1
@@ -272,7 +283,11 @@ print(diag.summary())
 ```
 
 - Probe: held out, probability sampled, and at least 20 effective independent clusters; size
-  for the desired CI width. Below 20 effective clusters PASS is withheld (INCONCLUSIVE), but a
+  for the desired CI width. Never pass a row whose `oracle_label` is already in the evaluation
+  draws or `calibration_data_path`: the calibrator reproduces the mean of its own training
+  labels, so reused rows give a residual near zero by construction. Set `observation_id` on
+  draws and probes so `analyze_dataset` raises on overlap (`transport_audit` cannot check).
+  `delta_max=0.03` suits 0–1 labels; on a 0–10 scale it makes PASS nearly unreachable. Below 20 effective clusters PASS is withheld (INCONCLUSIVE), but a
   CI wholly outside the margin still grades FAIL.
 - `TransportDiagnostics`: `status` (PASS/FAIL/INCONCLUSIVE/NOT_GRADED), `delta_hat` (mean
   residual), simultaneous `delta_ci`, `effective_clusters`, `recommended_action`, `.summary()`,
@@ -328,13 +343,43 @@ from the population where calibration will be learned. Roughly 200+ independent 
 and unlabeled observations must support variation in the sample-size/label-count grid.
 Insufficient grids raise `ValueError`; poor fits can instead warn and return `fit_ok=False`.
 Inspect the sampling design and fit warnings, not only whether the call returned.
-The 10–25-label calibration starter loop is a different task.
+The labeling loop (20+ random labels per policy) is a different task.
 
 **Budget scope.** Supply explicit costs in the same units as the budget. The modeled cost is
 `n_samples * surrogate_cost + m_oracle * oracle_cost`; it does not automatically total the
 extra scores for every candidate, pilot collection, response generation, or held-out transport
 probes. State what the budget includes. The default minimum is 30 labels; an infeasible budget
 raises rather than authorizing a smaller reliable evaluation.
+
+**The plan is for ONE policy.** `n_samples`, `m_oracle` and `total_cost` are per policy
+(`summary()` prints them without saying so); `mde` is the pairwise MDE between two policies that
+each get that allocation, baseline included.
+- For k candidates plus a baseline under a total budget B, call `plan_evaluation(budget=B/(k+1))`.
+  Each policy answers the same `n_samples` prompts, so the totals are n×(k+1) scored responses,
+  m×(k+1) labels and cost×(k+1).
+- `mde` is on the [0, 1] scale the pilot was converted to, and `summary()` prints it as a percent
+  (5.6% = 0.056). Convert with the rubric's endpoints, either `(y - lo) / (hi - lo)` or
+  `fresh_draws_from_dict(..., judge_scale=(lo, hi), oracle_scale=(lo, hi))`, never the observed
+  min and max; then multiply by `hi - lo` (0.05 on [0, 1] is 0.3 points on a 1–7 rubric).
+- Never rescale `n_samples` or `m_oracle` by hand while keeping a plan's `mde`; replan instead.
+  Report the equal-allocation planner result first and label any reallocation as your own.
+- An existing pilot counts toward an arm only if it comes from the same population and period
+  and its labels sit at that arm's label rate. Crediting a heavily labeled pilot alongside a
+  sparsely labeled new batch makes the rates unequal: the analysis then needs
+  `label_design="known_propensity"` and its SE is larger than the even plan's, so replan with
+  that design before offering it.
+- A single-policy pilot has no estimate of shared-prompt covariance, so do not claim a paired
+  design reaches a target the planner says is unaffordable.
+- When each candidate-vs-baseline claim needs family-wise control, also plan and analyze at
+  `alpha=0.05/k` (`compare_policies(..., alpha=0.05/k)`) and show both. `decision_ready`'s
+  best-beats-all test needs no correction.
+
+`fit_variance_model` refits CJE on many subsamples, so it can log many REFUSE-LEVEL lines; those
+come from small subsamples of your pilot, not from a fit on the full pilot or from the plan. Do
+not disable logging to hide them, in this fit or in any sensitivity refit: report `fit_ok` and
+any "measurement cells were clamped" warning. The fit measures label counts only up to 0.9 × the
+smallest `n_grid` value, so a plan with many more labels extrapolates; a wider
+`oracle_fraction_grid` does not raise that cap.
 
 **Interpretation.** `EvaluationPlan` reports `n_samples`, `m_oracle`, `total_cost`, `mde`,
 `power`, and `alpha`; `.to_dict()` preserves these and the planning assumptions.
@@ -368,8 +413,8 @@ from cje import AuditScenario, CostModel, plan_transport_audits
 
 plan = plan_transport_audits(
     {
-        "baseline": AuditScenario(0.10, 0.05, available_clusters=130),
-        "candidate": AuditScenario(0.20, 0.05, available_clusters=130),
+        "baseline": AuditScenario(residual_sd=0.10, delta_max=0.05, available_clusters=130),
+        "candidate": AuditScenario(residual_sd=0.20, delta_max=0.05, available_clusters=130),
     },
     calibration_labels=40,
     cost_model=CostModel(oracle_cost=2.0),
@@ -465,6 +510,19 @@ export is not an estimate, an audit pass, or evidence of representative sampling
 
 ## Audit exports
 
+Leave an executable analysis script and an output directory, not only a chat summary. Save:
+
+- Inputs or retained locations plus checksums; prompt/cluster identifiers; sampling and label-
+  selection design (including inclusion probabilities when applicable); label source and
+  target meaning; judge/rubric versions; and any excluded records.
+- Python and `cje-eval` versions (`results.metadata["cje_version"]`), exact configuration and
+  random seeds, declared score scales, effect/power/alpha/cost settings, and sampling and
+  calibration assumptions marked known or unresolved; the plan, fitted variance components, fit
+  quality, and warnings.
+- The rerun command, environment requirements, and a short readout of what the evidence does
+  and does not support. Keep source inputs available for reruns; a checksum alone is not the
+  data. "Auditable" means inspectable and reproducible, not that the assumptions hold.
+
 Save the executable script and retained inputs alongside the exported result. `plan.to_dict()`
 preserves the allocation; `results.to_dict()` uses the default portable result format.
 Also save the policy intervals and pairwise comparisons at the alpha actually requested,
@@ -504,10 +562,11 @@ randomly sampled, so exit 0 does not mean the design is sound.
 
 | Signal | Values | What to tell the user |
 |---|---|---|
-| `overall_status` | GOOD / WARNING / CRITICAL | CRITICAL: results shipped with explicit caveats only |
+| `overall_status` | GOOD / WARNING / CRITICAL | CRITICAL: results shipped with explicit caveats only. GOOD: the estimator's diagnostics passed; it does not cover how labels were chosen, whether one judge scored every row, or decision readiness (`best_policy().decision_ready`) |
 | Boundary card | OK / CAUTION / REFUSE-LEVEL | Scalar score-range support only. REFUSE-LEVEL: no absolute level claim from this fit; it does not establish ranking validity |
-| `reliability_gates[p]["flagged"]` | bool | Surface the point estimate with the limitation; do not substitute another policy silently |
-| Transport `status` | PASS / FAIL / INCONCLUSIVE / NOT_GRADED / NOT_CHECKED | Equivalence verdict for the declared residual margin; interpret only for the audited population and family. NOT_CHECKED = no probe was supplied for that policy; never treat it as a pass |
+| `reliability_gates[p]["flagged"]` | bool | Calibrated runs: surface the point estimate with the limitation; do not substitute another policy silently. A `naive_direct` run is blocked (SKILL.md hard rule 1) |
+| Transport `status` | PASS / FAIL / INCONCLUSIVE / NOT_GRADED / NOT_CHECKED | Equivalence verdict for the declared residual margin; interpret only for the audited population and family. NOT_CHECKED = no probe was supplied for that policy; never treat it as a pass. It does not matter for a policy corrected by its own random labels (route `augmented` in `metadata["point_estimator"]["routes"]`; `transport_unverified` is also empty when no calibrator was fit), even where `diagnostics.summary()` still prints it: say "not needed: calibrated on its own labels" |
+| `Calibration RMSE`, `Calibration coverage (±t)` in `diagnostics.summary()` | numbers | Per-response fit of the calibrated judge to the oracle labels on labeled rows: RMSE in label units, and the share within ±t. They describe single-response prediction noise; they are not the coverage of the 95% interval and do not by themselves gate the estimate |
 
 ## Troubleshooting
 
@@ -515,10 +574,10 @@ randomly sampled, so exit 0 does not mean the design is sound.
 |---|---|
 | `Only N independent oracle-labeled prompt clusters are available (<4 ...); returning the UNCALIBRATED raw-judge tier` warning (`analyze_dataset`, 1–3 labels) | Below the 4-cluster floor no calibrator can be fit; the run returns the flagged `naive_direct` tier. Treat as blocked; run the labeling loop (SKILL.md §Labeling); never invent labels. |
 | `ValueError: Too few unique oracle prompt clusters (N) for cross-fitted calibration. Need at least 4 independent prompt clusters ...` (`calibrated_mean_ci`) | Partial coverage requires calibration and at least four independent labeled clusters. Repeated labels within one prompt do not create independent folds. Complete coverage uses the direct oracle mean without calibration. |
-| `No oracle labels found` → `method="naive_direct"` | 0 labels: raw judge means with a loud warning. Never report these as the answer; treat as blocked and run the labeling loop. |
+| `No oracle labels found` → `method="naive_direct"` | 0 labels: raw judge means with a loud warning. `summary()` still prints a best-by line and paired p-values; never report any of these numbers in any form (table, ordering, p-values, "context", "best guess"); treat as blocked and run the labeling loop. |
 | `reducing calibration folds from 5 to K` warning | 4–9 independent labeled clusters: valid but noisier. Recommend ≥10 independent labeled clusters to the user. |
 | `ImportError: ... pip install "cje-eval[viz]"` | Plotting needs the viz extra; estimates work without it. |
-| Scores on 0–100 / Likert | Pass as-is; auto-normalized, results returned in the original scale. |
+| Scores on 0–100 / Likert | Pass as-is and declare `fresh_judge_scale`/`fresh_oracle_scale` when the endpoints are known; results return in label units. |
 | `ValueError: oracle_labels must lie in [0, 1] ...` (`calibrated_mean_ci`, `JudgeCalibrator.fit_cv`) | Array-level labels are not rescaled for you (they used to be clipped silently in `fit_cv`). Rescale with `(y - lo) / (hi - lo)` and map results back, or use `analyze_dataset` with a declared scale. |
 | `UserWarning: Covariates were supplied but ...` | Fewer than 20 labelled rows for the full model or for some folds' training complements; those fits ignore the covariates. Label about 25+ rows (5 folds) or drop the covariates; see `covariates_used` / `n_folds_without_covariates`. |
 | `... outside [0, 1]` error on a calibration file | `calibration_data_path` defaults to [0, 1]. Declare `calibration_judge_scale`/`calibration_oracle_scale`, rescale the file, or pass the data via `fresh_draws_data` (auto-normalizes). |

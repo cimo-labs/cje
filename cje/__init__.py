@@ -38,7 +38,7 @@ def _resolve_version() -> str:
 
         return _dist_version("cje-eval")
     except Exception:  # PackageNotFoundError, or metadata unavailable
-        return "0.9.2"
+        return "0.9.3"
 
 
 __version__ = _resolve_version()

@@ -55,6 +55,24 @@ def test_bundled_skill_is_byte_identical_to_canonical(name: str) -> None:
     )
 
 
+def test_skill_fits_in_one_agent_tool_output() -> None:
+    """Claude Code returns at most 30,000 characters of a command's output and
+    otherwise shows a 2 KB preview; agents that read only the preview never see
+    the hard rules. Keep headroom, and keep the stop checks inside the preview."""
+    text = (CANONICAL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    assert (
+        len(text) <= 28_500
+    ), f"SKILL.md is {len(text):,} characters; move detail to reference.md"
+    preview = " ".join(text[:2_000].split())
+    for verdict in (
+        "Blocked: no ground-truth labels yet",
+        "the only labels are self-selected",
+        "Not decision-grade",
+        "no winner and no lean",
+    ):
+        assert verdict in preview, f"stop check {verdict!r} is not in the first 2 KB"
+
+
 def test_cli_resolves_the_bundled_folder() -> None:
     assert cli.skill_dir() == BUNDLED_DIR.resolve()
     assert cli.SKILL_FILES == SKILL_FILES

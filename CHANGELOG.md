@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.9.3] - 2026-10-18
+
+Agent skill text only. The library, its API, estimates and output are
+unchanged from 0.9.2.
+
+We pointed coding agents at `cje skill` with realistic requests and synthetic
+data whose ground truth they could not see: 8 scenarios, 3 agent models,
+24 runs. Agents computed CJE's numbers correctly every time. Their mistakes
+were in what they reported and in checks only the user's data can answer,
+and the skill now addresses each one.
+
+### Changed
+
+- **No labels means no answer (hard rule 1).** With judge scores only, or
+  fewer than 4 labeled prompt clusters, the verdict is "Blocked" and the
+  report carries no number from the `naive_direct` run, in any framing.
+  Agents had ranked a judge-only prompt sweep "for context" and offered the
+  judge's favourite as a fallback pick; in the test it was truly 5th of 6.
+- **Self-selected feedback is not a label (hard rule 2).** Star ratings,
+  thumbs, CSAT, complaints and escalations are named as self-selected, even
+  when the user calls them ground truth. The verdict is "Undecided: the
+  only labels are self-selected", and the fix is a fresh random sample.
+  An outcome recorded for every response is not self-selected. Reshaping
+  now includes a label-rate check by judge-score quintile within each
+  policy.
+- **Check judge identity (hard rule 3).** For scores the user hands over,
+  tabulate any judge model, version or rubric column by policy; a mix is a
+  blocker in the verdict line. CJE does not read such a column.
+- **No tie or cost wording (hard rule 4).** "Toss-up", "similar", "a wash",
+  "splits the difference" and point-estimate leans join the banned list, in
+  every section; no cost or latency tiebreak. Agents state both bounds of
+  the paired CI in the user's units and size the labels that would settle
+  it.
+- **Borrowed calibration (hard rule 5)** gets a write-instead template, a
+  guard against sizing new labels on the borrowed difference, and the note
+  that any own labels remove the borrowed flag while about 20 are a floor,
+  not a precision target.
+- **Reporting.** The verdict comes first and has templates for blocked,
+  self-selected and mixed-judge cases. A user's ship threshold is compared
+  with the paired CI. Differences are reported as candidate minus baseline.
+  Status codes get one plain-language gloss. A rough label-count formula
+  covers runs where every policy already has labels.
+- **Status is not readiness.** `overall_status` GOOD does not cover label
+  provenance, judge identity or decision readiness; agents quote
+  `best_policy().decision_ready`.
+- **Planning (reference).** The planner's `n_samples`, `m_oracle` and
+  `total_cost` are per policy, and its `mde` assumes every compared policy
+  gets that allocation: how to budget k candidates plus a baseline, MDE
+  units from the rubric's declared endpoints, when an existing pilot can be
+  credited to an arm, and why `fit_variance_model` logs REFUSE-LEVEL lines
+  from its internal fits.
+- **Labeling loop.** 20+ random items per policy on shared prompts,
+  including variants the judge scores low, with raters blind to the policy
+  (was 10–25 items); stratified designs declare `known_propensity`.
+- **Fits in one tool output.** `SKILL.md` stays under 28,500 characters so
+  agent tools return `cje skill` whole instead of a short preview, it opens
+  with the stop checks, and a test holds the limit. Detail moved to
+  `reference.md`.
+- **Smaller fixes.** Declared scales and what they change; named
+  `AuditScenario` arguments; comparison dict keys; the `ci()` naming idiom;
+  glossary rows for calibration RMSE and coverage; a Step 0 note for
+  environments where installs are not allowed.
+
 ## [0.9.2] - 2026-10-08
 
 Safer first runs, for people and for coding agents. Estimates, intervals,
