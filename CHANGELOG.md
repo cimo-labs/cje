@@ -6,10 +6,12 @@ Agent skill text only. The library, its API, estimates and output are
 unchanged from 0.9.2.
 
 We pointed coding agents at `cje skill` with realistic requests and synthetic
-data whose ground truth they could not see: 8 scenarios, 3 agent models,
-24 runs. Agents computed CJE's numbers correctly every time. Their mistakes
-were in what they reported and in checks only the user's data can answer,
-and the skill now addresses each one.
+data whose ground truth they could not see (8 scenarios, 3 agent models).
+Agents computed CJE's numbers correctly every time. Their mistakes were in
+what they reported and in checks only the user's data can answer. On
+0.9.2, two of 24 runs led the simulated user to ship the wrong system (a
+judge-only prompt sweep). With this text, validated on the same scenarios
+plus a new one (33 runs), none did, and no run reached a wrong conclusion.
 
 ### Changed
 
@@ -44,8 +46,9 @@ and the skill now addresses each one.
   self-selected and mixed-judge cases. A user's ship threshold is compared
   with the paired CI. Differences are reported as candidate minus baseline.
   Status codes get one plain-language gloss. A flagged gate has its own
-  verdict line, and a boundary flag says where to add random labels. A rough label-count formula
-  covers runs where every policy already has labels.
+  verdict line, and a boundary flag says where to add random labels. A
+  rough label-count formula covers runs where every policy already has
+  labels.
 - **Status is not readiness.** `overall_status` GOOD does not cover label
   provenance, judge identity or decision readiness; agents quote
   `best_policy().decision_ready`.
@@ -58,15 +61,26 @@ and the skill now addresses each one.
 - **Labeling loop.** 20+ random items per policy on shared prompts,
   including variants the judge scores low, with raters blind to the policy
   (was 10–25 items); stratified designs declare `known_propensity`.
-- **Fits in one tool output.** `SKILL.md` stays under 28,500 characters so
-  Claude Code, which keeps at most 30,000 characters of a command's output,
-  returns `cje skill` whole instead of a short preview, it opens
-  with the stop checks, and a test holds the limit. Detail moved to
-  `reference.md`.
+- **Fits in one tool output.** Claude Code keeps at most 30,000 characters
+  of a command's output and otherwise shows a short preview, so `SKILL.md`
+  stays under 28,500 characters (a test holds the limit) and opens with
+  the stop checks. Detail moved to `reference.md`.
 - **Smaller fixes.** Declared scales and what they change; named
   `AuditScenario` arguments; comparison dict keys; the `ci()` naming idiom;
   glossary rows for calibration RMSE and coverage; a Step 0 version
   guard: below 0.9.2 the skill says it does not match the installed package.
+
+### Known limitations
+
+- With small agent models (tested: Claude Haiku 4.5), reports still
+  sometimes describe which way a non-significant point estimate leans or
+  use tie wording, and in borrowed-calibration runs can lean toward the
+  unlabeled policy under an "Undecided" verdict. The verdict line and the
+  numbers were right in those runs.
+- Library messages are unchanged in this skill-only release: `summary()`
+  and `decision_note` still offer more labels or a transport audit as equal
+  options, while the skill recommends the policy's own labels for a one-off
+  decision.
 
 ## [0.9.2] - 2026-10-08
 
