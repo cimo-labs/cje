@@ -13,7 +13,6 @@ You get each policy's mean on the label scale and the paired differences between
 [![arXiv](https://img.shields.io/badge/arXiv-2512.11150-b31b1b.svg)](https://arxiv.org/abs/2512.11150)
 [![Dataset](https://img.shields.io/badge/HF-Dataset-yellow)](https://huggingface.co/datasets/elandy/cje-chatbot-arena)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb)
-[![Docs](https://img.shields.io/badge/docs-cimolabs.com-blue)](https://cimolabs.com/cje)
 [![Python](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue)](https://www.python.org/downloads/)
 [![Tests](https://github.com/cimo-labs/cje/actions/workflows/ci.yml/badge.svg)](https://github.com/cimo-labs/cje/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/cimo-labs/cje/blob/main/LICENSE)
@@ -126,7 +125,7 @@ Status: warning
 
 Read the paired difference, not the two intervals: its CI includes 0 (p = 0.22), so these 20 synthetic prompts do not show that candidate is better, and `Best by point estimate` only ranks point estimates. `[borrowed calibration]` marks `candidate`: it has no labels of its own, so it uses production's calibration (`analyze_dataset` also logs a WARNING). Its interval covers prompt sampling and calibration-fit error but not the chance that the calibration is off for candidate's responses, which is why it is narrower than production's. A paired CI that excluded 0 would not settle this comparison either; the summary would say `No decision-ready winner`. Labeling a random slice of candidate's own responses removes that reliance, and a held-out [transport audit](#guardrails-claims-cje-refuses-to-make) grades it. For the same test as a dict, use `results.compare_policies("candidate", "production")` (`difference` is the first minus the second; `conditional_on_transport` is `True` here).
 
-→ [Colab tutorial](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb) on Chatbot Arena prompts (GPT-5 labels stand in for human ratings) · [API reference](https://github.com/cimo-labs/cje/blob/main/cje/interface/README.md#api-reference) · [Overview](https://cimolabs.com/cje)
+→ [Colab tutorial](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb) on Chatbot Arena prompts (GPT-5 labels stand in for human ratings) · [API reference](https://github.com/cimo-labs/cje/blob/main/cje/interface/README.md#api-reference)
 
 ### Guardrails: claims CJE refuses to make
 
@@ -150,7 +149,7 @@ Every estimate ships with its limitations attached: a `REFUSE-LEVEL` badge when 
 
 ## Evidence
 
-- **HealthBench Consensus (29,511 response–criterion records, physician grades).** In a custom confidence-augmented regrade, judges were overconfident by 24.5 (gpt-4o-mini) and 13.0 (Claude Haiku 4.5) percentage points against strict positive physician majority. In one seeded retrospective replay that exposed 5% of the aggregate labels, calibrated estimates were within 1.4–2.1 points of the full aggregate endpoint; this was not prospective annotation or repeated-split validation. [Audit →](https://cimolabs.com/research/healthbench-judge-audit)
+- **HealthBench Consensus (29,511 response–criterion records, physician grades).** In a custom confidence-augmented regrade, judges were overconfident by 24.5 (gpt-4o-mini) and 13.0 (Claude Haiku 4.5) percentage points against strict positive physician majority. In one seeded retrospective replay that exposed 5% of the aggregate labels, calibrated estimates were within 1.4–2.1 points of the full aggregate endpoint; this was not prospective annotation or repeated-split validation. [Audit →](https://github.com/cimo-labs/healthbench-judge-audit)
 - **Chatbot Arena (4,961 prompts, 5 policies; GPT-5 ratings stand in for human labels, so this is a model-reference study, not human validation).** With 5% of the base policy's responses labeled, policy pairs were ranked correctly 99% of the time in the headline configuration (92% averaged across configurations at the `analyze_dataset` default, 94% with a response-length covariate). The arXiv v3 cost model puts this at 14× lower total cost (oracle labels plus judge calls) than labeling every response: 8.8× for one policy, 14× when one calibration is reused for all five, assuming it transfers to the others; it does not for the deliberately unhelpful policy, which the transport audit flags. Nominal 95% intervals on raw judge means covered the reference mean 0% of the time; CJE's default intervals covered about 95% (93.9% Direct, 95.6% with the covariate, across 25 sample-size and label-fraction settings × 50 seeds) in a [corrected rerun](https://github.com/cimo-labs/cje-arena-experiments/blob/main/erratum_rerun/DELTAS.md). [Paper →](https://arxiv.org/abs/2512.11150)
 
 <div align="center">
@@ -169,7 +168,7 @@ Full numbers and caveats: [Methods: validation](https://github.com/cimo-labs/cje
 - **Module deep dives**: [calibration](https://github.com/cimo-labs/cje/blob/main/cje/calibration/README.md) · [diagnostics](https://github.com/cimo-labs/cje/blob/main/cje/diagnostics/README.md) · [estimators and methods](https://github.com/cimo-labs/cje/blob/main/cje/estimators/README.md) · [data formats](https://github.com/cimo-labs/cje/blob/main/cje/data/README.md)
 - **Bridges**: [Langfuse experiments](https://github.com/cimo-labs/cje/blob/main/scripts/langfuse_cje/README.md) (keeps response identity and label provenance) · [Promptfoo, TruLens, LangSmith, OpenCompass](https://github.com/cimo-labs/cje/blob/main/scripts/cje_bridges/README.md)
 - **Videos**: [CJE in 3 minutes](https://youtu.be/VbSYrby8iaQ) · [technical walkthrough](https://youtu.be/r0dinGsPuqY)
-- **Paper and site**: [arXiv 2512.11150](https://arxiv.org/abs/2512.11150) · [cimolabs.com/cje](https://cimolabs.com/cje)
+- **Paper**: [arXiv 2512.11150](https://arxiv.org/abs/2512.11150)
 - **Upgrading**: read the [CHANGELOG](https://github.com/cimo-labs/cje/blob/main/CHANGELOG.md) first; two-stage calibrators saved before 0.8.0 need refitting from retained inputs.
 - **Development**: `git clone https://github.com/cimo-labs/cje.git && cd cje && poetry install && make test`
 
