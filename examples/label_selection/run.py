@@ -5,7 +5,6 @@ import csv
 import hashlib
 import json
 import time
-import warnings
 from pathlib import Path
 from typing import Any
 
@@ -63,7 +62,6 @@ def main() -> None:
         ("known_propensity_differential", "differential", "known_propensity"),
     ]
     runs = []
-    warning_counts: dict[str, int] = {}
     start = time.perf_counter()
     for rep in range(args.repetitions):
         shared = {}
@@ -126,18 +124,13 @@ def main() -> None:
             kwargs: dict[str, Any] = (
                 {"label_propensities": props} if kind == "known_propensity" else {}
             )
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always")
-                result = analyze_dataset(
-                    fresh_draws_data=draws,
-                    label_design=kind,
-                    fresh_judge_scale=(0, 1),
-                    fresh_oracle_scale=(0, 1),
-                    **kwargs,
-                )
-            for w in caught:
-                msg = str(w.message)
-                warning_counts[msg] = warning_counts.get(msg, 0) + 1
+            result = analyze_dataset(
+                fresh_draws_data=draws,
+                label_design=kind,
+                fresh_judge_scale=(0, 1),
+                fresh_oracle_scale=(0, 1),
+                **kwargs,
+            )
             estimates = dict(zip(result.target_policies, result.estimates))
             cis = dict(zip(result.target_policies, result.ci()))
             pair = result.compare_policies("premium", "base")
@@ -160,8 +153,12 @@ def main() -> None:
                     "condition": name,
                     "values": values,
                     "quintile": checks,
+                    "label_counts": {p: int(masks[p].sum()) for p in POLICIES},
                     "mask_hashes": mask_hashes,
                     "status": str(result.diagnostics.overall_status),
+                    "pair_significant": bool(pair["significant"]),
+                    "pair_p_value": float(pair["p_value"]),
+                    "pair_gate_flagged": pair["gate_flagged"],
                     "transport_unverified": result.metadata.get("transport_unverified"),
                 }
             )
@@ -218,7 +215,6 @@ def main() -> None:
                 "elapsed_seconds": time.perf_counter() - start,
                 "rates": RATES,
                 "summary": summary,
-                "warnings": warning_counts,
                 "data_sha256": hashlib.sha256(
                     (ROOT / "data.jsonl").read_bytes()
                 ).hexdigest(),

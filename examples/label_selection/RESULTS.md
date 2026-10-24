@@ -1,6 +1,6 @@
-# Measured fixed-pool results
+# Results on the fixed prompt pool
 
-100 repetitions; six conditions; 43.67 seconds of runner time in the packaging environment. Fresh namespace 20261024. No model/API calls.
+The runner's default is 100 repetitions across six conditions. Results below vary label selection on one fixed pool of 600 matched prompts; they do not estimate population-level performance. No model calls are made by the runner.
 
 |Condition|Target|Bias|RMSE|Coverage|Mean CI half-width|Quintile pass|
 |---|---|---:|---:|---:|---:|---:|
@@ -17,18 +17,8 @@
 |known_propensity_differential|base|+0.00007|0.01940|100%|0.08632|100%|
 |known_propensity_differential|premium-base|+0.00226|0.03783|100%|0.13858|—|
 
-The fixed-pool true premium−base difference is +0.00927. The differential flagged-only mean estimated difference is −0.16114; all 100 estimates change sign. The sign change is specific to the predeclared stress mechanism, not evidence about observed failure reports.
+The fully labeled pool's true premium-minus-base difference is +0.00927. Under the predeclared differential flagged-only stress condition, the estimated difference has the opposite sign in all 100 repetitions. Its paired confidence interval is entirely below zero in every repetition (largest upper bound −0.037547), and `compare_policies` marks the difference significant with no gate flagged. In my rerun, the overall status still reads `GOOD` in 38 of 100 repetitions. This is a constructed oracle-assisted stress case, not evidence about observed failure-report behavior.
 
-Known-propensity symmetric intervals are about 1.85× wider for the base mean and 1.93× wider for the paired difference than random intervals. This is a result to discuss with the maintainer, not an attributed library defect.
+The symmetric known-propensity intervals are about 1.85 times wider for the base mean and 1.93 times wider for the paired difference than random sampling. CJE's variance calculation uses each row's inclusion probability and gives no credit for fixed counts within strata. Since the strata here are built from oracle residuals, the intervals are valid but conservative; this is not attributed as a library defect. With independently sampled labels at the same probabilities, the maintainer found coverage of 94–96%, with half-widths within 5% of RMSE, while RMSE more than doubled.
 
-For symmetric flagged-only samples, the custom score-quintile screen passes for 99% of base repetitions despite mean bias −0.23936. Full chi-square statistics and contingency tables are in results/runs.json.
-
-All 100 sampled masks are distinct in each condition/policy. Restricted support and the targeted calibration route explain why low variation should not be interpreted as general precision; the phrase near-identical does not mean identical masks.
-
-Acceptance checks: 600 estimator results; independent arithmetic recomputation for all 18 summary rows; 60-label and 600-row contingency margins; matched symmetric masks across the two analysis routes; four-field-only data; paired prompt order. All passed. Notebook schema validated.
-
-Execution history: during packaging, all code cells ran in IPython in-process, and a separate Jupyter kernel could not start because that environment forbids TCP and IPC socket binding. The notebook has since been executed end to end in a real Jupyter kernel on Windows (nbclient 0.11.0, ipykernel 6.25.2, Python 3.12); both code cells passed. That run covered 100 repetitions and produced 600 result records and 18 summary rows, matching the frozen results with a maximum absolute difference of 1.79e-12 and no structural or string differences. For that run, whole-notebook execution time was 90.89 s, while the runner's own `elapsed_seconds` was 81.10 s; the earlier packaged-runner run took 104.20 s end to end with 85.85 s of runner time.
-
-`run.py` was reformatted by black and received type annotations for mypy so the repository pre-commit hooks pass. The 600-record comparison above was produced after those edits; the numerical and structural output did not change.
-
-AI-assisted implementation and analysis. No independent human review. The original 200-repetition pilot was preserved.
+The score-quintile chi-square is a custom diagnostic, not a built-in CJE gate. In the symmetric flagged-only base condition it passes in 99% of repetitions despite bias of −0.23936. Passing this check is failure to detect unequal score-bin label rates, not evidence that outcome-dependent selection is absent. Full contingency tables and run-level results are written to `results/runs.json` when you run it.
