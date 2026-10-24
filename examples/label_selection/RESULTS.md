@@ -1,6 +1,6 @@
 # Measured fixed-pool results
 
-100 repetitions; six conditions; 43.67 seconds. Fresh namespace 20261024. No model/API calls.
+100 repetitions; six conditions; 43.67 seconds of runner time in the packaging environment. Fresh namespace 20261024. No model/API calls.
 
 |Condition|Target|Bias|RMSE|Coverage|Mean CI half-width|Quintile pass|
 |---|---|---:|---:|---:|---:|---:|
@@ -25,6 +25,10 @@ For symmetric flagged-only samples, the custom score-quintile screen passes for 
 
 All 100 sampled masks are distinct in each condition/policy. Restricted support and the targeted calibration route explain why low variation should not be interpreted as general precision; the phrase near-identical does not mean identical masks.
 
-Acceptance checks: 600 estimator results; independent arithmetic recomputation for all 18 summary rows; 60-label and 600-row contingency margins; matched symmetric masks across the two analysis routes; four-field-only data; paired prompt order. All passed. Notebook schema validated. All code cells executed in IPython in-process; all 600 result records matched the original run exactly. A separate Jupyter kernel could not start because this environment forbids TCP and IPC socket binding.
+Acceptance checks: 600 estimator results; independent arithmetic recomputation for all 18 summary rows; 60-label and 600-row contingency margins; matched symmetric masks across the two analysis routes; four-field-only data; paired prompt order. All passed. Notebook schema validated.
+
+Execution history: during packaging, all code cells ran in IPython in-process, and a separate Jupyter kernel could not start because that environment forbids TCP and IPC socket binding. The notebook has since been executed end to end in a real Jupyter kernel on Windows (nbclient 0.11.0, ipykernel 6.25.2, Python 3.12); both code cells passed. That run covered 100 repetitions and produced 600 result records and 18 summary rows, matching the frozen results with a maximum absolute difference of 1.79e-12 and no structural or string differences. For that run, whole-notebook execution time was 90.89 s, while the runner's own `elapsed_seconds` was 81.10 s; the earlier packaged-runner run took 104.20 s end to end with 85.85 s of runner time.
+
+`run.py` was reformatted by black and received type annotations for mypy so the repository pre-commit hooks pass. The 600-record comparison above was produced after those edits; the numerical and structural output did not change.
 
 AI-assisted implementation and analysis. No independent human review. The original 200-repetition pilot was preserved.
