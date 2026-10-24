@@ -1,5 +1,31 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Auto calibration mode no longer depends on the order of tied judge
+  scores.** Auto mode compares the monotone and two-stage fits in the low, mid
+  and high thirds of the judge scores. The thirds were cut from an unstable
+  sort, so when a block of tied scores straddled a cut, which of its rows fell
+  on each side, and sometimes the selected mode, depended on the row order and
+  the platform's sort. On the shipped Arena sample (the core demo's analysis,
+  350 labels, 11 distinct scores), shuffling the rows changed the selected
+  mode in 4 of 60 orders tested, which moved `unhelpful` from 0.519 to 0.452,
+  its difference from `base` from -0.236 to -0.304, and its boundary card from
+  OK to CAUTION. Each block of tied scores now goes wholly to the third that
+  holds the middle of its ranks, and all 60 orders give the published numbers.
+  Without ties, or when no block straddles a cut, the split is unchanged. With
+  few distinct scores the thirds can be uneven or empty; an empty third is
+  skipped, so "two-stage better in two regions" can mean better in every
+  non-empty region. The core demo notebook, `examples/audit_correction.py` and
+  the planning notebook's default run give the same numbers; its optional
+  pilot refinement moves slightly (production configuration: σ²_eval 0.0109 to
+  0.0114, recommended oracle fraction 53% to 52%). In a 600-analysis study on
+  Arena-derived data (15 to 16 distinct judge scores, 60 labels per policy),
+  27 analyses changed, by up to 0.024 in an estimate, with summary bias and
+  RMSE within 0.001 and coverage within 0.01 of before.
+
 ## [0.9.3] - 2026-10-18
 
 Agent skill text only. The library, its API, estimates and output are

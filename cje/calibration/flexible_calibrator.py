@@ -5,7 +5,7 @@ through flexible shape fitting while maintaining cross-fitting support.
 """
 
 import numpy as np
-from typing import Optional, Dict, Any, Literal, Callable, List
+from typing import Optional, Dict, Any, Literal, Callable, List, Tuple
 from sklearn.isotonic import IsotonicRegression
 from sklearn.preprocessing import SplineTransformer
 from sklearn.linear_model import RidgeCV
@@ -93,6 +93,28 @@ def _fit_ecdf(
         return out
 
     return F
+
+
+def _score_thirds(S: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Row indices of the low, mid and high judge-score thirds, ties kept whole.
+
+    Cutting a sort of S at n // 3 and 2 * (n // 3) splits a block of tied
+    scores that straddles a cut, and which tied rows land on each side then
+    depends on the sort's tie order and so on the row order. Here every block
+    of equal scores goes wholly to the third that holds the middle of its rank
+    positions, so the split depends only on the multiset of scores. Without
+    ties, or when no block straddles a cut, it is exactly the plain cut. With
+    few distinct scores a third can hold no block's middle and so be empty
+    (as are the low and mid thirds below three rows); callers skip it.
+    """
+    scores = np.asarray(S, dtype=float)
+    order = np.argsort(scores, kind="stable")
+    _, starts, counts = np.unique(scores[order], return_index=True, return_counts=True)
+    n_third = scores.size // 3
+    middle = starts + (counts - 1) / 2.0
+    block_third = np.where(middle < n_third, 0, np.where(middle < 2 * n_third, 1, 2))
+    third = np.repeat(block_third, counts)
+    return order[third == 0], order[third == 1], order[third == 2]
 
 
 def _rows_needed_hint(n_folds: int) -> str:
@@ -303,24 +325,20 @@ class FlexibleCalibrator:
                 rmse_mono = np.sqrt(np.average((Y - pred_mono) ** 2, weights=weights))
 
                 # Check for clear non-monotonicity via regional performance
-                sort_idx = np.argsort(S)
-                n_third = len(S) // 3
-                low_mask = sort_idx[:n_third]
-                mid_mask = sort_idx[n_third : 2 * n_third]
-                high_mask = sort_idx[2 * n_third :]
-
-                rmse_low = np.sqrt(np.mean((Y[low_mask] - pred_mono[low_mask]) ** 2))
-                rmse_mid = np.sqrt(np.mean((Y[mid_mask] - pred_mono[mid_mask]) ** 2))
-                rmse_high = np.sqrt(np.mean((Y[high_mask] - pred_mono[high_mask]) ** 2))
+                # (debug log only; the choice is made in _select_best_mode).
+                regional_rmse = [
+                    float(np.sqrt(np.mean((Y[rows] - pred_mono[rows]) ** 2)))
+                    for rows in _score_thirds(S)
+                    if rows.size
+                ]
 
                 # Always fit two-stage and use _select_best_mode for auto mode
                 # (ensures consistent application of 1-SE rule)
-                max_regional_diff = max(rmse_low, rmse_mid, rmse_high) - min(
-                    rmse_low, rmse_mid, rmse_high
-                )
-                logger.debug(
-                    f"Regional RMSE differences: {max_regional_diff:.3f}, fitting two-stage for comparison"
-                )
+                if regional_rmse:
+                    max_regional_diff = max(regional_rmse) - min(regional_rmse)
+                    logger.debug(
+                        f"Regional RMSE differences: {max_regional_diff:.3f}, fitting two-stage for comparison"
+                    )
                 self._fit_two_stage(S, Y, folds, covariates, weights)
                 self.selected_mode = self._select_best_mode(
                     S, Y, folds, covariates, weights
@@ -778,33 +796,24 @@ class FlexibleCalibrator:
         rmse_mono = weighted_rmse(Y, pred_mono)
         rmse_two_stage = weighted_rmse(Y, pred_two_stage)
 
-        # Check for non-monotonicity by comparing performance in different regions
-        # Sort by judge scores
-        sort_idx = np.argsort(S)
-
-        # Split into thirds and check local performance
-        n_third = len(S) // 3
-        low_mask = sort_idx[:n_third]
-        mid_mask = sort_idx[n_third : 2 * n_third]
-        high_mask = sort_idx[2 * n_third :]
-
-        rmse_mono_low = weighted_rmse(Y, pred_mono, low_mask)
-        rmse_flex_low = weighted_rmse(Y, pred_two_stage, low_mask)
-
-        rmse_mono_mid = weighted_rmse(Y, pred_mono, mid_mask)
-        rmse_flex_mid = weighted_rmse(Y, pred_two_stage, mid_mask)
-
-        rmse_mono_high = weighted_rmse(Y, pred_mono, high_mask)
-        rmse_flex_high = weighted_rmse(Y, pred_two_stage, high_mask)
+        # Check for non-monotonicity by comparing performance in the low, mid
+        # and high judge-score thirds. Tied scores stay in one third, so the
+        # choice does not depend on row order; an empty third (few distinct
+        # scores) cannot count as a region where two-stage is better.
+        regional: List[Tuple[str, float, float]] = []
+        for name, rows in zip(("Low", "Mid", "High"), _score_thirds(S)):
+            if rows.size == 0:
+                continue
+            regional.append(
+                (
+                    name,
+                    weighted_rmse(Y, pred_mono, rows),
+                    weighted_rmse(Y, pred_two_stage, rows),
+                )
+            )
 
         # Count regions where two-stage is better
-        better_count = 0
-        if rmse_flex_low < rmse_mono_low:
-            better_count += 1
-        if rmse_flex_mid < rmse_mono_mid:
-            better_count += 1
-        if rmse_flex_high < rmse_mono_high:
-            better_count += 1
+        better_count = sum(flex < mono for _, mono, flex in regional)
 
         # Apply 1-SE rule: prefer simpler model unless complex is significantly better
         # Standard error of RMSE estimate using delta method
@@ -828,20 +837,18 @@ class FlexibleCalibrator:
         )
         logger.log(
             level,
-            f"  Regional performance - Two-stage better in {better_count}/3 regions",
+            f"  Regional performance - Two-stage better in {better_count}/{len(regional)} regions",
         )
-        logger.debug(f"    Low S: Mono={rmse_mono_low:.4f}, Flex={rmse_flex_low:.4f}")
-        logger.debug(f"    Mid S: Mono={rmse_mono_mid:.4f}, Flex={rmse_flex_mid:.4f}")
-        logger.debug(
-            f"    High S: Mono={rmse_mono_high:.4f}, Flex={rmse_flex_high:.4f}"
-        )
+        for name, mono, flex in regional:
+            logger.debug(f"    {name} S: Mono={mono:.4f}, Flex={flex:.4f}")
 
         # Select two-stage if:
         # 1. It's significantly better overall (1-SE rule), OR
-        # 2. It's better in at least 2/3 regions (indicates non-monotonicity)
+        # 2. It's better in at least 2 of the (nonempty) regions
         if rmse_two_stage < rmse_mono - se_rmse or better_count >= 2:
             logger.log(
-                level, f"  → Selected: two_stage (better in {better_count}/3 regions)"
+                level,
+                f"  → Selected: two_stage (better in {better_count}/{len(regional)} regions)",
             )
             return "two_stage"
         else:
