@@ -73,6 +73,17 @@ Through 0.9.1 records reject `NaN`; from 0.9.2 a `NaN` label is read as unlabele
   probability in (0, 1] for every row in input order, labeled or not. Otherwise the estimate and
   its interval can be biased, with no warning. Never hand-pick responses to label; CJE cannot
   detect it.
+- **Known-propensity intervals.** The interval uses only each row's inclusion probability, so it
+  matches independent labeling (each row by its own draw at its probability, as in Bernoulli or
+  Poisson sampling; simulated 95% intervals covered about 94% with about 100 labels). With a
+  fixed number of labels per stratum it stays valid but is conservative. With judge-score
+  strata the excess is slight; keep `known_propensity` there. Strata that predict the
+  calibration residual (label minus calibrated score) widen it more: about 1.1 to 1.4 times as
+  wide as the estimate's actual error called for with a noisy pre-labelling flag for the
+  residual's sign, and 1.6 to 3 times when the strata were built from the residual itself (an
+  extreme case). For one policy's mean under a fixed-count design with such strata, the
+  per-stratum analysis in [Array API](#array-api-single-sample-primitive), with its share
+  term, gives an interval sized to the error.
 
 ## `analyze_dataset`
 
@@ -261,9 +272,16 @@ Supplying `n_bootstrap` without an inference choice selects bootstrap with a com
   residual correction averages them unweighted, so stratified or oversampled labels (equal
   quotas per bucket, rare buckets oversampled) bias the estimate; there is no strata or weights
   argument. For strata defined before labelling, call `calibrated_mean_ci` once per stratum h
-  and combine with population shares `W_h = N_h / N`: estimate `sum_h W_h * mu_h`, standard
-  error `sqrt(sum_h W_h**2 * SE_h**2)`, normal interval. Each stratum then needs its own labelled
-  slice (at least four labelled clusters). For known unequal inclusion probabilities use
+  and combine with the shares `W_h = N_h / N` of the N evaluation rows: estimate
+  `mu = sum_h W_h * mu_h`, standard error
+  `sqrt(sum_h W_h**2 * SE_h**2 + sum_h W_h * (mu_h - mu)**2 / N)`, normal interval. The second
+  term is the sampling variance of the shares; leave it out only when the `W_h` are known
+  population shares. Without it, simulated 95% intervals with judge-score strata covered as
+  little as 77%. Each stratum needs its own labelled slice (at least four labelled clusters).
+  When the strata predict the residual and each gets a fixed number of labels, this avoids the
+  `known_propensity` interval's over-statement; with judge-score strata `known_propensity` was
+  about as precise or more so. It gives one policy's mean, not paired comparisons. For known
+  unequal inclusion probabilities use
   `analyze_dataset(label_design="known_propensity", label_propensities=...)`.
 
 **Transport audit:** before reusing `result.calibrator` (or `results.calibrator`) on new
@@ -448,8 +466,11 @@ alter estimates. To correct the current target estimate:
 3. Declare `label_design="representative"` only for a justified representative slice. For
    known unequal inclusion probabilities, use `label_design="known_propensity"` and
    `label_propensities`: one vector per policy with a positive probability for **every**
-   evaluation row, in row order, including unlabeled rows. For targeted labels with unknown
-   probabilities, use `"targeted_unknown"`; CJE keeps an explicit plug-in route.
+   evaluation row, in row order, including unlabeled rows. Its interval matches independent
+   inclusion and is conservative for a fixed number of labels per stratum: slightly with
+   judge-score strata, more when the strata predict the residual
+   ([Your own data](#your-own-data)). For targeted labels with unknown probabilities, use
+   `"targeted_unknown"`; CJE keeps an explicit plug-in route.
 4. Inspect `results.metadata["point_estimator"]["routes"]` to confirm `augmented` where
    applicable. Use the recomputed SEs, CIs, and paired comparisons, not an old interval shifted
    by the correction. Retain the original audit as evidence about the unchanged map.

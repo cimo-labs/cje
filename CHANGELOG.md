@@ -26,6 +26,31 @@
   27 analyses changed, by up to 0.024 in an estimate, with summary bias and
   RMSE within 0.001 and coverage within 0.01 of before.
 
+### Documentation
+
+- **What the `known_propensity` interval assumes.** It uses only each row's
+  inclusion probability, so it matches independent labeling (simulated 95%
+  intervals covered about 94% with about 100 labels) and is conservative with
+  a fixed number of labels per stratum: slightly with judge-score strata,
+  where the docs now say to keep it, and more with strata that predict the
+  calibration residual. In simulations it was 1.1 to 1.4 times as wide as the
+  actual error called for with a noisy pre-labelling flag for the residual's
+  sign, and 1.6 to 3 times with strata built from the residual itself (an
+  extreme case). `reference.md` and the interface and diagnostics READMEs say
+  so, and point fixed-count designs with residual-predictive strata to the
+  per-stratum analysis.
+- **The per-stratum recipe's standard error now includes the variance of the
+  stratum shares.** With shares `W_h = N_h / N` counted from the evaluation
+  rows, `sqrt(sum_h W_h^2 SE_h^2)` (documented since 0.9.1) leaves out
+  `sum_h W_h (mu_h - mu)^2 / N`, and simulated 95% intervals with judge-score
+  strata covered as little as 77%. The `calibrated_mean_ci` docstring and
+  `reference.md` give the full formula; leave the term out only with known
+  population shares.
+- New seeded slow tests check the `known_propensity` interval's coverage and
+  its standard error against the actual error under independent and
+  fixed-count labeling, with judge-score and residual strata, and the
+  per-stratum recipe's coverage.
+
 ## [0.9.3] - 2026-10-18
 
 Agent skill text only. The library, its API, estimates and output are
