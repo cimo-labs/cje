@@ -402,11 +402,17 @@ def calibrated_mean_ci(
     oversampled) bias the estimate, and nothing here undoes that tilt; there
     is no strata or weights argument. For a stratified design defined before
     labelling, call this function once per stratum h on that stratum's rows
-    and combine with the population shares W_h = N_h / N: estimate
-    ``sum_h W_h * mu_h`` and standard error ``sqrt(sum_h W_h**2 * SE_h**2)``,
-    with a normal interval. Each stratum then needs its own labelled slice
-    (at least four labelled clusters). For known unequal inclusion
-    probabilities, use ``analyze_dataset(label_design="known_propensity")``.
+    and combine with the shares W_h = N_h / N of the N rows: estimate
+    ``mu = sum_h W_h * mu_h`` and standard error
+    ``sqrt(sum_h W_h**2 * SE_h**2 + sum_h W_h * (mu_h - mu)**2 / N)``, with a
+    normal interval. The second term is the sampling variance of the shares;
+    leave it out only when the W_h are known population shares. Each stratum
+    then needs its own labelled slice (at least four labelled clusters). For
+    known unequal inclusion probabilities, use
+    ``analyze_dataset(label_design="known_propensity")``; with a fixed number
+    of labels per stratum its interval is conservative, slightly with
+    judge-score strata and more with strata that predict the residual, where
+    this per-stratum combination is sized to the error.
 
     Args:
         judge_scores: (n,) raw judge scores for every evaluation sample.

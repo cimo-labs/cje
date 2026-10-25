@@ -1,5 +1,56 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Auto calibration mode no longer depends on the order of tied judge
+  scores.** Auto mode compares the monotone and two-stage fits in the low, mid
+  and high thirds of the judge scores. The thirds were cut from an unstable
+  sort, so when a block of tied scores straddled a cut, which of its rows fell
+  on each side, and sometimes the selected mode, depended on the row order and
+  the platform's sort. On the shipped Arena sample (the core demo's analysis,
+  350 labels, 11 distinct scores), shuffling the rows changed the selected
+  mode in 4 of 60 orders tested, which moved `unhelpful` from 0.519 to 0.452,
+  its difference from `base` from -0.236 to -0.304, and its boundary card from
+  OK to CAUTION. Each block of tied scores now goes wholly to the third that
+  holds the middle of its ranks, and all 60 orders give the published numbers.
+  Without ties, or when no block straddles a cut, the split is unchanged. With
+  few distinct scores the thirds can be uneven or empty; an empty third is
+  skipped, so "two-stage better in two regions" can mean better in every
+  non-empty region. The core demo notebook, `examples/audit_correction.py` and
+  the planning notebook's default run give the same numbers; its optional
+  pilot refinement moves slightly (production configuration: σ²_eval 0.0109 to
+  0.0114, recommended oracle fraction 53% to 52%). In a 600-analysis study on
+  Arena-derived data (15 to 16 distinct judge scores, 60 labels per policy),
+  27 analyses changed, by up to 0.024 in an estimate, with summary bias and
+  RMSE within 0.001 and coverage within 0.01 of before.
+
+### Documentation
+
+- **What the `known_propensity` interval assumes.** It uses only each row's
+  inclusion probability, so it matches independent labeling (simulated 95%
+  intervals covered about 94% with about 100 labels) and is conservative with
+  a fixed number of labels per stratum: slightly with judge-score strata,
+  where the docs now say to keep it, and more with strata that predict the
+  calibration residual. In simulations it was 1.1 to 1.4 times as wide as the
+  actual error called for with a noisy pre-labelling flag for the residual's
+  sign, and 1.6 to 3 times with strata built from the residual itself (an
+  extreme case). `reference.md` and the interface and diagnostics READMEs say
+  so, and point fixed-count designs with residual-predictive strata to the
+  per-stratum analysis.
+- **The per-stratum recipe's standard error now includes the variance of the
+  stratum shares.** With shares `W_h = N_h / N` counted from the evaluation
+  rows, `sqrt(sum_h W_h^2 SE_h^2)` (documented since 0.9.1) leaves out
+  `sum_h W_h (mu_h - mu)^2 / N`, and simulated 95% intervals with judge-score
+  strata covered as little as 77%. The `calibrated_mean_ci` docstring and
+  `reference.md` give the full formula; leave the term out only with known
+  population shares.
+- New seeded slow tests check the `known_propensity` interval's coverage and
+  its standard error against the actual error under independent and
+  fixed-count labeling, with judge-score and residual strata, and the
+  per-stratum recipe's coverage.
+
 ## [0.9.3] - 2026-10-18
 
 Agent skill text only. The library, its API, estimates and output are
