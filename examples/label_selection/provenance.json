@@ -1,6 +1,11 @@
 {
   "code_commit": "a4d84fb05019ebed610ac5890979df79d9ebe086",
+  "data_repo": "cimo-labs/cje-arena-experiments",
   "data_commit": "7bcfe4a4d008017ad6b681f8a426fe531ad40c0e",
+  "source_paths": {
+    "base_responses.jsonl": "data/responses/base_responses.jsonl",
+    "premium_responses.jsonl": "data/responses/premium_responses.jsonl"
+  },
   "source_sha256": {
     "base_responses.jsonl": "3579c4e9651b6d3c98f0949332e9db5f24004906b9c6ea1446e305eadb21532e",
     "premium_responses.jsonl": "f1b73800ba83eac089017443c9c3b36a360716ecb96c496e76c27f66d4fb3d8f"
