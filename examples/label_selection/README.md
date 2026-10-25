@@ -18,16 +18,16 @@ Equal-count judge-score bins contain 120 rows each, with stable tie splitting. T
 
 Flagged-only samples take 12 flagged rows per bin. Known-propensity samples take 9 flagged plus 3 unflagged per bin, recording the exact positive inclusion probabilities for every row. This changes both support and weighting; recovery cannot be attributed to weighting alone. It is an oracle-assisted best case, not a practical pre-label acquisition method or observed failure-report behavior.
 
-The two symmetric flagged analyses share exactly the same sampled masks. Other conditions use explicit SHA256-derived random streams. Old pilot outputs are preserved separately; this revision uses a new seed namespace.
+The two symmetric flagged analyses share exactly the same sampled masks. Other conditions use explicit SHA256-derived random streams.
 
 ## Interpretation
 
 Coverage is conditional on this fixed prompt pool and varies label selection only. Mean CI half-width is reported alongside bias, RMSE, and coverage. The intervals may include variation beyond the fixed-pool repetition design; high coverage alone is not a proof of correct population inference.
 
-The low flagged-only paired-difference RMSE in the original pilot reflected near-identical label sets across repetitions, not general precision. In this revision, each symmetric flagged sample takes 12 of 36 flagged rows per bin, and the output reports distinct masks. In the targeted_unknown route, calibration can also yield low variability while transport remains explicitly unverified.
+Each symmetric flagged sample takes 12 of 36 flagged rows per bin, and the output reports distinct masks. In the targeted_unknown route, calibration can also yield low variability while transport remains explicitly unverified.
 
 The score-quintile chi-square is a custom diagnostic, not a claimed built-in CJE gate. It uses score-value quantiles, preserves ties, and collapses duplicate edges. A p-value >= .05 is failure to detect unequal score-bin label rates, not proof that outcome-dependent selection is absent. Every contingency table, chi-square statistic, degrees of freedom, p-value, sampled-label count, and paired-comparison diagnostic is retained in `results/runs.json` when you run it.
 
 Opposite-sign fraction is a descriptive sign change of the estimated policy difference, not a statistically significant ranking claim. No training or deployment conclusion follows.
 
-Implementation and documentation are AI-assisted. See RESULTS.md for measured output and runtime.
+Implementation and documentation are AI-assisted. See RESULTS.md for measured output.
