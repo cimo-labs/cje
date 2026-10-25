@@ -94,6 +94,7 @@
 *.egg-info/
 *.jsonl
 !examples/arena_sample/**/*.jsonl
+!examples/label_selection/*.jsonl
 !cje/tests/data/**/*.jsonl
 *.key
 *.log
@@ -118,6 +119,7 @@
 .claude/
 .coverage
 .coverage.*
+examples/label_selection/results/
 .dmypy.json
 .eggs/
 .env
