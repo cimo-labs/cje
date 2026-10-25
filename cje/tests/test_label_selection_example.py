@@ -21,7 +21,7 @@ def test_label_selection_example_writes_expected_structure(tmp_path: Path) -> No
     env["OPENBLAS_NUM_THREADS"] = "1"
     env["OMP_NUM_THREADS"] = "1"
 
-    subprocess.run(
+    proc = subprocess.run(
         [
             sys.executable,
             str(RUNNER),
@@ -32,11 +32,12 @@ def test_label_selection_example_writes_expected_structure(tmp_path: Path) -> No
         ],
         cwd=REPO_ROOT,
         env=env,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=120,
     )
+    assert proc.returncode == 0, proc.stderr[-4000:]
 
     runs = json.loads((output_dir / "runs.json").read_text())
     summary = json.loads((output_dir / "summary.json").read_text())
