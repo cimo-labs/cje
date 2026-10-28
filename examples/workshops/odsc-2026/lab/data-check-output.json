@@ -1,0 +1,25 @@
+{
+  "status": "Descriptive data checks only; not CJE results",
+  "source_sha256": "all four upstream files verified",
+  "documents": 100,
+  "systems_in_lab": 2,
+  "evaluation_documents": 60,
+  "audit_documents": 40,
+  "fit_labels": 30,
+  "audit_labels": 80,
+  "raw_judge_mean_bounds_original_scale": {
+    "M10": [
+      3.013333333333333,
+      3.0366666666666666
+    ],
+    "M11": [
+      2.175,
+      2.2016666666666667
+    ]
+  },
+  "direct_M10_fit_label_mean_original_scale": 4.433333333333334,
+  "synthetic_exercise": {
+    "differential_residual_contrast": -0.06,
+    "common_residual_contrast": 0.04
+  }
+}

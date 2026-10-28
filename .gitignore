@@ -89,6 +89,7 @@
 *.bak
 *.cover
 *.csv
+!examples/workshops/odsc-2026/lab/*.csv
 *.draft.*
 *.egg
 *.egg-info/

@@ -1,0 +1,9 @@
+{
+  "workshop-data.json": "01d66d572c9e5e235534f0885ba5c0ea0847fea7c8843cd672397e61fe4ec85c",
+  "data-check-output.json": "46b835882020496cec655c0bb0e30f43d07b40ad0d633f2598c5b8f9446e687d",
+  "LICENSE-upstream.txt": "a0f7955eaf924c7923524d354658d56c8d0711f3db8c7d14e236accbd6274676",
+  "LICENSE-summeval.txt": "277a0ce9704840854ff8d31b8a6adbc4af73f5688eb4a8820e372ed10fff850e",
+  "toy-evals.csv": "9961bafe4489dd285e6ee5de556e3e4b9564b7db68f51ba9acb3c16cbed07b36",
+  "make-toy-evals.py": "e14108bfb502c8b7129237639e8458f624ed648bcd2c6d7d993edf0a576fafba",
+  "requirements.txt": "9c977928a23d45e618a9c367abbbe99ea6b961a4285a73d066883cf72740062c"
+}
