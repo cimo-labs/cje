@@ -40,3 +40,9 @@ Examples use a curated Chatbot Arena-derived dataset:
 - The repo also includes a ready-to-run sample under `examples/arena_sample/`.
 
 See `arena_sample/README.md` for details.
+
+## Label-selection sensitivity
+
+[`label_selection_sensitivity.ipynb`](label_selection_sensitivity.ipynb) compares random, flagged-only, and known-propensity labels at equal budgets on a fixed Arena pool. It includes asymmetric flag rates, interval widths, and score-quintile diagnostics. See [`label_selection/README.md`](label_selection/README.md) for provenance and limits.
+
+This notebook runs a script and bundled data from a repository checkout; it is not a standalone Colab notebook.
