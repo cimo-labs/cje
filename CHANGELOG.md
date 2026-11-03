@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-11-02
+
+A fix to auto calibration mode on tied judge scores, a corrected per-stratum
+standard error in the docs, and two new examples. The API is unchanged from
+0.9.3; estimates change only on data whose tied scores straddled the cuts
+auto mode uses to compare fits (details below).
+
 ### Fixed
 
 - **Auto calibration mode no longer depends on the order of tied judge
@@ -50,6 +57,23 @@
   its standard error against the actual error under independent and
   fixed-count labeling, with judge-score and residual strata, and the
   per-stratum recipe's coverage.
+
+### Added
+
+- **Label-selection sensitivity example** (`examples/label_selection/`,
+  `examples/label_selection_sensitivity.ipynb`; contributed by Baixin Guo,
+  #88). An offline notebook and runner showing how the choice of which rows
+  get oracle labels biases estimates at a fixed budget of 60 labels per
+  policy, on a pool derived from the Arena responses. With flagged-only labels
+  that differ by policy, the paired interval lies below zero in all 100
+  repetitions (true difference +0.009) and `compare_policies` reports it
+  significant with no gate flagged. Random labels stay valid, and
+  `known_propensity` does too, about twice as wide as needed with these
+  residual-built strata.
+- **ODSC AI West 2026 workshop lab** (`examples/workshops/odsc-2026/`). A
+  hands-on calibration lab on public SummEval / G-Eval data, with Colab and
+  local routes and an agent path. It stays pinned to `cje-eval==0.9.3`, the
+  version it was presented and checked on.
 
 ## [0.9.3] - 2026-10-18
 
