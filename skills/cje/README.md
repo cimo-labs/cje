@@ -9,47 +9,43 @@ Planning is optional; its power estimates are projections under explicit assumpt
 
 ## Install
 
-The package ships the skill matching its own version (0.9.2+). Install on Python 3.10–3.13; on
-Python 3.9 a bare `pip install cje-eval` silently installs the legacy 0.5 line, so keep the
-version floor:
+Install on Python 3.10–3.13. Run these commands with the interpreter that will analyze the
+data so the instructions match the installed package.
 
 ```bash
-pip install -U "cje-eval>=0.9.2"
-cje skill               # prints SKILL.md
-cje skill --reference   # prints reference.md
-cje skill --path        # prints the folder holding both
+python -m pip install -U "cje-eval>=0.10.1"
+python -m cje --version
+python -m cje skill               # prints SKILL.md
+python -m cje skill --reference   # prints reference.md
+python -m cje skill --path        # prints the folder holding both
 ```
 
 **Agents with a skills directory** (Claude Code and compatible): copy both files into it.
 
 ```bash
-# Claude Code, all projects, from the installed package (0.9.2+)
-mkdir -p ~/.claude/skills/cje
-cp "$(cje skill --path)"/SKILL.md "$(cje skill --path)"/reference.md ~/.claude/skills/cje/
-
-# Or from GitHub main (raw text)
-curl -fsSL https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/SKILL.md -o ~/.claude/skills/cje/SKILL.md
-curl -fsSL https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/reference.md -o ~/.claude/skills/cje/reference.md
-
-# Claude Code, one project (from a checkout of this repo)
-mkdir -p .claude/skills
-cp -r skills/cje .claude/skills/
+# For one project use .claude/skills/cje instead.
+skill_dir=~/.claude/skills/cje
+mkdir -p "$skill_dir"
+python -m cje skill > "$skill_dir/SKILL.md"
+python -m cje skill --reference > "$skill_dir/reference.md"
 ```
 
 **Any other agent**: install the package as above (or let the agent do it), then paste this into the conversation, filling in the brackets:
 
 ```text
-Run `cje skill` and follow it; when it points to reference.md, run `cje skill --reference`.
-Data: [path to the eval export]
-Question: [e.g. is candidate better than production on support prompts, and by how much?]
-How the labels were chosen: [e.g. 50 random responses per policy rated by our QA team /
-escalated tickets only / not sure]
+Record `python -m cje --version`. Read the full `python -m cje skill` and
+`python -m cje skill --reference` from that interpreter and follow the skill's stop checks.
+Use [file paths or in-memory records]. Compare [candidate minus baseline] on [outcome and scale].
+The target frame is [eligible prompts or documents, including any missing scores or labels].
+Historical calibration labels were selected by [mechanism and known rates, if used].
+Current traffic and human reviews were selected by [mechanism and known rates at each stage,
+or unknown]. Our prespecified decision margin is [gap in outcome units, or none].
 ```
 
-If the agent cannot run `cje` (or has a version before 0.9.2), have it download the raw
-[SKILL.md](https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/SKILL.md) and
-[reference.md](https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/reference.md)
-with `curl` and read the text itself; a summarizing web fetcher drops the rules.
+For a worked example, follow the guide that matches how the data were collected.
+[Weighted paired audits](../../guides/weighted-paired-audit.md) ·
+[Binary judge review budgets](../../guides/evaluation-planning.md#plan-reviews-of-a-binary-judge) ·
+[Rater panels and missing outcomes](../../guides/rater-and-missing-outcomes.md)
 
 ## Plan an evaluation
 

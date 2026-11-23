@@ -2,7 +2,9 @@
 
 Use `weighted_paired_audit` when you can enumerate the target prompts, users or documents and know exactly how they were sampled. One row represents one independent cluster. First sample clusters for traffic scoring, then sample from those clusters for paired human review. Each draw must be Bernoulli, independent across clusters. Both policies are judged and, when selected for human review, labeled together. The target is a prespecified weighted average of the paired outcomes over **this frame**.
 
-There are three distinct uses of weights. Historical calibration labels may have been collected under unequal probabilities. A separate fit can weight them by their inverse acquisition probabilities. In the current frame, each cluster has a traffic inclusion probability and a conditional label inclusion probability. Optional known target masses specify the frame average you want. For example, if the target is two groups with fixed shares, divide each group's target share by its total frame count to get its per-cluster mass.
+Historical calibration labels may have been collected under unequal probabilities. A separate fit can weight them by their inverse acquisition probabilities. In the current frame, each cluster has a traffic inclusion probability and a conditional label inclusion probability. Optional known target masses specify the frame average you want. For example, if the target is two groups with fixed shares, divide each group's target share by its total frame count to get its per-cluster mass.
+
+This function takes a fixed paired prediction as input, so it can report an interval even when very few clusters receive human review. If you only have selected click logs, recover the assignment frame and the sampling probabilities before using it. With a known frame and bounded outcomes, missing human reviews can still leave informative limits on the mean even when their inclusion probabilities are unknown. [Rater panels, judge timeouts and missing-outcome bounds](rater-and-missing-outcomes.md)
 
 ## A complete synthetic example
 
@@ -62,7 +64,8 @@ audit = weighted_paired_audit(
     outcome_bounds=(-1, 1),
     target_weights=np.where(group == 0, 3, 1),  # 75/25 across the equally sized groups
 )
-print(audit.estimate, audit.ci, audit.n_labeled, audit.label_effective_n)
+print(audit.estimate, audit.ci, audit.outcome_identification_bounds)
+print(audit.n_labeled, audit.label_effective_n)
 ```
 
 Pass one row per **frame** cluster, including unselected rows. Give each nonselected field a missing value. A judge timeout or unavailable human rating on a selected row is an observation failure. Correct the missingness design or define the endpoint before estimating. Quota sampling without replacement, voluntary responses, estimated traffic shares, and repeated decisions about whether to keep sampling require different uncertainty calculations. Inclusion probabilities inferred from observed label rates cannot establish how an acquisition process worked. If a current label probability depends on a score, the input still requires the true conditional probability for every potential cluster, even those skipped at stage one.

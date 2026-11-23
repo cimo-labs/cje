@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -101,6 +102,20 @@ def main() -> None:
                 text=True,
             ).stdout
             assert marker in shown, f"cje skill {extra} printed no {marker!r}"
+            if extra == ["--reference"]:
+                section = shown.split("\n## Sampling designs\n", 1)[1].split(
+                    "\n## ", 1
+                )[0]
+                recipes = re.findall(
+                    r"^```python\n(.*?)^```$", section, re.MULTILINE | re.DOTALL
+                )
+                assert (
+                    len(recipes) >= 2
+                ), "Missing offline review planning or audit example"
+                for recipe in recipes:
+                    subprocess.run(
+                        [sys.executable, "-c", recipe], check=True, cwd=directory
+                    )
     print(f"Installed core-only cje-eval {cje.__version__}: API and CLI smoke passed")
 
 

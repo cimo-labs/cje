@@ -1,12 +1,12 @@
 ---
 name: cje
-description: Use CJE (pip install cje-eval) to compare policies from judge scores and oracle labels, report calibrated means and paired differences with uncertainty, audit or correct calibration reuse, and plan evaluation or audit-label budgets. Use for eval-harness exports, production judge/outcome records, and estimating a candidate model or prompt from its generated responses before shipping it; off-policy IPS/DR reweighting of another policy's logged responses is outside current CJE.
+description: Use CJE (cje-eval) to compare policies using judge scores and human or observed outcomes, assess calibration drift, plan review budgets, and analyze paired audits on a known sampling frame. Use on eval exports, production evaluations, and proposed models or prompts with their own generated responses.
 ---
 
 # CJE: calibrated LLM-judge evaluation
 
-**Stop checks.** If your tool cut this output short or saved it to a file, open that file and
-read it whole before anything else. These decide the verdict line before any number:
+**For a calibrated policy comparison**, read these stop checks before reporting a number.
+If your tool truncated the output, save it and read the rest in chunks.
 
 - Judge scores only, or fewer than 4 independently labeled prompts: "Blocked: no ground-truth
   labels yet"; report no number, ranking or pick (hard rule 1).
@@ -17,25 +17,22 @@ read it whole before anything else. These decide the verdict line before any num
   no lean (hard rule 5).
 - Decide from the paired difference, never from raw judge means or overlapping intervals.
 
+**Choose the analysis from the sampling design (0.10+).** Search the bundled reference for **Sampling designs**.
+
+- A fixed review budget for a binary judge: use `plan_binary_reviews`. Choose `slope` for the human pass-rate gap between judge strata, or `mean` for the overall rate. A declared SD or the default 0.5 suffices for planning.
+- A known finite assignment frame: `weighted_paired_audit` uses one bounded paired endpoint per independent cluster, fixed target masses, and known Bernoulli probabilities for traffic and review. Include unsampled clusters. The calibration label floor does not apply here. A human census identifies the frame mean exactly. Fixed quotas and selected-only logs do not meet the two-stage design.
+- For a historical calibration table, pass `calibration_data`. Known inclusion probabilities give inverse selection weights (1/p) for `calibration_weight_field` with `combine_oracle_sources=False`. For an eligible pair with unverified transport, `compare_policies(candidate, baseline, sensitivity_margin=margin)` reports signed drift in outcome units. Keep the original decision verdict.
+- Missing votes or judge timeouts: retain the assignment denominator and define the human endpoint. The reference has identification bounds and the rater guide.
+
 ## Step 0: install, then print the version
 
 ```bash
 python --version                     # must be 3.10–3.13
-pip install -U "cje-eval>=0.9.2" pandas
+python -m pip install -U "cje-eval>=0.10.1"
 python -c "import cje; print(cje.__version__)"
 ```
 
-If installs are not allowed, print the version from the `python` that will run the analysis;
-below 0.9.2 this skill does not match it: say so and stop. On Python 3.9 a plain
-`pip install cje-eval` silently installs the legacy 0.5 line; the `>=0.9.2` floor makes pip
-fail instead, so switch to 3.10–3.13 (`python3.12 -m venv .venv`). Put the version in your
-report.
-
-Read this file and the reference whole, not through `head`: save them with
-`cje skill > cje_skill.md` and `cje skill --reference > cje_reference.md` (`python -m cje skill`
-if `cje` is not on `PATH`) and open both. Without the command, download the raw files with
-`curl -fsSL https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/SKILL.md` (and the
-same URL ending in `reference.md`); a summarizing web fetcher drops the rules below.
+Use the installed version's own skill. `cje skill --reference` gives searchable sections on sampling designs, external calibration and sensitivity. If the console script is unavailable, run `python -m cje skill`. Install pandas only for DataFrame inputs. Python 3.10–3.13 is required. Report the version. An older pinned environment must use its own supported APIs.
 
 ## Hard rules
 
@@ -45,7 +42,7 @@ same URL ending in `reference.md`); a summarizing web fetcher drops the rules be
    run with labels you may say in words that the judge seems to favor a policy, as a reason for
    caution, never as a finding that the judge is biased. CJE calibrates the judge against random
    ground-truth labels (floor: 4 independent labeled prompt clusters; 10+ recommended).
-   **No labels means no answer.** Count only probability-sampled labels; self-selected ratings
+   **A judge-only calibrated comparison needs labels.** Count only probability-sampled labels; self-selected ratings
    count as zero. Below 4 independent labeled prompt clusters the verdict is "Blocked: no
    ground-truth labels yet, so there is no ranking or pick." CJE still runs (`naive_direct`) and
    its `summary()` still prints a "Best by point estimate" line and paired p-values: report no
@@ -171,21 +168,15 @@ appropriate sequential design.
 - Labels already exist (eval export, audit, production feedback) → first establish how each was
   chosen (**Reshape the user's data**); count only probability-sampled labels toward the 4- and
   10-cluster thresholds below.
-- Judge scores only, or fewer than 4 independent labeled prompt clusters → **Blocked** (hard
-  rule 1). 0 labels and 1–3 labels both return the loudly flagged UNCALIBRATED `naive_direct`
-  tier (no calibrator can be fit; all policies gate-FLAGGED); `calibrated_mean_ci` raises a
-  `ValueError` when calibration is needed. You may run `analyze_dataset` to read its warnings,
-  but the report contains no estimate, interval, p-value or ordering from that run. Then go to
-  the **Labeling loop**; never fabricate labels to pass the floor.
-- Only self-selected labels (ratings, thumbs, complaints) → **Undecided** (hard rule 2); propose
-  a random labeled sample.
+- Judge-only or 1–3 independent labeled prompts in a calibration fit → **Blocked** (hard rule 1). Treat raw fallback output as diagnostic only. Seek independent labels.
+- Only self-selected ratings → **Undecided** (hard rule 2). Draw a random labeled sample.
 - 4–9 independent labeled prompt clusters → runs with fewer calibration folds and noisier CIs;
   report results as provisional and label toward ≥10.
 - ≥10 independent labeled prompt clusters, two or more policies → **Canonical flow**
   (`analyze_dataset`). One sample → `calibrated_mean_ci`; with complete oracle coverage it
   returns the direct oracle mean without fitting a calibrator (one cluster still cannot
   support a CI).
-- Planning a future evaluation → **Planning flow**; labels for a residual transport audit →
+- Planning power or the MDE of a future policy comparison → **Planning flow**; labels for a residual transport audit →
   **Audit budget** in `reference.md`. With existing data and only a comparison asked, skip it.
 - No judge scores at all → **Produce judge scores** below, then continue.
 - Reusing a previously fitted calibrator on new data (new month/domain/policy family) → check
@@ -193,14 +184,10 @@ appropriate sequential design.
   target labels available → **Correction** in `reference.md`; audit-only probes do not change
   the estimate.
 - Existing production judge/outcome records → **Production outcomes** in `reference.md`.
-- A candidate model or prompt not yet shipped → generate its responses on representative
-  prompts and use the **Canonical flow** against the current policy, with a random slice of the
-  candidate's own responses labeled (or a held-out probe graded `PASS`); otherwise its
-  comparison is undecided (hard rule 5).
-- Reweighting another policy's logged responses (IPS/DR) → not this library
-  (`pip install "cje-eval==0.3.*"`, Python ≤3.12). Predicting one response's score → not CJE.
+- For a new model or prompt, generate its own responses on representative prompts and compare with the current policy. Use hard rule 5 for an unlabeled candidate.
+- Legacy off-policy IPS/DR from another policy's logs requires `cje-eval==0.3.*` on Python ≤3.12.
 
-## Planning flow: size a future evaluation
+## Planning flow: power a future policy comparison
 
 1. Establish the comparison, target population, practical effect size and its units, power,
    significance level, and budget. Record judge-score and label costs; say what the budget
@@ -258,8 +245,7 @@ Before analysis, check what CJE cannot:
   policy's rows: simple random (the default `label_design="representative"`) or random within
   strata at recorded rates (`label_design="known_propensity"` with `label_propensities`, a
   probability in (0, 1] for every row of every policy). Leave out labels chosen for the
-  response's quality (complaints, failure reviews, judge–human disagreements, "interesting"
-  cases): they pass every gate without warning and can reverse a comparison;
+  response's quality with unknown inclusion probabilities (complaints or hand-picked failures): they pass every gate without warning and can reverse a comparison;
   `label_design="targeted_unknown"` does not repair them. Self-selected user feedback is never a
   probability sample (hard rule 2). One-line check: the label rate by judge-score quintile within
   each policy, with a chi-square test, not by eye. Rates that track the judge score beyond chance
@@ -394,15 +380,7 @@ applies. Then run the canonical flow.
 Leave an executable analysis script and an output directory, not only a chat summary: inputs
 or their locations with checksums, the label-selection design, judge and rubric versions,
 excluded records, Python and `cje-eval` versions, seeds, declared scales, `results.to_dict()`
-or `plan.to_dict()`, and every warning and gate state. Full list in `reference.md` §Audit
+or the fields of the returned planning/audit dataclass, and every warning and gate state. Full list in `reference.md` §Audit
 exports.
 
-## Pitfalls
-
-| Pitfall | Instead |
-|---|---|
-| Putting every label on one policy when each could be labeled | Label a random slice of each (routes become `augmented`); with many policies, pool labels and grade the transfer with held-out probes |
-| Reusing last month's calibrator silently | Held-out transport audit with an explicit margin |
-
-Full signatures, CSV/pandas recipes, `fresh_draws_dir`/CLI usage, planning API, diagnostics
-glossary, and troubleshooting: read `reference.md` (`cje skill --reference`).
+Find the API signatures, CSV/pandas recipes, planning and audit guides in `cje skill --reference`.

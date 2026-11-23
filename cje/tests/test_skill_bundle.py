@@ -78,6 +78,15 @@ def test_cli_resolves_the_bundled_folder() -> None:
     assert cli.SKILL_FILES == SKILL_FILES
 
 
+def test_default_skill_routes_to_installed_design_apis_before_the_workflow() -> None:
+    first_page = (BUNDLED_DIR / "SKILL.md").read_text().split("## Hard rules", 1)[0]
+    for api in (cje.plan_binary_reviews, cje.weighted_paired_audit):
+        assert api.__name__ in first_page
+    assert (
+        "calibration_weight_field" in first_page and "sensitivity_margin" in first_page
+    )
+
+
 def test_entry_point_targets_cli_main() -> None:
     assert _entry_point() == "cje.interface.cli:main"
 

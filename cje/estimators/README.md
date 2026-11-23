@@ -4,7 +4,7 @@
 
 Direct-mode estimation: turn judge-scored fresh draws into per-policy value estimates with honest uncertainty quantification. The estimand is each policy's **mean oracle label over the prompt population the evaluation prompts were sampled from**, estimated from calibrated judge scores on those prompts — "which of these policies produces the best outputs, and by how much?" The assumptions behind it are under [Methods](#methods).
 
-> **Note (0.4.0):** The off-policy estimators were removed; for IPS/DR workflows pin `pip install "cje-eval==0.3.*"`.
+For a paired outcome on a complete finite cluster frame with known probabilities of traffic scoring and subsequent human review, use `cje.weighted_paired_audit`. Its uncertainty comes from the two sampling stages. [Supported design and worked example](../../guides/weighted-paired-audit.md)
 
 ## File Structure
 
@@ -153,12 +153,15 @@ CJE cannot check (1) or (2); it reports (3) as `NOT_CHECKED` until a held-out au
 
 A level claim concerns a policy's mean oracle outcome; a ranking concerns the oracle difference between two policies, which equals the calibrated-prediction difference plus the difference in their mean residuals. A common residual offset cancels, so a failed level audit does not by itself prove the ordering wrong, and a scalar support badge does not certify the ordering under a shift.
 
+### Which probabilities were logged?
+
+- **Historical label acquisition.** Supply old judge/outcome pairs through `calibration_data_path` or `calibration_data`. For an exclusively external fit (`combine_oracle_sources=False`), name the positive relative fit weights in `calibration_weight_field`, such as inverse probabilities of acquiring those labels. [External scales and weighting example](../interface/README.md#dedicated-calibration-data)
+- **Current human review.** For scored evaluation rows whose human reviews had known unequal inclusion probabilities, pass `label_design="known_propensity"` and `label_propensities` to `analyze_dataset`. Supply one probability per row for each policy, including unlabeled rows.
+- **Current traffic and human review.** With paired independent clusters in a complete fixed frame, `weighted_paired_audit` accepts both stages’ probabilities and an optional target mass per cluster. Its result describes the specified frame. [Fixed-frame audit](../../guides/weighted-paired-audit.md)
+
 ### Why Direct mode only
 
-CJE is **Direct-mode only**: fresh draws, calibrated judge, audits. There is no off-policy machinery: no importance-sampling or doubly-robust estimators (`calibrated-ips`, `dr-cpo`, `mrdr`, `tmle`, `stacked-dr`), teacher forcing, SIMCal weight stabilization, or overlap diagnostics. Our own paper's results drove that design: for realistic LLM policy pairs, importance weighting failed even when ESS looked healthy (target-typicality coverage 0.19–0.49, far below the 0.70 gate), and the best DR stack merely matched Direct mode's accuracy at ~12× the compute.
-
-- **Need IPS/DR from logged propensities?** Pin the frozen OPE line: `pip install "cje-eval==0.3.*"` (maintained on the `0.3.x` branch; docs at the `v0.3.0` tag; requires Python <=3.12).
-- **Have old logged data with `judge_score` + `oracle_label`?** It works as the calibration source: `analyze_dataset(fresh_draws_dir=..., calibration_data_path="logged.jsonl")`. Its values are read as [0, 1] unless you declare `calibration_judge_scale=(lo, hi)` / `calibration_oracle_scale=(lo, hi)`.
+Estimating a different policy’s value from the logging policy’s responses uses policy likelihood ratios. For those off-policy IPS/DR estimators, pin the frozen line with `pip install "cje-eval==0.3.*"` on Python ≤3.12. In the paper, target-typicality coverage was 0.19–0.49, below the 0.70 gate, and the best DR stack matched Direct mode’s accuracy at about 12× the compute.
 
 ### Validation against reference labels
 

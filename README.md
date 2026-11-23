@@ -23,19 +23,17 @@ You get each policy's mean on the label scale and the paired differences between
 Paste this into your coding agent, filling in the brackets:
 
 ```text
-Install cje-eval in a Python 3.10-3.13 environment: pip install -U "cje-eval>=0.9.2" pandas
-(on Python 3.9 a bare `pip install cje-eval` silently installs the legacy 0.5 line).
-Run `cje skill` and follow it; when it points to reference.md, run `cje skill --reference`.
-If `cje` is unavailable, curl the raw files from
-https://raw.githubusercontent.com/cimo-labs/cje/main/skills/cje/ (SKILL.md, reference.md)
-rather than a summarizing web fetcher.
-Data: [path to the eval export]
-Question: [e.g. is candidate better than production on support prompts, and by how much?]
-How the labels were chosen: [e.g. 50 random responses per policy rated by our QA team /
-escalated tickets only / not sure]
+Use Python 3.10–3.13. Run `python -m pip install -U "cje-eval>=0.10.1"`.
+Record `python -m cje --version`. Read the full `python -m cje skill` and
+`python -m cje skill --reference` from that interpreter and follow the skill's stop checks.
+Use [file paths or in-memory records]. Compare [candidate minus baseline] on [outcome and scale].
+The target frame is [eligible prompts or documents, including any missing scores or labels].
+Historical calibration labels were selected by [mechanism and known rates, if used].
+Current traffic and human reviews were selected by [mechanism and known rates at each stage,
+or unknown]. Our prespecified decision margin is [gap in outcome units, or none].
 ```
 
-**CJE assumes the labels are a random sample.** Hand-picked labels (complaints, failures, "interesting" cases) can reverse a comparison without any warning, so the last line is the one to get right. The agent reports each policy's estimate with its CI, the paired differences, and which conclusions are not yet supported, for example a policy with no labels of its own. To install the skill natively, see [skills/cje](https://github.com/cimo-labs/cje/tree/main/skills/cje#install).
+**Record how each sample was drawn.** A known design can give different cases different chances of selection. Hand-picked cases and voluntary ratings with unknown selection probabilities can reverse a comparison without warning. The agent reports the paired difference and its interval, including any assumption that historical calibration transfers to an unlabeled policy. [Install the skill in your agent](https://github.com/cimo-labs/cje/tree/main/skills/cje#install)
 
 ## What you need
 
@@ -68,18 +66,18 @@ From pandas, `df.groupby("variant")` into lists of dicts works the same way; a `
 
 A separate historical calibration table can be passed directly as `calibration_data=records` or `calibration_data=dataframe`. Set `combine_oracle_sources=False` to fit exclusively on that table. The same scale and identity checks apply as for `calibration_data_path`. For an outcome defined on 0–500, use `calibration_oracle_scale=(0, 500)`, `fresh_oracle_scale=(0, 500)`, and `output_scale=(0, 500)` to report means and paired differences in the original units.
 
-If historical labels were sampled at known unequal rates, put their inverse selection weights in a numeric field and pass its name as `calibration_weight_field` with `combine_oracle_sources=False`. The result reports how concentrated the weights are across labeled rows and prompts. [Historical fit weights](https://github.com/cimo-labs/cje/blob/main/cje/interface/README.md)
+If the archive included 80% of positives and 20% of negatives by design, give each selected positive a fit weight of 1.25 and each selected negative a fit weight of 5. Pass the numeric field name as `calibration_weight_field` with `combine_oracle_sources=False`. The result reports how concentrated the weights are across labeled rows and prompts. If both current policies lack labels, their fitted difference assumes the archive calibration transfers. For a prespecified $5 margin on a dollar scale, `results.compare_policies("candidate", "baseline", sensitivity_margin=5.0)` reports the differential calibration error needed to bring the point or conditional interval to $5 when the gates permit. A launch decision still needs evidence of transport. [Historical fit weights](https://github.com/cimo-labs/cje/blob/main/cje/interface/README.md#dedicated-calibration-data)
 
 If the judge almost always passes, use `plan_binary_reviews` to plan how many judge failures and passes to review for a calibration slope or an overall mean. For a known finite frame with independent traffic and human-review draws, `weighted_paired_audit` estimates a paired outcome under both sampling stages. [Review allocation](https://github.com/cimo-labs/cje/blob/main/guides/evaluation-planning.md#plan-reviews-of-a-binary-judge) · [Weighted paired audits](https://github.com/cimo-labs/cje/blob/main/guides/weighted-paired-audit.md)
 
 ## What it estimates
 
-Each estimate targets the policy's mean label over the population your prompts were sampled from, on the label scale. It assumes (1) the labels are a probability sample of the responses they describe, (2) the judge and rubric stay fixed, and (3) for a policy without labels of its own, the reused calibration has zero mean error on its responses (transport). CJE cannot check (1) or (2); it reports (3) as `NOT_CHECKED` until a held-out audit grades it. Default intervals are analytic, clustered by `prompt_id`, and include the uncertainty of fitting the calibration on finite labels; bootstrap intervals are opt-in. How calibration, inference and the audits work, and why there is no importance weighting: [Methods](https://github.com/cimo-labs/cje/blob/main/cje/estimators/README.md#methods).
+Each estimate targets the policy's mean label over the population your prompts were sampled from, on the label scale. It assumes (1) the labels are a probability sample of the responses they describe, (2) the judge and rubric stay fixed, and (3) for a policy without labels of its own, the reused calibration has zero mean error on its responses (transport). CJE cannot check (1) or (2); it reports (3) as `NOT_CHECKED` until a held-out audit grades it. Default intervals are analytic, clustered by `prompt_id`, and include the uncertainty of fitting the calibration on finite labels; bootstrap intervals are opt-in. CJE evaluates responses generated by each policy. Historical fit weights and audit sampling weights account for how observations were selected. Reweighting logged outputs to simulate a different generating policy is an off-policy evaluation problem. [Methods](https://github.com/cimo-labs/cje/blob/main/cje/estimators/README.md#methods)
 
 ## 60 seconds
 
 ```bash
-pip install -U "cje-eval>=0.9.2"   # Python 3.10–3.13
+python -m pip install -U "cje-eval>=0.10.1"   # Python 3.10–3.13
 ```
 
 Each record is one judged response, `{"prompt_id", "judge_score", "oracle_label" (optional)}`; the API calls these records *fresh draws*.
@@ -170,7 +168,7 @@ Full numbers and caveats: [Methods: validation](https://github.com/cimo-labs/cje
 
 - **Agent skill**: `cje skill`, or [skills/cje](https://github.com/cimo-labs/cje/tree/main/skills/cje): the procedure and hard rules for coding agents.
 - **API reference**: [`analyze_dataset()`, `EstimationResult`, the `cje` CLI](https://github.com/cimo-labs/cje/blob/main/cje/interface/README.md).
-- **Guides**: [how many labels a judge saves](https://github.com/cimo-labs/cje/blob/main/guides/evaluation-planning.md) · [planning a transport audit](https://github.com/cimo-labs/cje/blob/main/guides/audit-budget-planning.md) · [from audit to correction](https://github.com/cimo-labs/cje/blob/main/guides/audit-correction.md) · [operational playbook](https://github.com/cimo-labs/cje/blob/main/PLAYBOOK.md) · [migrating from 0.5.x](https://github.com/cimo-labs/cje/blob/main/MIGRATING-0.6.md)
+- **Guides**: [how many labels a judge saves](https://github.com/cimo-labs/cje/blob/main/guides/evaluation-planning.md) · [planning a transport audit](https://github.com/cimo-labs/cje/blob/main/guides/audit-budget-planning.md) · [from audit to correction](https://github.com/cimo-labs/cje/blob/main/guides/audit-correction.md) · [weighted paired audits](https://github.com/cimo-labs/cje/blob/main/guides/weighted-paired-audit.md) · [rater panels and missing outcomes](https://github.com/cimo-labs/cje/blob/main/guides/rater-and-missing-outcomes.md) · [operational playbook](https://github.com/cimo-labs/cje/blob/main/PLAYBOOK.md) · [migrating from 0.5.x](https://github.com/cimo-labs/cje/blob/main/MIGRATING-0.6.md)
 - **Notebooks**: [tutorial](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_core_demo.ipynb) · [planning a label budget](https://colab.research.google.com/github/cimo-labs/cje/blob/main/examples/cje_planning.ipynb) (from judge quality and per-call costs, no data needed)
 - **Module deep dives**: [calibration](https://github.com/cimo-labs/cje/blob/main/cje/calibration/README.md) · [diagnostics](https://github.com/cimo-labs/cje/blob/main/cje/diagnostics/README.md) · [estimators and methods](https://github.com/cimo-labs/cje/blob/main/cje/estimators/README.md) · [data formats](https://github.com/cimo-labs/cje/blob/main/cje/data/README.md)
 - **Bridges**: [Langfuse experiments](https://github.com/cimo-labs/cje/blob/main/scripts/langfuse_cje/README.md) (keeps response identity and label provenance) · [Promptfoo, TruLens, LangSmith, OpenCompass](https://github.com/cimo-labs/cje/blob/main/scripts/cje_bridges/README.md)

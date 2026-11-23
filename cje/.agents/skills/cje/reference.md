@@ -26,7 +26,24 @@ Logprob fields from 0.3.x logged data are accepted and ignored.
 2. `fresh_draws_dir="responses/"`: one JSONL per policy, named `{policy}_responses.jsonl` (also accepted: `{policy}.jsonl`). Policy name comes from the filename; keep names identical everywhere. A single JSONL file path (records grouped by `target_policy`) also works here.
 3. `calibration_data_path="labeled.jsonl"`: a separate judge+oracle file (e.g. historical labeled logs) used as the calibration source. Values default to [0, 1]; for other scales declare `calibration_judge_scale=(lo, hi)` / `calibration_oracle_scale=(lo, hi)` (external calibration data never infers its scale from observations). Out-of-range files raise a hard error naming the observed range. With `combine_oracle_sources=True` (default) any `oracle_label`s in the fresh draws are pooled with it; `metadata["oracle_sources"]` reports provenance and cross-source conflicts.
 
-From 0.10 the external table can also be supplied in memory as `calibration_data=records` or `calibration_data=frame`. When a known sampling design oversampled historical labels, use `combine_oracle_sources=False` and set `calibration_weight_field` to the numeric field holding their positive relative fit weights. Report `metadata["calibration_weighting"]` for labeled-row and prompt effective counts. Current human-review probabilities belong in the current audit design.
+From 0.10, pass the same external records in memory with `calibration_data=records` or
+`calibration_data=frame` (a DataFrame). Supply exactly one of `calibration_data` and
+`calibration_data_path`. Both forms use the same fields, declared scales, deduplication and
+probe-overlap checks. To reproduce a JSONL fit in memory, preserve record order, explicit
+`source_id`, `row_id`, and stable response `observation_id`, and use the same fit options.
+Inspect `metadata["calibration_data_input"]` (`records` or `jsonl`) and
+`metadata["data_provenance"]["calibration_fit_roles"]` to see which labels entered the fit.
+
+For an independent historical sample that reviewed disputed items with probability 0.8
+and routine items with probability 0.2, attach an `audit_weight` of 1/0.8 = 1.25 or
+1/0.2 = 5 to each retained label. Use `calibration_weight_field="audit_weight"` and
+`combine_oracle_sources=False` to fit solely on those external labels. CJE normalizes
+their positive weights to mean one. Report `metadata["calibration_weighting"]`, including
+`fit_performed`, labeled row/prompt counts and their Kish effective counts. Kish counts
+describe weight concentration. A complete-coverage evaluation uses its observed outcomes
+directly. Preserve the original sampling protocol; a numeric weight field or agreement
+between input formats cannot establish that the acquisition probabilities were known.
+[External calibration records and fit weights](https://github.com/cimo-labs/cje/blob/v0.10.1/cje/interface/README.md)
 
 Field names differ in the user's data? Pass `judge_field="score"`, `oracle_field="human_rating"` instead of renaming.
 
@@ -74,7 +91,8 @@ Through 0.9.1 records reject `NaN`; from 0.9.2 a `NaN` label is read as unlabele
   label_propensities={policy: probs, ...}`: for every policy in the call, an inclusion
   probability in (0, 1] for every row in input order, labeled or not. Otherwise the estimate and
   its interval can be biased, with no warning. Never hand-pick responses to label; CJE cannot
-  detect it.
+  detect it. Label-rate parity across judge-score groups is descriptive only. Provenance
+  comes from the assignment protocol and recorded design probabilities.
 - **Known-propensity intervals.** The interval uses only each row's inclusion probability, so it
   matches independent labeling (each row by its own draw at its probability, as in Bernoulli or
   Poisson sampling; simulated 95% intervals covered about 94% with about 100 labels). With a
@@ -87,11 +105,129 @@ Through 0.9.1 records reject `NaN`; from 0.9.2 a `NaN` label is read as unlabele
   per-stratum analysis in [Array API](#array-api-single-sample-primitive), with its share
   term, gives an interval sized to the error.
 
-From 0.10, `plan_binary_reviews` allocates independent units across the fail and pass strata of a binary judge at equal review cost. Choose `objective="mean"` to target the population mean with a known traffic share, or `objective="slope"` for the difference in human pass rates. For a known finite frame sampled by two independent Bernoulli stages, use `weighted_paired_audit` with the cluster-level traffic probabilities, conditional label probabilities and prespecified bounded paired outcome. [Supported sampling design and worked example](https://github.com/cimo-labs/cje/blob/main/guides/weighted-paired-audit.md)
+## Sampling designs
 
-For a preplanned panel of raters, define the response label (for example, vote share or majority) before fitting. Keep joint posterior draws aligned across arms for model-based sensitivity. If the score or human outcome can be missing, preserve the assigned frame and distinguish the two forms of missingness. [Human outcome and missingness guide](https://github.com/cimo-labs/cje/blob/main/guides/rater-and-missing-outcomes.md)
+### Fixed review quotas for a binary judge
 
-For a calibrated pair with unverified transport and reportable gates, `results.compare_policies("candidate", "baseline", sensitivity_margin=0.0)` returns `transport_tipping_point`. The signed shift is the change in the candidate's mean residual minus the change in the baseline's mean residual, in output-label units. `point_shift` reaches the margin at the point estimate. `interval_shift` reaches the margin at the closest conditional interval endpoint (zero when the margin is already inside, None when paired bounds are unavailable). A tipping point supplies no evidence about the likelihood of drift. Keep the existing transport and decision verdict.
+Use `plan_binary_reviews` for two equal-cost strata of independent prompts, with one
+bounded human outcome in [0,1] per review. `slope` estimates the human pass rate among
+judge passes minus the rate among judge failures. `mean` weights those group means by
+their known traffic shares. Here failures are 1% of traffic and vary more in the pilot.
+
+```python
+import json
+from dataclasses import asdict
+from math import isclose
+from cje import plan_binary_reviews
+
+design = dict(judge_fail_share=0.01, budget=50, fail_sd=0.49, pass_sd=0.14)
+plans = {obj: plan_binary_reviews(objective=obj, **design) for obj in ("slope", "mean")}
+expected = {"slope": (39, 11, 0.089097), "mean": (2, 48, 0.020303)}
+for obj, plan in plans.items():
+    fail, passed, se = expected[obj]
+    assert (plan.fail_reviews, plan.pass_reviews) == (fail, passed)
+    assert isclose(plan.modeled_se, se, abs_tol=1e-6)
+print(json.dumps({"design": design, "plans": {k: asdict(v) for k, v in plans.items()}}))
+```
+
+Randomize within each group. Budget shares (39/50, 11/50 for the gap) count how
+reviews are spent. A prompt's inclusion probability under simple random sampling
+without replacement is its stratum's quota divided by its eligible frame count.
+Fixed counts make those selections dependent. Use a stratified analysis for the
+resulting labels. For the slope, add the two stratum mean variances; for the mean,
+multiply each by its squared traffic share before adding. The modeled SE assumes
+future independent units, pilot SDs and known shares. Pass `available_fail` and
+`available_pass` when eligibility is limited. The planner requires at least two
+reviews per stratum. Finding 39 failures takes about 3,900
+scored prompts in expectation at this traffic mix. [Binary review planning](https://github.com/cimo-labs/cje/blob/v0.10.1/guides/evaluation-planning.md#plan-reviews-of-a-binary-judge)
+
+### Weighted paired audit of a finite frame
+
+Use `weighted_paired_audit` for a single predeclared look at an enumerable frame. It
+accepts one row per independent cluster, including unsampled clusters. Both arms are
+selected together. Collapse repeated ratings or responses to one prespecified bounded
+paired outcome per cluster. Three inputs serve different purposes.
+
+| Input | Meaning |
+|---|---|
+| Historical calibration fit weights | Relative inverse acquisition probabilities on separate historical labels, used to fit a predictor before the audit. |
+| `traffic_inclusion`, `label_inclusion` | For **every** frame cluster, supply its design probability of being scored (`q`) and its conditional probability of paired review given scoring (`p`), each in (0,1]. The joint probability is `q*p`. |
+| `target_weights` | Known positive masses per frame cluster. CJE normalizes these to define the target average. Omit for equal masses. |
+
+Score and review selections must be independent across clusters at their respective
+Bernoulli stages. Fixed quotas violate that assumption even when all marginal
+probabilities are known. Selected-only logs, post-hoc observed sampling fractions and
+voluntary reviews cannot supply this design. The fixed prediction can be zero when
+zero is in the declared bounds, or come from a separately trained map.
+
+```python
+from math import isclose
+from cje import weighted_paired_audit
+
+frame = dict(
+    cluster_ids=["a", "b", "c"],
+    traffic_selected=[True] * 3, label_selected=[True] * 3,
+    traffic_inclusion=[1.0] * 3, label_inclusion=[1.0] * 3,
+    predictions=[0.0] * 3, outcomes=[1, 1, -1], outcome_bounds=(-1, 1),
+)
+for masses, expected in [(None, 1 / 3), ([1, 1, 8], -0.6)]:
+    audit = weighted_paired_audit(**frame, target_weights=masses)
+    assert all(isclose(x, expected) for x in (audit.estimate, *audit.ci))
+    print(audit.estimate, audit.ci)
+
+# A possible draw with independent fair coins at each stage.
+frame.update(
+    traffic_inclusion=[0.5] * 3, label_inclusion=[0.5] * 3,
+    traffic_selected=[True, True, False], label_selected=[True, False, False],
+    predictions=[0, 0, None], outcomes=[1, None, None],
+)
+audit = weighted_paired_audit(**frame, target_weights=[1, 1, 8])
+lo, hi = audit.outcome_identification_bounds
+assert isclose(lo, -0.8) and isclose(hi, 1.0)
+print(audit.estimate, audit.ci, audit.outcome_identification_bounds)
+```
+
+The census gives exact frame means, +1/3 and −0.6. In the partial draw the one observed
+outcome carries 10% of target mass. Assigning the lower or upper endpoint to the other
+90% gives identification bounds [−0.8, 1]. With zero observed labels the bounds and
+interval span the full declared support. Report the identification bounds alongside
+the fixed-look design confidence interval `ci`, raw counts and labeled target mass. An unscored
+cluster must have a missing prediction; an unreviewed cluster must have a missing
+outcome. A missing value on a selected row requires a missingness analysis.
+[Paired audit design, interval and worked example](https://github.com/cimo-labs/cje/blob/v0.10.1/guides/weighted-paired-audit.md)
+
+### Rater panels and missing outcomes
+
+Prespecify one response label. Votes [1, 1, 0] give 2/3 for panel vote share and 1
+for a majority decision. Retain prompt IDs for pairing, preserve panel assignments,
+and use aligned joint posterior draws across both arms for a model-based sensitivity
+analysis. Repeated votes or posterior draws on one response still describe one response.
+
+Keep the original assignment frame when judge scores or human outcomes are missing.
+An unscored but human-reviewed response still has an observed human outcome. For a
+bounded outcome let `S` be its observed sum with weights normalized over the
+whole frame, and `u` the missing target mass. On [a,b] the mean lies in
+[S + u·a, S + u·b]; on [0,1] this reduces to [S, S+u]. With 60
+successes among 80 observed of 100 equal-mass assignments, this gives [0.60, 0.80].
+For candidate minus baseline use [candidate lower − baseline upper, candidate upper −
+baseline lower]. These are identification bounds on the assigned frame. Sampling a
+wider population adds uncertainty. Define any operational failure endpoint before
+looking at results. [Human outcomes, rater dependence and missingness](https://github.com/cimo-labs/cje/blob/v0.10.1/guides/rater-and-missing-outcomes.md)
+
+### Signed sensitivity to calibration transport
+
+For a calibrated pair relying on unverified transport, request
+`results.compare_policies("candidate", "baseline", sensitivity_margin=margin)`.
+When the gates permit it, `transport_tipping_point` reports the additive shift in the
+candidate's remaining mean residual (human minus prediction) **minus** the baseline's.
+Use the output-label units of `results.estimates`. For a +6 point difference with
+conditional paired interval [+2,+10] on a 0–100 scale, a +1 point margin gives
+`point_shift=-5` and `interval_shift=-1`. On a 0–1 scale the corresponding margin is
+0.01 and shifts are −0.05 and −0.01. Reversing the policy order also negates the
+margin. A margin inside the interval gives zero interval shift; unavailable paired
+bounds give `None`. Check the proposed arm means against the outcome support.
+The shifts quantify hypothetical drift. Preserve the unverified verdict and all gates.
+[Transport sensitivity examples](https://github.com/cimo-labs/cje/blob/v0.10.1/cje/diagnostics/README.md)
 
 ## `analyze_dataset`
 
@@ -487,8 +623,10 @@ alter estimates. To correct the current target estimate:
    evaluation row, in row order, including unlabeled rows. Its interval matches independent
    inclusion and is conservative for a fixed number of labels per stratum: slightly with
    judge-score strata, more when the strata predict the residual
-   ([Your own data](#your-own-data)). For targeted labels with unknown probabilities, use
-   `"targeted_unknown"`; CJE keeps an explicit plug-in route.
+   ([Your own data](#your-own-data)). Labels collected by complaint, hand-picking or
+   voluntary feedback lack a known probability design. Exclude them from the correction
+   and seek random reviews. `"targeted_unknown"` leaves a plug-in estimate without a
+   target residual correction; it cannot recover the population mean from those labels.
 4. Inspect `results.metadata["point_estimator"]["routes"]` to confirm `augmented` where
    applicable. Use the recomputed SEs, CIs, and paired comparisons, not an old interval shifted
    by the correction. Retain the original audit as evidence about the unchanged map.
@@ -562,8 +700,11 @@ Leave an executable analysis script and an output directory, not only a chat sum
   and does not support. Keep source inputs available for reruns; a checksum alone is not the
   data. "Auditable" means inspectable and reproducible, not that the assumptions hold.
 
-Save the executable script and retained inputs alongside the exported result. `plan.to_dict()`
-preserves the allocation; `results.to_dict()` uses the default portable result format.
+Save the executable script and retained inputs alongside the exported result. Evaluation
+plans and transport audit plans export with `plan.to_dict()`. For a binary review plan
+or weighted paired audit result use `dataclasses.asdict(plan)` or
+`dataclasses.asdict(audit)` and retain the design inputs. `results.to_dict()` uses the
+default portable format for an `analyze_dataset` result.
 Also save the policy intervals and pairwise comparisons at the alpha actually requested,
 plus diagnostics and all gate/transport states.
 
@@ -623,7 +764,7 @@ randomly sampled, so exit 0 does not mean the design is sound.
 | `Oracle field 'oracle_label' must be finite` (0.9.1 and earlier) | A `NaN` label, usually a pandas blank. Convert with `df.astype(object).where(df.notna(), None)`; never `on_invalid="drop"`, which deletes those unlabeled rows. 0.9.2 reads a `NaN` label as unlabeled. |
 | WARNING naming policies with no oracle labels of their own (0.9.2+) | They borrow the named labeled policy's calibration: not decision-ready until their own random labels or a transport `PASS` (SKILL.md hard rule 5). |
 | Warnings about colliding policy names, repeated `(policy, prompt_id)` rows, or labels on only one policy (0.9.2+) | Informational; nothing is changed. Merge name variants only after the user confirms, add a unique `row_id` to deduplicate re-exports, and see "Where to put labels" above. |
-| `TypeError: ... 'logged_data_path'` / `calibrated-ips` errors | `analyze_dataset` has no `logged_data_path` parameter and no IPS/DR estimators. Logged judge+oracle data works via `calibration_data_path`. For IPS/DR pin `pip install "cje-eval==0.3.*"` (Python ≤3.12). |
+| `TypeError: ... 'logged_data_path'` / `calibrated-ips` errors | Current CJE accepts historical judge+oracle data through `calibration_data` or `calibration_data_path`. It uses known sampling probabilities for specific audit designs. Reweighting another response-generating policy's logged outputs for off-policy IPS/DR is a legacy 0.3.x workflow. |
 | `UserWarning: ... audits without delta_max are NOT_GRADED` | Declare a practical margin (`delta_max=`); no-margin audits can never PASS or FAIL. |
 | `results.calibrator is None` | Complete oracle coverage: the estimate is the direct oracle mean; no calibrator was fit. Check for `None` before a transport audit. |
 | `ImportError`/`ValueError` naming a replacement (e.g. `BaseCJEEstimator`, `calibrate_from_raw_data`) | Consolidated API: the error message names the current entry point; use it. |

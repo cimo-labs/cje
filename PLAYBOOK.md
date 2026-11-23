@@ -1,31 +1,25 @@
 # CJE Playbook: Audits, Drift Response, and Label Budgeting
 
-This is the operational runbook for:
-- running transport audits,
-- deciding what to do when audits pass vs fail,
-- planning oracle label budgets.
+Use this playbook to compare observed policy responses, audit a reused judge calibration and plan future human reviews. Choose the analysis from the sampling design.
 
-It is written against the current CJE API in this repo. CJE 0.4.0+ is Direct-mode only; this runbook is the whole operating loop. (Off-policy IPS/DR workflows live on the frozen 0.3.x line: `pip install "cje-eval==0.3.*"`.)
+- For scored responses from each policy, use `analyze_dataset`. If human review was randomized at unequal rates, pass the known review probability for every evaluation row through `label_design="known_propensity"` and `label_propensities`. Historical labels used to fit calibration have their own acquisition design. [External calibration inputs and weights](cje/interface/README.md#dedicated-calibration-data)
+- For paired responses sampled from a complete, fixed cluster list, use `weighted_paired_audit` when traffic scoring and subsequent human review were independent Bernoulli draws across clusters, with both probabilities known for every cluster. A selected-click export alone cannot support this audit. [Weighted paired audit](guides/weighted-paired-audit.md) · [Missing scores, outcomes and votes](guides/rater-and-missing-outcomes.md)
+- For a future collection, use Section 6 to size an evaluation. If reviews will be allocated between a binary judge’s fails and passes, plan quotas for the intended human outcome. [Binary review planning](guides/evaluation-planning.md#plan-reviews-of-a-binary-judge)
 
 ---
 
 ## Canonical Operational Loop
 
-![CJE operational loop: design metrics, sample, fit, precision gate, deploy, monitor, drift gate](images/cje_loop.svg)
-
-The recommended loop is:
-1. Design metrics (choose/adjust `S` and `Y`)
-2. Sample (judge scores + oracle labels)
-3. Fit judge→oracle mapping with uncertainty
-4. Precision gate: precise enough?
-   - No -> collect more `Y` labels, return to Step 2
-   - Yes -> deploy
-5. Deploy
+1. Define the human outcome, target population and minimum candidate improvement required for deployment. Set the sampling design and stopping rule before collection.
+2. Score responses with one fixed judge and rubric. Acquire human outcomes under the planned probability design.
+3. Fit the judge-to-outcome mapping and estimate the paired candidate-minus-baseline difference.
+4. At the planned look, read the observed paired interval, `results.best_policy().decision_note` and the reliability gates. Check the sampling assumptions and any calibration transfer the comparison relies on.
+5. Deploy the candidate only if the comparison supports it and its lower bound clears the deployment threshold after allowing for any residual bias covered by a transport audit. If the interval straddles the threshold, report the decision as unresolved. Use a new planned sample or a prespecified sequential method for another look.
 6. Monitor with new oracle labels and residuals
 7. Residual-equivalence gate: is the simultaneous CI wholly inside a predeclared practical bias margin?
    - Yes (`PASS`) -> keep monitoring (Step 6)
    - No (`FAIL`) -> inspect failure patterns, collect target labels, then return to Step 1
-   - Unresolved (`INCONCLUSIVE`) -> collect more independent probes or narrow the claim
+   - Unresolved (`INCONCLUSIVE`) -> plan another independent audit or narrow the claim
 
 Two-loop framing:
 - **Inner calibration loop:** Steps 1-4
@@ -68,8 +62,7 @@ Notes:
 
 ### Pairwise comparisons
 
-Use `results.compare_policies(i, j)` for any "is A better than B?" claim — never eyeballed
-CI overlap. The default analytic path combines the paired influence-function sampling SE
+For the calibrated run, use `results.compare_policies("candidate", "baseline")` to obtain the signed difference and its interval. The default analytic path combines the paired influence-function sampling SE
 with the oracle-jackknife variance of the difference (`method: "paired_if_oua"`). On an
 explicit bootstrap run it instead uses the joint (B × P) replicate matrix
 (`method: "paired_bootstrap"`). For many-pair
@@ -177,7 +170,7 @@ After recording the held-out audit result, probe labels may become calibration d
 
 Recommended pattern:
 1. Append validated probe labels to a maintained calibration dataset.
-2. Re-run the Section 1 analysis adding `calibration_data_path="data/oracle_history.jsonl"` and `combine_oracle_sources=True` to pool all high-quality labels.
+2. If the historical and current labels support a pooled fit, pass `calibration_data_path="data/oracle_history.jsonl"` and `combine_oracle_sources=True`. To fit exclusively on historical labels sampled at known unequal rates, use `combine_oracle_sources=False` and name their positive relative fit-weight field in `calibration_weight_field`. Current labels can still correct their own policies’ estimates.
 
 ---
 
@@ -208,7 +201,8 @@ For the full analysis of correction strategies, see [Post-Audit Drift Correction
 
 ## 6) Label Budgeting (How Many Oracle Labels?)
 
-Budgeting uses the planning model:
+For a calibrated evaluation, the planner uses the following variance and cost model. To size the held-out probes needed to assess calibration transfer, use `plan_transport_audits` with a predeclared residual margin. [Transport audit budget](guides/audit-budget-planning.md)
+
 - total variance `= sigma2_eval / n + sigma2_cal / m`
 - costs `B = c_S * n + c_Y * m`
 - optimize with square-root allocation law.
