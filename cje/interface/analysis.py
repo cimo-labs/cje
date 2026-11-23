@@ -9,6 +9,7 @@ metadata.
 """
 
 import logging
+import sys
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -16,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from ..calibration import calibrate_dataset
+from ..data.loaders import CalibrationRecords, DatasetLoader
 from ..data.models import Dataset, EstimationResult
 from ..data.normalization import ScaleDeclaration, validate_values_on_scale
 from ._removed import validate_estimator_name
@@ -61,6 +63,8 @@ def analyze_dataset(
     fresh_draws_dir: Optional[str] = None,
     fresh_draws_data: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     calibration_data_path: Optional[str] = None,
+    calibration_data: Optional[CalibrationRecords] = None,
+    calibration_weight_field: Optional[str] = None,
     combine_oracle_sources: bool = True,
     estimator: str = "auto",
     judge_field: str = "judge_score",
@@ -139,7 +143,7 @@ def analyze_dataset(
       are accidental duplicates.
     - Borrowed calibration: a policy with no oracle labels of its own is
       estimated through the calibration fit on other labels (other
-      policies', or ``calibration_data_path``); so is a policy on a
+      policies' or an external calibration table); so is a policy on a
       plug-in route (``use_augmented_estimator=False`` or
       ``label_design="targeted_unknown"``) whose own labels do not correct
       its estimate. Its CI, and the CI and p-value of every difference
@@ -178,9 +182,19 @@ def analyze_dataset(
             Use this to learn judge→oracle mapping from a curated oracle set separate
             from your evaluation data. If combine_oracle_sources=True (default), will
             pool with oracle labels from fresh_draws for maximum efficiency.
+        calibration_data: In-memory alternative to calibration_data_path. A sequence
+            of record dicts or a pandas DataFrame with unique columns. Uses the
+            external calibration fields, declared scales and source pooling rules.
+            A DataFrame's index is ignored; pass prompt_id and any stable row_id
+            as columns.
+        calibration_weight_field: Optional numeric field on each labeled external
+            row (top-level or in metadata). Requires combine_oracle_sources=False.
+            Positive relative weights are normalized to mean one over retained
+            labels and used in the calibration fit and its uncertainty refits.
+            Evaluation rows retain their own sampling and labeling design.
         combine_oracle_sources: Whether to pool oracle labels from all sources
             (calibration_data + fresh_draws). Default True for data efficiency.
-            Set False to use ONLY calibration_data_path for learning calibration.
+            Set False to fit only on the external calibration set.
             When combining, every source's (judge, oracle) pair enters calibration
             (labels attach to responses); only true duplicates are deduped.
         estimator: Estimator type. Options:
@@ -215,11 +229,11 @@ def analyze_dataset(
             the legacy observed-range normalization behavior.
         fresh_oracle_scale: Optional declared scale for oracle labels embedded
             in the evaluation draws.
-        calibration_judge_scale: Optional declared scale for judge scores in
-            ``calibration_data_path``. External calibration data defaults to
+        calibration_judge_scale: Optional declared scale for judge scores in the
+            external calibration set. External calibration data defaults to
             the unit interval and does not infer its scale from observations.
         calibration_oracle_scale: Optional declared scale for oracle labels in
-            ``calibration_data_path``.
+            the external calibration set.
         output_scale: Optional result ``(minimum, maximum)`` display scale. By
             default, calibrated results use their oracle source scale and
             uncalibrated results use the evaluation judge scale. Declaring a
@@ -249,14 +263,14 @@ def analyze_dataset(
           that policy's own oracle labels the analysis used}
         - results.metadata["calibration_label_sources"]: the labels the
           calibration was fit on (policy names, plus "calibration_data" for
-          calibration_data_path); empty when no calibrator was fit
+          external calibration records); empty when no calibrator was fit
         - results.metadata["transport_unverified"]: sorted policies whose
           estimate relies on an unverified calibration transfer (no labels
           of their own, or a plug-in route that does not correct with them)
           and whose transport audit is not PASS
         - results.metadata["cje_version"]: the cje-eval version that ran
 
-        New metadata fields when using calibration_data_path:
+        Metadata fields when using external calibration data:
         - results.metadata["oracle_sources"]: Breakdown of oracle labels by source
         - results.metadata["oracle_sources"]["conflicts"]: Cross-source oracle disagreements
           on rows sharing an explicit observation_id
@@ -285,7 +299,6 @@ def analyze_dataset(
         fresh_draws_from_dict,
     )
     from ..data.ingest import fresh_draws_data_from_file
-    from ..data.loaders import DatasetLoader
     from ..data.models import Sample
     from ..data.normalization import (
         ScaledCalibrator,
@@ -306,6 +319,27 @@ def analyze_dataset(
             "Provide exactly one evaluation source: fresh_draws_dir or "
             "fresh_draws_data, not both."
         )
+    if calibration_data_path is not None and calibration_data is not None:
+        raise ValueError(
+            "Provide only one of calibration_data_path or calibration_data."
+        )
+    has_external_calibration = (
+        calibration_data_path is not None or calibration_data is not None
+    )
+    if calibration_weight_field is not None:
+        if (
+            not isinstance(calibration_weight_field, str)
+            or not calibration_weight_field.strip()
+        ):
+            raise ValueError(
+                "calibration_weight_field must name a numeric metadata field."
+            )
+        if not has_external_calibration or combine_oracle_sources:
+            raise ValueError(
+                "calibration_weight_field requires external calibration data and "
+                "combine_oracle_sources=False. Historical and evaluation labels "
+                "have separate sampling designs."
+            )
     # Loud by default: invalid records raise unless the caller explicitly
     # opts into dropping (strict is a compatibility no-op — the default
     # already errors).
@@ -403,7 +437,7 @@ def analyze_dataset(
     ) == len(target_policies)
 
     # --- 5. Resolve the calibration source and calibrate:
-    # calibration_data_path (optionally pooled with labeled draws via
+    # External data (optionally pooled with labeled draws via
     # _combine_oracle_sources) OR oracle-in-draws
     oracle_sources_metadata = None
     calibration_result = None
@@ -412,12 +446,12 @@ def analyze_dataset(
     covariate_names = None
     oracle_coverage = 0.0
     n_calibration_clusters = 0
+    calibration_weights = None
+    weight_summary = None
     calibration_oracle_public_scale = unit_scale()
     calibration_judge_public_scale = unit_scale()
 
-    if calibration_data_path:
-        if verbose:
-            logger.info(f"Loading calibration dataset from {calibration_data_path}")
+    if has_external_calibration:
         calibration_loader = DatasetLoader(
             judge_field=judge_field,
             oracle_field=oracle_field,
@@ -426,9 +460,19 @@ def analyze_dataset(
             strict=strict,
             on_invalid=invalid_mode,
         )
-        calibration_dataset = calibration_loader.load_from_jsonl(calibration_data_path)
+        if calibration_data is not None:
+            calibration_dataset = calibration_loader.load_from_records(calibration_data)
+        else:
+            assert calibration_data_path is not None
+            calibration_dataset = calibration_loader.load_from_jsonl(
+                calibration_data_path
+            )
         calibration_judge_public_scale = calibration_loader.judge_scale
         calibration_oracle_public_scale = calibration_loader.oracle_scale
+        if calibration_weight_field is not None:
+            calibration_weights, weight_summary = _external_fit_weights(
+                calibration_dataset, calibration_weight_field
+            )
         for sample in calibration_dataset.samples:
             sample.metadata["row_role"] = "external"
             sample.metadata["source"] = "calibration_data"
@@ -454,7 +498,7 @@ def analyze_dataset(
                 )
             )
         else:
-            # Use ONLY calibration_data_path for learning calibration
+            # Fit only on the external calibration set
             if verbose:
                 logger.info(
                     "Using calibration data exclusively (combine_oracle_sources=False)"
@@ -504,11 +548,13 @@ def analyze_dataset(
                 oracle_field="oracle_label",
                 enable_cross_fit=True,
                 covariate_names=covariate_names,
+                sample_weight=calibration_weights,
             )
             calibration_provenance = _build_calibration_provenance(
                 calibration_dataset_for_rewards,
                 covariate_names,
                 CalibrationProvenance,
+                sample_weights=calibration_weights,
             )
         else:
             covariate_names = _build_covariate_list(
@@ -636,7 +682,7 @@ def analyze_dataset(
                 "No oracle labels found — returning UNCALIBRATED judge-score "
                 "means; CIs do not account for judge bias. Results will be "
                 "labeled method='naive_direct'. Add oracle labels to the "
-                "fresh draws or provide calibration_data_path to calibrate."
+                "fresh draws or provide external calibration data to calibrate."
             )
 
     direct_oracle_without_calibration_policies = (
@@ -730,7 +776,7 @@ def analyze_dataset(
         result_output_scale = declared_output_scale
         result_scale_source = "declared"
     elif (
-        calibration_data_path
+        has_external_calibration
         and calibration_result is not None
         and oracle_sources_metadata is not None
         and oracle_sources_metadata.get("calibration_data", {}).get("n_oracle", 0) > 0
@@ -799,7 +845,7 @@ def analyze_dataset(
             )
 
     # Calibration source metadata
-    if calibration_data_path:
+    if has_external_calibration:
         results.metadata["calibration"] = (
             (
                 "from_calibration_data_combined"
@@ -817,7 +863,20 @@ def analyze_dataset(
                 )
             )
         )
-        results.metadata["calibration_data_path"] = calibration_data_path
+        if invalid_mode == "drop":
+            results.metadata["n_invalid_calibration_dropped"] = (
+                calibration_dataset.metadata["n_invalid_dropped"]
+            )
+        if weight_summary is not None:
+            results.metadata["calibration_weighting"] = {
+                **weight_summary,
+                "fit_performed": calibration_result is not None,
+            }
+        if calibration_data_path is not None:
+            results.metadata["calibration_data_path"] = calibration_data_path
+        results.metadata["calibration_data_input"] = (
+            "records" if calibration_data is not None else "jsonl"
+        )
     else:
         results.metadata["calibration"] = (
             "from_fresh_draws"
@@ -911,10 +970,10 @@ def analyze_dataset(
         fresh_judge_scale=fresh_judge_public_scale,
         fresh_oracle_scale=fresh_oracle_public_scale,
         calibration_judge_scale=(
-            calibration_judge_public_scale if calibration_data_path else None
+            calibration_judge_public_scale if has_external_calibration else None
         ),
         calibration_oracle_scale=(
-            calibration_oracle_public_scale if calibration_data_path else None
+            calibration_oracle_public_scale if has_external_calibration else None
         ),
         output_scale=result_output_scale,
         invalid_mode=invalid_mode,
@@ -999,18 +1058,19 @@ def _record_borrowed_calibration(
 
     sources: List[str] = []
     if calibration_dataset is not None:
-        found = set()
+        policy_sources = set()
+        used_external_labels = False
         for sample in calibration_dataset.samples:
             if sample.oracle_label is None:
                 continue
             if sample.metadata.get("row_role") == "evaluation":
                 key = sample.metadata.get("evaluation_key")
                 if isinstance(key, (tuple, list)) and key:
-                    found.add(str(key[0]))
+                    policy_sources.add(str(key[0]))
             else:
-                found.add(_CALIBRATION_DATA_SOURCE)
-        sources = sorted(found - {_CALIBRATION_DATA_SOURCE})
-        if _CALIBRATION_DATA_SOURCE in found:
+                used_external_labels = True
+        sources = sorted(policy_sources)
+        if used_external_labels:
             sources.insert(0, _CALIBRATION_DATA_SOURCE)
 
     results.metadata["own_oracle_labels_by_policy"] = {
@@ -1489,10 +1549,64 @@ def _build_label_design(
     return label_design_cls(kind=normalized_kind, propensities=normalized_propensities)
 
 
+def _external_fit_weights(
+    dataset: Dataset, field: str
+) -> Tuple[Optional[np.ndarray], Dict[str, Any]]:
+    """Normalize relative weights after canonical validation and deduplication."""
+    weights: List[float] = []
+    prompts: List[str] = []
+    for sample in dataset.samples:
+        if sample.oracle_label is None:
+            continue
+        value = sample.metadata.get(field)
+        if (
+            isinstance(value, (bool, np.bool_))
+            or not isinstance(value, (int, float, np.integer, np.floating))
+            or not 0 < value <= sys.float_info.max
+        ):
+            raise ValueError(
+                f"calibration_weight_field {field!r} must be a finite positive number "
+                f"on every labeled external row. Row {sample.row_id!r} has {value!r}."
+            )
+        weights.append(float(value))
+        prompts.append(sample.prompt_id)
+
+    normalized = np.asarray(weights, dtype=float)
+    row_ess = prompt_ess = 0.0
+    n_prompts = 0
+    if normalized.size:
+        # Keep a common weight multiplier from changing the ridge penalty.
+        # Dividing by the maximum first avoids overflow in the mean.
+        normalized /= normalized.max()
+        normalized /= normalized.mean()
+        if np.any(normalized == 0):
+            raise ValueError("calibration weights span too wide a range to normalize.")
+        shares = normalized / normalized.sum()
+        _, groups = np.unique(prompts, return_inverse=True)
+        prompt_shares = np.bincount(groups, weights=shares)
+        n_prompts = len(prompt_shares)
+        row_ess = float(1.0 / (shares @ shares))
+        prompt_ess = float(1.0 / (prompt_shares @ prompt_shares))
+    # Uniform historical sampling uses the default solver and model-selection
+    # thresholds exactly. A missing weight vector also represents unit base
+    # weights in calibration provenance and the prompt-cluster bootstrap.
+    fit_weights = None if np.all(normalized == 1.0) else normalized
+    return fit_weights, {
+        "field": field,
+        "normalization": "mean_one_over_labeled_rows",
+        "n_labeled_rows": len(weights),
+        "n_labeled_prompts": n_prompts,
+        "kish_effective_rows": row_ess,
+        "kish_effective_prompts": prompt_ess,
+    }
+
+
 def _build_calibration_provenance(
     dataset: Dataset,
     covariate_names: Optional[List[str]],
     provenance_cls: Any,
+    *,
+    sample_weights: Optional[np.ndarray] = None,
 ) -> Any:
     """Capture the exact labeled rows used by ``calibrate_dataset`` in order."""
     judge_scores: List[float] = []
@@ -1542,6 +1656,7 @@ def _build_calibration_provenance(
         covariates=covariates,
         row_roles=row_roles,
         evaluation_keys=evaluation_keys,
+        sample_weights=sample_weights,
     )
 
 

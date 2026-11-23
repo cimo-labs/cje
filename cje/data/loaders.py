@@ -6,7 +6,17 @@ following the Single Responsibility Principle.
 
 import json
 import logging
-from typing import List, Dict, Any, Optional
+from collections.abc import Hashable, Iterable, Sequence
+from typing import (
+    List,
+    Dict,
+    Any,
+    Literal,
+    Optional,
+    Protocol,
+    Union,
+    runtime_checkable,
+)
 from pathlib import Path
 import numpy as np
 
@@ -27,6 +37,19 @@ from .normalization import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class _RecordTable(Protocol):
+    """The pandas DataFrame operations needed to read a row-oriented table."""
+
+    @property
+    def columns(self) -> Iterable[Hashable]: ...
+
+    def to_dict(self, *, orient: Literal["records"]) -> List[Dict[Any, Any]]: ...
+
+
+CalibrationRecords = Union[Sequence[Dict[str, Any]], _RecordTable]
 
 
 class DatasetLoader:
@@ -79,7 +102,7 @@ class DatasetLoader:
             "oracle_field": oracle_field,
         }
         self._source_id = "in_memory:dataset"
-        # Corrupt/non-object JSONL lines dropped before record conversion
+        # Malformed source rows dropped before canonical record conversion
         # (explicit on_invalid="drop" only); counted into n_invalid_dropped.
         self._n_source_dropped = 0
 
@@ -128,6 +151,51 @@ class DatasetLoader:
                     record["_cje_row_id"] = f"{self._source_id}:line:{line_num}"
                     data.append(record)
         return self._convert_raw_data(data, target_policies)
+
+    def load_from_records(
+        self, records: CalibrationRecords, target_policies: Optional[List[str]] = None
+    ) -> Dataset:
+        """Load separate calibration records using the JSONL validation contract.
+
+        Accept a sequence of record dicts or a DataFrame with unique columns.
+        Row order supplies the source-local fallback identity; explicit row and
+        source IDs take precedence. The input records and table are left intact.
+        """
+        if isinstance(records, _RecordTable):
+            columns = list(records.columns)
+            if len(columns) != len(set(columns)):
+                raise ValueError("calibration_data DataFrame columns must be unique")
+            records = records.to_dict(orient="records")
+        if not isinstance(records, Sequence) or isinstance(records, (str, bytes)):
+            raise TypeError(
+                "calibration_data must be a sequence of records or a DataFrame"
+            )
+
+        self._source_id = "external_calibration:records"
+        self._n_source_dropped = 0
+        rows = []
+        for idx, record in enumerate(records):
+            if not isinstance(record, dict):
+                if self.on_invalid == "error":
+                    raise ValueError(
+                        f"Expected a record dict at calibration_data[{idx}], "
+                        f"got {type(record).__name__}"
+                    )
+                logger.warning(
+                    "Dropping non-dict calibration_data[%d] (%s)",
+                    idx,
+                    type(record).__name__,
+                )
+                self._n_source_dropped += 1
+                continue
+            rows.append(
+                {
+                    **record,
+                    "_cje_source_id": self._source_id,
+                    "_cje_row_id": f"{self._source_id}:row:{idx}",
+                }
+            )
+        return self._convert_raw_data(rows, target_policies)
 
     def _check_score_ranges(self, data: List[Dict[str, Any]]) -> None:
         """Hard-fail on judge/oracle values outside [0, 1].
@@ -209,7 +277,7 @@ class DatasetLoader:
         if not canonical_records:
             raise ValueError(
                 f"No valid samples could be created from data: all "
-                f"{len(data)} records were skipped due to validation errors. "
+                f"{len(data) + self._n_source_dropped} records were skipped due to validation errors. "
                 f"See the warnings above for per-record reasons."
             )
 
@@ -244,7 +312,7 @@ class DatasetLoader:
         if not samples:
             raise ValueError(
                 f"No valid samples could be created from data: all "
-                f"{len(data)} records were skipped due to validation errors. "
+                f"{len(data) + self._n_source_dropped} records were skipped due to validation errors. "
                 f"See the warnings above for per-record reasons."
             )
 

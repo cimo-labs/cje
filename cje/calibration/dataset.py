@@ -31,6 +31,7 @@ def calibrate_dataset(
     use_response_length: bool = False,
     covariate_names: Optional[List[str]] = None,
     random_seed: int = 42,
+    sample_weight: Optional[np.ndarray] = None,
 ) -> Tuple[Dataset, CalibrationResult]:
     """Calibrate judge scores in a dataset to match oracle labels.
 
@@ -55,6 +56,8 @@ def calibrate_dataset(
                         covariates (e.g., ["domain", "difficulty"]). Combined with
                         response_length if use_response_length=True.
         random_seed: Random seed for reproducibility
+        sample_weight: Optional positive fit weights in dataset order. Supply one
+            per labeled row, or one per row including unlabeled rows.
 
     Returns:
         Tuple of (calibrated_dataset, calibration_result)
@@ -254,6 +257,7 @@ def calibrate_dataset(
         n_folds,
         prompt_ids=prompt_ids,
         covariates=covariates_array,
+        sample_weight=sample_weight,
     )
 
     # fit_cv auto-reduces the fold count when unique oracle prompt clusters

@@ -85,7 +85,8 @@ For a single sample of judge scores + a partial oracle slice as plain numpy arra
 
 ### Dedicated calibration data
 
-Learn the judge→oracle mapping from a separate file — a curated oracle set, or your old 0.3.x logged data (judge + oracle pairs; logprob fields are ignored). A minimal `{prompt_id, judge_score, oracle_label}` file works:
+Use a separate set of judged responses with reference labels to learn the calibration. The records use the same fields in memory and on disk. The minimal labeled record contains `prompt_id`, `judge_score`, and `oracle_label`.
+
 
 ```python
 results = analyze_dataset(
@@ -100,7 +101,65 @@ print(results.metadata["oracle_sources"])
 #  "total_oracle": 510, "n_conflicts": 0}
 ```
 
-By default (`combine_oracle_sources=True`) oracle labels from the calibration file and the fresh draws are pooled — labels attach to responses, so every (judge, oracle) pair enters calibration and only true duplicates are deduped; cross-source disagreements on a prompt (>0.05) are warned about and recorded in `oracle_sources["conflicts"]`. Set `combine_oracle_sources=False` to calibrate from the file alone.
+For data already in memory, pass `calibration_data=records` or
+`calibration_data=frame` in place of `calibration_data_path`. A sequence of
+record dictionaries and a pandas DataFrame with unique columns are supported.
+Place prompt and explicit row IDs in columns. The DataFrame index is ignored.
+External scores and labels default to the unit interval. For an outcome on a
+1–5 scale use `calibration_oracle_scale=(1, 5)` and set `fresh_oracle_scale`
+to match its evaluation labels. `metadata["calibration_data_input"]` records
+`"records"` or `"jsonl"`. In-memory fallback row IDs use their zero-based row
+positions. Supply stable `source_id` and `row_id` fields to carry provenance
+between input formats. With `on_invalid="drop"`, `n_invalid_calibration_dropped`
+counts filtered external records separately from the per-policy evaluation counts.
+
+By default (`combine_oracle_sources=True`) oracle labels from the external calibration set and the fresh draws are pooled — labels attach to responses, so every (judge, oracle) pair enters calibration and only true duplicates are deduped; cross-source disagreements on a prompt (>0.05) are warned about and recorded in `oracle_sources["conflicts"]`. Set `combine_oracle_sources=False` to fit solely on the external set.
+
+If the historical calibration set oversampled a known stratum, attach a positive
+relative fit weight to each labeled record. For example, a row selected with
+probability 0.25 has inverse selection weight 4.
+
+```python
+from random import Random
+from cje import analyze_dataset
+
+# Illustrative historical frame. Review every low score and a random 25% of high scores.
+rng = Random(7)
+historical_rows = []
+for i in range(120):
+    score = rng.random()
+    inclusion = 1.0 if score < 0.5 else 0.25
+    if rng.random() < inclusion:
+        historical_rows.append({
+            "prompt_id": f"historical-{i}",
+            "judge_score": score,
+            "oracle_label": float(rng.random() < score),
+            "audit_weight": 1.0 / inclusion,
+        })
+
+results = analyze_dataset(
+    fresh_draws_data=draws,
+    calibration_data=historical_rows,
+    calibration_weight_field="audit_weight",
+    combine_oracle_sources=False,
+)
+print(results.metadata["calibration_weighting"])
+```
+
+Place `audit_weight` at the top level or in `metadata`. CJE first validates and
+deduplicates records, then scales the retained labels' weights to mean one.
+Uniform weights reproduce the default fit and uncertainty estimates.
+A missing, zero, negative or nonfinite weight on a retained label raises an
+error. Unlabeled calibration rows need no weight. Each bootstrap fit multiplies
+the historical weights by that replicate's prompt-cluster multipliers.
+`kish_effective_rows` describes weight concentration across retained labels.
+`kish_effective_prompts` uses the total weight per labeled prompt. Both are
+descriptive effective counts.
+
+Historical weights affect the judge-to-label fit. A complete evaluation policy
+uses its direct mean over evaluation rows. Use `label_propensities` for known
+label inclusion probabilities on the current evaluation set. Unequal evaluation
+traffic sampling and complex survey variance require their own design analysis.
 
 ### Export results
 
@@ -222,6 +281,8 @@ def analyze_dataset(
     fresh_draws_dir=None,         # directory of per-policy response files
     fresh_draws_data=None,        # in-memory alternative: {policy: [records]}
     calibration_data_path=None,   # JSONL with judge + oracle pairs
+    calibration_data=None,        # alternative external records or DataFrame
+    calibration_weight_field=None,  # relative fit weight on each external label
     combine_oracle_sources=True,  # pool oracle labels from all sources
     estimator="auto",             # "auto" -> "direct"; OPE names raise migration errors
     judge_field="judge_score",
@@ -254,7 +315,7 @@ Provide `fresh_draws_dir` **or** `fresh_draws_data`.
 - `.gates`: `Dict[str, GateResult]` — typed view of `metadata["reliability_gates"]`
 - `.diagnostics`: `DirectDiagnostics` (statuses, boundary cards, calibration quality, per-policy transport states)
 - `.calibrator`: fitted calibrator when calibration is required; complete oracle coverage may return `None`
-- `.metadata`: `target_policies`, `boundary_cards`, `transport_audits`, `reliability_gates`, `oracle_sources` (with `calibration_data_path`), `normalization`, `inference`, `own_oracle_labels_by_policy`, `calibration_label_sources`, `transport_unverified`, `cje_version`, ...
+- `.metadata`: `target_policies`, `boundary_cards`, `transport_audits`, `reliability_gates`, `oracle_sources` (with external calibration data), `normalization`, `inference`, `own_oracle_labels_by_policy`, `calibration_label_sources`, `transport_unverified`, `cje_version`, ...
 
 The `estimator` names `"auto"`, `"direct"`, and `"calibrated-direct"` are aliases of the one calibrated estimator — whether calibration runs is driven solely by oracle-label availability (0 labels → the loud `naive_direct` fallback), and the parameter's only observable effect is which name is recorded in `metadata["estimator"]` (`"auto"` records `"direct"`).
 

@@ -28,6 +28,19 @@ From 0.9.2 the warning prints the labeled range in your judge's own units (e.g. 
 
 **Borrowed calibration.** A policy with no oracle labels of its own borrows the calibration fitted on other policies' labels. Its estimate, and every difference involving it, assume that calibration transfers, and the CI and p-value do not cover that assumption. From 0.9.2 this is explicit: `metadata["own_oracle_labels_by_policy"]` counts each policy's own labels, `metadata["transport_unverified"]` lists the policies whose estimate relies on an unverified calibration transfer (no oracle labels of their own, or a plug-in route that does not correct with them) and whose transport audit is not `PASS` (a policy on a plug-in route, `use_augmented_estimator=False` or `label_design="targeted_unknown"`, counts too and is marked `[uncorrected calibration]`), `analyze_dataset` logs a warning naming them, `summary()` prints a line for each (status at least WARNING), comparisons involving one carry `conditional_on_transport: true` (None for results that do not record label provenance, such as those saved before 0.9.2), and `best_policy()` reports `decision_ready=False` whenever one is in the ranking. `significant` keeps its meaning. To make such a policy decision-ready, label a random sample of its own responses (20 or more), or audit the reuse with held-out probes (below) sized with `plan_transport_audits`.
 
+**How much calibration drift would change a comparison?** When a pair relies on unverified transport, `compare_policies("candidate", "baseline")` reports a `transport_tipping_point` alongside `transport_unverified` if its gates allow reporting. Consider a fixed residual calibration error remaining after any correction already included in each estimate. If the candidate's calibrated mean is 3 points too high and the baseline's is 1 point too low, their errors shift the candidate-minus-baseline difference by −4 points. Equal errors cancel. To attribute the shift to the candidate alone, hold the baseline's remaining error at zero.
+
+The default threshold is zero. Pass a predeclared difference in output-label units as `sensitivity_margin`. For a candidate-minus-baseline difference of +6 with conditional interval [+2,+10], the following calculations show what the returned fields mean.
+
+| Threshold (`margin`) | Signed net residual to put the point at the threshold (`point_shift`) | Smallest signed net residual for the paired interval to include the threshold (`interval_shift`) |
+|---:|---:|---:|
+| 0 | −6 | −2 |
+| +3 | −3 | 0 |
+
+These additive shifts use output-label units. Check feasibility against the outcome's known support. With outcomes in [a,b] and the baseline held at μ, the candidate-minus-baseline point difference can range from a−μ to b−μ. With a [0,1] pass rate and a baseline of 0.95, a margin of +0.10 would require a candidate pass rate of 1.05. The function returns the algebraic shift even for such an unattainable margin. When both arms can move, the possible difference ranges from a−b to b−a.
+
+Reversing the order of the policies also reverses the sign convention for a business threshold. The calculation estimates neither the size nor the probability of actual drift. The p-value still tests zero. Use the transport audit and decision flags for any release claim. The field is omitted for raw judge scores, missing transport provenance, and blocked or flagged comparisons. A finite point can have `interval_shift=None` on a fallback inference route without paired bounds.
+
 **Residual transport audit (opt-in).** Reusing a calibration map on another policy, time period, or domain is an assumption. Grade it with held-out oracle probes that were not used to fit the calibrator (calibration labels reused as probes give a near-zero residual by construction; give draws and probes an `observation_id` and CJE rejects the overlap), plus a predeclared practical margin in the units of `results.estimates`:
 
 ```python

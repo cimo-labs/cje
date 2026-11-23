@@ -36,6 +36,36 @@ def main() -> None:
     assert result.method == "calibrated_direct"
     assert np.all(np.isfinite(result.estimates))
     assert np.all(result.standard_errors > 0)
+    historical = [
+        {
+            "prompt_id": f"historical-{i}",
+            "judge_score": i / 39,
+            "oracle_label": i / 39,
+            "fit_weight": 1 + i % 2,
+        }
+        for i in range(40)
+    ]
+    external = cje.analyze_dataset(
+        fresh_draws_data=draws,
+        calibration_data=historical,
+        calibration_weight_field="fit_weight",
+        combine_oracle_sources=False,
+    )
+    assert external.metadata["calibration_weighting"]["n_labeled_rows"] == 40
+    plan = cje.plan_binary_reviews(objective="slope", judge_fail_share=0.1, budget=20)
+    assert (plan.fail_reviews, plan.pass_reviews) == (10, 10)
+    audit = cje.weighted_paired_audit(
+        cluster_ids=["a", "b"],
+        traffic_selected=[True, True],
+        label_selected=[True, True],
+        traffic_inclusion=[1.0, 1.0],
+        label_inclusion=[1.0, 1.0],
+        predictions=[0.5, 0.5],
+        outcomes=[0.0, 1.0],
+        outcome_bounds=(0.0, 1.0),
+        target_weights=[1, 3],
+    )
+    assert audit.estimate == 0.75 and audit.ci == (0.75, 0.75)
     with tempfile.TemporaryDirectory(prefix="cje-wheel-") as directory:
         data = Path(directory) / "fresh.jsonl"
         data.write_text(

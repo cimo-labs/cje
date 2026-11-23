@@ -66,6 +66,12 @@ print(results.summary())
 
 From pandas, `df.groupby("variant")` into lists of dicts works the same way; a `NaN` label means unlabeled. Where to put labels across policies, unequal sampling rates (`label_design="known_propensity"`) and more recipes: [reference.md: Your own data](https://github.com/cimo-labs/cje/blob/main/skills/cje/reference.md#your-own-data).
 
+A separate historical calibration table can be passed directly as `calibration_data=records` or `calibration_data=dataframe`. Set `combine_oracle_sources=False` to fit exclusively on that table. The same scale and identity checks apply as for `calibration_data_path`. For an outcome defined on 0–500, use `calibration_oracle_scale=(0, 500)`, `fresh_oracle_scale=(0, 500)`, and `output_scale=(0, 500)` to report means and paired differences in the original units.
+
+If historical labels were sampled at known unequal rates, put their inverse selection weights in a numeric field and pass its name as `calibration_weight_field` with `combine_oracle_sources=False`. The result reports how concentrated the weights are across labeled rows and prompts. [Historical fit weights](https://github.com/cimo-labs/cje/blob/main/cje/interface/README.md)
+
+If the judge almost always passes, use `plan_binary_reviews` to plan how many judge failures and passes to review for a calibration slope or an overall mean. For a known finite frame with independent traffic and human-review draws, `weighted_paired_audit` estimates a paired outcome under both sampling stages. [Review allocation](https://github.com/cimo-labs/cje/blob/main/guides/evaluation-planning.md#plan-reviews-of-a-binary-judge) · [Weighted paired audits](https://github.com/cimo-labs/cje/blob/main/guides/weighted-paired-audit.md)
+
 ## What it estimates
 
 Each estimate targets the policy's mean label over the population your prompts were sampled from, on the label scale. It assumes (1) the labels are a probability sample of the responses they describe, (2) the judge and rubric stay fixed, and (3) for a policy without labels of its own, the reused calibration has zero mean error on its responses (transport). CJE cannot check (1) or (2); it reports (3) as `NOT_CHECKED` until a held-out audit grades it. Default intervals are analytic, clustered by `prompt_id`, and include the uncertainty of fitting the calibration on finite labels; bootstrap intervals are opt-in. How calibration, inference and the audits work, and why there is no importance weighting: [Methods](https://github.com/cimo-labs/cje/blob/main/cje/estimators/README.md#methods).
@@ -119,6 +125,7 @@ Best by point estimate: candidate (point estimate, not a test)
 Limitations: borrowed calibration (residual transport NOT_CHECKED)
 Paired differences (p unadjusted):
   candidate - production: +0.038  95% CI [-0.027, +0.102]  p=0.22  [borrowed calibration: candidate]
+    A net calibration shift of -0.0378 label units would bring the point difference to zero. The conditional interval already includes zero.
 No reliable winner: every paired CI includes 0 (not evidence that they are equal)
 Status: warning
 ```
