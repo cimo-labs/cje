@@ -79,8 +79,8 @@ Use the installed version's own skill. `cje skill --reference` gives searchable 
    team summary). Never narrate which policy the point estimate favours or present it alone as
    the size of the gap. Write instead, in the user's units: "No reliable winner: the paired CI for
    <B> − <A>, [<lo>, <hi>], allows <A> to be up to <|lo|> better or <B> up to <hi> better." Then
-   ask exactly "What is the smallest gap on <scale> that would change which one you ship?" and
-   size the labels (Reporting item 3). No cost or latency tiebreak, even hedged, unless the
+   size the labels for the declared decision margin (Reporting item 3). If none was supplied,
+   ask "What is the smallest gap on <scale> that would change which one you ship?" No cost or latency tiebreak, even hedged, unless the
    paired CI lies wholly inside a margin the user declared before seeing results; then say
    "equivalent within ±<m>" and cost may decide.
 5. **No winner and no lean on borrowed calibration.** A policy with no labels of its own whose
@@ -96,8 +96,8 @@ Use the installed version's own skill. `cje skill --reference` gives searchable 
    may favor its style, and the borrowed calibration cannot see that), not support. Choose
    one way to resolve this assumption and size it for the desired precision:
    - Any random labels on that policy's own responses (same prompts, raters blind to policy)
-     remove the borrowed flag and correct its estimate; about 20 or more are needed before its
-     interval is useful. That is a floor, not a precision target: the rerun may still say "not
+     can correct its estimate on the augmented route. Twenty is a starting budget for own
+     labels, not an API minimum. Size for precision. The rerun may still say "not
      established". Ask for the user's practical margin and size against it, never against the
      borrowed difference; do not frame new labels as confirming a win.
    - A held-out probe sized with `plan_transport_audits` is for keeping a calibrator across
@@ -371,8 +371,8 @@ or if you stratify, sample at random within that policy's judge-score strata and
 unequal rates with `label_design="known_propensity"`; covering the score range prevents
 REFUSE-LEVEL later, and labeling only the top-scored items is the classic mistake. Ground truth
 = human judgment, expert review, or a downstream KPI; a trusted stronger model can serve, and
-the estimate then targets that model's judgment, so say so. 20 per policy is a floor: the rerun
-may still say "not established". Labels may all sit in one policy, but then hard rule 5
+the estimate then targets that model's judgment, so say so. Size own-label purchases for precision. A transport PASS
+requires at least 20 effective independent probe clusters. Labels may all sit in one policy, but then hard rule 5
 applies. Then run the canonical flow.
 
 ## Save an auditable run
