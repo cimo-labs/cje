@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-22
+
+- The bundled agent skill now routes binary review planning, finite-frame paired audits, historical fit weights, and transport sensitivity from its first page. The four-label calibration minimum applies to fitting a judge. A fully observed finite frame can be summarized directly.
+- The installed reference includes offline examples and distinguishes fixed review quotas, historical selection probabilities, and target traffic masses. The README, playbook and agent installation instructions describe the same sampling designs.
+
 ## [0.10.0] - 2026-11-22
 
 ### Calibration data and interpretation
