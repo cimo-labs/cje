@@ -229,6 +229,12 @@ bounds give `None`. Check the proposed arm means against the outcome support.
 With only the reported point and conditional interval, the same arithmetic gives a manual
 sensitivity calculation. Say which numbers were supplied and whether the API was run.
 The shifts quantify hypothetical drift. Preserve the unverified verdict and all gates.
+Check the sign by addition. If the candidate prediction is $3 too high and the baseline
+is accurate, the candidate-minus-baseline correction is −$3. If the baseline prediction
+is $3 too high and the candidate is accurate, the correction is +$3. Equal errors cancel.
+At `point_shift` the point equals the margin. When an interval initially excludes the
+margin, its nearer endpoint touches the margin at `interval_shift`. Crossing that
+boundary requires a further shift in the same direction.
 [Transport sensitivity examples](https://github.com/cimo-labs/cje/blob/v0.10.1/cje/diagnostics/README.md)
 
 ## `analyze_dataset`
