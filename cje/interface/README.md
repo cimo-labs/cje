@@ -120,6 +120,23 @@ relative fit weight to each labeled record. For example, a row selected with
 probability 0.25 has inverse selection weight 4.
 
 ```python
+from random import Random
+from cje import analyze_dataset
+
+# Illustrative historical frame. Review every low score and a random 25% of high scores.
+rng = Random(7)
+historical_rows = []
+for i in range(120):
+    score = rng.random()
+    inclusion = 1.0 if score < 0.5 else 0.25
+    if rng.random() < inclusion:
+        historical_rows.append({
+            "prompt_id": f"historical-{i}",
+            "judge_score": score,
+            "oracle_label": float(rng.random() < score),
+            "audit_weight": 1.0 / inclusion,
+        })
+
 results = analyze_dataset(
     fresh_draws_data=draws,
     calibration_data=historical_rows,
