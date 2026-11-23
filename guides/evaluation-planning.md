@@ -23,3 +23,23 @@ within that policy. That share is at most the squared within-policy correlation 
 When the share is below about 0.10, budget labels as if there were no judge, and use the judge for triage and for ordering clear differences.
 
 Planned power is a projection under the planner's assumptions, not achieved power; after collection, read the realized intervals and paired comparisons.
+
+## Plan reviews of a binary judge
+
+A judge that passes 99% of responses has a 60.5% chance of yielding zero judge failures in 50 randomly selected responses. Use random sampling *within* the observed fail and pass groups to measure the difference in their human pass rates (the calibration slope). To measure the overall human pass rate, the two group means instead contribute in proportion to their traffic shares.
+
+```python
+from math import sqrt
+from cje import plan_binary_reviews
+
+plan = plan_binary_reviews(
+    objective="slope", judge_fail_share=0.01, budget=500, target_se=0.05,
+    fail_sd=sqrt(0.6 * 0.4), pass_sd=sqrt(0.98 * 0.02),
+    available_fail=150, available_pass=1000,
+)
+print(plan.fail_reviews, plan.pass_reviews, plan.meets_target)  # 124 35 True
+```
+
+This assumes a human pass rate of 60% among judge failures and 98% among passes to set the within-group SDs. With a 50-review budget, those assumptions assign 39 reviews to failures for the slope and two for the mean. A target SE of 0.05 denotes five points of standard error. At a 1% judge-fail rate, finding 124 eligible failures takes 12,400 scored responses in expectation. Supply real availability caps before recruiting. If a feasible quota cannot reach the target within budget, the result reports the best modeled SE available and `meets_target=False`. A stratum with fewer than two available clusters cannot support this design.
+
+The units are independent prompts or other prespecified independent clusters, with one bounded human outcome in [0,1] per unit. Each review has the same cost. Use the defaults of 0.5 for conservative SDs when prior evidence is weak. Randomize within each stratum and retain the selection mechanism. The calculation treats the traffic share as known and targets future independent units. For the final analysis of fixed quotas use a stratified variance calculation; the two-stage Bernoulli audit has a different sampling design.

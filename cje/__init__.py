@@ -38,7 +38,7 @@ def _resolve_version() -> str:
 
         return _dist_version("cje-eval")
     except Exception:  # PackageNotFoundError, or metadata unavailable
-        return "0.9.4"
+        return "0.10.0"
 
 
 __version__ = _resolve_version()
@@ -55,6 +55,8 @@ from .data import load_dataset_from_jsonl
 # Array-first primitive (single-policy calibrated mean + transport audit)
 from .array_api import CalibratedMeanResult, calibrated_mean_ci, transport_audit
 from .diagnostics.transport import TransportAuditConfig
+from .weighted_audit import WeightedPairedAuditResult, weighted_paired_audit
+from .diagnostics.stratified_planning import BinaryReviewPlan, plan_binary_reviews
 
 # Budget planning
 from .diagnostics.planning import (
@@ -82,6 +84,10 @@ from .diagnostics.audit_planning import (
 )
 
 __all__ = [
+    "WeightedPairedAuditResult",
+    "weighted_paired_audit",
+    "BinaryReviewPlan",
+    "plan_binary_reviews",
     "AuditScenario",
     "AuditBudgetPlan",
     "PolicyAuditPlan",

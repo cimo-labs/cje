@@ -429,7 +429,7 @@ class FlexibleCalibrator:
         """
         unique_folds = np.unique(folds)
 
-        # Step 1: Fit smooth g(S, X_cov) and ECDF for each fold
+        # Complete each fold while its training scores and weights are in memory.
         for k in unique_folds:
             train_mask = folds != k
             if not np.any(train_mask):
@@ -443,73 +443,42 @@ class FlexibleCalibrator:
                 sample_weight[train_mask] if sample_weight is not None else None
             )
 
-            # Skip if too few training samples
             if len(S_train) < TWO_STAGE_MIN_ROWS:
-                # Fallback to monotone for small folds
-                iso = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
-                iso.fit(S_train, Y_train, sample_weight=weight_train)
                 self._g_models[k] = None
-                self._iso_models[k] = iso
-                self._ecdf_models[k] = _fit_ecdf(S_train, weight_train)
-                continue
-
-            # Build feature matrix: [S, covariates]
-            if covariates is not None:
-                X_train = np.column_stack([S_train, covariates[train_mask]])
+                g_train = S_train
             else:
-                X_train = S_train.reshape(-1, 1)
-
-            # Fit spline + ridge for smooth transformation
-            n_knots = min(max(5, self.n_splines), len(S_train) // 4)  # Minimum 5 knots
-            spline = SplineTransformer(n_knots=n_knots, degree=3, include_bias=False)
-            ridge = RidgeCV(alphas=np.logspace(-3, 3, 13), store_cv_results=False)
-            g_model = make_pipeline(spline, ridge)
-
-            # Fit g(S, X_cov) to predict Y
-            fit_kwargs = (
-                {"ridgecv__sample_weight": weight_train}
-                if weight_train is not None
-                else {}
-            )
-            g_model.fit(X_train, Y_train, **fit_kwargs)
-            self._g_models[k] = g_model
-
-            # Fit ECDF on g(S, X_cov) predictions for this fold's training data
-            g_train = _predict_spline_ridge(g_model, X_train)
-            self._ecdf_models[k] = _fit_ecdf(g_train, weight_train)
-
-        # Step 2: Fit isotonic on rank-transformed space for each fold
-        for k in unique_folds:
-            train_mask = folds != k
-            if not np.any(train_mask):
-                raise ValueError(
-                    f"Fold {k} has no held-out complement; cross-fitted "
-                    "calibration requires at least two nonempty folds."
-                )
-
-            if self._g_models.get(k) is not None:
-                # Build feature matrix for this fold
+                # Build feature matrix: [S, covariates]
                 if covariates is not None:
-                    X_train = np.column_stack([S[train_mask], covariates[train_mask]])
+                    X_train = np.column_stack([S_train, covariates[train_mask]])
                 else:
-                    X_train = S[train_mask].reshape(-1, 1)
+                    X_train = S_train.reshape(-1, 1)
 
-                # Transform training data through g and ECDF
-                g_train = _predict_spline_ridge(self._g_models[k], X_train)
-                T_ranked_train = self._ecdf_models[k](g_train)
-            else:
-                # Fallback: use ECDF on original scores
-                T_ranked_train = self._ecdf_models[k](S[train_mask])
+                # Fit spline + ridge for smooth transformation
+                n_knots = min(
+                    max(5, self.n_splines), len(S_train) // 4
+                )  # Minimum 5 knots
+                spline = SplineTransformer(
+                    n_knots=n_knots, degree=3, include_bias=False
+                )
+                ridge = RidgeCV(alphas=np.logspace(-3, 3, 13), store_cv_results=False)
+                g_model = make_pipeline(spline, ridge)
 
-            # Fit isotonic on ranked space
+                # Fit g(S, X_cov) to predict Y
+                fit_kwargs = (
+                    {"ridgecv__sample_weight": weight_train}
+                    if weight_train is not None
+                    else {}
+                )
+                g_model.fit(X_train, Y_train, **fit_kwargs)
+                self._g_models[k] = g_model
+
+                # Use one index prediction for the ECDF and its isotonic training ranks.
+                g_train = _predict_spline_ridge(g_model, X_train)
+
+            ecdf = _fit_ecdf(g_train, weight_train)
+            self._ecdf_models[k] = ecdf
             iso = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds="clip")
-            iso.fit(
-                T_ranked_train,
-                Y[train_mask],
-                sample_weight=(
-                    sample_weight[train_mask] if sample_weight is not None else None
-                ),
-            )
+            iso.fit(ecdf(g_train), Y_train, sample_weight=weight_train)
             self._iso_models[k] = iso
 
     def _fit_full_models(

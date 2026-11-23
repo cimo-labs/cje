@@ -26,6 +26,8 @@ Logprob fields from 0.3.x logged data are accepted and ignored.
 2. `fresh_draws_dir="responses/"`: one JSONL per policy, named `{policy}_responses.jsonl` (also accepted: `{policy}.jsonl`). Policy name comes from the filename; keep names identical everywhere. A single JSONL file path (records grouped by `target_policy`) also works here.
 3. `calibration_data_path="labeled.jsonl"`: a separate judge+oracle file (e.g. historical labeled logs) used as the calibration source. Values default to [0, 1]; for other scales declare `calibration_judge_scale=(lo, hi)` / `calibration_oracle_scale=(lo, hi)` (external calibration data never infers its scale from observations). Out-of-range files raise a hard error naming the observed range. With `combine_oracle_sources=True` (default) any `oracle_label`s in the fresh draws are pooled with it; `metadata["oracle_sources"]` reports provenance and cross-source conflicts.
 
+From 0.10 the external table can also be supplied in memory as `calibration_data=records` or `calibration_data=frame`. When a known sampling design oversampled historical labels, use `combine_oracle_sources=False` and set `calibration_weight_field` to the numeric field holding their positive relative fit weights. Report `metadata["calibration_weighting"]` for labeled-row and prompt effective counts. Current human-review probabilities belong in the current audit design.
+
 Field names differ in the user's data? Pass `judge_field="score"`, `oracle_field="human_rating"` instead of renaming.
 
 ## Your own data
@@ -85,6 +87,12 @@ Through 0.9.1 records reject `NaN`; from 0.9.2 a `NaN` label is read as unlabele
   per-stratum analysis in [Array API](#array-api-single-sample-primitive), with its share
   term, gives an interval sized to the error.
 
+From 0.10, `plan_binary_reviews` allocates independent units across the fail and pass strata of a binary judge at equal review cost. Choose `objective="mean"` to target the population mean with a known traffic share, or `objective="slope"` for the difference in human pass rates. For a known finite frame sampled by two independent Bernoulli stages, use `weighted_paired_audit` with the cluster-level traffic probabilities, conditional label probabilities and prespecified bounded paired outcome. [Supported sampling design and worked example](https://github.com/cimo-labs/cje/blob/main/guides/weighted-paired-audit.md)
+
+For a preplanned panel of raters, define the response label (for example, vote share or majority) before fitting. Keep joint posterior draws aligned across arms for model-based sensitivity. If the score or human outcome can be missing, preserve the assigned frame and distinguish the two forms of missingness. [Human outcome and missingness guide](https://github.com/cimo-labs/cje/blob/main/guides/rater-and-missing-outcomes.md)
+
+For a calibrated pair with unverified transport and reportable gates, `results.compare_policies("candidate", "baseline", sensitivity_margin=0.0)` returns `transport_tipping_point`. The signed shift is the change in the candidate's mean residual minus the change in the baseline's mean residual, in output-label units. `point_shift` reaches the margin at the point estimate. `interval_shift` reaches the margin at the closest conditional interval endpoint (zero when the margin is already inside, None when paired bounds are unavailable). A tipping point supplies no evidence about the likelihood of drift. Keep the existing transport and decision verdict.
+
 ## `analyze_dataset`
 
 All arguments are keyword-only. Provide exactly ONE evaluation source
@@ -97,6 +105,8 @@ results = analyze_dataset(
     fresh_draws_data=None,        # {policy: [records]}  (or use fresh_draws_dir=...)
     fresh_draws_dir=None,
     calibration_data_path=None,   # separate judge+oracle JSONL
+    calibration_data=None,        # alternatively, records or a DataFrame (0.10+)
+    calibration_weight_field=None,  # positive historical fit weights, external-only
     combine_oracle_sources=True,
     estimator="auto",             # "auto"/"direct"/"calibrated-direct": same estimator (see below)
     judge_field="judge_score",
@@ -170,6 +180,14 @@ fallback), never by this parameter; its only observable effect is which name lan
   that stored unpaired IF z-tests), `"independent_conservative"` (no pairing info). `gate_flagged` lists any policy in
   the pair with a flagged reliability gate; a difference CI cannot repair a biased input
   (e.g. after a transport-audit FAIL), so treat such comparisons per the gates discipline
+- For a calibrated pair relying on unverified transport, `compare_policies(i, j, sensitivity_margin=0.0)`
+  can return `transport_tipping_point`. It reports the signed differential residual (remaining
+  calibration error in the outcome-minus-prediction direction for i, less that for j) that would move the point difference to `margin` (`point_shift`),
+  and the smallest shift that would include the margin in its conditional paired CI (`interval_shift`).
+  Zero means the interval already includes the margin. None means paired bounds are unavailable.
+  The shifts use output-label units. Check that any proposed arm means fit the outcome's known
+  bounds. The shifts describe hypothetical bias and cannot clear a gate or
+  establish `decision_ready`. The comparison's p-value continues to test zero.
 - `.compare_all_policies(alpha=0.05, adjust=None)` → list of comparison dicts for every (i < j)
   pair with `policy1`/`policy2` names (`difference` = `policy1` − `policy2`); `adjust="bh"` adds
   Benjamini-Hochberg `p_adjusted`/`significant_adjusted` for many-pair audits, while `p_value`,

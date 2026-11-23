@@ -68,6 +68,8 @@ QUICKSTART_SUMMARY = "\n".join(
             "  candidate - production: +0.038  95% CI [-0.027, +0.102]  p=0.2"
             "2  [borrowed calibration: candidate]"
         ),
+        "    A net calibration shift of -0.0378 label units would bring the point "
+        "difference to zero. The conditional interval already includes zero.",
         (
             "No reliable winner: every paired CI includes 0 (not evidence tha"
             "t they are equal)"
@@ -349,6 +351,24 @@ class TestSummaryPairedBlock:
             "  [borrowed calibration: candidate]"
         )
         assert line in s2_result.summary().splitlines()
+
+    def test_tipping_point_tracks_declared_output_units(
+        self, s2_result: EstimationResult
+    ) -> None:
+        unit = s2_result.compare_policies(
+            "candidate", "production", sensitivity_margin=0.13
+        )
+        scaled_result = analyze_dataset(
+            fresh_draws_data=_quickstart_draws(), output_scale=(50, 150)
+        )
+        scaled = scaled_result.compare_policies(
+            "candidate", "production", sensitivity_margin=13.0
+        )
+        for key in ("margin", "point_shift", "interval_shift"):
+            assert scaled["transport_tipping_point"][key] == pytest.approx(
+                100 * unit["transport_tipping_point"][key]
+            )
+        assert "shift of -3.78 label units" in scaled_result.summary()
 
     def test_no_reliable_winner_only_when_every_ci_includes_zero(self) -> None:
         def result(diff: float) -> EstimationResult:

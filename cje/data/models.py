@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 RESULT_SCHEMA_VERSION = "cje.estimation_result/v2"
 
 # metadata["calibration_label_sources"] entry for labels that came from
-# calibration_data_path (the others are policy names).
+# an external calibration set (the others are policy names).
 _CALIBRATION_DATA_SOURCE = "calibration_data"
 
 # compare_policies keys re-derived from the result on every call; stored
@@ -27,6 +27,7 @@ _DERIVED_COMPARISON_KEYS = (
     "policy2",
     "transport_unverified",
     "conditional_on_transport",
+    "transport_tipping_point",
 )
 
 
@@ -64,6 +65,28 @@ def _validate_alpha(alpha: Any) -> float:
     if not np.isfinite(numeric) or not 0.0 < numeric < 1.0:
         raise ValueError(f"alpha must be a finite number in (0, 1), got {alpha!r}")
     return numeric
+
+
+def _transport_tipping_point(
+    comparison: Dict[str, Any], margin: float
+) -> Dict[str, Optional[float]]:
+    """Signed additive shift to a contrast or its closest paired CI endpoint."""
+    point_shift = margin - float(comparison["difference"])
+    lower, upper = comparison.get("ci_lower"), comparison.get("ci_upper")
+    interval_shift = None
+    if (
+        lower is not None
+        and upper is not None
+        and np.isfinite(lower)
+        and np.isfinite(upper)
+        and lower <= upper
+    ):
+        interval_shift = float(margin - np.clip(margin, lower, upper))
+    return {
+        "margin": margin,
+        "point_shift": point_shift,
+        "interval_shift": interval_shift,
+    }
 
 
 class InferenceUnavailableError(RuntimeError):
@@ -745,7 +768,23 @@ class EstimationResult(BaseModel):
             return True
         raw = self.metadata.get("calibration_label_sources")
         sources = [str(s) for s in raw] if isinstance(raw, (list, tuple)) else []
-        return sources != [policy]
+        return sources != [policy] or (
+            policy == _CALIBRATION_DATA_SOURCE
+            and self._external_calibration_input() is not None
+        )
+
+    def _external_calibration_input(self) -> Optional[str]:
+        """Name the input that contributed external fit labels, including older results."""
+        roles = (self.metadata.get("data_provenance") or {}).get(
+            "calibration_fit_roles"
+        ) or {}
+        if roles.get("external") == 0:
+            return None
+        if self.metadata.get("calibration_data_input") == "records":
+            return "calibration_data"
+        if self.metadata.get("calibration_data_path"):
+            return "calibration_data_path"
+        return None
 
     def _calibration_source_phrase(self) -> str:
         """Name the labels the shared calibration was fit on.
@@ -760,19 +799,19 @@ class EstimationResult(BaseModel):
             own = self.metadata.get("own_oracle_labels_by_policy")
             if isinstance(own, dict):
                 sources = sorted(str(p) for p, n in own.items() if n)
-        # A policy literally named "calibration_data" is a policy unless a
-        # calibration_data_path was actually given.
-        external = _CALIBRATION_DATA_SOURCE in sources and bool(
-            self.metadata.get("calibration_data_path")
-        )
-        policies = [
-            s for s in sources if not (external and s == _CALIBRATION_DATA_SOURCE)
-        ]
+        # An evaluated policy may also be named "calibration_data". When both
+        # sources supplied labels the external marker precedes the policy name.
+        external = self._external_calibration_input()
+        policies = sources.copy()
+        if external and _CALIBRATION_DATA_SOURCE in policies:
+            policies.remove(_CALIBRATION_DATA_SOURCE)
+        else:
+            external = None
         if not external and len(policies) == 1:
             return f"{policies[0]}'s calibration"
         parts: List[str] = []
         if external:
-            parts.append("calibration_data_path")
+            parts.append(external)
         if policies:
             noun = "'s labels" if len(policies) == 1 else " labels"
             parts.append(_join_names(policies) + noun)
@@ -1164,6 +1203,26 @@ class EstimationResult(BaseModel):
                 f"{100 * (1 - alpha):.0f}% CI [{lower:+.3f}, {upper:+.3f}]  "
                 f"{_format_p_value(p_value)}{flag}"
             )
+            tipping = comparison.get("transport_tipping_point")
+            if tipping is not None:
+                point_shift, interval_shift = (
+                    tipping["point_shift"],
+                    tipping["interval_shift"],
+                )
+                if point_shift == 0:
+                    point_text = "The point difference is already zero."
+                else:
+                    point_text = (
+                        f"A net calibration shift of {point_shift:+.3g} label units "
+                        "would bring the point difference to zero."
+                    )
+                if interval_shift is None:
+                    interval_text = "No paired interval threshold is available."
+                elif interval_shift == 0:
+                    interval_text = "The conditional interval already includes zero."
+                else:
+                    interval_text = f"A shift of {interval_shift:+.3g} brings the conditional interval to zero."
+                lines.append(f"    {point_text} {interval_text}")
         if first_error:
             lines.append(f"  ({first_error})")
         if hidden:
@@ -1321,6 +1380,8 @@ class EstimationResult(BaseModel):
         policy1_idx: Union[int, str],
         policy2_idx: Union[int, str],
         alpha: float = 0.05,
+        *,
+        sensitivity_margin: float = 0.0,
     ) -> Dict[str, Any]:
         """Compare two policies with the most honest difference SE available.
 
@@ -1368,6 +1429,9 @@ class EstimationResult(BaseModel):
             policy2_idx: The second policy (name or index).
             alpha: Significance level for ``significant`` and (paths 1-2)
                 the returned CI.
+            sensitivity_margin: Predeclared threshold for policy1 minus policy2
+                in output-label units, used only for transport sensitivity.
+                The comparison and its significance test still concern zero.
 
         Returns:
             Dict with ``policy1``/``policy2`` (names), ``difference``,
@@ -1384,13 +1448,42 @@ class EstimationResult(BaseModel):
             before 0.9.2; ``significant`` keeps its meaning); paths 1-2 add
             ``ci_lower``/``ci_upper``/``alpha`` (plus ``n_replicates`` for
             the bootstrap path and ``df``/``basis`` for the analytic path).
+            A calibrated pair with unverified transport and usable estimates
+            carries ``transport_tipping_point`` if its gates allow reporting.
+            For a hypothetical fixed net residual (remaining calibration error
+            in the outcome-minus-prediction direction for policy1, less that
+            for policy2), ``point_shift`` is the signed
+            shift bringing the difference to ``margin``. ``interval_shift`` is
+            the smallest signed shift making the paired interval include that
+            margin, zero if already included, or None on a fallback without
+            paired bounds. Check the proposed arm means against the known
+            outcome support. Shifts are algebraic even for unattainable margins.
 
         Raises:
             ValueError: An unknown policy name.
             TypeError: A policy given as neither a name nor an integer.
             IndexError: An integer index out of range.
         """
-        return self._compare_policies_impl(policy1_idx, policy2_idx, alpha, warn=True)
+        margin_error = (
+            "sensitivity_margin must be a finite number in output-label units"
+        )
+        if isinstance(sensitivity_margin, bool) or not isinstance(
+            sensitivity_margin, (int, float, np.integer, np.floating)
+        ):
+            raise ValueError(margin_error)
+        try:
+            margin = float(sensitivity_margin)
+        except OverflowError as exc:
+            raise ValueError(margin_error) from exc
+        if not np.isfinite(margin):
+            raise ValueError(margin_error)
+        return self._compare_policies_impl(
+            policy1_idx,
+            policy2_idx,
+            alpha,
+            warn=True,
+            sensitivity_margin=margin,
+        )
 
     def _resolve_policy_index(self, name: str, value: Any) -> int:
         """Accept a policy name or an integer index; return the index."""
@@ -1423,6 +1516,7 @@ class EstimationResult(BaseModel):
         alpha: float,
         *,
         warn: bool,
+        sensitivity_margin: float = 0.0,
     ) -> Dict[str, Any]:
         """``compare_policies`` body; ``warn=False`` keeps summary() quiet."""
         policy1_idx = self._resolve_policy_index("policy1_idx", policy1_idx)
@@ -1470,7 +1564,11 @@ class EstimationResult(BaseModel):
                         policy1_idx, policy2_idx, alpha
                     )
                     return self._annotate_gate_flags(
-                        recomputed_comparison, policy1_idx, policy2_idx, warn=warn
+                        recomputed_comparison,
+                        policy1_idx,
+                        policy2_idx,
+                        warn=warn,
+                        sensitivity_margin=sensitivity_margin,
                     )
 
                 stored_alpha = float(serialized_state.get("alpha", 0.05))
@@ -1499,7 +1597,11 @@ class EstimationResult(BaseModel):
                         serialized_result["ci_lower"] = lower
                         serialized_result["ci_upper"] = upper
                 return self._annotate_gate_flags(
-                    serialized_result, policy1_idx, policy2_idx, warn=warn
+                    serialized_result,
+                    policy1_idx,
+                    policy2_idx,
+                    warn=warn,
+                    sensitivity_margin=sensitivity_margin,
                 )
 
         comparison = self._compare_paired_bootstrap(
@@ -1512,7 +1614,11 @@ class EstimationResult(BaseModel):
         if comparison is None:
             comparison = self._compare_legacy(policy1_idx, policy2_idx, alpha)
         return self._annotate_gate_flags(
-            comparison, policy1_idx, policy2_idx, warn=warn
+            comparison,
+            policy1_idx,
+            policy2_idx,
+            warn=warn,
+            sensitivity_margin=sensitivity_margin,
         )
 
     def _inference_unavailable_detail(self, policy: str) -> str:
@@ -1538,7 +1644,13 @@ class EstimationResult(BaseModel):
         )
 
     def _annotate_gate_flags(
-        self, result: Dict[str, Any], idx1: int, idx2: int, *, warn: bool = True
+        self,
+        result: Dict[str, Any],
+        idx1: int,
+        idx2: int,
+        *,
+        warn: bool = True,
+        sensitivity_margin: float = 0.0,
     ) -> Dict[str, Any]:
         """Name the pair and surface reliability-gate and transport caveats.
 
@@ -1575,6 +1687,18 @@ class EstimationResult(BaseModel):
             bool(pair_unverified) if self._transport_provenance_known() else None
         )
         result["gate_flagged"] = flagged
+        if (
+            pair_unverified
+            and idx1 != idx2
+            and self.method in {"calibrated_direct", "calibrated_direct_bootstrap"}
+            and not flagged
+            and not self._unreliable_policies().intersection(names)
+            and not any(self._transport_status(p) == "FAIL" for p in names)
+            and np.isfinite(result["difference"])
+        ):
+            result["transport_tipping_point"] = _transport_tipping_point(
+                result, sensitivity_margin
+            )
         if flagged and warn:
             logger.warning(
                 "compare_policies: %s flagged by reliability gates — the "

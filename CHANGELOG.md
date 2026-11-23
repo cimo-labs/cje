@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-22
+
+### Calibration data and interpretation
+
+- `analyze_dataset(calibration_data=...)` accepts a separate sequence of records or a pandas DataFrame. It uses the same field, scale, identity, and overlap checks as an external JSONL file.
+- For an exclusively external calibration fit, `calibration_weight_field` supplies positive relative fit weights for the labeled rows. Current audit-label inclusion probabilities and the target traffic mix have separate meanings.
+- For paired calibrated contrasts that depend on unverified transport, `compare_policies` reports the signed change in differential calibration error needed to reach zero or a supplied `sensitivity_margin`. It reports a separate threshold for the conditional interval. Existing audit and decision gates still apply.
+
+### Sampling and planning
+
+- `weighted_paired_audit` estimates a prespecified bounded paired outcome on a known finite cluster frame sampled in two Bernoulli stages. It accepts known traffic and conditional human-review probabilities and optional fixed target masses. Its conservative fixed-look interval uses the sampling design and known outcome support. The result also reports the observed-label identification bounds, coverage of target mass, and effective counts. On a sparse WMT replay, sampling intervals averaged 48.9 percentage points wide.
+- `plan_binary_reviews` allocates an equal-cost review budget across judge failures and passes. It sizes for a human outcome mean or binary calibration slope, accommodates available cluster counts, and can seek a target standard error.
+- The two-stage calibrator now reuses the spline predictions within each training fold. A parity run across tied scores, numeric covariates, unequal weights, and small-fold fallbacks reproduced the original predictions exactly.
+
 ## [0.9.4] - 2026-11-02
 
 A fix to auto calibration mode on tied judge scores, a corrected per-stratum
