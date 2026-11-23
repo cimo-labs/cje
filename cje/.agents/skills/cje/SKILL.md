@@ -93,8 +93,8 @@ Use the installed version's own skill. `cje skill --reference` gives searchable 
    is higher; say the interval and p-value measure sampling noise only, not whether <A>'s
    calibration fits <B>. A raw judge gap toward the unlabeled policy, said in words without
    raw means, is a red flag (the judge
-   may favor its style, and the borrowed calibration cannot see that), not support. Then size
-   what would settle it:
+   may favor its style, and the borrowed calibration cannot see that), not support. Choose
+   one way to resolve this assumption and size it for the desired precision:
    - Any random labels on that policy's own responses (same prompts, raters blind to policy)
      remove the borrowed flag and correct its estimate; about 20 or more are needed before its
      interval is useful. That is a floor, not a precision target: the rerun may still say "not

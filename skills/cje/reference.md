@@ -226,6 +226,8 @@ conditional paired interval [+2,+10] on a 0–100 scale, a +1 point margin gives
 0.01 and shifts are −0.05 and −0.01. Reversing the policy order also negates the
 margin. A margin inside the interval gives zero interval shift; unavailable paired
 bounds give `None`. Check the proposed arm means against the outcome support.
+With only the reported point and conditional interval, the same arithmetic gives a manual
+sensitivity calculation. Say which numbers were supplied and whether the API was run.
 The shifts quantify hypothetical drift. Preserve the unverified verdict and all gates.
 [Transport sensitivity examples](https://github.com/cimo-labs/cje/blob/v0.10.1/cje/diagnostics/README.md)
 
