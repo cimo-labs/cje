@@ -43,7 +43,7 @@ their positive weights to mean one. Report `metadata["calibration_weighting"]`, 
 describe weight concentration. A complete-coverage evaluation uses its observed outcomes
 directly. Preserve the original sampling protocol; a numeric weight field or agreement
 between input formats cannot establish that the acquisition probabilities were known.
-[External calibration records and fit weights](https://github.com/cimo-labs/cje/blob/v0.10.2/cje/interface/README.md)
+[External calibration records and fit weights](https://github.com/cimo-labs/cje/blob/v0.11.0/cje/interface/README.md)
 
 Field names differ in the user's data? Pass `judge_field="score"`, `oracle_field="human_rating"` instead of renaming.
 
@@ -139,7 +139,7 @@ multiply each by its squared traffic share before adding. The modeled SE assumes
 future independent units, pilot SDs and known shares. Pass `available_fail` and
 `available_pass` when eligibility is limited. The planner requires at least two
 reviews per stratum. Finding 39 failures takes about 3,900
-scored prompts in expectation at this traffic mix. [Binary review planning](https://github.com/cimo-labs/cje/blob/v0.10.2/guides/evaluation-planning.md#plan-reviews-of-a-binary-judge)
+scored prompts in expectation at this traffic mix. [Binary review planning](https://github.com/cimo-labs/cje/blob/v0.11.0/guides/evaluation-planning.md#plan-reviews-of-a-binary-judge)
 
 ### Weighted paired audit of a finite frame
 
@@ -194,7 +194,7 @@ interval span the full declared support. Report the identification bounds alongs
 the fixed-look design confidence interval `ci`, raw counts and labeled target mass. An unscored
 cluster must have a missing prediction; an unreviewed cluster must have a missing
 outcome. A missing value on a selected row requires a missingness analysis.
-[Paired audit design, interval and worked example](https://github.com/cimo-labs/cje/blob/v0.10.2/guides/weighted-paired-audit.md)
+[Paired audit design, interval and worked example](https://github.com/cimo-labs/cje/blob/v0.11.0/guides/weighted-paired-audit.md)
 
 ### Rater panels and missing outcomes
 
@@ -212,7 +212,7 @@ successes among 80 observed of 100 equal-mass assignments, this gives [0.60, 0.8
 For candidate minus baseline use [candidate lower − baseline upper, candidate upper −
 baseline lower]. These are identification bounds on the assigned frame. Sampling a
 wider population adds uncertainty. Define any operational failure endpoint before
-looking at results. [Human outcomes, rater dependence and missingness](https://github.com/cimo-labs/cje/blob/v0.10.2/guides/rater-and-missing-outcomes.md)
+looking at results. [Human outcomes, rater dependence and missingness](https://github.com/cimo-labs/cje/blob/v0.11.0/guides/rater-and-missing-outcomes.md)
 
 ### Signed sensitivity to calibration transport
 
@@ -235,7 +235,7 @@ is $3 too high and the candidate is accurate, the correction is +$3. Equal error
 At `point_shift` the point equals the margin. When an interval initially excludes the
 margin, its nearer endpoint touches the margin at `interval_shift`. Crossing that
 boundary requires a further shift in the same direction.
-[Transport sensitivity examples](https://github.com/cimo-labs/cje/blob/v0.10.2/cje/diagnostics/README.md)
+[Transport sensitivity examples](https://github.com/cimo-labs/cje/blob/v0.11.0/cje/diagnostics/README.md)
 
 ## `analyze_dataset`
 

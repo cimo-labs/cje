@@ -13,7 +13,7 @@ Install on Python 3.10–3.13. Run these commands with the interpreter that will
 data so the instructions match the installed package.
 
 ```bash
-python -m pip install -U "cje-eval>=0.10.2"
+python -m pip install -U "cje-eval>=0.11.0"
 python -m cje --version
 python -m cje skill               # prints SKILL.md
 python -m cje skill --reference   # prints reference.md

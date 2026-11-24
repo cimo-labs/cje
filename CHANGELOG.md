@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-24
+
+Adds `compare_judges`. No existing default or output changes.
+
 ### Added
 
 - **`compare_judges` compares several judges against one oracle on the same
