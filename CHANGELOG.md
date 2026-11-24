@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-24
+
+Adds `compare_judges`. No existing default or output changes.
+
+### Added
+
+- **`compare_judges` compares several judges against one oracle on the same
+  labelled rows (issue #71).** Each judge gets its own cross-fitted
+  `JudgeCalibrator` on folds shared by every judge. `table` reports per judge
+  the labelled rows and prompt clusters, the selected mode, out-of-fold RMSE,
+  out-of-fold R² pooled and within policy, `Var(f)` and `Var(Y - f)`, and
+  their prompt-clustered versions with the covariance term. `pairwise`
+  reports each judge against a reference: the differences in within-policy
+  R² and RMSE, the label multiplier (labelled rows the reference needs per
+  labelled row of the judge, plentiful unlabelled rows), and, with
+  `n_unlabeled`, the finite-N variance ratio and multiplier. The multipliers
+  treat prompts, not rows, as independent: with one labelled row per prompt
+  the plentiful-row multiplier is `(1 - R²_ref) / (1 - R²_J)`, and with
+  several labelled draws per prompt it accounts for judge errors shared
+  within a prompt (in simulations with four labelled draws per prompt the
+  row-level ratio understated the reference's label need by 20% to about
+  90%). The table's out-of-fold R² describes a calibrator fitted on about
+  (K-1)/K of the labels, so it runs slightly low and its interval can
+  under-cover the full-data value; the differences between judges and the
+  multiplier are unaffected. With
+  `n_unlabeled`, a warning fires when labelled rows per policy differ by more
+  than 1.5 times, since the finite-N fields use their mean. Intervals come
+  from a paired prompt-cluster bootstrap (positive Exp(1) weights shared by
+  every judge) that refits each judge in every replicate. Representative
+  labels only; judges keep their own score scales (`judge_scales` checks a
+  declared range). Additive: no existing default or output changes. See
+  `guides/comparing-judges.md`.
+
 ## [0.10.2] - 2026-11-24
 
 Input fixes and documentation from a review of 0.10.0. Estimates change only

@@ -38,7 +38,7 @@ def _resolve_version() -> str:
 
         return _dist_version("cje-eval")
     except Exception:  # PackageNotFoundError, or metadata unavailable
-        return "0.10.2"
+        return "0.11.0"
 
 
 __version__ = _resolve_version()
@@ -57,6 +57,14 @@ from .array_api import CalibratedMeanResult, calibrated_mean_ci, transport_audit
 from .diagnostics.transport import TransportAuditConfig
 from .weighted_audit import WeightedPairedAuditResult, weighted_paired_audit
 from .diagnostics.stratified_planning import BinaryReviewPlan, plan_binary_reviews
+
+# Several judges against one oracle on the same labelled rows
+from .judge_comparison import (
+    JudgeComparison,
+    JudgePair,
+    JudgeQuality,
+    compare_judges,
+)
 
 # Budget planning
 from .diagnostics.planning import (
@@ -105,6 +113,11 @@ __all__ = [
     "calibrated_mean_ci",
     "transport_audit",
     "TransportAuditConfig",
+    # Judge comparison
+    "compare_judges",
+    "JudgeComparison",
+    "JudgeQuality",
+    "JudgePair",
     # Budget planning
     "CostModel",
     "FittedVarianceModel",
