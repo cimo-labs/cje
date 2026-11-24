@@ -200,6 +200,37 @@ def test_pandas_table_matches_records_and_rejects_duplicate_columns() -> None:
         loader.load_from_records(frame.rename(columns={"judge_score": "oracle_label"}))
 
 
+def test_pandas_table_with_optional_fields_matches_records() -> None:
+    # Blank cells must read as absent fields, not as a shared "nan" identity.
+    pd = pytest.importorskip("pandas")
+    rows: list[dict[str, Any]] = []
+    for i in range(12):
+        row: dict[str, Any] = {
+            "prompt": f"question {i}",
+            "judge_score": i / 11,
+            "oracle_label": float(i % 2),
+        }
+        if i < 4:
+            row["prompt_id"] = f"p{i}"
+        if i % 3 == 0:
+            row["row_id"] = f"r{i}"
+            row["response"] = f"answer {i}"
+        rows.append(row)
+    loader = DatasetLoader()
+    table = loader.load_from_records(pd.DataFrame(rows))
+    assert table == loader.load_from_records(rows)
+    assert "nan" not in {s.prompt_id for s in table.samples}
+    assert len({s.prompt_id for s in table.samples}) == 12
+
+
+@pytest.mark.parametrize("field", ["judge_score", "oracle_label"])
+def test_numpy_bool_scores_are_rejected_like_python_bool(field: str) -> None:
+    row: dict[str, Any] = {"prompt_id": "c0", "judge_score": 0.5, "oracle_label": 1.0}
+    row[field] = np.True_
+    with pytest.raises(ValueError, match="not bool"):
+        DatasetLoader().load_from_records([row])
+
+
 def _weighted_rows(multiplier: float = 1.0) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for i in range(20):

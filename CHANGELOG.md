@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A DataFrame passed as `calibration_data` now reads like the same records.**
+  Blank cells (NaN, None, pandas NA) were kept as values, so a table built
+  from records with an optional `prompt_id` put every row without one into a
+  single cluster named "nan". In one example the standard errors tripled
+  (0.034 to 0.108) with identical estimates; with partial `row_id` or
+  `response` columns the load raised or, with `on_invalid="drop"`, dropped
+  most rows. Blank cells are now treated as absent fields, as in the records
+  and the JSONL file.
+- NumPy booleans (`np.True_`) as judge scores or oracle labels are rejected
+  like Python booleans instead of being read as 1.0 and 0.0.
+- `weighted_paired_audit` rejects text in `predictions` or `outcomes`
+  (previously `"1"` was silently converted) and cluster ids that mix strings
+  and integers, where `1` and `"1"` named different clusters.
+
+### Documentation
+
+- `weighted_paired_audit`: the interval's width is fixed by the design
+  probabilities, target masses and declared bounds. A better predictor reduces
+  the estimate's variance but never narrows the reported interval; with few
+  reviews it falls back toward the identification bounds. The guide and
+  docstring now say so (the docstring said "observed" bounds; they are the
+  declared ones).
+- The transport sensitivity shift (0.10.0) is in outcome-minus-prediction
+  residual units: the estimate plus `point_shift` equals the margin. The agent
+  skill now says the shift measures fragility only and is never a reason to
+  name a winner or a lean (hard rule 5).
+
 ## [0.10.1] - 2026-11-22
 
 - The bundled agent skill now routes binary review planning, finite-frame paired audits, historical fit weights, and transport sensitivity from its first page. The four-label calibration minimum applies to fitting a judge. A fully observed finite frame can be summarized directly.

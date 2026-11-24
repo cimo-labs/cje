@@ -57,6 +57,10 @@ def _observations(
     arr = _frame_vector(values, len(mask), name)
     if np.iscomplexobj(arr):
         raise ValueError(f"{name} must be real")
+    if arr.dtype.kind in "US" or (
+        arr.dtype.kind == "O" and any(isinstance(v, (str, bytes)) for v in arr)
+    ):
+        raise ValueError(f"{name} must be numeric (NaN or None for missing), not text")
     arr = arr.astype(float)
     if not np.all(np.isnan(arr[~mask])):
         raise ValueError(
@@ -115,9 +119,10 @@ def weighted_paired_audit(
 
     The point estimate uses traffic-weighted predictions and a joint-inclusion
     weighted correction. The fixed-look confidence interval uses Bernstein's
-    inequality and the observed outcome bounds. No human outcomes yields the
-    full declared interval. See guides/weighted-paired-audit.md for the proof,
-    supported designs, and an example using historical calibration weights.
+    inequality and the declared outcome bounds; its width does not depend on the
+    predictions or outcomes. No human outcomes yields the full declared
+    interval. See guides/weighted-paired-audit.md for the proof, supported
+    designs, and an example using historical calibration weights.
     """
     ids = np.asarray(cluster_ids, dtype=object)
     if ids.ndim != 1 or not ids.size or np.ma.is_masked(cluster_ids):
@@ -129,6 +134,13 @@ def weighted_paired_audit(
         for i in ids
     ):
         raise ValueError("cluster_ids must be nonempty strings or integers")
+    if any(isinstance(i, str) for i in ids) and any(
+        isinstance(i, Integral) for i in ids
+    ):
+        raise ValueError(
+            "cluster_ids mix strings and integers; use one type so 1 and '1' "
+            "cannot name different clusters"
+        )
     n = len(ids)
     if len(set(ids)) != n:
         raise ValueError(
