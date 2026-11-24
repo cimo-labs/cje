@@ -6,6 +6,7 @@ following the Single Responsibility Principle.
 
 import json
 import logging
+import math
 from collections.abc import Hashable, Iterable, Sequence
 from typing import (
     List,
@@ -50,6 +51,13 @@ class _RecordTable(Protocol):
 
 
 CalibrationRecords = Union[Sequence[Dict[str, Any]], _RecordTable]
+
+
+def _is_missing_cell(value: Any) -> bool:
+    """True for a DataFrame blank: None, a float NaN, pandas NA or NaT."""
+    if value is None or type(value).__name__ in ("NAType", "NaTType"):
+        return True
+    return isinstance(value, (float, np.floating)) and math.isnan(value)
 
 
 class DatasetLoader:
@@ -165,7 +173,14 @@ class DatasetLoader:
             columns = list(records.columns)
             if len(columns) != len(set(columns)):
                 raise ValueError("calibration_data DataFrame columns must be unique")
-            records = records.to_dict(orient="records")
+            # Blank cells come back as NaN, None or pandas NA. Drop them so a
+            # table built from records with optional fields reads like those
+            # records (and the JSONL file): a missing prompt_id must not
+            # become the shared cluster "nan".
+            records = [
+                {k: v for k, v in row.items() if not _is_missing_cell(v)}
+                for row in records.to_dict(orient="records")
+            ]
         if not isinstance(records, Sequence) or isinstance(records, (str, bytes)):
             raise TypeError(
                 "calibration_data must be a sequence of records or a DataFrame"

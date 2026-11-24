@@ -21,14 +21,14 @@ If your tool truncated the output, save it and read the rest in chunks.
 
 - A fixed review budget for a binary judge: use `plan_binary_reviews`. Choose `slope` for the human pass-rate gap between judge strata, or `mean` for the overall rate. A declared SD or the default 0.5 suffices for planning.
 - A known finite assignment frame: `weighted_paired_audit` uses one bounded paired endpoint per independent cluster, fixed target masses, and known Bernoulli probabilities for traffic and review. Include unsampled clusters. The calibration label floor does not apply here. A human census identifies the frame mean exactly. Fixed quotas and selected-only logs do not meet the two-stage design.
-- For a historical calibration table, pass `calibration_data`. Known inclusion probabilities give inverse selection weights (1/p) for `calibration_weight_field` with `combine_oracle_sources=False`. For an eligible pair with unverified transport, `compare_policies(candidate, baseline, sensitivity_margin=margin)` reports signed drift in outcome units. Candidate overprediction relative to baseline gives a negative shift. Add the shift to the estimate or interval endpoint to check that it equals the margin. Keep the original decision verdict.
+- For a historical calibration table, pass `calibration_data`. Known inclusion probabilities give inverse selection weights (1/p) for `calibration_weight_field` with `combine_oracle_sources=False`. For an eligible pair with unverified transport, `compare_policies(candidate, baseline, sensitivity_margin=margin)` reports signed drift in outcome units. Candidate overprediction relative to baseline gives a negative shift. The estimate plus `point_shift` equals the margin. The shift measures fragility only: never cite it as a winner or lean (hard rule 5).
 - Missing votes or judge timeouts: retain the assignment denominator and define the human endpoint. The reference has identification bounds and the rater guide.
 
 ## Step 0: install, then print the version
 
 ```bash
 python --version                     # must be 3.10–3.13
-python -m pip install -U "cje-eval>=0.10.1"
+python -m pip install -U "cje-eval>=0.10.2"
 python -c "import cje; print(cje.__version__)"
 ```
 

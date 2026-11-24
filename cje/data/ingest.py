@@ -26,6 +26,8 @@ import numbers
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 
@@ -191,7 +193,7 @@ def canonicalize_record(
     judge_raw = read_aliased_field(record, judge_field)
     if judge_raw is None:
         raise ValueError(f"Missing required judge field '{judge_field}'.")
-    if isinstance(judge_raw, bool):
+    if isinstance(judge_raw, (bool, np.bool_)):
         raise ValueError(f"Judge field '{judge_field}' must be numeric, not bool.")
     try:
         judge_score = float(judge_raw)
@@ -216,7 +218,7 @@ def canonicalize_record(
         else:
             log_nan_labels_as_unlabeled({nan_key: 1}, oracle_field)
     if oracle_raw is not None:
-        if isinstance(oracle_raw, bool):
+        if isinstance(oracle_raw, (bool, np.bool_)):
             raise ValueError(
                 f"Oracle field '{oracle_field}' must be numeric, not bool."
             )
