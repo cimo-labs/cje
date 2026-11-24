@@ -28,7 +28,7 @@ If your tool truncated the output, save it and read the rest in chunks.
 
 ```bash
 python --version                     # must be 3.10–3.13
-python -m pip install -U "cje-eval>=0.10.1"
+python -m pip install -U "cje-eval>=0.10.2"
 python -c "import cje; print(cje.__version__)"
 ```
 

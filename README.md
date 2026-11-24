@@ -23,7 +23,7 @@ You get each policy's mean on the label scale and the paired differences between
 Paste this into your coding agent, filling in the brackets:
 
 ```text
-Use Python 3.10–3.13. Run `python -m pip install -U "cje-eval>=0.10.1"`.
+Use Python 3.10–3.13. Run `python -m pip install -U "cje-eval>=0.10.2"`.
 Record `python -m cje --version`. Read the full `python -m cje skill` and
 `python -m cje skill --reference` from that interpreter and follow the skill's stop checks.
 Use [file paths or in-memory records]. Compare [candidate minus baseline] on [outcome and scale].
@@ -77,7 +77,7 @@ Each estimate targets the policy's mean label over the population your prompts w
 ## 60 seconds
 
 ```bash
-python -m pip install -U "cje-eval>=0.10.1"   # Python 3.10–3.13
+python -m pip install -U "cje-eval>=0.10.2"   # Python 3.10–3.13
 ```
 
 Each record is one judged response, `{"prompt_id", "judge_score", "oracle_label" (optional)}`; the API calls these records *fresh draws*.

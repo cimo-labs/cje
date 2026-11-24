@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-11-24
+
+Input fixes and documentation from a review of 0.10.0. Estimates change only
+for a DataFrame `calibration_data` with blank identity cells, which now gives
+the same results as the same records.
+
 ### Fixed
 
 - **A DataFrame passed as `calibration_data` now reads like the same records.**
