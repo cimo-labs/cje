@@ -458,3 +458,102 @@ def test_transport_config_rejects_understated_family_and_empty_probe() -> None:
             estimator_config={"inference_method": "cluster_robust"},
             transport=config,
         )
+
+
+def test_high_level_transport_uses_external_calibration_oracle_scale() -> None:
+    calibration = [
+        {
+            "prompt_id": f"cal-{i}",
+            "judge_score": float(s),
+            "oracle_label": float(1.0 + 4.0 * (s / 100.0)),
+        }
+        for i, s in enumerate(np.linspace(10.0, 90.0, 40))
+    ]
+    unlabeled_draws = {
+        "policy": [
+            {"prompt_id": f"eval-{i}", "judge_score": float(s)}
+            for i, s in enumerate(np.linspace(10.0, 90.0, 40))
+        ]
+    }
+    probes = [
+        {
+            "prompt_id": f"probe-{i}",
+            "judge_score": float(s),
+            "oracle_label": float(1.0 + 4.0 * (s / 100.0)),
+        }
+        for i, s in enumerate(np.linspace(10.0, 90.0, 30))
+    ]
+
+    result = analyze_dataset(
+        fresh_draws_data=unlabeled_draws,
+        calibration_data=calibration,
+        combine_oracle_sources=False,
+        fresh_judge_scale=(0, 100),
+        calibration_judge_scale=(0, 100),
+        calibration_oracle_scale=(1, 5),
+        estimator_config={"inference_method": "cluster_robust"},
+        transport=TransportAuditConfig(
+            probes_by_policy={"policy": probes},
+            delta_max_by_policy={"policy": 0.25},
+        ),
+    )
+
+    audit = result.metadata["transport_audits"]["policy"]
+    assert audit["delta_hat"] == pytest.approx(0.0, abs=0.05)
+    assert audit["status"] == "PASS"
+
+    scaled_result = analyze_dataset(
+        fresh_draws_data=unlabeled_draws,
+        calibration_data=calibration,
+        combine_oracle_sources=False,
+        fresh_judge_scale=(0, 100),
+        calibration_judge_scale=(0, 100),
+        calibration_oracle_scale=(1, 5),
+        output_scale=(0, 100),
+        estimator_config={"inference_method": "cluster_robust"},
+        transport=TransportAuditConfig(
+            probes_by_policy={"policy": probes},
+            delta_max_by_policy={"policy": 5.0},
+        ),
+    )
+
+    scaled_audit = scaled_result.metadata["transport_audits"]["policy"]
+    assert scaled_audit["delta_hat"] == pytest.approx(0.0, abs=1.0)
+    assert scaled_audit["status"] == "PASS"
+
+
+def test_high_level_transport_does_not_rescale_unit_probe_labels_against_external_scale() -> (
+    None
+):
+    calibration = [
+        {"prompt_id": f"cal-{i}", "judge_score": float(s), "oracle_label": float(s)}
+        for i, s in enumerate(np.linspace(0.0, 100.0, 40))
+    ]
+    unlabeled_draws = {
+        "policy": [
+            {"prompt_id": f"eval-{i}", "judge_score": float(s)}
+            for i, s in enumerate(np.linspace(0.0, 100.0, 40))
+        ]
+    }
+    probes = [
+        {"prompt_id": f"probe-{i}", "judge_score": 1.0, "oracle_label": 1.0}
+        for i in range(25)
+    ]
+
+    result = analyze_dataset(
+        fresh_draws_data=unlabeled_draws,
+        calibration_data=calibration,
+        combine_oracle_sources=False,
+        fresh_judge_scale=(0, 100),
+        calibration_judge_scale=(0, 100),
+        calibration_oracle_scale=(0, 100),
+        estimator_config={"inference_method": "cluster_robust"},
+        transport=TransportAuditConfig(
+            probes_by_policy={"policy": probes},
+            delta_max_by_policy={"policy": 5.0},
+        ),
+    )
+
+    audit = result.metadata["transport_audits"]["policy"]
+    assert audit["delta_hat"] == pytest.approx(0.0, abs=1.0)
+    assert audit["status"] == "PASS"

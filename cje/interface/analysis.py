@@ -1003,6 +1003,21 @@ def analyze_dataset(
             n_label_clusters=n_calibration_clusters,
         )
 
+    has_fresh_oracle_labels = any(
+        sample.oracle_label is not None for sample in all_fresh_draws
+    )
+    probe_oracle_input_scale = (
+        fresh_oracle_public_scale
+        if fresh_oracle_scale is not None or has_fresh_oracle_labels
+        else (
+            calibration_oracle_public_scale
+            if has_external_calibration
+            and oracle_sources_metadata is not None
+            and oracle_sources_metadata.get("calibration_data", {}).get("n_oracle", 0)
+            > 0
+            else fresh_oracle_public_scale
+        )
+    )
     _attach_transport_audits(
         results,
         config=transport,
@@ -1010,7 +1025,7 @@ def analyze_dataset(
         calibration_dataset=calibration_dataset_for_rewards,
         judge_field=judge_field,
         oracle_field=oracle_field,
-        oracle_input_scale=fresh_oracle_public_scale,
+        oracle_input_scale=probe_oracle_input_scale,
         output_scale=result_output_scale,
     )
 
